@@ -1,3 +1,11 @@
+//
+//  OfflineManager.swift
+//  Iconik Employee
+//
+//  Created by administrator on 5/18/25.
+//
+
+
 import Foundation
 import Firebase
 import FirebaseFirestore
@@ -13,6 +21,7 @@ class OfflineManager {
     
     // Network status
     private var isOnline = true
+    private let networkMonitor = NetworkMonitor()
     
     // Directory for cached sports shoots
     private var cachesDirectory: URL {
@@ -23,11 +32,6 @@ class OfflineManager {
     // Path for tracking cached shoots
     private var cachedShootsPath: URL {
         return cachesDirectory.appendingPathComponent("cachedShoots.json")
-    }
-    
-    // Path for tracking modified shoots
-    private var modifiedShootsPath: URL {
-        return cachesDirectory.appendingPathComponent("modifiedShoots.json")
     }
     
     // Dictionary to track modified shoots that need syncing
@@ -56,10 +60,7 @@ class OfflineManager {
             // Load list of cached shoots
             loadCachedShootsList()
             
-            // Load modified shoots list
-            loadModifiedShootsList()
-            
-            // Setup network status monitoring
+            // Set up network monitoring
             setupNetworkMonitoring()
             
         } catch {
@@ -70,31 +71,18 @@ class OfflineManager {
     // MARK: - Network Monitoring
     
     private func setupNetworkMonitoring() {
-        // Listen for network status changes
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(networkStatusChanged(_:)),
-            name: NSNotification.Name("NetworkStatusChanged"),
-            object: nil
-        )
-        
-        // Get initial network status
-        isOnline = NetworkMonitor.shared.getCurrentConnectionStatus()
-    }
-    
-    @objc private func networkStatusChanged(_ notification: Notification) {
-        if let isConnected = notification.userInfo?["isConnected"] as? Bool {
-            self.isOnline = isConnected
+        networkMonitor.startMonitoring { [weak self] isConnected in
+            self?.isOnline = isConnected
             
             // If we just came online, start syncing
             if isConnected {
-                syncModifiedShoots()
+                self?.syncModifiedShoots()
                 // Clear local locks when going online
-                clearLocalLocks()
+                self?.clearLocalLocks()
             } else {
                 // When going offline, clear any locks from the server
                 // as they won't be valid anyway
-                self.localLocks.removeAll()
+                self?.localLocks.removeAll()
             }
             
             // Notify others about network status change
@@ -210,6 +198,8 @@ class OfflineManager {
     
     // Save modified shoots list
     private func saveModifiedShootsList() {
+        let modifiedShootsPath = cachesDirectory.appendingPathComponent("modifiedShoots.json")
+        
         do {
             let data = try JSONEncoder().encode(modifiedShoots)
             try data.write(to: modifiedShootsPath)
@@ -220,6 +210,8 @@ class OfflineManager {
     
     // Load modified shoots list
     private func loadModifiedShootsList() {
+        let modifiedShootsPath = cachesDirectory.appendingPathComponent("modifiedShoots.json")
+        
         guard fileManager.fileExists(atPath: modifiedShootsPath.path) else {
             modifiedShoots = [:]
             return
@@ -533,7 +525,33 @@ class OfflineManager {
     // Push a shoot to the server
     private func pushShootToServer(_ shoot: SportsShoot) {
         let docRef = db.collection("sportsJobs").document(shoot.id)
-        let docData = shoot.toDictionary()
+        
+        // Convert roster entries to dictionaries
+        let rosterDicts = shoot.roster.map { $0.toDictionary() }
+        
+        // Convert group images to dictionaries
+        let groupDicts = shoot.groupImages.map { $0.toDictionary() }
+        
+        // Create document data
+        var docData: [String: Any] = [
+            "schoolName": shoot.schoolName,
+            "sportName": shoot.sportName,
+            "shootDate": Timestamp(date: shoot.shootDate),
+            "location": shoot.location,
+            "photographer": shoot.photographer,
+            "roster": rosterDicts,
+            "groupImages": groupDicts,
+            "additionalNotes": shoot.additionalNotes,
+            "organizationID": shoot.organizationID,
+            "updatedAt": Timestamp(date: Date())
+        ]
+        
+        // Set created date if it's a new document
+        if shoot.createdAt != Date(timeIntervalSince1970: 0) {
+            docData["createdAt"] = Timestamp(date: shoot.createdAt)
+        } else {
+            docData["createdAt"] = Timestamp(date: Date())
+        }
         
         // Set or update the document
         docRef.setData(docData) { [weak self] error in

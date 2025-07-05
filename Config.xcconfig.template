@@ -1,0 +1,9 @@
+// Configuration file template for API Keys and Secrets
+// Copy this file to Config.xcconfig and fill in your actual values
+// NEVER commit Config.xcconfig with real values to version control
+
+// Captura API Configuration
+CAPTURA_CLIENT_ID = your-captura-client-id-here
+CAPTURA_CLIENT_SECRET = your-captura-client-secret-here
+CAPTURA_ACCOUNT_ID = your-captura-account-id-here
+CAPTURA_GOOGLE_CLIENT_ID = your-google-client-id-here

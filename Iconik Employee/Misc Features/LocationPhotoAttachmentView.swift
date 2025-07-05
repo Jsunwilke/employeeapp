@@ -586,7 +586,7 @@ struct LocationPhotoAttachmentView: View {
     
     private func loadSchoolOptions() {
         let db = Firestore.firestore()
-        db.collection("dropdownData")
+        db.collection("schools")
             .whereField("type", isEqualTo: "school")
             .getDocuments { snapshot, error in
                 if let error = error {
@@ -660,7 +660,7 @@ struct LocationPhotoAttachmentView: View {
         
         // After all uploads complete, update Firestore.
         dispatchGroup.notify(queue: .main) {
-            let locationDocRef = db.collection("dropdownData").document(school.id)
+            let locationDocRef = db.collection("schools").document(school.id)
             // Use arrayUnion to append new dictionaries to the "locationPhotos" field.
             locationDocRef.updateData([
                 "locationPhotos": FieldValue.arrayUnion(uploadedPhotoDicts)

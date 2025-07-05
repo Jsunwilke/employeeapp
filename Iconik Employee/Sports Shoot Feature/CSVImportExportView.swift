@@ -1,7 +1,7 @@
 import SwiftUI
-import UniformTypeIdentifiers
 import Firebase
 import FirebaseFirestore
+import UniformTypeIdentifiers
 
 struct CSVImportExportView: View {
     let shootID: String
@@ -15,6 +15,10 @@ struct CSVImportExportView: View {
     @State private var importedRoster: [RosterEntry] = []
     @State private var currentShoot: SportsShoot?
     @State private var isLoading = true
+    
+    // New state for photo import
+    @State private var showPhotoImport = false
+    @State private var showMultiPhotoImport = false
     
     // Field mapping labels with updated display names
     let fieldMappings = [
@@ -32,6 +36,22 @@ struct CSVImportExportView: View {
                 } else {
                     Form {
                         Section(header: Text("Import/Export")) {
+                            // New multi-photo import button
+                            Button(action: {
+                                showMultiPhotoImport = true
+                            }) {
+                                Label("Import Paper Rosters", systemImage: "doc.viewfinder")
+                                    .foregroundColor(.blue)
+                            }
+                            
+                            // Single photo import button
+                            Button(action: {
+                                showPhotoImport = true
+                            }) {
+                                Label("Import from Photo", systemImage: "camera")
+                                    .foregroundColor(.blue)
+                            }
+                            
                             Button(action: {
                                 isImporting = true
                             }) {
@@ -95,7 +115,7 @@ struct CSVImportExportView: View {
                     }
                 }
             }
-            .navigationTitle("CSV Import/Export")
+            .navigationTitle("Import/Export")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -108,6 +128,32 @@ struct CSVImportExportView: View {
                 DocumentPicker(
                     onDocumentPicked: { url in
                         importCSV(from: url)
+                    }
+                )
+            }
+            .sheet(isPresented: $showPhotoImport) {
+                RosterPhotoImporterView(
+                    shootID: shootID,
+                    onComplete: { success in
+                        if success {
+                            // If successfully imported via photo, reload shoot data
+                            loadSportsShoot()
+                            onComplete(true)
+                        }
+                        showPhotoImport = false
+                    }
+                )
+            }
+            .sheet(isPresented: $showMultiPhotoImport) {
+                MultiPhotoRosterImporterView(
+                    shootID: shootID,
+                    onComplete: { success in
+                        if success {
+                            // If successfully imported via multi-photo, reload shoot data
+                            loadSportsShoot()
+                            onComplete(true)
+                        }
+                        showMultiPhotoImport = false
                     }
                 )
             }

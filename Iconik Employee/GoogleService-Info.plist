@@ -3,28 +3,28 @@
 <plist version="1.0">
 <dict>
 	<key>API_KEY</key>
-	<string>AIzaSyC3QbUosSVSyXfblYM1bwwjlAFJiiknB8A</string>
+	<string>AIzaSyA3kS7YLt4XqYodsfn8TAo8Y4Hcu3UJnSE</string>
 	<key>GCM_SENDER_ID</key>
-	<string>700201321131</string>
+	<string>157275128489</string>
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
 	<string>Iconik.Iconik-Employee</string>
 	<key>PROJECT_ID</key>
-	<string>nfc-scanner-348a4</string>
+	<string>focal-point-c452c</string>
 	<key>STORAGE_BUCKET</key>
-	<string>nfc-scanner-348a4.firebasestorage.app</string>
+	<string>focal-point-c452c.firebasestorage.app</string>
 	<key>IS_ADS_ENABLED</key>
-	<true/>
+	<false></false>
 	<key>IS_ANALYTICS_ENABLED</key>
-	<true/>
+	<false></false>
 	<key>IS_APPINVITE_ENABLED</key>
-	<true/>
+	<true></true>
 	<key>IS_GCM_ENABLED</key>
-	<true/>
+	<true></true>
 	<key>IS_SIGNIN_ENABLED</key>
-	<true/>
+	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:700201321131:ios:af67c61176cee0a05bedee</string>
+	<string>1:157275128489:ios:c4b4a3120d6ceb71f7dfb8</string>
 </dict>
 </plist>

@@ -9,11 +9,11 @@ class GalleryCreatorService {
     static let shared = GalleryCreatorService()
     
     // MARK: - Properties
-    private let capturaClientID = "1ab255f1-5a89-4ae8-b454-4da98b64afcb"
-    private let capturaClientSecret = "18458cffbe1e0fe82b2c99d4ead741cc8271640b0020d8f61035945be374675913a32303e32ce6c6a78d88c91554419e19cd458ce28d490302d2c1dd020df03d"
     private let capturaTokenURL = "https://api.imagequix.com/api/oauth/token"
-    private let capturaAccountID = "J98TA9W"
-    private let createGalleryURL: String
+    private var createGalleryURL: String = ""
+    
+    // API credentials will be fetched from CapturaAPIKeyManager
+    private var capturaCredentials: CapturaAPIKeyManager.CapturaCredentials?
     
     // Updated to use a fallback template mechanism
     private let templateSheetID = "1fT6I_U1Ag1lluo1mzO-qfRVCLzouwSadZBQFHI6jcxM"
@@ -23,15 +23,12 @@ class GalleryCreatorService {
     private let primaryFolderID = "1bNNkQsqUYwk-XuoS_yP1trJkBgJ6axFF"
     private let fallbackFolderID = "1oKoJr4R9SKeqbo59LjpKcL5nRDKhFF7M"
     
-    // Using the client ID extracted from the URL scheme
-    private let googleClientID = "700201321131-uss5rsm5fl712l3eiurj9r7np9tlqkef.apps.googleusercontent.com"
-    
     // Debug flag - set to true for verbose logging
     private let debug = true
     
     // MARK: - Initialization
     private init() {
-        createGalleryURL = "https://api.imagequix.com/api/v1/account/\(capturaAccountID)/gallery"
+        // createGalleryURL will be set when credentials are loaded
     }
     
     // MARK: - Public Methods
@@ -42,26 +39,36 @@ class GalleryCreatorService {
     ///   - eventDate: The date of the event
     ///   - completion: Completion handler with result
     func createGallery(galleryName: String, eventDate: Date, completion: @escaping (Result<GalleryCreationResult, GalleryCreatorError>) -> Void) {
-        // Format date as required by API: YYYY-MM-DD
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        let eventDateString = dateFormatter.string(from: eventDate)
-        
-        // Format date for title: MM-DD-YY
-        dateFormatter.dateFormat = "M-d-yy"
-        let formattedDateForTitle = dateFormatter.string(from: eventDate)
-        
-        // Create the new title that will be used for both systems
-        let newTitle = "\(galleryName) \(formattedDateForTitle)"
-        
-        debugLog("Starting gallery creation for: \(newTitle) with date \(eventDateString)")
-        
-        // Start the sequence of API calls
-        getCapturaToken { [weak self] result in
+        // First, ensure we have valid credentials
+        CapturaAPIKeyManager.shared.getCredentials { [weak self] credentialsResult in
             guard let self = self else { return }
             
-            switch result {
-            case .success(let token):
+            switch credentialsResult {
+            case .success(let credentials):
+                self.capturaCredentials = credentials
+                self.createGalleryURL = "https://api.imagequix.com/api/v1/account/\(credentials.accountID)/gallery"
+                self.debugLog("Successfully loaded Captura credentials")
+                
+                // Format date as required by API: YYYY-MM-DD
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "yyyy-MM-dd"
+                let eventDateString = dateFormatter.string(from: eventDate)
+                
+                // Format date for title: MM-DD-YY
+                dateFormatter.dateFormat = "M-d-yy"
+                let formattedDateForTitle = dateFormatter.string(from: eventDate)
+                
+                // Create the new title that will be used for both systems
+                let newTitle = "\(galleryName) \(formattedDateForTitle)"
+                
+                self.debugLog("Starting gallery creation for: \(newTitle) with date \(eventDateString)")
+                
+                // Start the sequence of API calls
+                self.getCapturaToken { [weak self] result in
+                    guard let self = self else { return }
+                    
+                    switch result {
+                    case .success(let token):
                 self.debugLog("Successfully got Captura token")
                 self.createCapturaGallery(token: token, title: newTitle, eventDate: eventDateString) { capturaResult in
                     switch capturaResult {
@@ -111,9 +118,16 @@ class GalleryCreatorService {
                     }
                 }
                 
+                    case .failure(let error):
+                        self.debugLog("Failed to get Captura token: \(error.localizedDescription)")
+                        completion(.failure(error))
+                    }
+                }
+                
             case .failure(let error):
-                self.debugLog("Failed to get Captura token: \(error.localizedDescription)")
-                completion(.failure(error))
+                // Failed to get credentials
+                self.debugLog("Failed to get Captura credentials: \(error.localizedDescription)")
+                completion(.failure(.missingCredentials))
             }
         }
     }
@@ -123,8 +137,14 @@ class GalleryCreatorService {
     private func getCapturaToken(completion: @escaping (Result<String, GalleryCreatorError>) -> Void) {
         debugLog("Getting Captura token...")
         
+        guard let credentials = capturaCredentials else {
+            debugLog("No Captura credentials available")
+            completion(.failure(.missingCredentials))
+            return
+        }
+        
         // Don't encode the client ID and secret - use them directly in the form data
-        let body = "grant_type=client_credentials&client_id=\(capturaClientID)&client_secret=\(capturaClientSecret)"
+        let body = "grant_type=client_credentials&client_id=\(credentials.clientID)&client_secret=\(credentials.clientSecret)"
         
         guard let url = URL(string: capturaTokenURL) else {
             debugLog("Invalid Captura token URL")
@@ -712,6 +732,7 @@ enum GalleryCreatorError: Error {
     case googleAuthError
     case googleSheetError
     case folderAccessError
+    case missingCredentials
     
     var localizedDescription: String {
         switch self {
@@ -735,6 +756,8 @@ enum GalleryCreatorError: Error {
             return "Error creating or updating Google Sheet"
         case .folderAccessError:
             return "Error accessing Google Drive folder"
+        case .missingCredentials:
+            return "Captura API credentials not configured. Please add them in Settings."
         }
     }
 }

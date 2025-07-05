@@ -191,7 +191,7 @@ struct MileageDetailView: View {
     // Load school options from Firestore
     private func loadSchools() {
         let db = Firestore.firestore()
-        db.collection("dropdownData")
+        db.collection("schools")
             .whereField("type", isEqualTo: "school")
             .getDocuments { snapshot, error in
                 if let error = error {

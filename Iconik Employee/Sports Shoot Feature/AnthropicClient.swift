@@ -1,10 +1,9 @@
 //
-//  AnthropicAPIError.swift
+//  AnthropicClient.swift
 //  Iconik Employee
 //
-//  Created by administrator on 5/20/25.
+//  Created by administrator on 5/16/25.
 //
-
 
 import Foundation
 
