@@ -215,14 +215,85 @@ class SportsShootService {
     private let db = Firestore.firestore()
     private let sportsShootsCollection = "sportsJobs"
     
+    // Network monitor for connectivity tracking
+    private let networkMonitor = NetworkMonitor()
+    private var isOnline = true
+    
+    // Initialize the service
+    private init() {
+        // Start monitoring network status
+        networkMonitor.startMonitoring { [weak self] isConnected in
+            self?.isOnline = isConnected
+            
+            // If we just came online, sync modified shoots
+            if isConnected {
+                OfflineManager.shared.syncModifiedShoots()
+            }
+            
+            // Notify listeners about network status change
+            NotificationCenter.default.post(
+                name: NSNotification.Name("SportsShootServiceNetworkStatusChanged"),
+                object: nil,
+                userInfo: ["isOnline": isConnected]
+            )
+        }
+        
+        // Initialize the isOnline property with the current status
+        isOnline = networkMonitor.getCurrentConnectionStatus()
+        
+        // Also listen for network status changes from OfflineManager
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(networkStatusChanged(_:)),
+            name: NSNotification.Name("OfflineManagerNetworkStatusChanged"),
+            object: nil
+        )
+    }
+    
+    @objc private func networkStatusChanged(_ notification: Notification) {
+        if let isOnline = notification.userInfo?["isOnline"] as? Bool {
+            self.isOnline = isOnline
+        }
+    }
+    
+    // Public method to check if device is online
+    func isDeviceOnline() -> Bool {
+        return isOnline
+    }
+    
     // MARK: - Fetch
     
     func fetchSportsShoot(id: String, completion: @escaping (Result<SportsShoot, Error>) -> Void) {
         print("Fetching sports shoot with ID: \(id)")
-        db.collection(sportsShootsCollection).document(id).getDocument { snapshot, error in
+        
+        // Check if we are offline
+        if !isOnline {
+            print("Device is offline, using cached data...")
+            
+            // Try to load from cache
+            if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
+                completion(.success(cachedShoot))
+                return
+            } else {
+                // No cached data available
+                let userInfo = [NSLocalizedDescriptionKey: "Shoot not found in cache and device is offline"]
+                let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
+                completion(.failure(error))
+                return
+            }
+        }
+        
+        // We're online, fetch from Firestore
+        db.collection(sportsShootsCollection).document(id).getDocument { [weak self] snapshot, error in
             if let error = error {
                 print("Error fetching document: \(error.localizedDescription)")
-                completion(.failure(error))
+                
+                // Try to load from cache as fallback
+                if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
+                    completion(.success(cachedShoot))
+                } else {
+                    completion(.failure(error))
+                }
                 return
             }
             
@@ -235,6 +306,12 @@ class SportsShootService {
             }
             
             if let sportsShoot = SportsShoot(from: snapshot) {
+                // Cache the shoot for offline use
+                OfflineManager.shared.cacheShoot(sportsShoot) { _ in
+                    // Just log the result, don't block the completion
+                    print("Cached shoot \(id) for offline use")
+                }
+                
                 completion(.success(sportsShoot))
             } else {
                 let userInfo = [NSLocalizedDescriptionKey: "Failed to parse sports shoot data"]
@@ -255,6 +332,46 @@ class SportsShootService {
             return
         }
         
+        // Check if we are offline - if so, use cached data
+        if !isOnline {
+            print("Device is offline, using cached data...")
+            var cachedShoots: [SportsShoot] = []
+            
+            // Fetch cached shoots from offline manager
+            // This is a simplification - in a real app, you'd need to also store
+            // all cached shoot IDs per organization for more complex offline flow
+            // For now, we'll just look through all cached shoots (simple approach)
+            let fileManager = FileManager.default
+            let cachesDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("sportsShootCache")
+            
+            do {
+                let fileURLs = try fileManager.contentsOfDirectory(at: cachesDir, includingPropertiesForKeys: nil)
+                
+                for fileURL in fileURLs {
+                    if fileURL.pathExtension == "json" && fileURL.lastPathComponent != "cachedShoots.json" && fileURL.lastPathComponent != "modifiedShoots.json" {
+                        // Extract ID from filename
+                        let shootID = fileURL.deletingPathExtension().lastPathComponent
+                        
+                        if let shoot = OfflineManager.shared.loadCachedShoot(id: shootID),
+                           shoot.organizationID == orgID {
+                            cachedShoots.append(shoot)
+                        }
+                    }
+                }
+                
+                // Sort by date descending
+                cachedShoots.sort { $0.shootDate > $1.shootDate }
+                
+                completion(.success(cachedShoots))
+            } catch {
+                print("Error reading cached shoots: \(error.localizedDescription)")
+                completion(.failure(error))
+            }
+            
+            return
+        }
+        
+        // We're online, fetch from Firestore
         db.collection(sportsShootsCollection)
             .whereField("organizationID", isEqualTo: orgID)
             .order(by: "shootDate", descending: true)
@@ -290,6 +407,16 @@ class SportsShootService {
     
     // Update roster entry with field mapping
     func updateRosterEntry(shootID: String, entry: RosterEntry, completion: @escaping (Result<Void, Error>) -> Void) {
+        // Check if we are offline
+        if !isOnline {
+            print("Device is offline, updating cached shoot...")
+            
+            // Update the shoot in cache
+            OfflineManager.shared.updateRosterEntryOffline(shootID: shootID, entry: entry, completion: completion)
+            return
+        }
+        
+        // We're online, update in Firestore
         let docRef = db.collection(sportsShootsCollection).document(shootID)
         
         // First remove the old entry
@@ -333,6 +460,19 @@ class SportsShootService {
                         if let error = error {
                             completion(.failure(error))
                         } else {
+                            // Update succeeded, update the cached version too
+                            if let shoot = SportsShoot(from: snapshot) {
+                                var updatedShoot = shoot
+                                if let idx = updatedShoot.roster.firstIndex(where: { $0.id == entry.id }) {
+                                    updatedShoot.roster[idx] = entry
+                                } else {
+                                    updatedShoot.roster.append(entry)
+                                }
+                                
+                                // Cache the updated shoot
+                                OfflineManager.shared.cacheShoot(updatedShoot) { _ in }
+                            }
+                            
                             completion(.success(()))
                         }
                     }
@@ -346,6 +486,16 @@ class SportsShootService {
     
     // Update group image
     func updateGroupImage(shootID: String, groupImage: GroupImage, completion: @escaping (Result<Void, Error>) -> Void) {
+        // Check if we are offline
+        if !isOnline {
+            print("Device is offline, updating cached shoot...")
+            
+            // Update the shoot in cache
+            OfflineManager.shared.updateGroupImageOffline(shootID: shootID, group: groupImage, completion: completion)
+            return
+        }
+        
+        // We're online, update in Firestore
         let docRef = db.collection(sportsShootsCollection).document(shootID)
         
         // First remove the old group
@@ -389,6 +539,19 @@ class SportsShootService {
                         if let error = error {
                             completion(.failure(error))
                         } else {
+                            // Update succeeded, update the cached version too
+                            if let shoot = SportsShoot(from: snapshot) {
+                                var updatedShoot = shoot
+                                if let idx = updatedShoot.groupImages.firstIndex(where: { $0.id == groupImage.id }) {
+                                    updatedShoot.groupImages[idx] = groupImage
+                                } else {
+                                    updatedShoot.groupImages.append(groupImage)
+                                }
+                                
+                                // Cache the updated shoot
+                                OfflineManager.shared.cacheShoot(updatedShoot) { _ in }
+                            }
+                            
                             completion(.success(()))
                         }
                     }
@@ -402,6 +565,16 @@ class SportsShootService {
     
     // Add a new roster entry with field mapping
     func addRosterEntry(shootID: String, entry: RosterEntry, completion: @escaping (Result<Void, Error>) -> Void) {
+        // Check if we are offline
+        if !isOnline {
+            print("Device is offline, updating cached shoot...")
+            
+            // Add the entry to the cached shoot
+            OfflineManager.shared.addRosterEntryOffline(shootID: shootID, entry: entry, completion: completion)
+            return
+        }
+        
+        // We're online, update in Firestore
         let docRef = db.collection(sportsShootsCollection).document(shootID)
         
         // Convert to dictionary for Firestore
@@ -410,10 +583,15 @@ class SportsShootService {
         docRef.updateData([
             "roster": FieldValue.arrayUnion([entryDict]),
             "updatedAt": FieldValue.serverTimestamp()
-        ]) { error in
+        ]) { [weak self] error in
             if let error = error {
                 completion(.failure(error))
             } else {
+                // Update succeeded, update the cached version too
+                self?.fetchSportsShoot(id: shootID) { _ in
+                    // Just refresh the cache, don't need to handle result
+                }
+                
                 completion(.success(()))
             }
         }
@@ -421,6 +599,16 @@ class SportsShootService {
     
     // Add a new group image
     func addGroupImage(shootID: String, groupImage: GroupImage, completion: @escaping (Result<Void, Error>) -> Void) {
+        // Check if we are offline
+        if !isOnline {
+            print("Device is offline, updating cached shoot...")
+            
+            // Add the group to the cached shoot
+            OfflineManager.shared.addGroupImageOffline(shootID: shootID, group: groupImage, completion: completion)
+            return
+        }
+        
+        // We're online, update in Firestore
         let docRef = db.collection(sportsShootsCollection).document(shootID)
         
         // Convert to dictionary for Firestore
@@ -429,10 +617,15 @@ class SportsShootService {
         docRef.updateData([
             "groupImages": FieldValue.arrayUnion([groupDict]),
             "updatedAt": FieldValue.serverTimestamp()
-        ]) { error in
+        ]) { [weak self] error in
             if let error = error {
                 completion(.failure(error))
             } else {
+                // Update succeeded, update the cached version too
+                self?.fetchSportsShoot(id: shootID) { _ in
+                    // Just refresh the cache, don't need to handle result
+                }
+                
                 completion(.success(()))
             }
         }
@@ -440,7 +633,16 @@ class SportsShootService {
     
     // Delete roster entry
     func deleteRosterEntry(shootID: String, entryID: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        // First fetch the shoot to get the full entry to remove
+        // Check if we are offline
+        if !isOnline {
+            print("Device is offline, updating cached shoot...")
+            
+            // Delete the entry from the cached shoot
+            OfflineManager.shared.deleteRosterEntryOffline(shootID: shootID, entryID: entryID, completion: completion)
+            return
+        }
+        
+        // We're online, fetch the shoot from Firestore
         fetchSportsShoot(id: shootID) { result in
             switch result {
             case .success(let shoot):
@@ -458,10 +660,15 @@ class SportsShootService {
                 docRef.updateData([
                     "roster": FieldValue.arrayRemove([entryDict]),
                     "updatedAt": FieldValue.serverTimestamp()
-                ]) { error in
+                ]) { [weak self] error in
                     if let error = error {
                         completion(.failure(error))
                     } else {
+                        // Update succeeded, update the cached version too
+                        self?.fetchSportsShoot(id: shootID) { _ in
+                            // Just refresh the cache, don't need to handle result
+                        }
+                        
                         completion(.success(()))
                     }
                 }
@@ -474,7 +681,16 @@ class SportsShootService {
     
     // Delete group image
     func deleteGroupImage(shootID: String, groupID: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        // First fetch the shoot to get the full group to remove
+        // Check if we are offline
+        if !isOnline {
+            print("Device is offline, updating cached shoot...")
+            
+            // Delete the group from the cached shoot
+            OfflineManager.shared.deleteGroupImageOffline(shootID: shootID, groupID: groupID, completion: completion)
+            return
+        }
+        
+        // We're online, fetch the shoot from Firestore
         fetchSportsShoot(id: shootID) { result in
             switch result {
             case .success(let shoot):
@@ -492,10 +708,15 @@ class SportsShootService {
                 docRef.updateData([
                     "groupImages": FieldValue.arrayRemove([groupDict]),
                     "updatedAt": FieldValue.serverTimestamp()
-                ]) { error in
+                ]) { [weak self] error in
                     if let error = error {
                         completion(.failure(error))
                     } else {
+                        // Update succeeded, update the cached version too
+                        self?.fetchSportsShoot(id: shootID) { _ in
+                            // Just refresh the cache, don't need to handle result
+                        }
+                        
                         completion(.success(()))
                     }
                 }
@@ -503,6 +724,58 @@ class SportsShootService {
             case .failure(let error):
                 completion(.failure(error))
             }
+        }
+    }
+    
+    // MARK: - Offline Helpers
+    
+    // Check sync status for a shoot
+    func syncStatusForShoot(id: String) -> OfflineManager.CacheStatus {
+        return OfflineManager.shared.cacheStatusForShoot(id: id)
+    }
+    
+    // Cache a shoot for offline use
+    func cacheShootForOffline(id: String, completion: @escaping (Bool) -> Void) {
+        // Fetch the shoot and cache it
+        fetchSportsShoot(id: id) { result in
+            switch result {
+            case .success(let shoot):
+                OfflineManager.shared.cacheShoot(shoot, completion: completion)
+            case .failure:
+                completion(false)
+            }
+        }
+    }
+    
+    // Helper to handle conflict resolution
+    func handleSyncConflicts() {
+        // Listen for sync conflict notifications
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("SyncConflictsDetected"),
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let userInfo = notification.userInfo,
+                  let shootID = userInfo["shootID"] as? String,
+                  let entryConflicts = userInfo["entryConflicts"] as? [OfflineManager.EntryConflict],
+                  let groupConflicts = userInfo["groupConflicts"] as? [OfflineManager.GroupConflict],
+                  let localShoot = userInfo["localShoot"] as? SportsShoot,
+                  let remoteShoot = userInfo["remoteShoot"] as? SportsShoot else {
+                return
+            }
+            
+            // Post a notification to show the conflict resolution UI
+            NotificationCenter.default.post(
+                name: NSNotification.Name("ShowConflictResolution"),
+                object: nil,
+                userInfo: [
+                    "shootID": shootID,
+                    "entryConflicts": entryConflicts,
+                    "groupConflicts": groupConflicts,
+                    "localShoot": localShoot,
+                    "remoteShoot": remoteShoot
+                ]
+            )
         }
     }
     

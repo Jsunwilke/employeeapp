@@ -2,7 +2,7 @@
 //  RosterPhotoImporterView.swift
 //  Iconik Employee
 //
-//  Created by administrator on 5/16/25.
+//  Updated to support sequential Subject IDs
 //
 
 import SwiftUI
@@ -20,6 +20,7 @@ struct RosterPhotoImporterView: View {
     @State private var extractedRoster: [RosterEntry] = []
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
+    @State private var nextSubjectID: Int = 101 // Default starting ID
     
     // Environment to dismiss the view
     @Environment(\.presentationMode) var presentationMode
@@ -42,18 +43,25 @@ struct RosterPhotoImporterView: View {
                             .frame(maxHeight: 300)
                         
                         if extractedRoster.isEmpty {
-                            Button(action: {
-                                processImage(image)
-                            }) {
-                                Text("Extract Roster")
-                                    .bold()
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(Color.blue)
-                                    .cornerRadius(10)
+                            VStack(spacing: 20) {
+                                TextField("Starting Subject ID", value: $nextSubjectID, formatter: NumberFormatter())
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .keyboardType(.numberPad)
+                                    .padding(.horizontal)
+                                
+                                Button(action: {
+                                    processImage(image)
+                                }) {
+                                    Text("Extract Roster")
+                                        .bold()
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.blue)
+                                        .cornerRadius(10)
+                                }
+                                .padding(.horizontal)
                             }
-                            .padding()
                             
                             Button(action: {
                                 self.image = nil
@@ -80,13 +88,7 @@ struct RosterPhotoImporterView: View {
                 }
             }
             .sheet(isPresented: $showImagePicker) {
-                ImagePicker(
-                    sourceType: .photoLibrary,
-                    selectedImage: $image,
-                    completionHandler: { _ in
-                        showImagePicker = false
-                    }
-                )
+                ImagePicker(selectedImage: $image)
             }
             .alert(isPresented: $showingErrorAlert) {
                 Alert(
@@ -94,6 +96,9 @@ struct RosterPhotoImporterView: View {
                     message: Text(errorMessage),
                     dismissButton: .default(Text("OK"))
                 )
+            }
+            .onAppear {
+                loadExistingRoster()
             }
         }
     }
@@ -112,6 +117,23 @@ struct RosterPhotoImporterView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
                 .foregroundColor(.secondary)
+            
+            // Show next available ID info
+            VStack(spacing: 8) {
+                Text("Next athlete will be assigned ID: \(nextSubjectID)")
+                    .font(.headline)
+                    .foregroundColor(.blue)
+                
+                TextField("Starting Subject ID", value: $nextSubjectID, formatter: NumberFormatter())
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .keyboardType(.numberPad)
+                    .padding(.horizontal)
+                    .padding(.bottom, 10)
+            }
+            .padding(.vertical)
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(8)
+            .padding(.horizontal)
             
             VStack(spacing: 15) {
                 Button(action: {
@@ -164,7 +186,7 @@ struct RosterPhotoImporterView: View {
                 .font(.title3)
                 .fontWeight(.medium)
             
-            Text("Claude AI is analyzing the image to extract athlete information. This may take a few moments.")
+            Text("Claude AI is analyzing the image to extract athlete information. This may take a few moments. New athletes will be numbered starting from \(nextSubjectID).")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
@@ -181,8 +203,16 @@ struct RosterPhotoImporterView: View {
             List {
                 ForEach(extractedRoster) { entry in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(entry.lastName), \(entry.firstName)")
-                            .font(.headline)
+                        HStack {
+                            Text("\(entry.lastName)")
+                                .font(.headline)
+                            
+                            Spacer()
+                            
+                            Text("ID: \(entry.firstName)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         
                         if !entry.group.isEmpty {
                             Text("Sport/Team: \(entry.group)")
@@ -190,8 +220,14 @@ struct RosterPhotoImporterView: View {
                         }
                         
                         if !entry.teacher.isEmpty {
-                            Text("Special: \(entry.teacher)")
+                            Text("Grade: \(entry.teacher)")
                                 .font(.caption)
+                        }
+                        
+                        if !entry.email.isEmpty {
+                            Text("Email: \(entry.email)")
+                                .font(.caption)
+                                .foregroundColor(.blue)
                         }
                     }
                     .padding(.vertical, 4)
@@ -223,17 +259,33 @@ struct RosterPhotoImporterView: View {
         }
     }
     
+    // Load existing roster to determine next available Subject ID
+    private func loadExistingRoster() {
+        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
+            switch result {
+            case .success(let shoot):
+                // Find the highest Subject ID value across all entries
+                let highestID = shoot.roster.compactMap { entry -> Int? in
+                    return Int(entry.firstName)
+                }.max() ?? 100 // Default to 100 if no entries exist
+                
+                DispatchQueue.main.async {
+                    self.nextSubjectID = highestID + 1
+                    print("Next available Subject ID: \(self.nextSubjectID)")
+                }
+                
+            case .failure(let error):
+                print("Error loading sports shoot: \(error.localizedDescription)")
+                // Keep the default starting ID if there's an error
+            }
+        }
+    }
+    
     private func processImage(_ image: UIImage) {
         isProcessing = true
         
-        // Use the mock implementation for testing or quick results
-        // In production, use the actual API call:
-        
-        // Option 1: Use mock for testing (fast, no API call)
-        // ClaudeRosterService.shared.mockExtractRoster { result in
-        
-        // Option 2: Use actual API (requires API key)
-        ClaudeRosterService.shared.extractRosterFromImage(image) { result in
+        // Use the actual API implementation with the next available Subject ID
+        ClaudeRosterService.shared.extractRosterFromImage(image, startingSubjectID: nextSubjectID) { result in
             DispatchQueue.main.async {
                 isProcessing = false
                 
@@ -287,49 +339,6 @@ struct RosterPhotoImporterView: View {
                 presentationMode.wrappedValue.dismiss()
             }
         }
-    }
-}
-
-// Image Picker Component for selecting photos
-struct ImagePicker: UIViewControllerRepresentable {
-    var sourceType: UIImagePickerController.SourceType
-    @Binding var selectedImage: UIImage?
-    let completionHandler: (Result<UIImage, Error>) -> Void
-    
-    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
-        var parent: ImagePicker
-        
-        init(_ parent: ImagePicker) {
-            self.parent = parent
-        }
-        
-        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
-            if let image = info[.originalImage] as? UIImage {
-                parent.selectedImage = image
-                parent.completionHandler(.success(image))
-            }
-            picker.dismiss(animated: true)
-        }
-        
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            picker.dismiss(animated: true)
-            parent.completionHandler(.failure(NSError(domain: "ImagePicker", code: 0, userInfo: [NSLocalizedDescriptionKey: "User cancelled"])))
-        }
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
-        picker.sourceType = sourceType
-        picker.delegate = context.coordinator
-        return picker
-    }
-    
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {
-        // Nothing to update
     }
 }
 

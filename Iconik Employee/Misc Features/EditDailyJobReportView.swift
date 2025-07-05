@@ -227,8 +227,7 @@ struct EditDailyJobReportView: View {
     
     func loadSchools() {
         let db = Firestore.firestore()
-        db.collection("dropdownData")
-            .whereField("type", isEqualTo: "school")
+        db.collection("schools")
             .getDocuments { snapshot, error in
                 if let error = error {
                     errorMessage = error.localizedDescription

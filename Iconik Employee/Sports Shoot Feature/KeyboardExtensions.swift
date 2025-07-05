@@ -86,19 +86,14 @@ struct NumericTextField: View {
     // Focus state
     @FocusState private var isFocused: Bool
     
+    // Track the previous focus state to detect when focus is lost
+    @State private var wasFocused = false
+    
     var body: some View {
         TextField(placeholder, text: $text)
             .keyboardType(.numberPad)
             .focused($isFocused)
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") {
-                        isFocused = false
-                        onCommit?()
-                    }
-                }
-            }
+            // Remove toolbar completely to avoid constraint issues
             .onSubmit {
                 onCommit?()
             }
@@ -107,6 +102,18 @@ struct NumericTextField: View {
                 if filtered != newValue {
                     self.text = filtered
                 }
+            }
+            // Track changes in focus state
+            .onChange(of: isFocused) { newFocus in
+                // If focus was lost, trigger the save
+                if wasFocused && !newFocus {
+                    onCommit?()
+                }
+                wasFocused = newFocus
+            }
+            .onAppear {
+                // Initialize wasFocused based on initial focus state
+                wasFocused = isFocused
             }
     }
 }

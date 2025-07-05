@@ -100,8 +100,7 @@ struct SchoolInfoListView: View {
         mileageBySchool = [:]
         
         let db = Firestore.firestore()
-        db.collection("dropdownData")
-            .whereField("type", isEqualTo: "school")
+        db.collection("schools")
             .whereField("organizationID", isEqualTo: storedUserOrganizationID) // Filter by organization ID
             .getDocuments { snapshot, error in
                 DispatchQueue.main.async {

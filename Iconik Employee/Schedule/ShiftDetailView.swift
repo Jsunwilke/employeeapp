@@ -1221,7 +1221,7 @@ struct ShiftDetailView: View {
     
     private func loadLocationPhotos() {
         let db = Firestore.firestore()
-        db.collection("dropdownData")
+        db.collection("schools")
             .whereField("value", isEqualTo: event.schoolName)
             .getDocuments { snapshot, error in
                 if let error = error {
@@ -1281,7 +1281,7 @@ struct ShiftDetailView: View {
     
     private func loadSchoolAddress() {
         let db = Firestore.firestore()
-        db.collection("dropdownData")
+        db.collection("schools")
             .whereField("value", isEqualTo: event.schoolName)
             .getDocuments { snapshot, error in
                 if let error = error {

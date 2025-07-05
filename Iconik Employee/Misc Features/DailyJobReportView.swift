@@ -1211,8 +1211,8 @@ struct DailyJobReportView: View {
     // MARK: - Load Schools
     func loadSchools() {
         let db = Firestore.firestore()
-        db.collection("dropdownData")
-            .whereField("type", isEqualTo: "school")
+        db.collection("schools")
+            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
             .getDocuments { snapshot, error in
                 if let error = error {
                     self.errorMessage = error.localizedDescription

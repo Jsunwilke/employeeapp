@@ -1,47 +1,95 @@
-//
-//  CreateSportsShootViewModel.swift
-//  Iconik Employee
-//
-//  Created by administrator on 5/20/25.
-//
-
-
 import SwiftUI
 import Firebase
 import FirebaseFirestore
-import Combine
 
-class CreateSportsShootViewModel: ObservableObject {
+struct CreateSportsShootView: View {
+    @Environment(\.presentationMode) var presentationMode
+    @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
+    
+    // Match the expected function signature
+    let onComplete: (_ success: Bool) -> Void
+    
     // Form fields
-    @Published var schoolName: String = ""
-    @Published var sportName: String = ""
-    @Published var shootDate = Date()
-    @Published var location: String = ""
-    @Published var photographer: String = ""
-    @Published var additionalNotes: String = ""
+    @State private var schoolName: String = ""
+    @State private var sportName: String = ""
+    @State private var shootDate = Date()
+    @State private var location: String = ""
+    @State private var photographer: String = ""
+    @State private var additionalNotes: String = ""
     
     // State
-    @Published var isLoading = false
-    @Published var showAlert = false
-    @Published var alertTitle = ""
-    @Published var alertMessage = ""
+    @State private var isLoading = false
+    @State private var showAlert = false
+    @State private var alertTitle = ""
+    @State private var alertMessage = ""
     
-    // Organization info
-    private let organizationID: String
-    private var repository = SportsShootRepository.shared
-    private var cancellables = Set<AnyCancellable>()
-    
-    init() {
-        // Get stored organization ID
-        self.organizationID = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.userOrganizationID) ?? ""
+    init(onComplete: @escaping (_ success: Bool) -> Void) {
+        self.onComplete = onComplete
     }
     
-    func createSportsShoot(completion: @escaping (Bool) -> Void) {
-        guard !organizationID.isEmpty else {
+    var body: some View {
+        NavigationView {
+            Form {
+                // Basic information section
+                Section(header: Text("Basic Information")) {
+                    TextField("School Name", text: $schoolName)
+                    TextField("Sport Name", text: $sportName)
+                    DatePicker("Shoot Date", selection: $shootDate, displayedComponents: .date)
+                    TextField("Location", text: $location)
+                    TextField("Photographer", text: $photographer)
+                }
+                
+                // Notes section
+                Section(header: Text("Additional Notes")) {
+                    TextEditor(text: $additionalNotes)
+                        .frame(minHeight: 100)
+                }
+                
+                // Create button section
+                Section {
+                    Button(action: createSportsShoot) {
+                        if isLoading {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                        } else {
+                            Text("Create Sports Shoot")
+                                .bold()
+                                .foregroundColor(.blue)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .disabled(isLoading || schoolName.isEmpty || sportName.isEmpty)
+                }
+            }
+            .navigationTitle("New Sports Shoot")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+            }
+            .alert(isPresented: $showAlert) {
+                Alert(
+                    title: Text(alertTitle),
+                    message: Text(alertMessage),
+                    dismissButton: .default(Text("OK")) {
+                        if alertTitle == "Success" {
+                            onComplete(true)
+                            presentationMode.wrappedValue.dismiss()
+                        }
+                    }
+                )
+            }
+        }
+    }
+    
+    private func createSportsShoot() {
+        guard !storedUserOrganizationID.isEmpty else {
             alertTitle = "Error"
             alertMessage = "No organization ID found. Please sign in again."
             showAlert = true
-            completion(false)
             return
         }
         
@@ -49,7 +97,6 @@ class CreateSportsShootViewModel: ObservableObject {
             alertTitle = "Error"
             alertMessage = "School name and sport name are required."
             showAlert = true
-            completion(false)
             return
         }
         
@@ -66,105 +113,50 @@ class CreateSportsShootViewModel: ObservableObject {
             roster: [],
             groupImages: [],
             additionalNotes: additionalNotes,
-            organizationID: organizationID,
+            organizationID: storedUserOrganizationID,
             createdAt: Date(),
             updatedAt: Date()
         )
         
-        // Save to Firestore using the repository
+        // Save to Firestore
         let db = Firestore.firestore()
-        let docRef = db.collection(Constants.FirestoreCollections.sportsJobs).document(newShoot.id)
+        let docRef = db.collection("sportsJobs").document(newShoot.id)
         
         // Convert to Firestore data
-        let data = newShoot.toDictionary()
+        var data: [String: Any] = [
+            "schoolName": newShoot.schoolName,
+            "sportName": newShoot.sportName,
+            "shootDate": Timestamp(date: newShoot.shootDate),
+            "location": newShoot.location,
+            "photographer": newShoot.photographer,
+            "roster": [],  // Empty roster initially
+            "groupImages": [],  // Empty group images initially
+            "additionalNotes": newShoot.additionalNotes,
+            "organizationID": newShoot.organizationID,
+            "createdAt": Timestamp(date: newShoot.createdAt),
+            "updatedAt": Timestamp(date: newShoot.updatedAt)
+        ]
         
-        docRef.setData(data) { [weak self] error in
+        docRef.setData(data) { error in
             DispatchQueue.main.async {
-                self?.isLoading = false
+                isLoading = false
                 
                 if let error = error {
-                    self?.alertTitle = "Error"
-                    self?.alertMessage = "Failed to create sports shoot: \(error.localizedDescription)"
-                    self?.showAlert = true
-                    completion(false)
+                    alertTitle = "Error"
+                    alertMessage = "Failed to create sports shoot: \(error.localizedDescription)"
                 } else {
-                    self?.alertTitle = "Success"
-                    self?.alertMessage = "Sports shoot created successfully."
-                    self?.showAlert = true
-                    completion(true)
+                    alertTitle = "Success"
+                    alertMessage = "Sports shoot created successfully."
                 }
+                
+                showAlert = true
             }
         }
     }
 }
 
-struct CreateSportsShootView: View {
-    @StateObject private var viewModel = CreateSportsShootViewModel()
-    @Environment(\.presentationMode) var presentationMode
-    var onComplete: (Bool) -> Void
-    
-    var body: some View {
-        NavigationView {
-            Form {
-                // Basic information section
-                Section(header: Text("Basic Information")) {
-                    TextField("School Name", text: $viewModel.schoolName)
-                    TextField("Sport Name", text: $viewModel.sportName)
-                    DatePicker("Shoot Date", selection: $viewModel.shootDate, displayedComponents: .date)
-                    TextField("Location", text: $viewModel.location)
-                    TextField("Photographer", text: $viewModel.photographer)
-                }
-                
-                // Notes section
-                Section(header: Text("Additional Notes")) {
-                    TextEditor(text: $viewModel.additionalNotes)
-                        .frame(minHeight: 100)
-                }
-                
-                // Create button section
-                Section {
-                    Button(action: {
-                        viewModel.createSportsShoot { success in
-                            if success {
-                                onComplete(true)
-                                presentationMode.wrappedValue.dismiss()
-                            }
-                        }
-                    }) {
-                        if viewModel.isLoading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                        } else {
-                            Text("Create Sports Shoot")
-                                .bold()
-                                .foregroundColor(.blue)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .disabled(viewModel.isLoading || viewModel.schoolName.isEmpty || viewModel.sportName.isEmpty)
-                }
-            }
-            .navigationTitle("New Sports Shoot")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-            }
-            .alert(isPresented: $viewModel.showAlert) {
-                Alert(
-                    title: Text(viewModel.alertTitle),
-                    message: Text(viewModel.alertMessage),
-                    dismissButton: .default(Text("OK")) {
-                        if viewModel.alertTitle == "Success" {
-                            onComplete(true)
-                            presentationMode.wrappedValue.dismiss()
-                        }
-                    }
-                )
-            }
-        }
+struct CreateSportsShootView_Previews: PreviewProvider {
+    static var previews: some View {
+        CreateSportsShootView(onComplete: { _ in })
     }
 }

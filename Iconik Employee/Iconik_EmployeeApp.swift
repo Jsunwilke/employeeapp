@@ -1,32 +1,47 @@
-//
-//  Iconik_EmployeeApp.swift
-//  Iconik Employee
-//
-//  Created by administrator on 3/2/25.
-//
-
 import SwiftUI
-import SwiftData
+import Firebase
 
 @main
-struct Iconik_EmployeeApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+struct EmployeeAppApp: App {
+    // Use PushNotificationManager as your app delegate.
+    @UIApplicationDelegateAdaptor(PushNotificationManager.self) var pushManager
+    
+    // Access the AppStorage value for app theme
+    @AppStorage("appTheme") private var appTheme: String = "system"
 
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
-
+    init() {
+        FirebaseApp.configure()
+        
+        // Apply the saved theme immediately during app initialization
+        applyAppTheme()
+    }
+    
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .onAppear {
+                    // Also apply theme when root view appears, for good measure
+                    applyAppTheme()
+                }
         }
-        .modelContainer(sharedModelContainer)
+    }
+    
+    // Apply the theme based on the AppStorage value
+    private func applyAppTheme() {
+        DispatchQueue.main.async {
+            let scenes = UIApplication.shared.connectedScenes
+            guard let windowScene = scenes.first as? UIWindowScene else { return }
+            
+            for window in windowScene.windows {
+                switch appTheme {
+                case "light":
+                    window.overrideUserInterfaceStyle = .light
+                case "dark":
+                    window.overrideUserInterfaceStyle = .dark
+                default:
+                    window.overrideUserInterfaceStyle = .unspecified
+                }
+            }
+        }
     }
 }

@@ -44,10 +44,34 @@ enum JobBoxSort: String, CaseIterable {
     case status = "Status"
 }
 
+enum JobBoxStatusFilter: String, CaseIterable {
+    case all = "All Statuses"
+    case packed = "Packed"
+    case pickedUp = "Picked Up"
+    case leftJob = "Left Job"
+    case turnedIn = "Turned In"
+    
+    var correspondingStatus: JobBoxStatus? {
+        switch self {
+        case .all:
+            return nil
+        case .packed:
+            return .packed
+        case .pickedUp:
+            return .pickedUp
+        case .leftJob:
+            return .leftJob
+        case .turnedIn:
+            return .turnedIn
+        }
+    }
+}
+
 class ManagerJobBoxViewModel: ObservableObject {
     @Published var allJobBoxes: [JobBoxWithEvent] = []
     @Published var selectedFilter: JobBoxFilter = .active
     @Published var selectedSort: JobBoxSort = .newestFirst
+    @Published var selectedStatusFilter: JobBoxStatusFilter = .all
     @Published var searchText: String = ""
     @Published var isLoading: Bool = false
     @Published var errorMessage: String = ""
@@ -182,7 +206,7 @@ class ManagerJobBoxViewModel: ObservableObject {
                 return
             }
             
-            // Otherwise, group by card number and show only the latest status
+            // Group by card number and get only the latest status for each
             let groupedBoxes = Dictionary(grouping: filteredBoxes) { box -> String in
                 // Group by card number, or use jobbox number as fallback
                 return !box.cardNumber.isEmpty ? box.cardNumber : box.jobboxNumber
@@ -195,6 +219,14 @@ class ManagerJobBoxViewModel: ObservableObject {
                 // Sort by timestamp (newest first) and take only the first one
                 if let latestBox = boxes.sorted(by: { $0.jobBox.timestamp > $1.jobBox.timestamp }).first {
                     latestStatusBoxes.append(latestBox)
+                }
+            }
+            
+            // IMPORTANT: Apply status filter AFTER determining the latest status
+            // This ensures we only see boxes currently at a specific status
+            if self.selectedStatusFilter != .all {
+                if let status = self.selectedStatusFilter.correspondingStatus {
+                    latestStatusBoxes = latestStatusBoxes.filter { $0.jobBox.status == status }
                 }
             }
             
@@ -263,15 +295,12 @@ class ManagerJobBoxViewModel: ObservableObject {
         }
     }
     
-    // Helper function to determine status priority for sorting
+    // Helper function to determine status priority for sorting (optimized version)
     private func statusPriority(_ status: JobBoxStatus) -> Int {
-        switch status {
-        case .packed: return 0
-        case .pickedUp: return 1
-        case .leftJob: return 2
-        case .turnedIn: return 3
-        case .unknown: return 4
-        }
+        if status == .packed { return 0 }
+        if status == .pickedUp { return 1 }
+        if status == .leftJob { return 2 }
+        return 3 // Must be .turnedIn
     }
     
     // Apply filters and sorting
@@ -332,6 +361,9 @@ struct ManagerJobBoxTrackerView: View {
     @State private var showingSettingsSheet = false
     @State private var flagNote = ""
     
+    // State for expanded filters
+    @State private var showAdvancedFilters: Bool = false
+    
     var body: some View {
         VStack(spacing: 0) {
             // Dashboard header
@@ -372,7 +404,7 @@ struct ManagerJobBoxTrackerView: View {
             .padding(.horizontal)
             .padding(.bottom, 10)
             
-            // Filter controls
+            // Main filter controls
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(JobBoxFilter.allCases, id: \.self) { filter in
@@ -387,6 +419,25 @@ struct ManagerJobBoxTrackerView: View {
                                 .foregroundColor(viewModel.selectedFilter == filter ? .white : .primary)
                                 .cornerRadius(20)
                         }
+                    }
+                    
+                    // Advanced filters toggle button
+                    Button(action: {
+                        withAnimation {
+                            showAdvancedFilters.toggle()
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: showAdvancedFilters ? "line.horizontal.3.decrease.circle.fill" : "line.horizontal.3.decrease.circle")
+                                .font(.footnote)
+                            Text("Advanced")
+                                .font(.subheadline)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(showAdvancedFilters ? Color.blue : Color.gray.opacity(0.2))
+                        .foregroundColor(showAdvancedFilters ? .white : .primary)
+                        .cornerRadius(20)
                     }
                     
                     Button(action: {
@@ -407,7 +458,39 @@ struct ManagerJobBoxTrackerView: View {
                 }
                 .padding(.horizontal)
             }
-            .padding(.bottom, 10)
+            .padding(.bottom, 5)
+            
+            // Advanced filters section - conditionally show
+            if showAdvancedFilters {
+                VStack {
+                    // Status filter controls
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            Text("Status:")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            
+                            ForEach(JobBoxStatusFilter.allCases, id: \.self) { statusFilter in
+                                Button(action: {
+                                    viewModel.selectedStatusFilter = statusFilter
+                                    viewModel.applyFiltersAndSort()
+                                }) {
+                                    Text(statusFilter.rawValue)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(viewModel.selectedStatusFilter == statusFilter ? Color.green : Color.gray.opacity(0.2))
+                                        .foregroundColor(viewModel.selectedStatusFilter == statusFilter ? .white : .primary)
+                                        .cornerRadius(20)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+                .padding(.vertical, 8)
+                .background(Color.gray.opacity(0.05))
+                .transition(.opacity)
+            }
             
             // Date picker (if enabled)
             if viewModel.showDatePicker {
@@ -641,24 +724,17 @@ struct ManagerJobBoxTrackerView: View {
         .padding(.vertical, 4)
     }
     
-    // Background color for each row based on status
+    // Background color for each row based on status (optimized version)
     private func rowBackground(for jobBox: JobBoxWithEvent) -> Color {
         if jobBox.isStalled {
             return Color.orange.opacity(0.1)
         }
         
-        switch jobBox.jobBox.status {
-        case .packed:
-            return Color.blue.opacity(0.05)
-        case .pickedUp:
-            return Color.purple.opacity(0.05)
-        case .leftJob:
-            return Color.orange.opacity(0.05)
-        case .turnedIn:
-            return Color.green.opacity(0.05)
-        case .unknown:
-            return Color.gray.opacity(0.05)
-        }
+        let status = jobBox.jobBox.status
+        if status == .packed { return Color.blue.opacity(0.05) }
+        if status == .pickedUp { return Color.purple.opacity(0.05) }
+        if status == .leftJob { return Color.orange.opacity(0.05) }
+        return Color.green.opacity(0.05) // Must be .turnedIn
     }
     
     // Status pills visualization
@@ -776,20 +852,12 @@ struct ManagerJobBoxTrackerView: View {
     
     // Helper functions
     
-    // Convert JobBoxStatus to step number (1-4)
+    // Convert JobBoxStatus to step number (1-4) (optimized version)
     private func statusToStep(_ status: JobBoxStatus) -> Int {
-        switch status {
-        case .packed:
-            return 1
-        case .pickedUp:
-            return 2
-        case .leftJob:
-            return 3
-        case .turnedIn:
-            return 4
-        case .unknown:
-            return 0
-        }
+        if status == .packed { return 1 }
+        if status == .pickedUp { return 2 }
+        if status == .leftJob { return 3 }
+        return 4 // Must be .turnedIn
     }
     
     // Get the color for a step based on its state
@@ -803,26 +871,18 @@ struct ManagerJobBoxTrackerView: View {
         }
     }
     
-    // Get color for status text
+    // Get color for status text (optimized version)
     private func getStatusColor(_ status: JobBoxStatus) -> Color {
-        switch status {
-        case .packed:
-            return .blue
-        case .pickedUp:
-            return .purple
-        case .leftJob:
-            return .orange
-        case .turnedIn:
-            return .green
-        case .unknown:
-            return .gray
-        }
+        if status == .packed { return .blue }
+        if status == .pickedUp { return .purple }
+        if status == .leftJob { return .orange }
+        return .green // Must be .turnedIn
     }
 }
 
 // Helper extension to make JobBoxStatus conform to CaseIterable
 extension JobBoxStatus: CaseIterable {
     static var allCases: [JobBoxStatus] {
-        return [.packed, .pickedUp, .leftJob, .turnedIn, .unknown]
+        return [.packed, .pickedUp, .leftJob, .turnedIn]
     }
 }

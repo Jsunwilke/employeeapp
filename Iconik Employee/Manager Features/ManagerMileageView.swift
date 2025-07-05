@@ -51,19 +51,31 @@ class ManagerMileageViewModel: ObservableObject {
             fatalError("Invalid reference date for pay periods.")
         }
         
+        // Make sure reference date is start of day
+        let referenceStartOfDay = calendar.startOfDay(for: referenceDate)
+        
         let today = Date()
-        let daysSinceRef = calendar.dateComponents([.day], from: referenceDate, to: today).day ?? 0
+        let daysSinceRef = calendar.dateComponents([.day], from: referenceStartOfDay, to: today).day ?? 0
         let periodsElapsed = daysSinceRef / periodLength
         
-        guard
-            let start = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceDate),
-            let end   = calendar.date(byAdding: .day, value: periodLength - 1, to: start)
-        else {
-            fatalError("Could not compute 14-day boundaries.")
+        guard let start = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay) else {
+            fatalError("Could not compute 14-day start boundary.")
+        }
+        
+        // Calculate end date and set it to end of day (23:59:59)
+        guard let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: start),
+              let end = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) else {
+            fatalError("Could not compute 14-day end boundary.")
         }
         
         self.currentPeriodStart = start
-        self.currentPeriodEnd   = end
+        self.currentPeriodEnd = end
+        
+        // Log the calculated period for debugging
+        let debugFormatter = DateFormatter()
+        debugFormatter.dateStyle = .medium
+        debugFormatter.timeStyle = .medium
+        print("Manager current period calculated as: \(debugFormatter.string(from: start)) to \(debugFormatter.string(from: end))")
     }
     
     /// Loads employees from Firestore, then automatically loads stats for the current pay period.
@@ -114,11 +126,25 @@ class ManagerMileageViewModel: ObservableObject {
         endOfYearComps.year  = currentYear
         endOfYearComps.month = 12
         endOfYearComps.day   = 31
+        endOfYearComps.hour  = 23
+        endOfYearComps.minute = 59
+        endOfYearComps.second = 59
         
         let yearStart = calendar.date(from: startOfYearComps) ?? now
         let yearEnd   = calendar.date(from: endOfYearComps)   ?? now
         
-        let periodEnd = calendar.date(byAdding: .day, value: 13, to: selectedPeriodStart) ?? selectedPeriodStart
+        // Calculate period end with proper end-of-day timing
+        guard let tempPeriodEnd = calendar.date(byAdding: .day, value: 13, to: selectedPeriodStart),
+              let periodEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempPeriodEnd) else {
+            print("Error calculating period end date")
+            return
+        }
+        
+        // Log the date range we're querying for debugging
+        let debugFormatter = DateFormatter()
+        debugFormatter.dateStyle = .medium
+        debugFormatter.timeStyle = .medium
+        print("Manager loading stats from \(debugFormatter.string(from: selectedPeriodStart)) to \(debugFormatter.string(from: periodEnd))")
         
         // Reset stats
         statsByUser = [:]
@@ -162,6 +188,7 @@ class ManagerMileageViewModel: ObservableObject {
                                 monthMiles += miles
                             }
                             
+                            // Fixed: Now properly comparing with end-of-day periodEnd
                             if dateVal >= selectedPeriodStart && dateVal <= periodEnd {
                                 periodMiles += miles
                             }
@@ -174,6 +201,10 @@ class ManagerMileageViewModel: ObservableObject {
                             monthMiles:  monthMiles,
                             yearMiles:   yearMiles
                         )
+                        
+                        // Log the calculation for this employee
+                        print("Manager calculated mileage for \(emp.firstName): period=\(periodMiles), month=\(monthMiles), year=\(yearMiles)")
+                        
                         group.leave()
                     }
                 }
@@ -181,6 +212,7 @@ class ManagerMileageViewModel: ObservableObject {
         
         group.notify(queue: .main) {
             // All stats fetched
+            print("Manager finished loading all employee stats")
         }
     }
     

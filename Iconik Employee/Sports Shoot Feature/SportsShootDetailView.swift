@@ -48,12 +48,12 @@ struct SportsShootDetailView: View {
     @State private var selectedSpecialFilters: Set<String> = []
     @State private var imageFilterType: ImageFilterType = .all
     
-    // Autosave states
-    var debounceTask: DispatchWorkItem?
-    var lastSavedValue: String = ""
+    // Autosave states - these need to be @State properties, not simple vars
+    @State private var debounceTask: DispatchWorkItem?
+    @State private var lastSavedValue: String = ""
     
     // Environment
-    @Environment(\.presentationMode) var presentationMode
+    // @Environment(\.presentationMode) var presentationMode // Removed - using NavigationLink
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     @AppStorage("userLastName") private var storedUserLastName: String = ""
     
@@ -81,115 +81,107 @@ struct SportsShootDetailView: View {
     }
     
     var body: some View {
-        NavigationView {
-            ZStack {
-                if isLoading {
-                    ProgressView("Loading...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let shoot = sportsShoot {
-                    VStack(spacing: 0) {
-                        // Header with shoot info
-                        shootHeaderView(shoot)
-                        
-                        // Tab selector
-                        tabSelectorView
-                        
-                        // Active filters indicator
-                        if (!selectedFilters.isEmpty || !selectedSpecialFilters.isEmpty || imageFilterType != .all) && selectedTab == 0 {
-                            activeFiltersView
-                        }
-                        
-                        // Tab content
-                        if selectedTab == 0 {
-                            rosterListView(shoot)
-                        } else {
-                            groupImagesListView(shoot)
-                        }
+        ZStack {
+            if isLoading {
+                ProgressView("Loading...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let shoot = sportsShoot {
+                VStack(spacing: 0) {
+                    // Compact header - much smaller
+                    compactHeaderView(shoot)
+                    
+                    // Tab selector
+                    tabSelectorView
+                    
+                    // Active filters indicator
+                    if (!selectedFilters.isEmpty || !selectedSpecialFilters.isEmpty || imageFilterType != .all) && selectedTab == 0 {
+                        activeFiltersView
                     }
-                    .background(Color(.systemGroupedBackground))
-                } else {
-                    VStack {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 50))
-                            .foregroundColor(.orange)
-                        
-                        Text("Failed to Load")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .padding(.top)
-                        
-                        Text("Unable to load this sports shoot. Please try again.")
-                            .multilineTextAlignment(.center)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal)
-                        
-                        Button("Retry") {
-                            loadSportsShoot()
-                        }
+                    
+                    // Tab content
+                    if selectedTab == 0 {
+                        rosterListView(shoot)
+                    } else {
+                        groupImagesListView(shoot)
+                    }
+                }
+                .background(Color(.systemGroupedBackground))
+            } else {
+                VStack {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 50))
+                        .foregroundColor(.orange)
+                    
+                    Text("Failed to Load")
+                        .font(.title2)
+                        .fontWeight(.bold)
                         .padding(.top)
-                        .foregroundColor(.blue)
+                    
+                    Text("Unable to load this sports shoot. Please try again.")
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
+                    
+                    Button("Retry") {
+                        loadSportsShoot()
                     }
-                    .padding()
+                    .padding(.top)
+                    .foregroundColor(.blue)
                 }
-                
-                // Filter panel (slides out from right side)
-                if selectedTab == 0 {
-                    FilterPanelView(
-                        isShowing: $showFilterPanel,
-                        selectedFilters: $selectedFilters,
-                        selectedSpecialFilters: $selectedSpecialFilters,
-                        imageFilterType: $imageFilterType,
-                        groupNames: allGroupNames(),
-                        specialFilters: specialFilters,
-                        colorForGroup: colorForGroup
-                    )
-                }
+                .padding()
             }
-            .navigationTitle(sportsShoot?.schoolName ?? "Sports Shoot")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Back") {
-                        presentationMode.wrappedValue.dismiss()
+            
+            // Filter panel (slides out from right side)
+            if selectedTab == 0 {
+                FilterPanelView(
+                    isShowing: $showFilterPanel,
+                    selectedFilters: $selectedFilters,
+                    selectedSpecialFilters: $selectedSpecialFilters,
+                    imageFilterType: $imageFilterType,
+                    groupNames: allGroupNames(),
+                    specialFilters: specialFilters,
+                    colorForGroup: colorForGroup
+                )
+            }
+        }
+        .navigationTitle(sportsShoot?.schoolName ?? "Sports Shoot")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(false) // Use default back button
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button(action: {
+                        showingMultiPhotoImport = true
+                    }) {
+                        Label("Import Paper Rosters", systemImage: "doc.viewfinder")
                     }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button(action: {
-                            showingMultiPhotoImport = true
-                        }) {
-                            Label("Import Paper Rosters", systemImage: "doc.viewfinder")
-                        }
-                        
-                        Button(action: {
-                            showingImportExport = true
-                        }) {
-                            Label("Import/Export CSV", systemImage: "square.and.arrow.up.on.square")
-                        }
-                        
-                        if let shoot = sportsShoot {
-                            if OfflineManager.shared.isShootCached(id: shoot.id) {
-                                Button(action: {
-                                    OfflineManager.shared.syncShoot(shootID: shoot.id)
-                                }) {
-                                    Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
-                                }
-                            } else {
-                                Button(action: {
-                                    cacheShootForOffline()
-                                }) {
-                                    Label("Make Available Offline", systemImage: "arrow.down.to.line")
-                                }
+                    
+                    Button(action: {
+                        showingImportExport = true
+                    }) {
+                        Label("Import/Export CSV", systemImage: "square.and.arrow.up.on.square")
+                    }
+                    
+                    if let shoot = sportsShoot {
+                        if OfflineManager.shared.isShootCached(id: shoot.id) {
+                            Button(action: {
+                                OfflineManager.shared.syncShoot(shootID: shoot.id)
+                            }) {
+                                Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                            }
+                        } else {
+                            Button(action: {
+                                cacheShootForOffline()
+                            }) {
+                                Label("Make Available Offline", systemImage: "arrow.down.to.line")
                             }
                         }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
                     }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle()) // Force stack style for iPhone
         .onAppear {
             loadSportsShoot()
             setupNetworkMonitoring()
@@ -217,10 +209,10 @@ struct SportsShootDetailView: View {
                         switch result {
                         case .success:
                             // Update the lastSavedValue to prevent redundant saves
-                            self.lastSavedValue = newValue
+                            lastSavedValue = newValue
                             
                             // Refresh the shoot data
-                            self.refreshSportsShoot()
+                            refreshSportsShoot()
                         case .failure(let error):
                             print("Autosave error: \(error.localizedDescription)")
                         }
@@ -295,72 +287,61 @@ struct SportsShootDetailView: View {
         }
     }
     
-    // MARK: - Header View
+    // MARK: - Compact Header View
     
-    private func shootHeaderView(_ shoot: SportsShoot) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func compactHeaderView(_ shoot: SportsShoot) -> some View {
+        VStack(spacing: 4) {
+            // Single line with sport and basic info
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(shoot.schoolName)
-                        .font(.title2)
-                        .fontWeight(.bold)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(shoot.sportName)
+                        .font(.headline)
+                        .foregroundColor(.blue)
                     
-                    HStack {
-                        Text(shoot.sportName)
-                            .font(.headline)
-                            .foregroundColor(.blue)
+                    HStack(spacing: 8) {
+                        if !shoot.location.isEmpty {
+                            Text(shoot.location)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         
-                        Spacer()
-                        
-                        // Sync status badge
-                        SyncStatusBadge(shootID: shoot.id)
-                            .font(.system(size: 16))
-                        
-                        // Connection status
-                        CompactConnectionIndicator()
+                        Text(formatDate(shoot.shootDate))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
-                }
-            }
-            
-            HStack {
-                if !shoot.location.isEmpty {
-                    Label(shoot.location, systemImage: "mappin.and.ellipse")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
                 }
                 
                 Spacer()
                 
-                Text(formatDate(shoot.shootDate))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                // Status indicators in compact form
+                HStack(spacing: 8) {
+                    SyncStatusBadge(shootID: shoot.id)
+                        .font(.system(size: 16))
+                    
+                    CompactConnectionIndicator()
+                }
             }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
             
-            if !shoot.photographer.isEmpty {
-                Label(shoot.photographer, systemImage: "person.crop.circle")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            // Offline notification banner
+            // Offline notification banner (if applicable) - more compact
             if !isOnline {
                 HStack {
                     Image(systemName: "wifi.slash")
+                        .font(.caption)
                         .foregroundColor(.orange)
                     
-                    Text("You're offline - changes will sync when you reconnect")
+                    Text("Offline - changes will sync when you reconnect")
                         .font(.caption)
                         .foregroundColor(.orange)
                     
                     Spacer()
                 }
+                .padding(.horizontal)
                 .padding(.vertical, 4)
-                .padding(.horizontal, 8)
                 .background(Color.orange.opacity(0.1))
-                .cornerRadius(6)
             }
         }
-        .padding()
         .background(Color(.secondarySystemGroupedBackground))
     }
     
@@ -530,56 +511,130 @@ struct SportsShootDetailView: View {
         return VStack(spacing: 0) {
             // Main content row
             VStack(spacing: 8) {
-                // Top row - Name and ID
-                HStack {
-                    Button(action: {
-                        if !isLockedByOthers {
-                            selectedRosterEntry = entry
-                            showingAddRosterEntry = true
-                        }
-                    }) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 4) {
-                                Text(entry.firstName)
-                                    .font(.system(size: 18, weight: .bold))
-                                    .foregroundColor(.blue)
-                                
-                                if !entry.teacher.isEmpty {
-                                    Text(specialTranslation(entry.teacher))
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            
-                            Text(entry.lastName)
-                                .font(.system(size: 16))
-                                .foregroundColor(.primary)
-                        }
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .disabled(isLockedByOthers)
-                    
-                    Spacer()
-                    
-                    // Group/Team tag
-                    if !entry.group.isEmpty {
+                // Adaptive layout based on content length
+                let layoutStrategy = getLayoutStrategy(entry)
+                let needsMultiLine = groupNeedsMultiLineLayout(entry.group)
+                
+                if layoutStrategy.useVertical {
+                    // Vertical layout for extremely long content
+                    VStack(alignment: .leading, spacing: 8) {
+                        // Player info - full width
                         Button(action: {
                             if !isLockedByOthers {
                                 selectedRosterEntry = entry
                                 showingAddRosterEntry = true
                             }
                         }) {
-                            Text(entry.group)
-                                .font(.system(size: 12))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(groupColor)
-                                .cornerRadius(4)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 4) {
+                                    Text(entry.firstName)
+                                        .font(.system(size: 18, weight: .bold))
+                                        .foregroundColor(.blue)
+                                    
+                                    if !entry.teacher.isEmpty {
+                                        Text(specialTranslation(entry.teacher))
+                                            .font(.system(size: 14))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    
+                                    Spacer()
+                                }
+                                
+                                Text(entry.lastName)
+                                    .font(.system(size: 16))
+                                    .foregroundColor(.primary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         .buttonStyle(PlainButtonStyle())
                         .disabled(isLockedByOthers)
+                        
+                        // Group tag - full width
+                        if !entry.group.isEmpty {
+                            Button(action: {
+                                if !isLockedByOthers {
+                                    selectedRosterEntry = entry
+                                    showingAddRosterEntry = true
+                                }
+                            }) {
+                                Text(entry.group)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .frame(minHeight: 32)
+                                    .background(groupColor)
+                                    .cornerRadius(4)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .disabled(isLockedByOthers)
+                        }
+                    }
+                } else {
+                    // Horizontal layout for normal/moderately long content
+                    HStack(alignment: .top) {
+                        // Player info - gets priority for space
+                        Button(action: {
+                            if !isLockedByOthers {
+                                selectedRosterEntry = entry
+                                showingAddRosterEntry = true
+                            }
+                        }) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 4) {
+                                    Text(entry.firstName)
+                                        .font(.system(size: 18, weight: .bold))
+                                        .foregroundColor(.blue)
+                                    
+                                    if !entry.teacher.isEmpty {
+                                        Text(specialTranslation(entry.teacher))
+                                            .font(.system(size: 14))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                
+                                Text(entry.lastName)
+                                    .font(.system(size: 16))
+                                    .foregroundColor(.primary)
+                                    .lineLimit(layoutStrategy.playerLines)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .disabled(isLockedByOthers)
+                        .layoutPriority(1)
+                        
+                        Spacer(minLength: 8)
+                        
+                        // Group/Team tag
+                        if !entry.group.isEmpty {
+                            Button(action: {
+                                if !isLockedByOthers {
+                                    selectedRosterEntry = entry
+                                    showingAddRosterEntry = true
+                                }
+                            }) {
+                                Text(entry.group)
+                                    .font(.system(size: needsMultiLine ? 10 : 11))
+                                    .foregroundColor(.white)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 4)
+                                    .frame(minHeight: needsMultiLine ? 44 : 32)
+                                    .background(groupColor)
+                                    .cornerRadius(4)
+                                    .lineLimit(layoutStrategy.groupLines)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .disabled(isLockedByOthers)
+                        }
                     }
                 }
                 
@@ -590,6 +645,10 @@ struct SportsShootDetailView: View {
                         placeholder: "Enter image numbers",
                         onTapOutside: {
                             // Field autosaves on text change
+                        },
+                        onEnterOrDown: {
+                            // Find the next editable entry and start editing it
+                            moveToNextEditableEntry(currentID: entry.id)
                         }
                     )
                     .font(.system(size: 16))
@@ -984,6 +1043,63 @@ struct SportsShootDetailView: View {
     
     // MARK: - Helper Functions
     
+    // Function to move to the next editable entry when pressing Enter or Down arrow
+    private func moveToNextEditableEntry(currentID: String) {
+        guard let shoot = sportsShoot else { return }
+        
+        // Get the filtered and sorted roster as displayed in the list
+        let displayedRoster = sortedRoster(filterRoster(shoot.roster))
+        
+        // Find the index of the current entry
+        guard let currentIndex = displayedRoster.firstIndex(where: { $0.id == currentID }) else {
+            return
+        }
+        
+        // Try to find the next entry that's not locked by others
+        for index in (currentIndex + 1)..<displayedRoster.count {
+            let nextEntry = displayedRoster[index]
+            let isLocked = lockedEntries[nextEntry.id] != nil && lockedEntries[nextEntry.id] != currentEditorIdentifier
+            
+            if !isLocked {
+                // Release current lock
+                if let currentEntryID = currentlyEditingEntry {
+                    releaseLock(shootID: shoot.id, entryID: currentEntryID)
+                }
+                
+                // Start editing the next entry
+                startEditing(shootID: shoot.id, entry: nextEntry)
+                
+                // Optionally scroll to make the entry visible
+                // This would require additional changes to track scroll position
+                
+                return
+            }
+        }
+        
+        // If we reach here, we're at the last entry or all remaining entries are locked
+        // Option 1: Loop back to the first entry
+        for index in 0..<currentIndex {
+            let nextEntry = displayedRoster[index]
+            let isLocked = lockedEntries[nextEntry.id] != nil && lockedEntries[nextEntry.id] != currentEditorIdentifier
+            
+            if !isLocked {
+                // Release current lock
+                if let currentEntryID = currentlyEditingEntry {
+                    releaseLock(shootID: shoot.id, entryID: currentEntryID)
+                }
+                
+                // Start editing the entry
+                startEditing(shootID: shoot.id, entry: nextEntry)
+                return
+            }
+        }
+        
+        // Option 2: Just release the current lock if no other entries are available
+        if let currentEntryID = currentlyEditingEntry {
+            releaseLock(shootID: shoot.id, entryID: currentEntryID)
+        }
+    }
+    
     private func loadSportsShoot() {
         isLoading = true
         
@@ -1070,9 +1186,9 @@ struct SportsShootDetailView: View {
         
         // Check if we already have a lock on this entry
         if isOwnLock(entry.id) {
-            currentlyEditingEntry = entry.id
-            editingImageNumber = entry.imageNumbers
-            lastSavedValue = entry.imageNumbers
+            self.currentlyEditingEntry = entry.id
+            self.editingImageNumber = entry.imageNumbers
+            self.lastSavedValue = entry.imageNumbers
             return
         }
         
@@ -1082,8 +1198,8 @@ struct SportsShootDetailView: View {
         }
         
         // Set up editing state
-        editingImageNumber = entry.imageNumbers
-        lastSavedValue = entry.imageNumbers
+        self.editingImageNumber = entry.imageNumbers
+        self.lastSavedValue = entry.imageNumbers
         
         // Acquire lock for this entry
         acquireLock(shootID: shootID, entryID: entry.id)
@@ -1152,7 +1268,35 @@ struct SportsShootDetailView: View {
         }
     }
     
-    // MARK: - Utility Functions
+    // Helper function to determine layout strategy based on content lengths
+    private func getLayoutStrategy(_ entry: RosterEntry) -> (playerLines: Int, groupLines: Int, useVertical: Bool) {
+        let playerNameLength = entry.lastName.count
+        let groupNameLength = entry.group.count
+        
+        // If both names are extremely long, use vertical layout
+        if playerNameLength > 25 && groupNameLength > 35 {
+            return (playerLines: 2, groupLines: 2, useVertical: true)
+        }
+        
+        // If either is very long, use multi-line horizontal
+        if playerNameLength > 12 || groupNameLength > 20 {
+            return (playerLines: 2, groupLines: 2, useVertical: false)
+        }
+        
+        // Default: single line horizontal
+        return (playerLines: 1, groupLines: 1, useVertical: false)
+    }
+    
+    // Helper function to check if any player in a group needs multi-line layout
+    private func groupNeedsMultiLineLayout(_ groupName: String) -> Bool {
+        guard let shoot = sportsShoot else { return false }
+        
+        let playersInGroup = shoot.roster.filter { $0.group == groupName }
+        return playersInGroup.contains { player in
+            let strategy = getLayoutStrategy(player)
+            return strategy.playerLines > 1 || strategy.groupLines > 1
+        }
+    }
     
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()

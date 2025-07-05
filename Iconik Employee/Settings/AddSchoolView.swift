@@ -208,7 +208,7 @@ struct AddSchoolView: View {
         
         // Save to Firestore
         let db = Firestore.firestore()
-        db.collection("dropdownData").addDocument(data: schoolData) { error in
+        db.collection("schools").addDocument(data: schoolData) { error in
             DispatchQueue.main.async {
                 isSubmitting = false
                 

@@ -1,3 +1,11 @@
+//
+//  ConflictResolutionView.swift
+//  Iconik Employee
+//
+//  Created by administrator on 5/18/25.
+//
+
+
 import SwiftUI
 import Firebase
 import FirebaseFirestore

@@ -320,7 +320,8 @@ struct MainEmployeeView: View {
         FeatureItem(id: "unflagUser", title: "Unflag User", systemImage: "flag.slash.fill", description: "Unflag a previously flagged user"),
         FeatureItem(id: "managerMileage", title: "Manager Mileage", systemImage: "car.2.fill", description: "View mileage reports for all employees"),
         FeatureItem(id: "stats", title: "Statistics", systemImage: "chart.bar.fill", description: "View business analytics and statistics"),
-        FeatureItem(id: "galleryCreator", title: "Gallery Creator", systemImage: "photo.on.rectangle.angled", description: "Create galleries in Captura and Google Sheets")
+        FeatureItem(id: "galleryCreator", title: "Gallery Creator", systemImage: "photo.on.rectangle.angled", description: "Create galleries in Captura and Google Sheets"),
+        FeatureItem(id: "jobBoxTracker", title: "Job Box Tracker", systemImage: "cube.box.fill", description: "Track and manage job box status")
     ]
     
     // State to track which feature is selected
@@ -610,6 +611,13 @@ struct MainEmployeeView: View {
                         tag: "galleryCreator",
                         selection: $selectedFeatureID
                     ) { EmptyView() }
+                    
+                    // Job Box Tracker navigation link
+                    NavigationLink(
+                        destination: ManagerJobBoxTrackerView(),
+                        tag: "jobBoxTracker",
+                        selection: $selectedFeatureID
+                    ) { EmptyView() }
                 }
                 .hidden()  // Hide these navigation links
                 
@@ -872,6 +880,7 @@ struct MainEmployeeView: View {
         case "managerMileage": return .blue
         case "stats": return .indigo
         case "galleryCreator": return .green
+        case "jobBoxTracker": return .teal  // Color for Job Box Tracker
         default: return .gray
         }
     }
