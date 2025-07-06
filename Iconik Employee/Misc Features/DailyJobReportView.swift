@@ -38,9 +38,10 @@ struct DailyJobReportView: View {
     // ------------------------------------------------------------------
     // Schedule data
     // ------------------------------------------------------------------
-    @State private var todayEvents: [ICSEvent] = []
+    @State private var selectedDateSessions: [Session] = []
     @State private var isLoadingSchedule: Bool = false
     @State private var scheduleError: String = ""
+    @State private var scheduleListener: ListenerRegistration?
     
     // ------------------------------------------------------------------
     // Other report fields
@@ -140,7 +141,7 @@ struct DailyJobReportView: View {
     let yesNoOptions   = ["Yes", "No"]
     
     // Full ICS URL from Sling
-    private let icsURL = "https://calendar.getsling.com/564097/18fffd515e88999522da2876933d36a9d9d83a7eeca9c07cd58890a8/Sling_Calendar_all.ics"
+    private let sessionService = SessionService.shared
     
     // MARK: - Form Sections Enum
     
@@ -220,6 +221,10 @@ struct DailyJobReportView: View {
         .onAppear {
             loadData()
         }
+        .onDisappear {
+            // Clean up real-time listener
+            scheduleListener?.remove()
+        }
         .alert(isPresented: $showSuccessAlert) {
             Alert(
                 title: Text("Success"),
@@ -259,8 +264,8 @@ struct DailyJobReportView: View {
                 .font(.system(size: 24, weight: .bold))
                 .foregroundColor(.primary)
             
-            if !todayEvents.isEmpty {
-                Text("\(todayEvents.count) events scheduled today")
+            if !selectedDateSessions.isEmpty {
+                Text("\(selectedDateSessions.count) sessions scheduled today")
                     .font(.subheadline)
                     .foregroundColor(.green)
             }
@@ -1006,51 +1011,36 @@ struct DailyJobReportView: View {
     func loadScheduleForDate(_ date: Date) {
         isLoadingSchedule = true
         scheduleError = ""
-        todayEvents = []
+        selectedDateSessions = []
+        
+        // Remove any existing listener
+        scheduleListener?.remove()
         
         // Create date range for the selected day
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
         
-        // Load ICS file
-        guard let url = URL(string: icsURL) else {
-            scheduleError = "Invalid schedule URL."
-            isLoadingSchedule = false
+        // Get current user ID for filtering
+        guard let currentUserID = UserManager.shared.getCurrentUserID() else {
+            print("🔐 Cannot filter sessions: no current user ID")
+            self.isLoadingSchedule = false
             return
         }
         
-        URLSession.shared.dataTask(with: url) { data, response, error in
-            if let error = error {
-                DispatchQueue.main.async {
-                    self.scheduleError = "Error loading schedule: \(error.localizedDescription)"
-                    self.isLoadingSchedule = false
-                }
-                return
-            }
-            
-            guard let data = data, let content = String(data: data, encoding: .utf8) else {
-                DispatchQueue.main.async {
-                    self.scheduleError = "Unable to load schedule data."
-                    self.isLoadingSchedule = false
-                }
-                return
-            }
-            
-            // Parse ICS
-            let allEvents = ICSParser.parseICS(from: content)
-            
+        // Load sessions from Firestore with real-time updates
+        scheduleListener = sessionService.listenForSessions { sessions in
             DispatchQueue.main.async {
-                // Filter events for the selected date and current user
-                let userFullName = "\(self.storedUserFirstName) \(self.storedUserLastName)".trimmingCharacters(in: .whitespaces)
-                let eventsForDay = allEvents.filter { event in
-                    guard let eventDate = event.startDate else { return false }
-                    let isToday = eventDate >= startOfDay && eventDate < endOfDay
-                    let isUserEvent = event.employeeName.lowercased() == userFullName.lowercased()
-                    return isToday && isUserEvent
+                
+                // Filter sessions for the selected date where current user is assigned
+                let sessionsForDay = sessions.filter { session in
+                    guard let sessionDate = session.startDate else { return false }
+                    let isSelectedDay = sessionDate >= startOfDay && sessionDate < endOfDay
+                    let isUserAssigned = session.isUserAssigned(userID: currentUserID)
+                    return isSelectedDay && isUserAssigned
                 }
                 
-                self.todayEvents = eventsForDay
+                self.selectedDateSessions = sessionsForDay
                 
                 // Check if we have completed a report for this date and school already
                 self.checkExistingReports { completedSchools in
@@ -1059,7 +1049,7 @@ struct DailyJobReportView: View {
                     self.isLoadingSchedule = false
                 }
             }
-        }.resume()
+        }
     }
     
     func checkExistingReports(completion: @escaping ([String]) -> Void) {
@@ -1097,8 +1087,8 @@ struct DailyJobReportView: View {
     }
     
     func setDefaultSchoolFromSchedule(completedSchools: [String]) {
-        // No events for today in schedule
-        if todayEvents.isEmpty {
+        // No sessions for selected date in schedule
+        if selectedDateSessions.isEmpty {
             if selectedPhotoshootNote != nil {
                 // Already have a photoshoot note selected, use that
                 if let note = selectedPhotoshootNote,
@@ -1111,15 +1101,15 @@ struct DailyJobReportView: View {
             return
         }
         
-        // Sort events by start time, so we get the earliest one first
-        let sortedEvents = todayEvents.sorted { (a, b) -> Bool in
+        // Sort sessions by start time, so we get the earliest one first
+        let sortedSessions = selectedDateSessions.sorted { (a, b) -> Bool in
             guard let aStart = a.startDate, let bStart = b.startDate else { return false }
             return aStart < bStart
         }
         
-        // Look for the first event at a school we haven't already completed
-        for event in sortedEvents {
-            let schoolName = event.schoolName
+        // Look for the first session at a school we haven't already completed
+        for session in sortedSessions {
+            let schoolName = session.schoolName
             
             // Skip if we've already completed a report for this school today
             if completedSchools.contains(schoolName) {
@@ -1243,7 +1233,7 @@ struct DailyJobReportView: View {
                 }
                 
                 // Try to set school from schedule
-                if self.isLoadingSchedule == false && !self.todayEvents.isEmpty {
+                if self.isLoadingSchedule == false && !self.selectedDateSessions.isEmpty {
                     self.checkExistingReports { completedSchools in
                         self.setDefaultSchoolFromSchedule(completedSchools: completedSchools)
                     }

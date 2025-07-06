@@ -16,9 +16,10 @@ struct PhotoshootNotesView: View {
     @State private var isInitialLoad = true
     
     // For automatically setting the school based on schedule
-    @State private var todayEvents: [ICSEvent] = []
+    @State private var todaySessions: [Session] = []
     @State private var isLoadingSchedule: Bool = false
     @State private var scheduleError: String = ""
+    @State private var scheduleListener: ListenerRegistration?
     
     // User's stored information
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
@@ -30,8 +31,8 @@ struct PhotoshootNotesView: View {
     @State private var tempImage: UIImage? = nil
     @State private var isUploadingImage = false
     
-    // Full ICS URL from Sling
-    private let icsURL = "https://calendar.getsling.com/564097/18fffd515e88999522da2876933d36a9d9d83a7eeca9c07cd58890a8/Sling_Calendar_all.ics"
+    // Session service for Firestore operations
+    private let sessionService = SessionService.shared
 
     // A simple date/time formatter for the list display.
     private var dateFormatter: DateFormatter {
@@ -79,9 +80,9 @@ struct PhotoshootNotesView: View {
                         }
                     }
                     
-                    if !todayEvents.isEmpty {
+                    if !todaySessions.isEmpty {
                         Spacer()
-                        Text("\(todayEvents.count) events today")
+                        Text("\(todaySessions.count) sessions today")
                             .padding(6)
                             .background(Color.green.opacity(0.2))
                             .cornerRadius(10)
@@ -360,6 +361,10 @@ struct PhotoshootNotesView: View {
                 loadSchoolOptions()
                 loadScheduleForToday()
             }
+            .onDisappear {
+                // Clean up real-time listener
+                scheduleListener?.remove()
+            }
         }
     }
     
@@ -555,31 +560,41 @@ struct PhotoshootNotesView: View {
     
     private func loadSchoolOptions() {
         let db = Firestore.firestore()
-        db.collection("schools")
-            .whereField("type", isEqualTo: "school")
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    errorMessage = error.localizedDescription
-                    return
-                }
-                guard let docs = snapshot?.documents else { return }
-                var temp: [SchoolItem] = []
-                for doc in docs {
-                    let data = doc.data()
-                    if let value = data["value"] as? String,
-                       let address = data["schoolAddress"] as? String {
-                        let item = SchoolItem(id: doc.documentID, name: value, address: address)
-                        temp.append(item)
+        
+        // Get organization ID to comply with security rules
+        UserManager.shared.getCurrentUserOrganizationID { organizationID in
+            guard let orgID = organizationID else {
+                print("🔐 Cannot load schools: no organization ID found")
+                return
+            }
+            
+            db.collection("schools")
+                .whereField("organizationID", isEqualTo: orgID)
+                .whereField("type", isEqualTo: "school")
+                .getDocuments { snapshot, error in
+                    if let error = error {
+                        self.errorMessage = error.localizedDescription
+                        return
+                    }
+                    guard let docs = snapshot?.documents else { return }
+                    var temp: [SchoolItem] = []
+                    for doc in docs {
+                        let data = doc.data()
+                        if let value = data["value"] as? String,
+                           let address = data["schoolAddress"] as? String {
+                            let item = SchoolItem(id: doc.documentID, name: value, address: address)
+                            temp.append(item)
+                        }
+                    }
+                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
+                    self.schoolOptions = temp
+                    
+                    // Try to set school from schedule when we have options loaded
+                    if let note = self.selectedNote, note.school.isEmpty {
+                        self.setSchoolFromSchedule(for: note)
                     }
                 }
-                temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                schoolOptions = temp
-                
-                // Try to set school from schedule when we have options loaded
-                if let note = selectedNote, note.school.isEmpty {
-                    setSchoolFromSchedule(for: note)
-                }
-            }
+        }
     }
     
     // MARK: - Schedule Integration
@@ -587,51 +602,36 @@ struct PhotoshootNotesView: View {
     private func loadScheduleForToday() {
         isLoadingSchedule = true
         scheduleError = ""
-        todayEvents = []
+        todaySessions = []
+        
+        // Remove any existing listener
+        scheduleListener?.remove()
         
         // Create date range for today
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date())
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
         
-        // Load ICS file
-        guard let url = URL(string: icsURL) else {
-            scheduleError = "Invalid schedule URL."
-            isLoadingSchedule = false
+        // Get current user ID for filtering
+        guard let currentUserID = UserManager.shared.getCurrentUserID() else {
+            print("🔐 Cannot filter sessions: no current user ID")
+            self.isLoadingSchedule = false
             return
         }
         
-        URLSession.shared.dataTask(with: url) { data, response, error in
-            if let error = error {
-                DispatchQueue.main.async {
-                    self.scheduleError = "Error loading schedule: \(error.localizedDescription)"
-                    self.isLoadingSchedule = false
-                }
-                return
-            }
-            
-            guard let data = data, let content = String(data: data, encoding: .utf8) else {
-                DispatchQueue.main.async {
-                    self.scheduleError = "Unable to load schedule data."
-                    self.isLoadingSchedule = false
-                }
-                return
-            }
-            
-            // Parse ICS
-            let allEvents = ICSParser.parseICS(from: content)
-            
+        // Load sessions from Firestore with real-time updates
+        scheduleListener = sessionService.listenForSessions { sessions in
             DispatchQueue.main.async {
-                // Filter events for today and current user
-                let userFullName = "\(self.storedUserFirstName) \(self.storedUserLastName)".trimmingCharacters(in: .whitespaces)
-                let eventsForToday = allEvents.filter { event in
-                    guard let eventDate = event.startDate else { return false }
-                    let isToday = eventDate >= startOfDay && eventDate < endOfDay
-                    let isUserEvent = event.employeeName.lowercased() == userFullName.lowercased()
-                    return isToday && isUserEvent
+                
+                // Filter sessions for today where current user is assigned
+                let sessionsForToday = sessions.filter { session in
+                    guard let sessionDate = session.startDate else { return false }
+                    let isToday = sessionDate >= startOfDay && sessionDate < endOfDay
+                    let isUserAssigned = session.isUserAssigned(userID: currentUserID)
+                    return isToday && isUserAssigned
                 }
                 
-                self.todayEvents = eventsForToday
+                self.todaySessions = sessionsForToday
                 self.isLoadingSchedule = false
                 
                 // Try to set school for selected note based on today's schedule
@@ -639,25 +639,25 @@ struct PhotoshootNotesView: View {
                     self.setSchoolFromSchedule(for: note)
                 }
             }
-        }.resume()
+        }
     }
     
     // Try to set school for a note based on today's schedule
     private func setSchoolFromSchedule(for note: PhotoshootNote) {
-        // No events or no school options yet
-        if todayEvents.isEmpty || schoolOptions.isEmpty {
+        // No sessions or no school options yet
+        if todaySessions.isEmpty || schoolOptions.isEmpty {
             return
         }
         
-        // Sort events by start time, so we get the earliest one first
-        let sortedEvents = todayEvents.sorted { (a, b) -> Bool in
+        // Sort sessions by start time, so we get the earliest one first
+        let sortedSessions = todaySessions.sorted { (a, b) -> Bool in
             guard let aStart = a.startDate, let bStart = b.startDate else { return false }
             return aStart < bStart
         }
         
-        // Look for a matching school in our options for the first event
-        if let firstEvent = sortedEvents.first,
-           let matchIndex = schoolOptions.firstIndex(where: { $0.name == firstEvent.schoolName }) {
+        // Look for a matching school in our options for the first session
+        if let firstSession = sortedSessions.first,
+           let matchIndex = schoolOptions.firstIndex(where: { $0.name == firstSession.schoolName }) {
             // Found a match - update the note
             if let index = notes.firstIndex(where: { $0.id == note.id }) {
                 notes[index].school = schoolOptions[matchIndex].name

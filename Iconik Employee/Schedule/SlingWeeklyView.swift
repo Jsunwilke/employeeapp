@@ -7,11 +7,11 @@ enum ScheduleMode: String, CaseIterable {
 }
 
 struct SlingWeeklyView: View {
-    // Full ICS URL from Sling
-    private let icsURL = "https://calendar.getsling.com/564097/18fffd515e88999522da2876933d36a9d9d83a7eeca9c07cd58890a8/Sling_Calendar_all.ics"
+    // Session service for Firestore operations
+    private let sessionService = SessionService.shared
     
-    @State private var events: [ICSEvent] = []  // All ICS events loaded
-    @State private var filteredEvents: [ICSEvent] = []  // Events for display after filtering
+    @State private var sessions: [Session] = []  // All sessions loaded from Firestore
+    @State private var filteredSessions: [Session] = []  // Sessions for display after filtering
     @State private var errorMessage: String = ""
     @State private var isLoading: Bool = false
     
@@ -20,19 +20,25 @@ struct SlingWeeklyView: View {
     @State private var weekOffset: Int = 0
     @State private var selectedDay: Date? = nil
     
-    // Selected event for detail view
-    @State private var selectedEvent: ICSEvent? = nil
+    // Selected session for detail view
+    @State private var selectedSession: Session? = nil
     
     @State private var scheduleMode: ScheduleMode = .myShifts
     
     // Weather service and data
     private let weatherService = WeatherService()
-    @State private var weatherDataByEvent: [String: WeatherData] = [:] // Key is location-date
+    @State private var weatherDataBySession: [String: WeatherData] = [:] // Key is location-date
     @State private var isLoadingWeather: Bool = false
+    
+    // Firestore listener
+    @State private var sessionListener: ListenerRegistration? = nil
     
     // User's first and last name from AppStorage (used in filtering "My Shifts")
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
     @AppStorage("userLastName") var storedUserLastName: String = ""
+    
+    // User manager for getting current user ID
+    private let userManager = UserManager.shared
     
     // Environment for color scheme
     @Environment(\.colorScheme) var colorScheme
@@ -119,32 +125,35 @@ struct SlingWeeklyView: View {
         .navigationTitle("Schedule")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            loadICS()
+            loadSessions()
             if selectedDay == nil {
                 selectedDay = Date()
             }
         }
+        .onDisappear {
+            sessionListener?.remove()
+        }
         .onChange(of: weekOffset) { _ in
-            updateDisplayedEvents()
+            updateDisplayedSessions()
             if let selectedDay = selectedDay, !isDateInVisibleWeek(selectedDay) {
                 // If selected day is no longer in visible week after a week change,
                 // select the closest date in the new week
                 self.selectedDay = getClosestVisibleDate(to: selectedDay)
             }
-            loadWeatherForVisibleEvents()
+            loadWeatherForVisibleSessions()
         }
         .onChange(of: selectedDay) { _ in
-            loadWeatherForVisibleEvents()
+            loadWeatherForVisibleSessions()
         }
-        // Handle navigation to event details
+        // Handle navigation to session details
         .background(
             NavigationLink(
-                destination: selectedEvent.map { event in
-                    ShiftDetailView(event: event, allEvents: events)
+                destination: selectedSession.map { session in
+                    ShiftDetailView(session: session, allSessions: sessions, currentUserID: userManager.getCurrentUserID())
                 },
                 isActive: Binding(
-                    get: { selectedEvent != nil },
-                    set: { if !$0 { selectedEvent = nil } }
+                    get: { selectedSession != nil },
+                    set: { if !$0 { selectedSession = nil } }
                 )
             ) { EmptyView() }
         )
@@ -164,8 +173,8 @@ struct SlingWeeklyView: View {
                 withAnimation(.spring()) {
                     weekOffset = 0
                     selectedDay = Date()
-                    updateDisplayedEvents()
-                    loadWeatherForVisibleEvents()
+                    updateDisplayedSessions()
+                    loadWeatherForVisibleSessions()
                 }
             }) {
                 Text("Today")
@@ -197,7 +206,7 @@ struct SlingWeeklyView: View {
             Button(action: {
                 withAnimation(.spring()) {
                     scheduleMode = scheduleMode == .myShifts ? .allShifts : .myShifts
-                    filterEvents()
+                    filterSessions()
                 }
             }) {
                 Text(scheduleMode.rawValue)
@@ -280,7 +289,7 @@ struct SlingWeeklyView: View {
     
     // Selected day header with number of shifts
     private func selectedDayHeader(for date: Date) -> some View {
-        let dayEvents = getEventsForDay(date)
+        let daySessions = getSessionsForDay(date)
         
         return HStack {
             Text(formatFullDate(date))
@@ -289,32 +298,33 @@ struct SlingWeeklyView: View {
             
             Spacer()
             
-            Text("\(dayEvents.count) shift\(dayEvents.count != 1 ? "s" : "")")
+            Text("\(daySessions.count) shift\(daySessions.count != 1 ? "s" : "")")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
         }
     }
     
-    // Events list for selected day
+    // Sessions list for selected day
     private func eventsListView(for date: Date) -> some View {
-        let dayEvents = getEventsForDay(date)
+        let daySessions = getSessionsForDay(date)
         
         return ScrollView {
             LazyVStack(spacing: 12) {
-                if dayEvents.isEmpty {
+                if daySessions.isEmpty {
                     Text("No shifts scheduled for this day")
                         .foregroundColor(.secondary)
                         .padding(.top, 40)
                 } else {
-                    ForEach(dayEvents) { event in
-                        EventCard(
-                            event: event,
+                    ForEach(daySessions) { session in
+                        SessionCard(
+                            session: session,
                             isMyShiftsMode: scheduleMode == .myShifts,
-                            weatherData: getWeatherDataForEvent(event)
+                            weatherData: getWeatherDataForSession(session),
+                            currentUserID: userManager.getCurrentUserID()
                         )
                         .padding(.horizontal)
                         .onTapGesture {
-                            selectedEvent = event
+                            selectedSession = session
                         }
                     }
                     .padding(.bottom, 20)
@@ -354,7 +364,7 @@ struct SlingWeeklyView: View {
                 .padding(.horizontal, 32)
             
             Button(action: {
-                loadICS()
+                loadSessions()
             }) {
                 Text("Try Again")
                     .font(.subheadline)
@@ -422,12 +432,13 @@ struct SlingWeeklyView: View {
         }
     }
     
-    // MARK: - Event Card
+    // MARK: - Session Card
     
-    struct EventCard: View {
-        let event: ICSEvent
+    struct SessionCard: View {
+        let session: Session
         let isMyShiftsMode: Bool
         let weatherData: WeatherData? // Weather specific to this event's location
+        let currentUserID: String?
         
         @Environment(\.colorScheme) var colorScheme
         
@@ -437,8 +448,37 @@ struct SlingWeeklyView: View {
             return formatter
         }
         
+        // Get the current user's photographer info from the session
+        private var currentUserPhotographerInfo: (name: String, notes: String)? {
+            guard let userID = currentUserID else { return nil }
+            return session.getPhotographerInfo(for: userID)
+        }
+        
+        private var displayName: String {
+            if let userInfo = currentUserPhotographerInfo {
+                return userInfo.name
+            }
+            return session.employeeName // Fallback to session's employee name
+        }
+        
+        private var displayNotes: String {
+            var notes: [String] = []
+            
+            // Add session-level notes if they exist
+            if let sessionNotes = session.description, !sessionNotes.isEmpty {
+                notes.append("Session: \(sessionNotes)")
+            }
+            
+            // Add photographer-specific notes if they exist
+            if let userInfo = currentUserPhotographerInfo, !userInfo.notes.isEmpty {
+                notes.append("Personal: \(userInfo.notes)")
+            }
+            
+            return notes.joined(separator: "\n")
+        }
+        
         private var colorForPosition: Color {
-            if let positionColor = positionColorMap[event.position] {
+            if let positionColor = positionColorMap[session.position] {
                 return positionColor
             }
             
@@ -454,7 +494,7 @@ struct SlingWeeklyView: View {
                 "Delivery": .gray
             ]
             
-            return colorMap[event.position] ?? .blue
+            return colorMap[session.position] ?? .blue
         }
         
         // Background color based on color scheme
@@ -471,11 +511,11 @@ struct SlingWeeklyView: View {
             VStack(alignment: .leading, spacing: 0) {
                 // Time range and position label
                 HStack {
-                    if let start = event.startDate, let end = event.endDate {
+                    if let start = session.startDate, let end = session.endDate {
                         Text("\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))")
                             .font(.headline)
                             .foregroundColor(.primary)
-                    } else if let start = event.startDate {
+                    } else if let start = session.startDate {
                         Text(timeFormatter.string(from: start))
                             .font(.headline)
                             .foregroundColor(.primary)
@@ -484,7 +524,7 @@ struct SlingWeeklyView: View {
                     Spacer()
                     
                     // Position tag with rounded background
-                    Text(event.position)
+                    Text(session.position)
                         .font(.subheadline)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 4)
@@ -504,13 +544,28 @@ struct SlingWeeklyView: View {
                     
                     VStack(alignment: .leading, spacing: 4) {
                         // School name
-                        Text(event.schoolName)
+                        Text(session.schoolName)
                             .font(.title3)
                             .fontWeight(.semibold)
                             .foregroundColor(.primary)
                         
+                        // Display user's name if in "My Shifts" mode
+                        if isMyShiftsMode, let userInfo = currentUserPhotographerInfo {
+                            Text("Photographer: \(userInfo.name)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Show notes if they exist
+                        if !displayNotes.isEmpty {
+                            Text(displayNotes)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 2)
+                        }
+                        
                         // Location address with icon if available
-                        if let location = event.location, !location.isEmpty {
+                        if let location = session.location, !location.isEmpty {
                             HStack(spacing: 4) {
                                 Image(systemName: "mappin.and.ellipse")
                                     .font(.caption)
@@ -572,64 +627,64 @@ struct SlingWeeklyView: View {
     
     // MARK: - Weather Methods
     
-    // Get weather data for a specific event
-    private func getWeatherDataForEvent(_ event: ICSEvent) -> WeatherData? {
-        guard let eventDate = event.startDate,
-              let location = event.location,
+    // Get weather data for a specific session
+    private func getWeatherDataForSession(_ session: Session) -> WeatherData? {
+        guard let sessionDate = session.startDate,
+              let location = session.location,
               !location.isEmpty else {
             // Skip if no location or date
             return nil
         }
         
-        // Create a unique key for this event's location and date
+        // Create a unique key for this session's location and date
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
-        let dateString = dateFormatter.string(from: eventDate)
+        let dateString = dateFormatter.string(from: sessionDate)
         let cacheKey = "\(location)-\(dateString)"
         
-        return weatherDataByEvent[cacheKey]
+        return weatherDataBySession[cacheKey]
     }
     
-    // Load weather data for all events in the current view
-    private func loadWeatherForVisibleEvents() {
-        print("Loading weather for visible events...")
+    // Load weather data for all sessions in the current view
+    private func loadWeatherForVisibleSessions() {
+        print("Loading weather for visible sessions...")
         
-        // Get events for the selected day only
+        // Get sessions for the selected day only
         guard let selectedDate = selectedDay else { return }
-        let dayEvents = getEventsForDay(selectedDate)
+        let daySessions = getSessionsForDay(selectedDate)
         
-        // No events means no weather to load
-        if dayEvents.isEmpty {
+        // No sessions means no weather to load
+        if daySessions.isEmpty {
             return
         }
         
         isLoadingWeather = true
         
-        // For each event with a location, load its specific weather
-        for event in dayEvents {
+        // For each session with a location, load its specific weather
+        for session in daySessions {
             // Skip if no date or location
-            guard let eventDate = event.startDate,
-                  let location = event.location,
+            guard let sessionDate = session.startDate,
+                  let location = session.location,
                   !location.isEmpty else {
                 continue
             }
             
-            // Create a unique key for this event's location and date
+            // Create a unique key for this session's location and date
             let dateFormatter = DateFormatter()
             dateFormatter.dateFormat = "yyyy-MM-dd"
-            let dateString = dateFormatter.string(from: eventDate)
+            let dateString = dateFormatter.string(from: sessionDate)
             let cacheKey = "\(location)-\(dateString)"
             
-            // Only fetch if we don't already have data for this event location and date
-            if weatherDataByEvent[cacheKey] == nil {
+            // Only fetch if we don't already have data for this session location and date
+            if weatherDataBySession[cacheKey] == nil {
                 print("Fetching weather for location: \(location) on \(dateString)")
                 
-                // Get weather for this specific event location and date
-                weatherService.getWeatherData(for: location, date: eventDate) { weatherData, errorMessage in
+                // Get weather for this specific session location and date
+                weatherService.getWeatherData(for: location, date: sessionDate) { weatherData, errorMessage in
                     DispatchQueue.main.async {
                         if let weatherData = weatherData {
                             // Store the weather data with the unique key
-                            self.weatherDataByEvent[cacheKey] = weatherData
+                            self.weatherDataBySession[cacheKey] = weatherData
                             print("Weather data loaded for: \(location) on \(dateString)")
                         } else if let error = errorMessage {
                             print("Error loading weather for \(location): \(error)")
@@ -649,66 +704,71 @@ struct SlingWeeklyView: View {
     
     // MARK: - Data Loading
     
-    private func loadICS() {
+    private func loadSessions() {
         isLoading = true
         errorMessage = ""
         
-        guard let url = URL(string: icsURL) else {
-            errorMessage = "Invalid ICS URL."
-            isLoading = false
-            return
-        }
+        // Remove any existing listener
+        sessionListener?.remove()
         
-        URLSession.shared.dataTask(with: url) { data, response, error in
-            if let error = error {
-                DispatchQueue.main.async {
-                    errorMessage = "Error loading ICS: \(error.localizedDescription)"
-                    isLoading = false
-                }
-                return
-            }
-            
-            guard let data = data, let content = String(data: data, encoding: .utf8) else {
-                DispatchQueue.main.async {
-                    errorMessage = "Unable to load ICS data."
-                    isLoading = false
-                }
-                return
-            }
-            
-            let parsed = ICSParser.parseICS(from: content)
-            
+        // Start listening for sessions
+        sessionListener = sessionService.listenForSessions { sessions in
             DispatchQueue.main.async {
-                events = parsed
-                updateDisplayedEvents()
-                loadWeatherForVisibleEvents()
-                isLoading = false
+                print("📊 SlingWeeklyView: Loaded \(sessions.count) sessions")
+                for session in sessions {
+                    print("📊 Session: \(session.schoolName) on \(session.date ?? "nil") at \(session.startTime ?? "nil")")
+                    print("📊 Employee name: '\(session.employeeName)'")
+                }
+                
+                self.sessions = sessions
+                self.updateDisplayedSessions()
+                self.loadWeatherForVisibleSessions()
+                self.isLoading = false
             }
-        }.resume()
+        }
     }
     
     // MARK: - Helper Methods
     
-    private func updateDisplayedEvents() {
-        filterEvents()
+    private func updateDisplayedSessions() {
+        filterSessions()
     }
     
-    private func filterEvents() {
-        // Get all events
-        var filtered = events
+    private func filterSessions() {
+        print("📊 filterSessions: Starting with \(sessions.count) sessions")
+        print("📊 Schedule mode: \(scheduleMode)")
+        
+        // Get all sessions
+        var filtered = sessions
         
         // Filter by user if in "My Shifts" mode
         if scheduleMode == .myShifts {
-            let fullName = "\(storedUserFirstName) \(storedUserLastName)".trimmingCharacters(in: .whitespacesAndNewlines)
-            filtered = filtered.filter { event in
-                event.employeeName.lowercased() == fullName.lowercased()
+            guard let currentUserID = userManager.getCurrentUserID() else {
+                print("📊 Cannot filter sessions: no current user ID")
+                filteredSessions = []
+                return
             }
+            
+            print("📊 Filtering for user ID: '\(currentUserID)'")
+            
+            let originalCount = filtered.count
+            filtered = filtered.filter { session in
+                let isAssigned = session.isUserAssigned(userID: currentUserID)
+                if !isAssigned {
+                    print("📊 Session \(session.schoolName) user '\(currentUserID)' not assigned")
+                } else {
+                    print("📊 ✅ Session \(session.schoolName) matches user '\(currentUserID)'")
+                }
+                return isAssigned
+            }
+            print("📊 After filtering: \(filtered.count) sessions (was \(originalCount))")
         }
         
         // Sort by date
         filtered.sort { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) }
         
-        filteredEvents = filtered
+        filteredSessions = filtered
+        print("📊 Final filteredSessions count: \(filteredSessions.count)")
     }
     
     private func getDaysInWeek(forOffset offset: Int = 0) -> [Date] {
@@ -777,14 +837,14 @@ struct SlingWeeklyView: View {
         return date
     }
     
-    private func getEventsForDay(_ day: Date) -> [ICSEvent] {
+    private func getSessionsForDay(_ day: Date) -> [Session] {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: day)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
         
-        return filteredEvents.filter { event in
-            guard let eventDate = event.startDate else { return false }
-            return eventDate >= startOfDay && eventDate < endOfDay
+        return filteredSessions.filter { session in
+            guard let sessionDate = session.startDate else { return false }
+            return sessionDate >= startOfDay && sessionDate < endOfDay
         }.sorted(by: { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) })
     }
     
@@ -793,18 +853,21 @@ struct SlingWeeklyView: View {
         let startOfDay = calendar.startOfDay(for: date)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
         
-        var eventsToCheck = events
+        var sessionsToCheck = sessions
         
         if scheduleMode == .myShifts {
-            let fullName = "\(storedUserFirstName) \(storedUserLastName)".trimmingCharacters(in: .whitespacesAndNewlines)
-            eventsToCheck = eventsToCheck.filter { event in
-                event.employeeName.lowercased() == fullName.lowercased()
+            guard let currentUserID = userManager.getCurrentUserID() else {
+                return false
+            }
+            
+            sessionsToCheck = sessionsToCheck.filter { session in
+                session.isUserAssigned(userID: currentUserID)
             }
         }
         
-        return eventsToCheck.contains { event in
-            guard let eventDate = event.startDate else { return false }
-            return eventDate >= startOfDay && eventDate < endOfDay
+        return sessionsToCheck.contains { session in
+            guard let sessionDate = session.startDate else { return false }
+            return sessionDate >= startOfDay && sessionDate < endOfDay
         }
     }
     

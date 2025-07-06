@@ -21,13 +21,19 @@ struct FeatureItem: Identifiable, Equatable {
 /// ViewModel that manages feature ordering for employee features.
 class MainEmployeeViewModel: ObservableObject {
     @Published var employeeFeatures: [FeatureItem] = []
-    @Published var upcomingShifts: [ICSEvent] = []
-    @Published var allEvents: [ICSEvent] = [] // Store all events for coworker data
+    @Published var upcomingShifts: [Session] = []
+    @Published var allSessions: [Session] = [] // Store all sessions for coworker data
     @Published var isLoadingSchedule: Bool = false
     
     // Weather service and data
     private let weatherService = WeatherService()
-    @Published var weatherDataByEvent: [String: WeatherData] = [:] // Key is location-date
+    @Published var weatherDataBySession: [String: WeatherData] = [:] // Key is location-date
+    
+    // Session service for Firestore operations
+    private let sessionService = SessionService.shared
+    
+    // Firestore listener for real-time updates
+    @Published var sessionListener: ListenerRegistration?
     
     // Default employee features – re-orderable by the user.
     let defaultEmployeeFeatures: [FeatureItem] = [
@@ -42,8 +48,7 @@ class MainEmployeeViewModel: ObservableObject {
     
     private let employeeOrderKey = "employeeFeatureOrder"
     
-    // Full ICS URL from Sling
-    private let icsURL = "https://calendar.getsling.com/564097/18fffd515e88999522da2876933d36a9d9d83a7eeca9c07cd58890a8/Sling_Calendar_all.ics"
+    // Removed: ICS URL no longer needed - using Firestore sessions
     
     init() {
         loadEmployeeFeatureOrder()
@@ -78,128 +83,151 @@ class MainEmployeeViewModel: ObservableObject {
         saveEmployeeFeatureOrder()
     }
     
-    // Function to fetch upcoming events
-    func fetchUpcomingEvents(employeeName: String) {
+    // Function to fetch upcoming events from Firestore
+    func fetchUpcomingEvents(employeeName: String = "") {
         isLoadingSchedule = true
         upcomingShifts = []
-        allEvents = []
+        allSessions = []
         
-        guard let url = URL(string: icsURL) else {
-            print("Invalid ICS URL")
-            isLoadingSchedule = false
-            return
-        }
+        // Remove any existing listener before creating a new one
+        sessionListener?.remove()
         
-        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
-            if let error = error {
-                print("Error loading ICS: \(error.localizedDescription)")
-                DispatchQueue.main.async {
-                    self?.isLoadingSchedule = false
-                }
-                return
-            }
-            
-            guard let data = data, let content = String(data: data, encoding: .utf8) else {
-                print("Unable to load ICS data")
-                DispatchQueue.main.async {
-                    self?.isLoadingSchedule = false
-                }
-                return
-            }
-            
-            // Parse the ICS content
-            let allEvents = ICSParser.parseICS(from: content)
-            
-            // Store all events for coworker data
+        // Load sessions from Firestore with real-time updates
+        sessionListener = sessionService.listenForSessions { [weak self] sessions in
             DispatchQueue.main.async {
-                self?.allEvents = allEvents
-            }
-            
-            // Filter events for the next 2 days and for the specific employee
-            let calendar = Calendar.current
-            let now = Date()
-            let twoDaysFromNow = calendar.date(byAdding: .day, value: 2, to: now) ?? now
-            
-            let filtered = allEvents.filter { event in
-                guard let startDate = event.startDate else { return false }
-                return startDate >= now &&
-                       startDate <= twoDaysFromNow &&
-                       event.employeeName.lowercased() == employeeName.lowercased()
-            }
-            
-            // Sort by start date
-            let sorted = filtered.sorted {
-                (($0.startDate ?? Date()) < ($1.startDate ?? Date()))
-            }
-            
-            DispatchQueue.main.async {
+                // Get current user ID for filtering
+                guard let currentUserID = UserManager.shared.getCurrentUserID() else {
+                    print("🔐 Cannot filter sessions: no current user ID")
+                    self?.upcomingShifts = []
+                    self?.isLoadingSchedule = false
+                    return
+                }
+                
+                // Filter sessions for today and tomorrow where current user is assigned
+                let calendar = Calendar.current
+                let startOfToday = calendar.startOfDay(for: Date())
+                let endOfTomorrow = calendar.date(byAdding: .day, value: 2, to: startOfToday) ?? startOfToday
+                
+                print("📅 Date range filter: \(startOfToday) to \(endOfTomorrow)")
+                print("📅 Processing \(sessions.count) sessions for filtering")
+                
+                let userSessions = sessions.filter { session in
+                    print("📅 Checking session: \(session.schoolName)")
+                    print("📅 Raw date: \(session.date ?? "nil"), startTime: \(session.startTime ?? "nil")")
+                    print("📅 Parsed startDate: \(session.startDate?.description ?? "nil")")
+                    
+                    guard let startDate = session.startDate else { 
+                        print("❌ Session \(session.schoolName) has nil startDate - FILTERED OUT")
+                        return false 
+                    }
+                    
+                    let isInTimeRange = startDate >= startOfToday && startDate < endOfTomorrow
+                    print("📅 Session \(session.schoolName) time range check: \(isInTimeRange) (date: \(startDate))")
+                    
+                    if !isInTimeRange {
+                        print("❌ Session \(session.schoolName) outside time range - FILTERED OUT")
+                        return false
+                    }
+                    
+                    let isUserAssigned = session.isUserAssigned(userID: currentUserID)
+                    
+                    if isUserAssigned {
+                        print("✅ Session \(session.schoolName) PASSED all filters")
+                        return true
+                    } else {
+                        print("❌ Session \(session.schoolName) user not assigned - FILTERED OUT")
+                        return false
+                    }
+                }
+                
+                // Store all sessions for coworker data
+                self?.allSessions = sessions
+                
+                // Debug: Check what sessions were found
+                for session in userSessions {
+                    print("🎯 User session ID: \(session.id), school: \(session.schoolName)")
+                }
+                
+                // Sort by start date
+                let sorted = userSessions.sorted {
+                    (($0.startDate ?? Date()) < ($1.startDate ?? Date()))
+                }
+                
+                print("📅 Final filtered sessions: \(sorted.count) for user \(currentUserID)")
                 self?.upcomingShifts = sorted
                 self?.isLoadingSchedule = false
                 
                 // Load weather data for upcoming shifts
-                self?.loadWeatherForEvents(sorted)
+                self?.loadWeatherForSessions(sorted)
             }
-        }.resume()
-    }
-    
-    // Load weather data for events
-    func loadWeatherForEvents(_ events: [ICSEvent]) {
-        for event in events {
-            loadWeatherForEvent(event)
         }
     }
     
-    // Load weather for a specific event
-    func loadWeatherForEvent(_ event: ICSEvent) {
-        guard let eventDate = event.startDate,
-              let location = event.location,
+    // Load weather data for sessions
+    func loadWeatherForSessions(_ sessions: [Session]) {
+        for session in sessions {
+            loadWeatherForSession(session)
+        }
+    }
+    
+    // Load weather for a specific session
+    func loadWeatherForSession(_ session: Session) {
+        guard let sessionDate = session.startDate,
+              let location = session.location,
               !location.isEmpty else {
             return
         }
         
-        // Create a unique key for this event
+        // Create a unique key for this session
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
-        let dateString = dateFormatter.string(from: eventDate)
+        let dateString = dateFormatter.string(from: sessionDate)
         let cacheKey = "\(location)-\(dateString)"
         
         // Check if we already have weather data for this location and date
-        if weatherDataByEvent[cacheKey] != nil {
+        if weatherDataBySession[cacheKey] != nil {
             return
         }
         
         // Get weather data
-        weatherService.getWeatherData(for: location, date: eventDate) { [weak self] weatherData, errorMessage in
+        weatherService.getWeatherData(for: location, date: sessionDate) { [weak self] weatherData, errorMessage in
             if let weatherData = weatherData {
                 DispatchQueue.main.async {
-                    self?.weatherDataByEvent[cacheKey] = weatherData
+                    self?.weatherDataBySession[cacheKey] = weatherData
                 }
             }
         }
     }
     
-    // Get weather data for specific event
-    func getWeatherForEvent(_ event: ICSEvent) -> WeatherData? {
-        guard let eventDate = event.startDate,
-              let location = event.location,
+    // Get weather data for specific session
+    func getWeatherForSession(_ session: Session) -> WeatherData? {
+        guard let sessionDate = session.startDate,
+              let location = session.location,
               !location.isEmpty else {
             return nil
         }
         
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
-        let dateString = dateFormatter.string(from: eventDate)
+        let dateString = dateFormatter.string(from: sessionDate)
         let cacheKey = "\(location)-\(dateString)"
         
-        return weatherDataByEvent[cacheKey]
+        return weatherDataBySession[cacheKey]
+    }
+    
+    // Cleanup method to remove listener
+    func cleanup() {
+        sessionListener?.remove()
+        sessionListener = nil
     }
 }
 
-// MARK: - Compact Event Row for MainEmployeeView
+// MARK: - Compact Session Row for MainEmployeeView
 
-struct CompactEventRow: View {
-    let event: ICSEvent
+struct CompactSessionRow: View {
+    let session: Session
     let weatherData: WeatherData?
+    let currentUserID: String?
     
     private var timeFormatter: DateFormatter {
         let formatter = DateFormatter()
@@ -213,8 +241,21 @@ struct CompactEventRow: View {
         return formatter
     }
     
+    // Get the current user's photographer info from the session
+    private var currentUserPhotographerInfo: (name: String, notes: String)? {
+        guard let userID = currentUserID else { return nil }
+        return session.getPhotographerInfo(for: userID)
+    }
+    
+    private var displayName: String {
+        if let userInfo = currentUserPhotographerInfo {
+            return userInfo.name
+        }
+        return session.employeeName // Fallback to session's employee name
+    }
+    
     private var colorForPosition: Color {
-        if let positionColor = positionColorMap[event.position] {
+        if let positionColor = positionColorMap[session.position] {
             return positionColor
         }
         
@@ -230,7 +271,7 @@ struct CompactEventRow: View {
             "Delivery": .gray
         ]
         
-        return colorMap[event.position] ?? .blue
+        return colorMap[session.position] ?? .blue
     }
     
     var body: some View {
@@ -244,7 +285,7 @@ struct CompactEventRow: View {
             // Content
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    if let start = event.startDate {
+                    if let start = session.startDate {
                         Text(dateFormatter.string(from: start))
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -253,7 +294,7 @@ struct CompactEventRow: View {
                     Spacer()
                     
                     // Position label
-                    Text(event.position)
+                    Text(session.position)
                         .font(.caption)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
@@ -262,12 +303,18 @@ struct CompactEventRow: View {
                         .cornerRadius(12)
                 }
                 
-                Text(event.schoolName)
+                Text(session.schoolName)
                     .font(.headline)
                     .lineLimit(1)
                 
+                // Show user's name
+                Text("Photographer: \(displayName)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                
                 HStack {
-                    if let start = event.startDate, let end = event.endDate {
+                    if let start = session.startDate, let end = session.endDate {
                         Text("\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
@@ -330,8 +377,8 @@ struct MainEmployeeView: View {
     // State for Sports Shoots feature
     @State private var selectedSportsShootID: String? = nil
     
-    // State to track which shift is selected for navigation
-    @State private var selectedShift: ICSEvent? = nil
+    // State to track which session is selected for navigation
+    @State private var selectedSession: Session? = nil
     
     // Flag status
     @State private var isFlagged: Bool = false
@@ -373,14 +420,15 @@ struct MainEmployeeView: View {
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
                             } else {
-                                ForEach(viewModel.upcomingShifts) { shift in
-                                    // Make each shift row clickable
+                                ForEach(viewModel.upcomingShifts) { session in
+                                    // Make each session row clickable
                                     Button(action: {
-                                        selectedShift = shift
+                                        selectedSession = session
                                     }) {
-                                        CompactEventRow(
-                                            event: shift,
-                                            weatherData: viewModel.getWeatherForEvent(shift)
+                                        CompactSessionRow(
+                                            session: session,
+                                            weatherData: viewModel.getWeatherForSession(session),
+                                            currentUserID: UserManager.shared.getCurrentUserID()
                                         )
                                     }
                                     .buttonStyle(PlainButtonStyle())
@@ -621,16 +669,17 @@ struct MainEmployeeView: View {
                 }
                 .hidden()  // Hide these navigation links
                 
-                // Hidden navigation link for shift details
-                if let shift = selectedShift {
+                // Hidden navigation link for session details
+                if let session = selectedSession {
                     NavigationLink(
                         destination: ShiftDetailView(
-                            event: shift,
-                            allEvents: viewModel.allEvents // Pass ALL events, not just the upcoming ones
+                            session: session,
+                            allSessions: viewModel.allSessions, // Pass ALL sessions, not just the upcoming ones
+                            currentUserID: UserManager.shared.getCurrentUserID()
                         ),
                         isActive: Binding(
-                            get: { selectedShift != nil },
-                            set: { if !$0 { selectedShift = nil } }
+                            get: { selectedSession != nil },
+                            set: { if !$0 { selectedSession = nil } }
                         )
                     ) { EmptyView() }
                     .hidden()
@@ -707,18 +756,23 @@ struct MainEmployeeView: View {
                 if #available(iOS 16.0, *) {
                     UITableView.appearance().backgroundColor = .clear
                 }
+                
+                // Initialize user organization ID for session filtering
+                UserManager.shared.initializeOrganizationID()
+                
                 listenForFlagStatus() // Listen for Firebase updates
                 loadSchedule()
                 
                 // Reset selections when view appears
                 selectedFeatureID = nil
-                selectedShift = nil
+                selectedSession = nil
                 
                 // Apply the saved theme when the app starts or the view appears
                 applyAppTheme()
             }
             .onDisappear {
                 viewModel.saveEmployeeFeatureOrder()
+                viewModel.cleanup() // Remove real-time listener
             }
             .sheet(isPresented: $showThemePicker) {
                 themePickerSheet
@@ -886,8 +940,9 @@ struct MainEmployeeView: View {
     }
     
     private func loadSchedule() {
-        let fullName = "\(storedUserFirstName) \(storedUserLastName)".trimmingCharacters(in: .whitespacesAndNewlines)
-        viewModel.fetchUpcomingEvents(employeeName: fullName)
+        let currentUserID = UserManager.shared.getCurrentUserID() ?? "unknown"
+        print("🔍 Searching for events for user ID: '\(currentUserID)'")
+        viewModel.fetchUpcomingEvents(employeeName: "") // employeeName parameter no longer used
     }
     
     // Firebase listener for flag status
