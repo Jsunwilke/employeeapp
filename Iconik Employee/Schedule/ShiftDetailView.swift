@@ -38,8 +38,16 @@ struct LocationPhoto: Identifiable, Hashable {
 // MARK: - Main View
 
 struct ShiftDetailView: View {
-    let event: ICSEvent
-    let allEvents: [ICSEvent]
+    @State private var session: Session
+    @State private var allSessions: [Session]
+    let currentUserID: String?
+    
+    // Primary initializer for Session
+    init(session: Session, allSessions: [Session], currentUserID: String?) {
+        self._session = State(initialValue: session)
+        self._allSessions = State(initialValue: allSessions)
+        self.currentUserID = currentUserID
+    }
     
     // State properties
     @State private var coworkerProfiles: [CoworkerProfile] = []
@@ -72,8 +80,12 @@ struct ShiftDetailView: View {
     @State private var selectedPhoto: LocationPhoto? = nil
     @State private var showingPhotoDetail = false
     
+    // Real-time listener
+    @State private var sessionListener: ListenerRegistration?
+    
     // Services
     private let weatherService = WeatherService()
+    private let sessionService = SessionService.shared
     
     var body: some View {
         ZStack(alignment: .top) {
@@ -98,15 +110,15 @@ struct ShiftDetailView: View {
                     VStack(spacing: 8) {
                         iconRow(systemName: "person.fill",
                                 label: "Employee",
-                                value: event.employeeName)
+                                value: displayEmployeeName)
                         
-                        if let startDate = event.startDate {
+                        if let startDate = session.startDate {
                             iconRow(systemName: "calendar",
                                     label: "Date",
                                     value: formattedFullDate)
                         }
                         
-                        if let start = event.startDate, let end = event.endDate {
+                        if let start = session.startDate, let end = session.endDate {
                             iconRow(systemName: "clock",
                                     label: "Time",
                                     value: timeRangeString)
@@ -116,7 +128,7 @@ struct ShiftDetailView: View {
                                     value: shiftDurationString(start: start, end: end))
                         }
                         
-                        if let location = event.location, !location.isEmpty {
+                        if let location = session.location, !location.isEmpty {
                             iconRow(systemName: "mappin.and.ellipse",
                                     label: "Location",
                                     value: location)
@@ -124,7 +136,7 @@ struct ShiftDetailView: View {
                         
                         iconRow(systemName: "camera.fill",
                                 label: "Position",
-                                value: event.position)
+                                value: session.position)
                         
                         iconRow(systemName: "person.2.fill",
                                 label: "Coworkers",
@@ -135,6 +147,7 @@ struct ShiftDetailView: View {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(Color(.secondarySystemBackground))
                     )
+                    
                     
                     // Coworker photos
                     if !coworkerProfiles.isEmpty {
@@ -297,12 +310,30 @@ struct ShiftDetailView: View {
                         .frame(maxWidth: .infinity) // Ensure it fills the full width
                     }
                     
-                    // Shift notes
-                    if let notes = event.description, !notes.isEmpty {
+                    // Session notes (from session.description)
+                    if let sessionNotes = session.description, !sessionNotes.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Shift Notes")
+                            Text("Session Notes")
                                 .font(.headline)
-                            Text(notes)
+                            Text(sessionNotes)
+                                .font(.body)
+                                .foregroundColor(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(.secondarySystemBackground))
+                        )
+                    }
+                    
+                    // Photographer notes (from photographer array)
+                    if let userInfo = currentUserPhotographerInfo, !userInfo.notes.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Personal Notes")
+                                .font(.headline)
+                            Text(userInfo.notes)
                                 .font(.body)
                                 .foregroundColor(.primary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -361,10 +392,13 @@ struct ShiftDetailView: View {
             loadWeatherData()
             startJobBoxListener()
             setupNotificationObserver()
+            startSessionListener() // Start real-time updates
         }
         .onDisappear {
             // Remove the job box listener
             jobBoxListener?.remove()
+            // Remove the session listener
+            sessionListener?.remove()
             // Remove notification observer
             NotificationCenter.default.removeObserver(self)
         }
@@ -407,13 +441,13 @@ struct ShiftDetailView: View {
     
     private var headerView: some View {
         HStack(alignment: .center, spacing: 16) {
-            // Event info
+            // Session info
             VStack(alignment: .leading, spacing: 4) {
-                Text(event.schoolName)
+                Text(session.schoolName)
                     .font(.title2)
                     .fontWeight(.bold)
                 
-                if let start = event.startDate, let end = event.endDate {
+                if let start = session.startDate, let end = session.endDate {
                     Text("\(dateFormatter.string(from: start))")
                         .font(.headline)
                     
@@ -459,7 +493,7 @@ struct ShiftDetailView: View {
     private var actionButtonsRow: some View {
         HStack(spacing: 0) {
             // Directions Button
-            if let _ = event.location, !event.location!.isEmpty {
+            if let _ = session.location, !session.location!.isEmpty {
                 ActionButton(
                     title: "Directions",
                     systemImage: "map.fill",
@@ -499,8 +533,8 @@ struct ShiftDetailView: View {
                 Image(systemName: "thermometer.sun")
                     .font(.title3)
                     .foregroundColor(.orange)
-                if let eventDate = event.startDate {
-                    Text("Weather Forecast for \(formatDateForDisplay(eventDate))")
+                if let sessionDate = session.startDate {
+                    Text("Weather Forecast for \(formatDateForDisplay(sessionDate))")
                         .font(.headline)
                 } else {
                     Text("Weather Forecast")
@@ -814,19 +848,31 @@ struct ShiftDetailView: View {
                                 .frame(width: 60, height: 60)
                                 .clipShape(Circle())
                         case .failure(_):
-                            Image(systemName: "person.circle.fill")
-                                .resizable()
-                                .frame(width: 60, height: 60)
-                                .foregroundColor(.gray)
+                            // Show initials when image fails to load
+                            ZStack {
+                                Circle()
+                                    .fill(Color.blue.opacity(0.7))
+                                    .frame(width: 60, height: 60)
+                                
+                                Text(getInitials(from: profile.name))
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .foregroundColor(.white)
+                            }
                         @unknown default:
                             EmptyView()
                         }
                     }
                 } else {
-                    Image(systemName: "person.circle.fill")
-                        .resizable()
-                        .frame(width: 60, height: 60)
-                        .foregroundColor(.gray)
+                    // Show initials instead of generic icon
+                    ZStack {
+                        Circle()
+                            .fill(Color.blue.opacity(0.7))
+                            .frame(width: 60, height: 60)
+                        
+                        Text(getInitials(from: profile.name))
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundColor(.white)
+                    }
                 }
                 
                 // Show highlight if this person scanned the job box
@@ -978,8 +1024,19 @@ struct ShiftDetailView: View {
         // Remove any existing listener
         jobBoxListener?.remove()
         
+        // Convert Session to ICSEvent for JobBoxService compatibility
+        let compatibilityEvent = ICSEvent(
+            id: session.id,
+            summary: "\(session.employeeName) - \(session.position) - \(session.schoolName)",
+            startDate: session.startDate,
+            endDate: session.endDate,
+            description: session.description,
+            location: session.location,
+            url: nil
+        )
+        
         // Start a new listener
-        jobBoxListener = JobBoxService.shared.listenForJobBoxes(forShift: event) { jobBoxes in
+        jobBoxListener = JobBoxService.shared.listenForJobBoxes(forShift: compatibilityEvent) { jobBoxes in
             DispatchQueue.main.async {
                 self.jobBoxes = jobBoxes
                 
@@ -1007,8 +1064,8 @@ struct ShiftDetailView: View {
             
             // Check if the notification is for this shift
             let currentShiftUid = JobBoxService.generateCustomShiftID(
-                schoolName: self.event.schoolName,
-                date: self.event.startDate ?? Date()
+                schoolName: self.session.schoolName,
+                date: self.session.startDate ?? Date()
             )
             
             if shiftUid == currentShiftUid {
@@ -1028,7 +1085,7 @@ struct ShiftDetailView: View {
     // MARK: - Properties
     
     private var colorForPosition: Color {
-        if let positionColor = positionColorMap[event.position] {
+        if let positionColor = positionColorMap[session.position] {
             return positionColor
         }
         
@@ -1044,7 +1101,7 @@ struct ShiftDetailView: View {
             "Delivery": .gray
         ]
         
-        return colorMap[event.position] ?? .blue
+        return colorMap[session.position] ?? .blue
     }
     
     private var dateFormatter: DateFormatter {
@@ -1067,13 +1124,42 @@ struct ShiftDetailView: View {
     }
     
     private var formattedFullDate: String {
-        guard let start = event.startDate else { return "" }
+        guard let start = session.startDate else { return "" }
         return dateFormatter.string(from: start)
     }
     
     private var timeRangeString: String {
-        guard let start = event.startDate, let end = event.endDate else { return "" }
+        guard let start = session.startDate, let end = session.endDate else { return "" }
         return "\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))"
+    }
+    
+    // Get the current user's photographer info from the session
+    private var currentUserPhotographerInfo: (name: String, notes: String)? {
+        guard let userID = currentUserID else { return nil }
+        return session.getPhotographerInfo(for: userID)
+    }
+    
+    private var displayEmployeeName: String {
+        if let userInfo = currentUserPhotographerInfo {
+            return userInfo.name
+        }
+        return session.employeeName // Fallback to session's employee name
+    }
+    
+    private var displayNotes: String {
+        var notes: [String] = []
+        
+        // Add session-level notes if they exist
+        if let sessionNotes = session.description, !sessionNotes.isEmpty {
+            notes.append("Session: \(sessionNotes)")
+        }
+        
+        // Add photographer-specific notes if they exist
+        if let userInfo = currentUserPhotographerInfo, !userInfo.notes.isEmpty {
+            notes.append("Personal: \(userInfo.notes)")
+        }
+        
+        return notes.joined(separator: "\n")
     }
     
     // MARK: - Helper Methods
@@ -1103,37 +1189,37 @@ struct ShiftDetailView: View {
     }
     
     private func isFirstShiftOfDay() -> Bool {
-        guard let currentShiftDate = event.startDate else { return false }
+        guard let currentShiftDate = session.startDate else { return false }
         
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: currentShiftDate)
         
-        // Find all events for the same employee on the same day
-        let employeeEvents = allEvents.filter { evt in
+        // Find all sessions for the same employee on the same day
+        let employeeSessions = allSessions.filter { evt in
             guard let eventDate = evt.startDate,
-                  evt.employeeName == self.event.employeeName else {
+                  evt.employeeName == self.session.employeeName else {
                 return false
             }
             
-            // Check if the event is on the same day
+            // Check if the session is on the same day
             return calendar.isDate(eventDate, inSameDayAs: currentShiftDate)
         }
         
-        // Sort events by start time
-        let sortedEvents = employeeEvents.sorted { (a, b) -> Bool in
+        // Sort sessions by start time
+        let sortedSessions = employeeSessions.sorted { (a, b) -> Bool in
             guard let aStart = a.startDate, let bStart = b.startDate else {
                 return false
             }
             return aStart < bStart
         }
         
-        // Check if the current event is the first one
-        if let firstEvent = sortedEvents.first,
-           let firstEventDate = firstEvent.startDate,
-           let currentEventDate = event.startDate {
+        // Check if the current session is the first one
+        if let firstSession = sortedSessions.first,
+           let firstSessionDate = firstSession.startDate,
+           let currentSessionDate = session.startDate {
             
             // Compare times using timeIntervalSince1970 to handle possible millisecond differences
-            let isFirst = abs(firstEventDate.timeIntervalSince1970 - currentEventDate.timeIntervalSince1970) < 60 // Within a minute
+            let isFirst = abs(firstSessionDate.timeIntervalSince1970 - currentSessionDate.timeIntervalSince1970) < 60 // Within a minute
             return isFirst
         }
         
@@ -1141,32 +1227,40 @@ struct ShiftDetailView: View {
     }
     
     private func loadEmployeeProfile() {
-        let fullName = event.employeeName
-        let queryName = firstName(from: fullName)
+        // Use current user's ID directly instead of querying by name
+        guard let userID = currentUserID else {
+            print("🔐 Cannot load employee profile: no current user ID")
+            return
+        }
         
         let db = Firestore.firestore()
         db.collection("users")
-            .whereField("firstName", isEqualTo: queryName)
-            .getDocuments { snapshot, error in
+            .document(userID)
+            .getDocument { snapshot, error in
                 if let error = error {
-                    self.errorMessage = error.localizedDescription
+                    print("⚠️ Employee profile unavailable: \(error.localizedDescription)")
+                    // Continue without employee profile photo
                     return
                 }
-                if let docs = snapshot?.documents, let doc = docs.first {
-                    let data = doc.data()
+                
+                if let data = snapshot?.data() {
                     let photoURL = data["photoURL"] as? String ?? ""
+                    let firstName = data["firstName"] as? String ?? ""
+                    let lastName = data["lastName"] as? String ?? ""
+                    let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+                    
                     DispatchQueue.main.async {
                         self.employeeProfile = CoworkerProfile(
-                            id: doc.documentID,
-                            name: fullName,
+                            id: userID,
+                            name: fullName.isEmpty ? self.displayEmployeeName : fullName,
                             photoURL: photoURL
                         )
                     }
                 } else {
                     DispatchQueue.main.async {
                         self.employeeProfile = CoworkerProfile(
-                            id: UUID().uuidString,
-                            name: fullName,
+                            id: userID,
+                            name: self.displayEmployeeName,
                             photoURL: ""
                         )
                     }
@@ -1175,75 +1269,155 @@ struct ShiftDetailView: View {
     }
     
     private func loadCoworkerPhotos() {
-        let coworkerNames = otherEmployeesSameJob()
-        if coworkerNames.isEmpty {
+        coworkerProfiles = []
+        
+        // Get all photographers from the session (excluding current user)
+        guard let currentUserID = currentUserID else { return }
+        
+        // Get organization ID to comply with security rules
+        let orgID = UserManager.shared.getCachedOrganizationID()
+        guard !orgID.isEmpty else {
+            print("🔐 Cannot load coworker photos: no organization ID found")
             return
         }
         
         let db = Firestore.firestore()
-        coworkerProfiles = []
         
-        for fullName in coworkerNames {
-            let queryName = firstName(from: fullName)
+        for photographer in session.photographers {
+            guard let photographerID = photographer["id"] as? String,
+                  let photographerName = photographer["name"] as? String,
+                  photographerID != currentUserID else {
+                continue // Skip current user
+            }
             
+            // Load actual photo URL from users collection
             db.collection("users")
-                .whereField("firstName", isEqualTo: queryName)
-                .getDocuments { snapshot, error in
+                .document(photographerID)
+                .getDocument { snapshot, error in
                     if let error = error {
-                        self.errorMessage = "Error loading coworker photo: \(error.localizedDescription)"
-                        return
-                    }
-                    if let docs = snapshot?.documents, let doc = docs.first {
-                        let data = doc.data()
-                        let photoURL = data["photoURL"] as? String ?? ""
-                        
+                        print("⚠️ Coworker photo unavailable: \(error.localizedDescription)")
+                        // Create profile with initials fallback
                         DispatchQueue.main.async {
                             let profile = CoworkerProfile(
-                                id: doc.documentID,
-                                name: fullName,
-                                photoURL: photoURL
-                            )
-                            self.coworkerProfiles.append(profile)
-                        }
-                    } else {
-                        DispatchQueue.main.async {
-                            let profile = CoworkerProfile(
-                                id: UUID().uuidString,
-                                name: fullName,
+                                id: photographerID,
+                                name: photographerName,
                                 photoURL: ""
                             )
+                            if !self.coworkerProfiles.contains(where: { $0.id == photographerID }) {
+                                self.coworkerProfiles.append(profile)
+                            }
+                        }
+                        return
+                    }
+                    
+                    let photoURL = snapshot?.data()?["photoURL"] as? String ?? ""
+                    DispatchQueue.main.async {
+                        let profile = CoworkerProfile(
+                            id: photographerID,
+                            name: photographerName,
+                            photoURL: photoURL
+                        )
+                        if !self.coworkerProfiles.contains(where: { $0.id == photographerID }) {
                             self.coworkerProfiles.append(profile)
                         }
                     }
                 }
+        }
+        
+        // Also check for coworkers from other sessions on the same day/location
+        let calendar = Calendar.current
+        guard let sessionDate = session.startDate else { return }
+        let sessionDay = calendar.startOfDay(for: sessionDate)
+        
+        for otherSession in allSessions {
+            guard let otherSessionDate = otherSession.startDate,
+                  otherSession.id != session.id,
+                  calendar.startOfDay(for: otherSessionDate) == sessionDay,
+                  otherSession.schoolName == session.schoolName else {
+                continue
+            }
+            
+            // Add photographers from other sessions on same day
+            for photographer in otherSession.photographers {
+                guard let photographerID = photographer["id"] as? String,
+                      let photographerName = photographer["name"] as? String,
+                      photographerID != currentUserID,
+                      !coworkerProfiles.contains(where: { $0.id == photographerID }) else {
+                    continue
+                }
+                
+                // Load actual photo URL from users collection for other session photographers too
+                db.collection("users")
+                    .document(photographerID)
+                    .getDocument { snapshot, error in
+                        if let error = error {
+                            print("⚠️ Other session coworker photo unavailable: \(error.localizedDescription)")
+                            // Create profile with initials fallback
+                            DispatchQueue.main.async {
+                                let profile = CoworkerProfile(
+                                    id: photographerID,
+                                    name: photographerName,
+                                    photoURL: ""
+                                )
+                                if !self.coworkerProfiles.contains(where: { $0.id == photographerID }) {
+                                    self.coworkerProfiles.append(profile)
+                                }
+                            }
+                            return
+                        }
+                        
+                        let photoURL = snapshot?.data()?["photoURL"] as? String ?? ""
+                        DispatchQueue.main.async {
+                            let profile = CoworkerProfile(
+                                id: photographerID,
+                                name: photographerName,
+                                photoURL: photoURL
+                            )
+                            if !self.coworkerProfiles.contains(where: { $0.id == photographerID }) {
+                                self.coworkerProfiles.append(profile)
+                            }
+                        }
+                    }
+            }
         }
     }
     
     private func loadLocationPhotos() {
         let db = Firestore.firestore()
-        db.collection("schools")
-            .whereField("value", isEqualTo: event.schoolName)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    self.errorMessage = "Error loading location photos: \(error.localizedDescription)"
-                    return
-                }
-                guard let docs = snapshot?.documents,
-                      let doc = docs.first,
-                      let photoDicts = doc.data()["locationPhotos"] as? [[String: String]] else {
-                    return
-                }
-                // Map each dictionary to a LocationPhoto.
-                let photos = photoDicts.compactMap { dict -> LocationPhoto? in
-                    if let url = dict["url"], let label = dict["label"] {
-                        return LocationPhoto(url: url, label: label)
-                    }
-                    return nil
-                }
-                DispatchQueue.main.async {
-                    self.locationPhotos = photos
-                }
+        
+        // Get organization ID to comply with security rules
+        UserManager.shared.getCurrentUserOrganizationID { organizationID in
+            guard let orgID = organizationID else {
+                print("🔐 Cannot load location photos: no organization ID found")
+                return
             }
+            
+            db.collection("schools")
+                .whereField("organizationID", isEqualTo: orgID)
+                .whereField("value", isEqualTo: self.session.schoolName)
+                .getDocuments { snapshot, error in
+                    if let error = error {
+                        print("⚠️ Location photos unavailable: \(error.localizedDescription)")
+                        // Don't show error to user, just fail silently for location photos
+                        return
+                    }
+                    guard let docs = snapshot?.documents,
+                          let doc = docs.first,
+                          let photoDicts = doc.data()["locationPhotos"] as? [[String: String]] else {
+                        return
+                    }
+                    // Map each dictionary to a LocationPhoto.
+                    let photos = photoDicts.compactMap { dict -> LocationPhoto? in
+                        if let url = dict["url"], let label = dict["label"] {
+                            return LocationPhoto(url: url, label: label)
+                        }
+                        return nil
+                    }
+                    DispatchQueue.main.async {
+                        self.locationPhotos = photos
+                    }
+                }
+        }
     }
     
     private func loadUserHomeAddress() {
@@ -1255,7 +1429,8 @@ struct ShiftDetailView: View {
         let db = Firestore.firestore()
         db.collection("users").document(userId).getDocument { snapshot, error in
             if let error = error {
-                self.travelPlan.errorMessage = "Could not load user data"
+                print("⚠️ User home address unavailable: \(error.localizedDescription)")
+                // Continue without user home address data
                 return
             }
             
@@ -1281,76 +1456,181 @@ struct ShiftDetailView: View {
     
     private func loadSchoolAddress() {
         let db = Firestore.firestore()
-        db.collection("schools")
-            .whereField("value", isEqualTo: event.schoolName)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    self.travelPlan.errorMessage = "Could not load school data"
-                    return
-                }
-                
-                if let doc = snapshot?.documents.first, let address = doc.data()["schoolAddress"] as? String {
-                    self.schoolAddress = address
-                    
-                    // Calculate travel plan if we already have the user home address
-                    if !self.userHomeAddress.isEmpty {
-                        self.calculateTravelPlan()
-                    }
-                } else if let location = self.event.location, !location.isEmpty {
-                    // Use the event location if available
-                    self.schoolAddress = location
-                    
-                    if !self.userHomeAddress.isEmpty {
-                        self.calculateTravelPlan()
-                    }
-                } else {
-                    self.travelPlan.errorMessage = "School address not found"
-                }
+        
+        // Get organization ID to comply with security rules
+        UserManager.shared.getCurrentUserOrganizationID { organizationID in
+            guard let orgID = organizationID else {
+                print("🔐 Cannot load school address: no organization ID found")
+                self.travelPlan.errorMessage = "Could not load school data"
+                return
             }
+            
+            db.collection("schools")
+                .whereField("organizationID", isEqualTo: orgID)
+                .whereField("value", isEqualTo: self.session.schoolName)
+                .getDocuments { snapshot, error in
+                    if let error = error {
+                        self.travelPlan.errorMessage = "Could not load school data"
+                        return
+                    }
+                    
+                    if let doc = snapshot?.documents.first {
+                        let data = doc.data()
+                        
+                        // First try to use coordinates field for maximum accuracy
+                        if let coordinates = data["coordinates"] as? String, !coordinates.isEmpty {
+                            self.schoolAddress = coordinates
+                        }
+                        // Fall back to schoolAddress field
+                        else if let address = data["schoolAddress"] as? String, !address.isEmpty {
+                            self.schoolAddress = address
+                        }
+                        // Finally fall back to session location
+                        else if let location = self.session.location, !location.isEmpty {
+                            self.schoolAddress = location
+                        }
+                        else {
+                            self.travelPlan.errorMessage = "School location not found"
+                            return
+                        }
+                        
+                        // Calculate travel plan if we already have the user home address
+                        if !self.userHomeAddress.isEmpty {
+                            self.calculateTravelPlan()
+                        }
+                    } else if let location = self.session.location, !location.isEmpty {
+                        // Use the session location if no school document found
+                        self.schoolAddress = location
+                        
+                        if !self.userHomeAddress.isEmpty {
+                            self.calculateTravelPlan()
+                        }
+                    } else {
+                        self.travelPlan.errorMessage = "School location not found"
+                    }
+                }
+        }
     }
     
     private func loadWeatherData() {
-        guard let eventDate = event.startDate else { return }
+        guard let sessionDate = session.startDate else { return }
         
-        // Only load weather if the event is within the next 7 days
+        // Only load weather if the session is within the next 7 days
         let calendar = Calendar.current
         let now = Date()
         let sevenDaysFromNow = calendar.date(byAdding: .day, value: 7, to: now) ?? now
         
-        if eventDate > sevenDaysFromNow {
+        if sessionDate > sevenDaysFromNow {
             weatherErrorMessage = "Weather forecast only available for next 7 days"
             return // Don't attempt to load weather for dates more than 7 days away
         }
         
         isLoadingWeather = true
         
-        // Try to use school address first
-        if !schoolAddress.isEmpty {
-            weatherService.getWeatherData(for: schoolAddress, date: eventDate) { weatherData, errorMessage in
-                DispatchQueue.main.async {
-                    self.weatherData = weatherData
-                    self.weatherErrorMessage = errorMessage
-                    self.isLoadingWeather = false
+        // Load school data to get the best location for weather
+        loadSchoolDataForWeather { latitude, longitude, addressFallback in
+            // Use coordinates if available for maximum accuracy
+            if let lat = latitude, let lng = longitude {
+                self.weatherService.getWeatherData(latitude: lat, longitude: lng, date: sessionDate) { weatherData, errorMessage in
+                    DispatchQueue.main.async {
+                        self.weatherData = weatherData
+                        self.weatherErrorMessage = errorMessage
+                        self.isLoadingWeather = false
+                    }
                 }
             }
-        } else if let location = event.location, !location.isEmpty {
-            // Fall back to event location
-            weatherService.getWeatherData(for: location, date: eventDate) { weatherData, errorMessage in
-                DispatchQueue.main.async {
-                    self.weatherData = weatherData
-                    self.weatherErrorMessage = errorMessage
-                    self.isLoadingWeather = false
+            // Use address if coordinates not available
+            else if !addressFallback.isEmpty {
+                self.weatherService.getWeatherData(for: addressFallback, date: sessionDate) { weatherData, errorMessage in
+                    DispatchQueue.main.async {
+                        self.weatherData = weatherData
+                        self.weatherErrorMessage = errorMessage
+                        self.isLoadingWeather = false
+                    }
                 }
             }
-        } else {
-            // Fall back to school name
-            weatherService.getWeatherData(for: event.schoolName, date: eventDate) { weatherData, errorMessage in
-                DispatchQueue.main.async {
-                    self.weatherData = weatherData
-                    self.weatherErrorMessage = errorMessage
-                    self.isLoadingWeather = false
+            // Final fallback to school name
+            else {
+                self.weatherService.getWeatherData(for: self.session.schoolName, date: sessionDate) { weatherData, errorMessage in
+                    DispatchQueue.main.async {
+                        self.weatherData = weatherData
+                        self.weatherErrorMessage = errorMessage
+                        self.isLoadingWeather = false
+                    }
                 }
             }
+        }
+    }
+    
+    private func loadSchoolDataForWeather(completion: @escaping (Double?, Double?, String) -> Void) {
+        let db = Firestore.firestore()
+        
+        // Get organization ID to comply with security rules
+        UserManager.shared.getCurrentUserOrganizationID { organizationID in
+            guard let orgID = organizationID else {
+                print("🔐 Cannot load school data for weather: no organization ID found")
+                completion(nil, nil, "")
+                return
+            }
+            
+            db.collection("schools")
+                .whereField("organizationID", isEqualTo: orgID)
+                .whereField("value", isEqualTo: self.session.schoolName)
+                .getDocuments { snapshot, error in
+                    if let error = error {
+                        print("⚠️ School data for weather unavailable: \(error.localizedDescription)")
+                        completion(nil, nil, "")
+                        return
+                    }
+                    
+                    if let doc = snapshot?.documents.first {
+                        let data = doc.data()
+                        
+                        // First priority: Use coordinates field for maximum accuracy
+                        if let coordinates = data["coordinates"] as? String, !coordinates.isEmpty,
+                           let parsedCoords = self.parseCoordinateString(coordinates) {
+                            // Return coordinates directly - most accurate for weather
+                            completion(parsedCoords.latitude, parsedCoords.longitude, "")
+                            return
+                        }
+                        
+                        // Second priority: city + state for weather data (good for geocoding)
+                        if let city = data["city"] as? String, !city.isEmpty,
+                           let state = data["state"] as? String, !state.isEmpty {
+                            completion(nil, nil, "\(city), \(state)")
+                            return
+                        }
+                        
+                        // Third priority: street address
+                        if let street = data["street"] as? String, !street.isEmpty,
+                           let city = data["city"] as? String, !city.isEmpty {
+                            completion(nil, nil, "\(street), \(city)")
+                            return
+                        }
+                        
+                        // Fourth priority: schoolAddress field (if not coordinates)
+                        if let address = data["schoolAddress"] as? String, !address.isEmpty,
+                           self.parseCoordinateString(address) == nil { // Not coordinates
+                            completion(nil, nil, address)
+                            return
+                        }
+                        
+                        // Final fallback: session location
+                        if let location = self.session.location, !location.isEmpty {
+                            completion(nil, nil, location)
+                            return
+                        }
+                        
+                        completion(nil, nil, "")
+                    } else {
+                        // Use session location if no school document found
+                        if let location = self.session.location, !location.isEmpty {
+                            completion(nil, nil, location)
+                        } else {
+                            completion(nil, nil, "")
+                        }
+                    }
+                }
         }
     }
     
@@ -1415,10 +1695,10 @@ struct ShiftDetailView: View {
         }
     }
     
-    // Determine the actual start time from either shift notes or event time
+    // Determine the actual start time from either shift notes or session time
     private func determineStartTime() -> Date? {
         // Check shift notes for a start time
-        if let notes = event.description, !notes.isEmpty {
+        if let notes = session.description, !notes.isEmpty {
             // First try simple scanning for a line with "Start Time" followed by a number
             let lines = notes.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
             
@@ -1442,8 +1722,8 @@ struct ShiftDetailView: View {
                             if let hour = Int(timeStr) {
                                 // Convert to Date
                                 let calendar = Calendar.current
-                                if let eventDate = event.startDate {
-                                    var dateComponents = calendar.dateComponents([.year, .month, .day], from: eventDate)
+                                if let sessionDate = session.startDate {
+                                    var dateComponents = calendar.dateComponents([.year, .month, .day], from: sessionDate)
                                     dateComponents.hour = hour
                                     dateComponents.minute = 0
                                     if let date = calendar.date(from: dateComponents) {
@@ -1459,15 +1739,15 @@ struct ShiftDetailView: View {
                                 formatter.dateFormat = format
                                 
                                 if let date = formatter.date(from: timeStr) {
-                                    // We have a time without a date, so need to set the date to the event date
+                                    // We have a time without a date, so need to set the date to the session date
                                     let calendar = Calendar.current
-                                    if let eventDate = event.startDate {
+                                    if let sessionDate = session.startDate {
                                         let startTimeComponents = calendar.dateComponents([.hour, .minute], from: date)
-                                        var eventDateComponents = calendar.dateComponents([.year, .month, .day], from: eventDate)
-                                        eventDateComponents.hour = startTimeComponents.hour
-                                        eventDateComponents.minute = startTimeComponents.minute
+                                        var sessionDateComponents = calendar.dateComponents([.year, .month, .day], from: sessionDate)
+                                        sessionDateComponents.hour = startTimeComponents.hour
+                                        sessionDateComponents.minute = startTimeComponents.minute
                                         
-                                        if let finalDate = calendar.date(from: eventDateComponents) {
+                                        if let finalDate = calendar.date(from: sessionDateComponents) {
                                             return finalDate
                                         }
                                     }
@@ -1488,8 +1768,8 @@ struct ShiftDetailView: View {
                         if let hour = Int(timeStr) {
                             // Convert to Date
                             let calendar = Calendar.current
-                            if let eventDate = event.startDate {
-                                var dateComponents = calendar.dateComponents([.year, .month, .day], from: eventDate)
+                            if let sessionDate = session.startDate {
+                                var dateComponents = calendar.dateComponents([.year, .month, .day], from: sessionDate)
                                 dateComponents.hour = hour
                                 dateComponents.minute = 0
                                 if let date = calendar.date(from: dateComponents) {
@@ -1502,8 +1782,8 @@ struct ShiftDetailView: View {
             }
         }
         
-        // Fall back to the event start time
-        return event.startDate
+        // Fall back to the session start time
+        return session.startDate
     }
 
     // Calculate travel time between two addresses using MapKit
@@ -1670,26 +1950,26 @@ struct ShiftDetailView: View {
     private func createMessageText() -> String {
         var message = "Hi team!\n\n"
         
-        if let start = event.startDate, let end = event.endDate {
+        if let start = session.startDate, let end = session.endDate {
             let dateFormatter = DateFormatter()
             dateFormatter.dateStyle = .full
             
             let timeFormatter = DateFormatter()
             timeFormatter.timeStyle = .short
             
-            message += "We're scheduled for a shoot at \(event.schoolName) on \(dateFormatter.string(from: start)) from \(timeFormatter.string(from: start)) to \(timeFormatter.string(from: end)).\n\n"
+            message += "We're scheduled for a shoot at \(session.schoolName) on \(dateFormatter.string(from: start)) from \(timeFormatter.string(from: start)) to \(timeFormatter.string(from: end)).\n\n"
         } else {
-            message += "We're scheduled for a shoot at \(event.schoolName).\n\n"
+            message += "We're scheduled for a shoot at \(session.schoolName).\n\n"
         }
         
         // Add more details if available
-        if let location = event.location, !location.isEmpty {
+        if let location = session.location, !location.isEmpty {
             message += "Location: \(location)\n"
         }
         
-        message += "Position: \(event.position)\n\n"
+        message += "Position: \(session.position)\n\n"
         
-        if let description = event.description, !description.isEmpty {
+        if let description = session.description, !description.isEmpty {
             message += "Notes: \(description)\n\n"
         }
         
@@ -1733,12 +2013,21 @@ struct ShiftDetailView: View {
             return // No coworkers to message
         }
         
+        // Get organization ID to comply with security rules
+        let orgID = UserManager.shared.getCachedOrganizationID()
+        guard !orgID.isEmpty else {
+            print("🔐 Cannot load coworker contacts: no organization ID found")
+            completion(false)
+            return
+        }
+        
         var loadedCount = 0
         var foundPhoneNumber = false
         
         for fullName in coworkerNames {
             let queryName = firstName(from: fullName)
             db.collection("users")
+                .whereField("organizationID", isEqualTo: orgID)
                 .whereField("firstName", isEqualTo: queryName)
                 .getDocuments { snapshot, error in
                     defer {
@@ -1752,7 +2041,8 @@ struct ShiftDetailView: View {
                     }
                     
                     if let error = error {
-                        self.errorMessage = "Error loading coworker contact: \(error.localizedDescription)"
+                        print("⚠️ Coworker contact unavailable: \(error.localizedDescription)")
+                        // Continue without coworker contact data
                         return
                     }
                     
@@ -1779,7 +2069,7 @@ struct ShiftDetailView: View {
     // Action Methods
     
     private func openInAppleMaps() {
-        guard let location = event.location, !location.isEmpty else { return }
+        guard let location = session.location, !location.isEmpty else { return }
         
         let addressString = location.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let mapsString = "http://maps.apple.com/?address=\(addressString)"
@@ -1790,7 +2080,7 @@ struct ShiftDetailView: View {
     }
     
     private func openInGoogleMaps() {
-        guard let location = event.location, !location.isEmpty else { return }
+        guard let location = session.location, !location.isEmpty else { return }
         
         let addressString = location.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let mapsString = "comgooglemaps://?q=\(addressString)"
@@ -1805,17 +2095,17 @@ struct ShiftDetailView: View {
     }
     
     private func shareShift() {
-        guard let start = event.startDate, let end = event.endDate else { return }
+        guard let start = session.startDate, let end = session.endDate else { return }
         
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
         dateFormatter.timeStyle = .short
         
-        var textToShare = "Shift: \(event.position)\n"
+        var textToShare = "Shift: \(session.position)\n"
         textToShare += "Date: \(dateFormatter.string(from: start)) - \(dateFormatter.string(from: end))\n"
-        textToShare += "Location: \(event.schoolName)"
+        textToShare += "Location: \(session.schoolName)"
         
-        if let location = event.location, !location.isEmpty {
+        if let location = session.location, !location.isEmpty {
             textToShare += "\nAddress: \(location)"
         }
         
@@ -1854,22 +2144,44 @@ struct ShiftDetailView: View {
     }
     
     func otherEmployeesSameJob() -> [String] {
-        guard let shiftStart = event.startDate else { return [] }
+        guard let shiftStart = session.startDate else { return [] }
         let cal = Calendar.current
         let shiftDay = cal.startOfDay(for: shiftStart)
         
-        // Get all employees working the same shift
-        let coworkers = allEvents.filter { other in
-            guard let otherStart = other.startDate else { return false }
-            let otherDay = cal.startOfDay(for: otherStart)
-            return otherDay == shiftDay &&
-                   other.position == event.position &&
-                   other.schoolName == event.schoolName &&
-                   other.employeeName != event.employeeName
-        }
-        .map { $0.employeeName }
+        // Get all photographers working on the same session (same date, school, time)
+        var coworkerNames: [String] = []
         
-        return coworkers
+        // First, get all photographers from the current session (excluding current user)
+        let sessionPhotographers = session.getPhotographerNames()
+        if let currentUserInfo = currentUserPhotographerInfo {
+            // Exclude current user from the list
+            for photographerName in sessionPhotographers {
+                if photographerName != currentUserInfo.name {
+                    coworkerNames.append(photographerName)
+                }
+            }
+        } else {
+            // If we can't identify current user, include all photographers except the first one
+            coworkerNames = Array(sessionPhotographers.dropFirst())
+        }
+        
+        // Also check other sessions on the same day at the same school (for different session types)
+        let otherSessionCoworkers = allSessions.filter { other in
+            guard let otherStart = other.startDate,
+                  other.id != session.id else { return false }
+            let otherDay = cal.startOfDay(for: otherStart)
+            return otherDay == shiftDay && other.schoolName == session.schoolName
+        }
+        .flatMap { $0.getPhotographerNames() }
+        
+        // Add unique names from other sessions
+        for name in otherSessionCoworkers {
+            if !coworkerNames.contains(name) {
+                coworkerNames.append(name)
+            }
+        }
+        
+        return coworkerNames
     }
     
     // Check if a user profile name matches the job box scanner name
@@ -1920,6 +2232,47 @@ struct ShiftDetailView: View {
         // Otherwise just get the first name (first part before any whitespace)
         let firstPart = cleanedName.components(separatedBy: .whitespaces).first ?? cleanedName
         return firstPart
+    }
+    
+    // Get initials from a full name
+    private func getInitials(from name: String) -> String {
+        let components = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+        
+        if components.count >= 2 {
+            // First and last name initials
+            let firstInitial = String(components.first?.prefix(1) ?? "")
+            let lastInitial = String(components.last?.prefix(1) ?? "")
+            return (firstInitial + lastInitial).uppercased()
+        } else if let first = components.first {
+            // Just first name initial
+            return String(first.prefix(1)).uppercased()
+        } else {
+            return "?"
+        }
+    }
+    
+    // MARK: - Real-time Session Updates
+    
+    private func startSessionListener() {
+        // Listen for updates to all sessions
+        sessionListener = sessionService.listenForSessions { sessions in
+            DispatchQueue.main.async {
+                
+                // Update the current session if it changed
+                if let updatedSession = sessions.first(where: { $0.id == self.session.id }) {
+                    self.session = updatedSession
+                    
+                    // Reload related data that might have changed
+                    self.loadCoworkerPhotos()
+                    self.loadWeatherData()
+                }
+                
+                // Update all sessions for coworker calculations
+                self.allSessions = sessions
+            }
+        }
     }
 }
 
