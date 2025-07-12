@@ -277,3 +277,220 @@ struct PhotoshootNote: Identifiable, Codable, Equatable, Hashable {
         photoURLs = (try? container.decode([String].self, forKey: .photoURLs)) ?? []
     }
 }
+
+// MARK: - Time Tracking Models
+
+struct TimeEntry: Identifiable, Codable {
+    let id: String
+    let userId: String
+    let organizationID: String
+    let clockInTime: Date?
+    let clockOutTime: Date?
+    let date: String
+    let status: String
+    let sessionId: String?
+    let notes: String?
+    let createdAt: Date?
+    let updatedAt: Date?
+    
+    // Direct initializer for creating TimeEntry instances
+    init(id: String, userId: String, organizationID: String, clockInTime: Date? = nil, clockOutTime: Date? = nil, date: String, status: String, sessionId: String? = nil, notes: String? = nil, createdAt: Date? = nil, updatedAt: Date? = nil) {
+        self.id = id
+        self.userId = userId
+        self.organizationID = organizationID
+        self.clockInTime = clockInTime
+        self.clockOutTime = clockOutTime
+        self.date = date
+        self.status = status
+        self.sessionId = sessionId
+        self.notes = notes
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+    
+    init(document: QueryDocumentSnapshot) {
+        self.id = document.documentID
+        let data = document.data()
+        
+        self.userId = data["userId"] as? String ?? ""
+        self.organizationID = data["organizationID"] as? String ?? ""
+        self.date = data["date"] as? String ?? ""
+        self.status = data["status"] as? String ?? ""
+        self.sessionId = data["sessionId"] as? String
+        self.notes = data["notes"] as? String
+        
+        // Convert Firestore timestamps to Date objects
+        if let clockInTimestamp = data["clockInTime"] as? Timestamp {
+            self.clockInTime = clockInTimestamp.dateValue()
+        } else {
+            self.clockInTime = nil
+        }
+        
+        if let clockOutTimestamp = data["clockOutTime"] as? Timestamp {
+            self.clockOutTime = clockOutTimestamp.dateValue()
+        } else {
+            self.clockOutTime = nil
+        }
+        
+        if let createdAtTimestamp = data["createdAt"] as? Timestamp {
+            self.createdAt = createdAtTimestamp.dateValue()
+        } else {
+            self.createdAt = nil
+        }
+        
+        if let updatedAtTimestamp = data["updatedAt"] as? Timestamp {
+            self.updatedAt = updatedAtTimestamp.dateValue()
+        } else {
+            self.updatedAt = nil
+        }
+    }
+    
+    init(document: DocumentSnapshot) {
+        self.id = document.documentID
+        let data = document.data() ?? [:]
+        
+        self.userId = data["userId"] as? String ?? ""
+        self.organizationID = data["organizationID"] as? String ?? ""
+        self.date = data["date"] as? String ?? ""
+        self.status = data["status"] as? String ?? ""
+        self.sessionId = data["sessionId"] as? String
+        self.notes = data["notes"] as? String
+        
+        // Convert Firestore timestamps to Date objects
+        if let clockInTimestamp = data["clockInTime"] as? Timestamp {
+            self.clockInTime = clockInTimestamp.dateValue()
+        } else {
+            self.clockInTime = nil
+        }
+        
+        if let clockOutTimestamp = data["clockOutTime"] as? Timestamp {
+            self.clockOutTime = clockOutTimestamp.dateValue()
+        } else {
+            self.clockOutTime = nil
+        }
+        
+        if let createdAtTimestamp = data["createdAt"] as? Timestamp {
+            self.createdAt = createdAtTimestamp.dateValue()
+        } else {
+            self.createdAt = nil
+        }
+        
+        if let updatedAtTimestamp = data["updatedAt"] as? Timestamp {
+            self.updatedAt = updatedAtTimestamp.dateValue()
+        } else {
+            self.updatedAt = nil
+        }
+    }
+    
+    // Calculate duration in seconds
+    var durationInSeconds: TimeInterval? {
+        guard let clockIn = clockInTime else { return nil }
+        let clockOut = clockOutTime ?? Date() // Use current time if still clocked in
+        return clockOut.timeIntervalSince(clockIn)
+    }
+    
+    // Format duration as hours and minutes
+    var formattedDuration: String {
+        guard let duration = durationInSeconds else { return "0h 0m" }
+        let hours = Int(duration) / 3600
+        let minutes = (Int(duration) % 3600) / 60
+        return "\(hours)h \(minutes)m"
+    }
+    
+    // Get duration in decimal hours for calculations
+    var durationInHours: Double {
+        guard let duration = durationInSeconds else { return 0.0 }
+        return duration / 3600.0
+    }
+}
+
+// MARK: - Time Entry Validation
+
+struct TimeEntryValidator {
+    
+    // Validate notes field
+    static func validateNotes(_ notes: String?) -> (isValid: Bool, error: String?) {
+        guard let notes = notes, !notes.isEmpty else {
+            return (true, nil) // Notes are optional
+        }
+        
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        if trimmedNotes.count > 500 {
+            return (false, "Notes cannot exceed 500 characters")
+        }
+        
+        // Basic XSS prevention - remove/escape HTML-like content
+        let sanitizedNotes = trimmedNotes.replacingOccurrences(of: "<", with: "&lt;")
+                                        .replacingOccurrences(of: ">", with: "&gt;")
+        
+        return (true, nil)
+    }
+    
+    // Validate manual time entry
+    static func validateManualEntry(date: String, startTime: Date, endTime: Date) -> (isValid: Bool, error: String?) {
+        // Cannot create future entries
+        let today = Date()
+        if endTime > today {
+            return (false, "Cannot create time entries for future dates")
+        }
+        
+        // End time must be after start time
+        if endTime <= startTime {
+            return (false, "End time must be after start time")
+        }
+        
+        // Maximum duration check (16 hours)
+        let duration = endTime.timeIntervalSince(startTime)
+        if duration > 16 * 3600 { // 16 hours in seconds
+            return (false, "Time entry cannot exceed 16 hours")
+        }
+        
+        // Minimum duration check (1 minute)
+        if duration < 60 {
+            return (false, "Time entry must be at least 1 minute long")
+        }
+        
+        return (true, nil)
+    }
+    
+    // Check if user can edit entry (30-day rule)
+    static func canEditEntry(_ entry: TimeEntry) -> Bool {
+        guard let createdAt = entry.createdAt else { return false }
+        
+        // Cannot edit active entries
+        if entry.status == "clocked-in" {
+            return false
+        }
+        
+        // 30-day edit window
+        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        return createdAt >= thirtyDaysAgo
+    }
+}
+
+// MARK: - Date and TimeInterval Extensions
+
+extension Date {
+    func toYYYYMMDD() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone.current
+        return formatter.string(from: self)
+    }
+}
+
+extension TimeInterval {
+    func formatAsHoursMinutes() -> String {
+        let hours = Int(self) / 3600
+        let minutes = (Int(self) % 3600) / 60
+        return "\(hours)h \(minutes)m"
+    }
+    
+    func formatAsHoursMinutesSeconds() -> String {
+        let hours = Int(self) / 3600
+        let minutes = (Int(self) % 3600) / 60
+        let seconds = Int(self) % 60
+        return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+    }
+}
