@@ -239,7 +239,8 @@ struct EditDailyJobReportView: View {
                     let data = doc.data()
                     if let value = data["value"] as? String,
                        let address = data["schoolAddress"] as? String {
-                        temp.append(SchoolItem(id: doc.documentID, name: value, address: address))
+                        let coordinates = data["coordinates"] as? String
+                        temp.append(SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates))
                     }
                 }
                 temp.sort { $0.name.lowercased() < $1.name.lowercased() }

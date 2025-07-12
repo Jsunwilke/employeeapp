@@ -582,7 +582,8 @@ struct PhotoshootNotesView: View {
                         let data = doc.data()
                         if let value = data["value"] as? String,
                            let address = data["schoolAddress"] as? String {
-                            let item = SchoolItem(id: doc.documentID, name: value, address: address)
+                            let coordinates = data["coordinates"] as? String
+                            let item = SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates)
                             temp.append(item)
                         }
                     }

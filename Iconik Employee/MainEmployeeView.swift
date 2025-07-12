@@ -39,6 +39,7 @@ class MainEmployeeViewModel: ObservableObject {
     let defaultEmployeeFeatures: [FeatureItem] = [
         FeatureItem(id: "photoshootNotes", title: "Photoshoot Notes", systemImage: "note.text", description: "Create and manage notes for your photoshoots"),
         FeatureItem(id: "dailyJobReport", title: "Daily Job Report", systemImage: "doc.text", description: "Submit your daily job report"),
+        FeatureItem(id: "customDailyReports", title: "Custom Daily Reports", systemImage: "doc.text.below.ecg", description: "Create reports using custom templates"),
         FeatureItem(id: "myDailyJobReports", title: "My Daily Job Reports", systemImage: "doc.text.magnifyingglass", description: "View and edit your job reports"),
         FeatureItem(id: "mileageReports", title: "Mileage Reports", systemImage: "car.fill", description: "Track your mileage"),
         FeatureItem(id: "schedule", title: "Schedule", systemImage: "calendar", description: "View your upcoming shifts"),
@@ -593,6 +594,12 @@ struct MainEmployeeView: View {
                     NavigationLink(
                         destination: DailyJobReportView(),
                         tag: "dailyJobReport",
+                        selection: $selectedFeatureID
+                    ) { EmptyView() }
+                    
+                    NavigationLink(
+                        destination: CustomDailyReportsView(),
+                        tag: "customDailyReports",
                         selection: $selectedFeatureID
                     ) { EmptyView() }
                     
