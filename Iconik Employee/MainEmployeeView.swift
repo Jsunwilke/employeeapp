@@ -363,6 +363,9 @@ struct MainEmployeeView: View {
     // Separate view model for employee features
     @StateObject private var viewModel = MainEmployeeViewModel()
     
+    // Shared time tracking service for header button
+    @StateObject private var timeTrackingService = TimeTrackingService()
+    
     // Fixed manager features
     let managerFeatures: [FeatureItem] = [
         FeatureItem(id: "flagUser", title: "Flag User", systemImage: "flag.fill", description: "Flag a user in your organization"),
@@ -587,7 +590,7 @@ struct MainEmployeeView: View {
                 Group {
                     // Employee features navigation links
                     NavigationLink(
-                        destination: TimeTrackingMainView(timeTrackingService: TimeTrackingService()),
+                        destination: TimeTrackingMainView(timeTrackingService: timeTrackingService),
                         tag: "timeTracking",
                         selection: $selectedFeatureID
                     ) { EmptyView() }
@@ -699,8 +702,6 @@ struct MainEmployeeView: View {
                     .hidden()
                 }
                 
-                // Time Tracking Floating Action Button
-                TimeTrackingFloatingButton()
             }
             .navigationBarTitle("", displayMode: .inline)
             .toolbar {
@@ -720,8 +721,16 @@ struct MainEmployeeView: View {
                             viewModel.saveEmployeeFeatureOrder()
                         }
                     } else {
-                        HStack(spacing: 12) {
-                            Text(storedUserFirstName).font(.headline)
+                        HStack(spacing: 10) {
+                            // Time Tracking Button - priority layout
+                            TimeTrackingButton(timeTrackingService: timeTrackingService)
+                                .layoutPriority(1)
+                            
+                            Text(storedUserFirstName)
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                             if let url = URL(string: storedUserPhotoURL), !storedUserPhotoURL.isEmpty {
                                 AsyncImage(url: url) { phase in
                                     switch phase {

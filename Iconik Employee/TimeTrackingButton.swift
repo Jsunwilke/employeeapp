@@ -8,33 +8,37 @@ struct TimeTrackingButton: View {
         Button(action: {
             showingTimeTrackingView = true
         }) {
-            VStack(spacing: 4) {
+            HStack(spacing: 6) {
                 // Main timer icon or status
                 Image(systemName: timeTrackingService.isClockIn ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.title2)
+                    .font(.body)
                     .foregroundColor(.white)
                 
-                // Time display when clocked in
+                // Show elapsed time when clocked in, "Clock In" when clocked out
                 if timeTrackingService.isClockIn {
                     Text(timeTrackingService.formatElapsedTime())
-                        .font(.caption2)
+                        .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .minimumScaleFactor(0.7)
                 } else {
                     Text("Clock In")
-                        .font(.caption2)
+                        .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 3)
             .background(
-                RoundedRectangle(cornerRadius: 25)
+                RoundedRectangle(cornerRadius: 8)
                     .fill(timeTrackingService.isClockIn ? Color.orange : Color.blue)
-                    .shadow(color: Color.black.opacity(0.3), radius: 8, x: 0, y: 4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.3), radius: 6, x: 0, y: 3)
             )
         }
         .buttonStyle(PlainButtonStyle())
