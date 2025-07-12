@@ -37,6 +37,7 @@ class MainEmployeeViewModel: ObservableObject {
     
     // Default employee features – re-orderable by the user.
     let defaultEmployeeFeatures: [FeatureItem] = [
+        FeatureItem(id: "timeTracking", title: "Time Tracking", systemImage: "clock.fill", description: "Clock in/out and track your hours"),
         FeatureItem(id: "photoshootNotes", title: "Photoshoot Notes", systemImage: "note.text", description: "Create and manage notes for your photoshoots"),
         FeatureItem(id: "dailyJobReport", title: "Daily Job Report", systemImage: "doc.text", description: "Submit your daily job report"),
         FeatureItem(id: "customDailyReports", title: "Custom Daily Reports", systemImage: "doc.text.below.ecg", description: "Create reports using custom templates"),
@@ -586,6 +587,12 @@ struct MainEmployeeView: View {
                 Group {
                     // Employee features navigation links
                     NavigationLink(
+                        destination: TimeTrackingMainView(timeTrackingService: TimeTrackingService()),
+                        tag: "timeTracking",
+                        selection: $selectedFeatureID
+                    ) { EmptyView() }
+                    
+                    NavigationLink(
                         destination: PhotoshootNotesView(),
                         tag: "photoshootNotes",
                         selection: $selectedFeatureID
@@ -691,6 +698,9 @@ struct MainEmployeeView: View {
                     ) { EmptyView() }
                     .hidden()
                 }
+                
+                // Time Tracking Floating Action Button
+                TimeTrackingFloatingButton()
             }
             .navigationBarTitle("", displayMode: .inline)
             .toolbar {
@@ -929,8 +939,10 @@ struct MainEmployeeView: View {
     
     private func featureColorFor(_ id: String) -> Color {
         switch id {
+        case "timeTracking": return .cyan
         case "photoshootNotes": return .purple
         case "dailyJobReport": return .blue
+        case "customDailyReports": return .mint
         case "myDailyJobReports": return .green
         case "mileageReports": return .orange
         case "schedule": return .red

@@ -1,7 +1,7 @@
 import Foundation
 import FirebaseFirestore
 
-struct Session: Identifiable, Equatable {
+struct Session: Identifiable, Equatable, Hashable {
     let id: String
     let employeeName: String
     let position: String
@@ -220,5 +220,20 @@ struct Session: Identifiable, Equatable {
         lhs.date == rhs.date &&
         lhs.startTime == rhs.startTime &&
         lhs.endTime == rhs.endTime
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(employeeName)
+        hasher.combine(position)
+        hasher.combine(schoolName)
+        hasher.combine(startDate)
+        hasher.combine(endDate)
+        hasher.combine(description)
+        hasher.combine(location)
+        hasher.combine(organizationID)
+        hasher.combine(date)
+        hasher.combine(startTime)
+        hasher.combine(endTime)
     }
 }
