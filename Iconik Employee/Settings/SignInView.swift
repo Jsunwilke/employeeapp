@@ -14,6 +14,7 @@ struct SignInView: View {
   @AppStorage("userFirstName") var storedUserFirstName: String = ""
   @AppStorage("userLastName") var storedUserLastName: String = ""
   @AppStorage("userHomeAddress") var storedUserHomeAddress: String = ""
+  @AppStorage("userCoordinates") var storedUserCoordinates: String = ""
   @AppStorage("userRole") var userRole: String = "employee"
   
   var body: some View {
@@ -78,6 +79,7 @@ struct SignInView: View {
         storedUserFirstName = data["firstName"] as? String ?? ""
         storedUserLastName = data["lastName"] as? String ?? ""
         storedUserHomeAddress = data["homeAddress"] as? String ?? ""
+        storedUserCoordinates = data["userCoordinates"] as? String ?? ""
         userRole = data["role"] as? String ?? "employee"
         
         isSignedIn = true
