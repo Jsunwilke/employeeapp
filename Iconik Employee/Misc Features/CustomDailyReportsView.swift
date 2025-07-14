@@ -7,8 +7,6 @@ struct CustomDailyReportsView: View {
     @State private var selectedTemplate: ReportTemplate?
     @State private var searchText = ""
     
-    @Environment(\.presentationMode) var presentationMode
-    
     private var filteredTemplates: [ReportTemplate] {
         if searchText.isEmpty {
             return templateService.templates
@@ -28,29 +26,22 @@ struct CustomDailyReportsView: View {
     }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                // Header with search
-                headerSection
-                
-                if templateService.isLoading {
-                    loadingView
-                } else if !templateService.errorMessage.isEmpty {
-                    errorView
-                } else if templateService.templates.isEmpty {
-                    emptyStateView
-                } else {
-                    templatesListView
-                }
+        VStack(spacing: 0) {
+            // Header with search
+            headerSection
+            
+            if templateService.isLoading {
+                loadingView
+            } else if !templateService.errorMessage.isEmpty {
+                errorView
+            } else if templateService.templates.isEmpty {
+                emptyStateView
+            } else {
+                templatesListView
             }
-            .navigationTitle("Custom Daily Reports")
-            .navigationBarTitleDisplayMode(.large)
-            .navigationBarItems(
-                leading: Button("Close") {
-                    presentationMode.wrappedValue.dismiss()
-                }
-            )
         }
+        .navigationTitle("Custom Daily Reports")
+        .navigationBarTitleDisplayMode(.large)
         .onAppear {
             templateService.loadTemplatesAsync()
         }

@@ -43,8 +43,7 @@ struct PhotoshootNotesView: View {
     }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 8) {
+        VStack(spacing: 8) {
                 // Header with buttons
                 HStack {
                     Text("Photoshoot Notes")
@@ -354,17 +353,16 @@ struct PhotoshootNotesView: View {
                 }
                 
                 Spacer()
-            }
-            .navigationBarTitle("", displayMode: .inline)
-            .onAppear {
-                loadNotes()
-                loadSchoolOptions()
-                loadScheduleForToday()
-            }
-            .onDisappear {
-                // Clean up real-time listener
-                scheduleListener?.remove()
-            }
+        }
+        .navigationBarTitle("", displayMode: .inline)
+        .onAppear {
+            loadNotes()
+            loadSchoolOptions()
+            loadScheduleForToday()
+        }
+        .onDisappear {
+            // Clean up real-time listener
+            scheduleListener?.remove()
         }
     }
     

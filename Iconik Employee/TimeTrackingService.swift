@@ -18,13 +18,18 @@ class TimeTrackingService: ObservableObject {
         checkCurrentStatus()
     }
     
-    private func setupUser() {
+    func setupUser() {
         guard let user = Auth.auth().currentUser else { return }
         self.currentUserId = user.uid
         
         // Get organization ID from UserManager
         UserManager.shared.initializeOrganizationID()
         self.currentOrgId = UserDefaults.standard.string(forKey: "userOrganizationID")
+    }
+    
+    func refreshUserAndStatus() {
+        setupUser()
+        checkCurrentStatus()
     }
     
     // MARK: - Main Clock In/Out Functions

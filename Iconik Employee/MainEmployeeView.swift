@@ -399,6 +399,7 @@ struct MainEmployeeView: View {
     
     // Environment
     @Environment(\.colorScheme) var colorScheme
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
     var body: some View {
         NavigationView {
@@ -522,8 +523,8 @@ struct MainEmployeeView: View {
                             .onMove(perform: viewModel.moveEmployeeFeatures)
                         }
                         
-                        // Manager Features Section (fixed order) if user is a manager
-                        if storedUserRole == "manager" {
+                        // Manager Features Section (fixed order) if user is a manager or admin
+                        if storedUserRole == "manager" || storedUserRole == "admin" {
                             Section(header: Text("Management Features")) {
                                 ForEach(managerFeatures) { feature in
                                     Button(action: {
@@ -594,12 +595,14 @@ struct MainEmployeeView: View {
                         tag: "timeTracking",
                         selection: $selectedFeatureID
                     ) { EmptyView() }
+                    .isDetailLink(false)
                     
                     NavigationLink(
                         destination: PhotoshootNotesView(),
                         tag: "photoshootNotes",
                         selection: $selectedFeatureID
                     ) { EmptyView() }
+                    .isDetailLink(false)
                     
                     NavigationLink(
                         destination: DailyJobReportView(),
@@ -612,18 +615,21 @@ struct MainEmployeeView: View {
                         tag: "customDailyReports",
                         selection: $selectedFeatureID
                     ) { EmptyView() }
+                    .isDetailLink(false)
                     
                     NavigationLink(
                         destination: MyJobReportsView(),
                         tag: "myDailyJobReports",
                         selection: $selectedFeatureID
                     ) { EmptyView() }
+                    .isDetailLink(false)
                     
                     NavigationLink(
                         destination: MileageReportsView(userName: storedUserFirstName),
                         tag: "mileageReports",
                         selection: $selectedFeatureID
                     ) { EmptyView() }
+                    .isDetailLink(false)
                     
                     NavigationLink(
                         destination: SlingWeeklyView(),
@@ -636,6 +642,7 @@ struct MainEmployeeView: View {
                         tag: "locationPhotos",
                         selection: $selectedFeatureID
                     ) { EmptyView() }
+                    .isDetailLink(false)
                     
                     // Sports Shoots navigation link
                     NavigationLink(
@@ -785,6 +792,9 @@ struct MainEmployeeView: View {
                 
                 // Initialize user organization ID for session filtering
                 UserManager.shared.initializeOrganizationID()
+                
+                // Refresh time tracking service to ensure proper user setup
+                timeTrackingService.refreshUserAndStatus()
                 
                 listenForFlagStatus() // Listen for Firebase updates
                 loadSchedule()

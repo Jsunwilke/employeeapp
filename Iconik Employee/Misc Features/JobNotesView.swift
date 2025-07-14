@@ -21,8 +21,7 @@ struct JobNotesView: View {
     @State private var errorMessage: String = ""
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 16) {
+        VStack(spacing: 16) {
                 if schoolOptions.isEmpty {
                     Text("Loading schools...")
                         .onAppear(perform: loadSchoolOptions)
@@ -57,10 +56,9 @@ struct JobNotesView: View {
             }
             .padding()
             .navigationTitle("Job Notes")
-            .onAppear {
-                // Initialize local notes from AppStorage
-                notes = storedJobNotes
-            }
+        .onAppear {
+            // Initialize local notes from AppStorage
+            notes = storedJobNotes
         }
     }
     
