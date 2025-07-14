@@ -2,7 +2,6 @@ import SwiftUI
 
 struct TimeTrackingMainView: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
-    @Environment(\.presentationMode) var presentationMode
     
     @State private var showingSessionSelection = false
     @State private var showingNotesInput = false
@@ -10,28 +9,22 @@ struct TimeTrackingMainView: View {
     @State private var alertMessage = ""
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 8) {
-                // Header with current status
-                statusHeaderView
-                
-                // Main clock in/out interface
-                clockStatusView
-                
-                // Time entries list - expanded to show more entries
-                TimeEntryListView(timeTrackingService: timeTrackingService)
-                    .frame(maxHeight: .infinity) // Allow it to expand
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 4)
-            .padding(.bottom, 8)
-            .navigationTitle("Time Tracking")
-            .navigationBarTitleDisplayMode(.inline) // Make title more compact
-            .navigationBarItems(
-                trailing: Button("Done") {
-                    presentationMode.wrappedValue.dismiss()
-                }
-            )
+        VStack(spacing: 8) {
+            // Header with current status
+            statusHeaderView
+            
+            // Main clock in/out interface
+            clockStatusView
+            
+            // Time entries list - expanded to show more entries
+            TimeEntryListView(timeTrackingService: timeTrackingService)
+                .frame(maxHeight: .infinity) // Allow it to expand
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+        .navigationTitle("Time Tracking")
+        .navigationBarTitleDisplayMode(.inline) // Make title more compact
             .sheet(isPresented: $showingSessionSelection) {
                 SessionSelectionView(
                     timeTrackingService: timeTrackingService,
@@ -55,7 +48,6 @@ struct TimeTrackingMainView: View {
                     dismissButton: .default(Text("OK"))
                 )
             }
-        }
     }
     
     // MARK: - UI Components

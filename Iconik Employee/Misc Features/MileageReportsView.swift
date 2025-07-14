@@ -53,8 +53,7 @@ struct MileageReportsView: View {
     }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 12) {
+        VStack(spacing: 12) {
                 
                 // Carousel-style period picker.
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -160,11 +159,10 @@ struct MileageReportsView: View {
                 }
                 .listStyle(InsetGroupedListStyle())
             }
-            .navigationBarTitle("Mileage Reports", displayMode: .inline)
-            .onAppear {
-                viewModel.loadRecords(forPayPeriodStart: selectedPeriodStart)
-                viewModel.loadYearAndMonthMileage()
-            }
+        .navigationBarTitle("Mileage Reports", displayMode: .inline)
+        .onAppear {
+            viewModel.loadRecords(forPayPeriodStart: selectedPeriodStart)
+            viewModel.loadYearAndMonthMileage()
         }
     }
     

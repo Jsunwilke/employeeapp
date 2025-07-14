@@ -15,8 +15,6 @@ struct TemplateReportListView: View {
     
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
     
-    @Environment(\.presentationMode) var presentationMode
-    
     private let filterTypes = ["All", "This Week", "This Month", "Last 30 Days"]
     
     private var filteredReports: [DailyJobReport] {
@@ -45,32 +43,22 @@ struct TemplateReportListView: View {
     }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                // Header with search and filter
-                headerSection
-                
-                if isLoading {
-                    loadingView
-                } else if !errorMessage.isEmpty {
-                    errorView
-                } else if reports.isEmpty {
-                    emptyStateView
-                } else {
-                    reportsListView
-                }
+        VStack(spacing: 0) {
+            // Header with search and filter
+            headerSection
+            
+            if isLoading {
+                loadingView
+            } else if !errorMessage.isEmpty {
+                errorView
+            } else if reports.isEmpty {
+                emptyStateView
+            } else {
+                reportsListView
             }
-            .navigationTitle("Template Reports")
-            .navigationBarTitleDisplayMode(.large)
-            .navigationBarItems(
-                leading: Button("Close") {
-                    presentationMode.wrappedValue.dismiss()
-                },
-                trailing: Button("Refresh") {
-                    loadReports()
-                }
-            )
         }
+        .navigationTitle("Template Reports")
+        .navigationBarTitleDisplayMode(.large)
         .onAppear {
             loadReports()
         }

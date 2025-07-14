@@ -19,23 +19,21 @@ struct MyJobReportsView: View {
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
     
     var body: some View {
-        NavigationView {
-            List(reports) { report in
-                NavigationLink(destination: EditDailyJobReportView(report: report)) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(report.date, style: .date)
-                            .font(.headline)
-                        Text(report.school)
-                            .font(.subheadline)
-                        Text("Mileage: \(report.totalMileage, specifier: "%.1f")")
-                            .font(.footnote)
-                    }
-                    .padding(.vertical, 4)
+        List(reports) { report in
+            NavigationLink(destination: EditDailyJobReportView(report: report)) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(report.date, style: .date)
+                        .font(.headline)
+                    Text(report.school)
+                        .font(.subheadline)
+                    Text("Mileage: \(report.totalMileage, specifier: "%.1f")")
+                        .font(.footnote)
                 }
+                .padding(.vertical, 4)
             }
-            .navigationTitle("My Daily Job Reports")
-            .onAppear(perform: loadReports)
         }
+        .navigationTitle("My Daily Job Reports")
+        .onAppear(perform: loadReports)
     }
     
     func loadReports() {

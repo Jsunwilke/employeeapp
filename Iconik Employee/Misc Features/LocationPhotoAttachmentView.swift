@@ -49,8 +49,7 @@ struct LocationPhotoAttachmentView: View {
     @Environment(\.colorScheme) var colorScheme
     
     var body: some View {
-        NavigationView {
-            ZStack {
+        ZStack {
                 // Main content
                 VStack(spacing: 0) {
                     // Header with location selector
@@ -150,12 +149,11 @@ struct LocationPhotoAttachmentView: View {
                     }
                 )
             }
-            .onAppear {
-                loadSchoolOptions()
-                
-                // Request location authorization
-                locationManager.requestAuthorization()
-            }
+        .onAppear {
+            loadSchoolOptions()
+            
+            // Request location authorization
+            locationManager.requestAuthorization()
         }
     }
     

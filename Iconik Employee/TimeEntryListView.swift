@@ -200,7 +200,10 @@ struct TimeEntryListView: View {
             }
         }
         .onAppear {
-            loadTimeEntries()
+            // Small delay to ensure authentication is set up
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                loadTimeEntries()
+            }
         }
         .onChange(of: selectedDateRange) { _ in
             loadTimeEntries()
