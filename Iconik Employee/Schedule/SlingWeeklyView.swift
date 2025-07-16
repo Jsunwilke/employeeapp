@@ -23,6 +23,10 @@ struct SlingWeeklyView: View {
     // Selected session for detail view
     @State private var selectedSession: Session? = nil
     
+    // Selected time off entry for detail view
+    @State private var selectedTimeOffEntry: TimeOffCalendarEntry? = nil
+    @State private var showingTimeOffDetail = false
+    
     @State private var scheduleMode: ScheduleMode = .myShifts
     
     // Weather service and data
@@ -39,6 +43,11 @@ struct SlingWeeklyView: View {
     
     // User manager for getting current user ID
     private let userManager = UserManager.shared
+    
+    // Time off service and data
+    private let timeOffService = TimeOffService.shared
+    @State private var timeOffEntries: [TimeOffCalendarEntry] = []
+    @State private var timeOffListener: ListenerRegistration? = nil
     
     // Environment for color scheme
     @Environment(\.colorScheme) var colorScheme
@@ -129,9 +138,11 @@ struct SlingWeeklyView: View {
             if selectedDay == nil {
                 selectedDay = Date()
             }
+            loadTimeOffForVisibleWeek()
         }
         .onDisappear {
             sessionListener?.remove()
+            timeOffListener?.remove()
         }
         .onChange(of: weekOffset) { _ in
             updateDisplayedSessions()
@@ -141,6 +152,7 @@ struct SlingWeeklyView: View {
                 self.selectedDay = getClosestVisibleDate(to: selectedDay)
             }
             loadWeatherForVisibleSessions()
+            loadTimeOffForVisibleWeek()
         }
         .onChange(of: selectedDay) { _ in
             loadWeatherForVisibleSessions()
@@ -157,6 +169,26 @@ struct SlingWeeklyView: View {
                 )
             ) { EmptyView() }
         )
+        // Handle time off detail modal
+        .sheet(isPresented: $showingTimeOffDetail) {
+            if let timeOffEntry = selectedTimeOffEntry {
+                TimeOffDetailView(
+                    timeOffEntry: timeOffEntry,
+                    onCancel: {
+                        showingTimeOffDetail = false
+                        selectedTimeOffEntry = nil
+                        // Refresh time off data
+                        loadTimeOffForVisibleWeek()
+                    },
+                    onDelete: {
+                        showingTimeOffDetail = false
+                        selectedTimeOffEntry = nil
+                        // Refresh time off data
+                        loadTimeOffForVisibleWeek()
+                    }
+                )
+            }
+        }
     }
     
     // MARK: - UI Components
@@ -287,9 +319,11 @@ struct SlingWeeklyView: View {
         .shadow(color: Color.black.opacity(0.05), radius: 1, x: 0, y: 1)
     }
     
-    // Selected day header with number of shifts
+    // Selected day header with number of shifts and time off
     private func selectedDayHeader(for date: Date) -> some View {
         let daySessions = getSessionsForDay(date)
+        let dayTimeOff = getTimeOffForDay(date)
+        let totalEvents = daySessions.count + dayTimeOff.count
         
         return HStack {
             Text(formatFullDate(date))
@@ -298,23 +332,60 @@ struct SlingWeeklyView: View {
             
             Spacer()
             
-            Text("\(daySessions.count) shift\(daySessions.count != 1 ? "s" : "")")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+            VStack(alignment: .trailing, spacing: 2) {
+                if totalEvents > 0 {
+                    Text("\(totalEvents) event\(totalEvents != 1 ? "s" : "")")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    HStack(spacing: 8) {
+                        if daySessions.count > 0 {
+                            Text("\(daySessions.count) shift\(daySessions.count != 1 ? "s" : "")")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        if dayTimeOff.count > 0 {
+                            Text("\(dayTimeOff.count) time off")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } else {
+                    Text("No events")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
     }
     
-    // Sessions list for selected day
+    // Sessions and time off list for selected day
     private func eventsListView(for date: Date) -> some View {
         let daySessions = getSessionsForDay(date)
+        let dayTimeOff = getTimeOffForDay(date)
         
         return ScrollView {
             LazyVStack(spacing: 12) {
-                if daySessions.isEmpty {
-                    Text("No shifts scheduled for this day")
+                if daySessions.isEmpty && dayTimeOff.isEmpty {
+                    Text("No shifts or time off scheduled for this day")
                         .foregroundColor(.secondary)
                         .padding(.top, 40)
                 } else {
+                    // Time off entries
+                    ForEach(dayTimeOff) { timeOffEntry in
+                        TimeOffCard(
+                            timeOffEntry: timeOffEntry,
+                            isMyShiftsMode: scheduleMode == .myShifts
+                        )
+                        .padding(.horizontal)
+                        .onTapGesture {
+                            selectedTimeOffEntry = timeOffEntry
+                            showingTimeOffDetail = true
+                        }
+                    }
+                    
+                    // Session entries
                     ForEach(daySessions) { session in
                         SessionCard(
                             session: session,
@@ -625,6 +696,174 @@ struct SlingWeeklyView: View {
         }
     }
     
+    // MARK: - Time Off Card
+    
+    struct TimeOffCard: View {
+        let timeOffEntry: TimeOffCalendarEntry
+        let isMyShiftsMode: Bool
+        
+        @Environment(\.colorScheme) var colorScheme
+        
+        private var timeFormatter: DateFormatter {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            return formatter
+        }
+        
+        // Background color based on color scheme
+        private var cardBackground: Color {
+            colorScheme == .dark ? Color(.systemGray6) : Color.white
+        }
+        
+        // Shadow based on color scheme
+        private var cardShadow: Color {
+            colorScheme == .dark ? Color.black.opacity(0.2) : Color.black.opacity(0.1)
+        }
+        
+        // Visual styling based on status and type
+        private var timeOffStyle: (backgroundColor: Color, borderColor: Color, borderStyle: StrokeStyle, textColor: Color) {
+            switch timeOffEntry.status {
+            case .pending:
+                // Pending: Dotted blue border, transparent background
+                return (
+                    backgroundColor: Color.clear,
+                    borderColor: Color.blue,
+                    borderStyle: StrokeStyle(lineWidth: 2, dash: [5]),
+                    textColor: Color.blue
+                )
+            case .approved:
+                if timeOffEntry.isPartialDay {
+                    // Approved partial day: Orange diagonal stripes
+                    return (
+                        backgroundColor: Color.orange.opacity(0.15),
+                        borderColor: Color.orange,
+                        borderStyle: StrokeStyle(lineWidth: 1),
+                        textColor: Color.orange
+                    )
+                } else {
+                    // Approved full day: Gray diagonal stripes
+                    return (
+                        backgroundColor: Color.gray.opacity(0.15),
+                        borderColor: Color.gray,
+                        borderStyle: StrokeStyle(lineWidth: 1),
+                        textColor: Color.primary
+                    )
+                }
+            default:
+                // Denied/cancelled - shouldn't appear on calendar
+                return (
+                    backgroundColor: Color.gray.opacity(0.1),
+                    borderColor: Color.gray,
+                    borderStyle: StrokeStyle(lineWidth: 1),
+                    textColor: Color.gray
+                )
+            }
+        }
+        
+        var body: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                // Time range and status
+                HStack {
+                    // Time display
+                    if timeOffEntry.isPartialDay {
+                        let startTime = timeFromString(timeOffEntry.startTime)
+                        let endTime = timeFromString(timeOffEntry.endTime)
+                        if let start = startTime, let end = endTime {
+                            Text("\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))")
+                                .font(.headline)
+                                .foregroundColor(timeOffStyle.textColor)
+                        } else {
+                            Text("Partial Day")
+                                .font(.headline)
+                                .foregroundColor(timeOffStyle.textColor)
+                        }
+                    } else {
+                        Text("All Day")
+                            .font(.headline)
+                            .foregroundColor(timeOffStyle.textColor)
+                    }
+                    
+                    Spacer()
+                    
+                    // Status indicator
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(timeOffStyle.borderColor)
+                            .frame(width: 8, height: 8)
+                        Text(timeOffEntry.status.rawValue.capitalized)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(timeOffStyle.textColor)
+                    }
+                }
+                .padding(.bottom, 8)
+                
+                // Time off details
+                HStack(alignment: .top) {
+                    // Vertical color bar
+                    Rectangle()
+                        .fill(timeOffStyle.borderColor)
+                        .frame(width: 4)
+                        .cornerRadius(2)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        // Time off reason with icon
+                        HStack(spacing: 6) {
+                            Image(systemName: timeOffEntry.reason.systemImageName)
+                                .foregroundColor(timeOffStyle.textColor)
+                                .font(.title3)
+                            Text("Time Off: \(timeOffEntry.reason.displayName)")
+                                .font(.title3)
+                                .fontWeight(.semibold)
+                                .foregroundColor(timeOffStyle.textColor)
+                        }
+                        
+                        // Show photographer name if not in "My Shifts" mode
+                        if !isMyShiftsMode {
+                            Text("Photographer: \(timeOffEntry.photographerName)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Show notes if they exist
+                        if !timeOffEntry.notes.isEmpty {
+                            Text("Note: \(timeOffEntry.notes)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 2)
+                        }
+                    }
+                    .padding(.leading, 8)
+                    
+                    Spacer()
+                    
+                    // Interaction indicator
+                    Image(systemName: "info.circle")
+                        .foregroundColor(.gray)
+                        .font(.caption)
+                }
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(timeOffStyle.backgroundColor)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(timeOffStyle.borderColor, style: timeOffStyle.borderStyle)
+                    )
+                    .shadow(color: cardShadow, radius: 2, x: 0, y: 1)
+            )
+            .padding(.bottom, 2)
+        }
+        
+        // Helper to convert time string to Date for formatting
+        private func timeFromString(_ timeString: String) -> Date? {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            return formatter.date(from: timeString)
+        }
+    }
+    
     // MARK: - Weather Methods
     
     // Get weather data for a specific session
@@ -699,6 +938,29 @@ struct SlingWeeklyView: View {
         // After 3 seconds, set loading to false regardless
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             self.isLoadingWeather = false
+        }
+    }
+    
+    // MARK: - Time Off Methods
+    
+    private func loadTimeOffForVisibleWeek() {
+        print("Loading time off for visible week...")
+        
+        // Get the current visible week date range
+        let dates = getDaysInWeek(forOffset: weekOffset)
+        guard let startDate = dates.first, let endDate = dates.last else { return }
+        
+        // Remove existing listener
+        timeOffListener?.remove()
+        
+        // Set up real-time listener for the current week
+        timeOffListener = timeOffService.startListeningToCalendarTimeOff(
+            dateRange: (start: startDate, end: endDate)
+        ) { entries in
+            DispatchQueue.main.async {
+                self.timeOffEntries = entries
+                print("Loaded \(entries.count) time off entries for week")
+            }
         }
     }
     
@@ -848,6 +1110,29 @@ struct SlingWeeklyView: View {
         }.sorted(by: { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) })
     }
     
+    private func getTimeOffForDay(_ day: Date) -> [TimeOffCalendarEntry] {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: day)
+        
+        var timeOffToShow = timeOffEntries
+        
+        // Filter by user if in "My Shifts" mode
+        if scheduleMode == .myShifts {
+            guard let currentUserID = userManager.getCurrentUserID() else {
+                return []
+            }
+            
+            timeOffToShow = timeOffToShow.filter { entry in
+                entry.photographerId == currentUserID
+            }
+        }
+        
+        return timeOffToShow.filter { entry in
+            let entryDate = calendar.startOfDay(for: entry.date)
+            return entryDate == startOfDay
+        }.sorted { $0.startTime < $1.startTime }
+    }
+    
     private func hasEvents(on date: Date) -> Bool {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
@@ -865,10 +1150,19 @@ struct SlingWeeklyView: View {
             }
         }
         
-        return sessionsToCheck.contains { session in
+        let hasSessions = sessionsToCheck.contains { session in
             guard let sessionDate = session.startDate else { return false }
             return sessionDate >= startOfDay && sessionDate < endOfDay
         }
+        
+        // Check for time off on this date
+        let hasTimeOff = timeOffEntries.contains { timeOffEntry in
+            let entryDate = calendar.startOfDay(for: timeOffEntry.date)
+            let targetDate = calendar.startOfDay(for: date)
+            return entryDate == targetDate
+        }
+        
+        return hasSessions || hasTimeOff
     }
     
     private func isToday(_ date: Date) -> Bool {

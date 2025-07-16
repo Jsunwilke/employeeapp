@@ -38,6 +38,7 @@ class MainEmployeeViewModel: ObservableObject {
     // Default employee features – re-orderable by the user.
     let defaultEmployeeFeatures: [FeatureItem] = [
         FeatureItem(id: "timeTracking", title: "Time Tracking", systemImage: "clock.fill", description: "Clock in/out and track your hours"),
+        FeatureItem(id: "timeOffRequests", title: "Time Off Requests", systemImage: "calendar.badge.plus", description: "Request time off and view your requests"),
         FeatureItem(id: "photoshootNotes", title: "Photoshoot Notes", systemImage: "note.text", description: "Create and manage notes for your photoshoots"),
         FeatureItem(id: "dailyJobReport", title: "Daily Job Report", systemImage: "doc.text", description: "Submit your daily job report"),
         FeatureItem(id: "customDailyReports", title: "Custom Daily Reports", systemImage: "doc.text.below.ecg", description: "Create reports using custom templates"),
@@ -368,6 +369,7 @@ struct MainEmployeeView: View {
     
     // Fixed manager features
     let managerFeatures: [FeatureItem] = [
+        FeatureItem(id: "timeOffApprovals", title: "Time Off Approvals", systemImage: "checkmark.circle.fill", description: "Approve or deny time off requests"),
         FeatureItem(id: "flagUser", title: "Flag User", systemImage: "flag.fill", description: "Flag a user in your organization"),
         FeatureItem(id: "unflagUser", title: "Unflag User", systemImage: "flag.slash.fill", description: "Unflag a previously flagged user"),
         FeatureItem(id: "managerMileage", title: "Manager Mileage", systemImage: "car.2.fill", description: "View mileage reports for all employees"),
@@ -598,6 +600,13 @@ struct MainEmployeeView: View {
                     .isDetailLink(false)
                     
                     NavigationLink(
+                        destination: MyTimeOffRequestsView(),
+                        tag: "timeOffRequests",
+                        selection: $selectedFeatureID
+                    ) { EmptyView() }
+                    .isDetailLink(false)
+                    
+                    NavigationLink(
                         destination: PhotoshootNotesView(),
                         tag: "photoshootNotes",
                         selection: $selectedFeatureID
@@ -652,6 +661,13 @@ struct MainEmployeeView: View {
                     ) { EmptyView() }
                     
                     // Manager features navigation links
+                    NavigationLink(
+                        destination: TimeOffApprovalView(),
+                        tag: "timeOffApprovals",
+                        selection: $selectedFeatureID
+                    ) { EmptyView() }
+                    .isDetailLink(false)
+                    
                     NavigationLink(
                         destination: FlagUserView(),
                         tag: "flagUser",
