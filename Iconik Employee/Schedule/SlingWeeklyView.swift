@@ -134,6 +134,9 @@ struct SlingWeeklyView: View {
         .navigationTitle("Schedule")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            // Initialize organization ID cache to prevent dummy listeners
+            UserManager.shared.initializeOrganizationID()
+            
             loadSessions()
             if selectedDay == nil {
                 selectedDay = Date()
@@ -159,35 +162,59 @@ struct SlingWeeklyView: View {
         }
         // Handle navigation to session details
         .background(
-            NavigationLink(
-                destination: selectedSession.map { session in
-                    ShiftDetailView(session: session, allSessions: sessions, currentUserID: userManager.getCurrentUserID())
-                },
-                isActive: Binding(
-                    get: { selectedSession != nil },
-                    set: { if !$0 { selectedSession = nil } }
-                )
-            ) { EmptyView() }
+            // Only create NavigationLink when we have a valid session
+            Group {
+                if let session = selectedSession {
+                    NavigationLink(
+                        destination: ShiftDetailView(session: session, allSessions: sessions, currentUserID: userManager.getCurrentUserID())
+                            .id(session.id), // Force SwiftUI to create fresh view for each session
+                        isActive: Binding(
+                            get: { 
+                                let isActive = selectedSession != nil
+                                print("🔗 NavigationLink isActive getter: \(isActive), selectedSession: \(selectedSession?.id ?? "nil")")
+                                return isActive
+                            },
+                            set: { 
+                                print("🔗 NavigationLink isActive setter: \($0)")
+                                if !$0 { 
+                                    selectedSession = nil 
+                                }
+                            }
+                        )
+                    ) { EmptyView() }
+                }
+            }
         )
         // Handle time off detail modal
-        .sheet(isPresented: $showingTimeOffDetail) {
-            if let timeOffEntry = selectedTimeOffEntry {
-                TimeOffDetailView(
-                    timeOffEntry: timeOffEntry,
-                    onCancel: {
-                        showingTimeOffDetail = false
-                        selectedTimeOffEntry = nil
-                        // Refresh time off data
-                        loadTimeOffForVisibleWeek()
-                    },
-                    onDelete: {
-                        showingTimeOffDetail = false
-                        selectedTimeOffEntry = nil
-                        // Refresh time off data
-                        loadTimeOffForVisibleWeek()
-                    }
-                )
+        .sheet(item: Binding<TimeOffCalendarEntry?>(
+            get: { showingTimeOffDetail ? selectedTimeOffEntry : nil },
+            set: { _ in 
+                showingTimeOffDetail = false
+                selectedTimeOffEntry = nil
             }
+        )) { timeOffEntry in
+            let _ = print("🟡 Time off sheet is being presented for entry: \(timeOffEntry.id)")
+            TimeOffDetailView(
+                timeOffEntry: timeOffEntry,
+                onCancel: {
+                    print("🟡 Time off sheet cancelled")
+                    showingTimeOffDetail = false
+                    selectedTimeOffEntry = nil
+                    // Clear any navigation state that might interfere
+                    selectedSession = nil
+                    // Refresh time off data
+                    loadTimeOffForVisibleWeek()
+                },
+                onDelete: {
+                    print("🟡 Time off sheet deleted")
+                    showingTimeOffDetail = false
+                    selectedTimeOffEntry = nil
+                    // Clear any navigation state that might interfere
+                    selectedSession = nil
+                    // Refresh time off data
+                    loadTimeOffForVisibleWeek()
+                }
+            )
         }
     }
     
@@ -380,6 +407,9 @@ struct SlingWeeklyView: View {
                         )
                         .padding(.horizontal)
                         .onTapGesture {
+                            print("🟡 Time off tapped: \(timeOffEntry.id)")
+                            // Reset any selected session to avoid conflicts
+                            selectedSession = nil
                             selectedTimeOffEntry = timeOffEntry
                             showingTimeOffDetail = true
                         }
@@ -395,6 +425,10 @@ struct SlingWeeklyView: View {
                         )
                         .padding(.horizontal)
                         .onTapGesture {
+                            print("🟢 Session tapped: \(session.id)")
+                            // Reset any selected time off entry to avoid conflicts
+                            selectedTimeOffEntry = nil
+                            showingTimeOffDetail = false
                             selectedSession = session
                         }
                     }

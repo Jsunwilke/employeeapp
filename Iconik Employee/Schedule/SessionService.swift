@@ -23,26 +23,36 @@ class SessionService: ObservableObject {
     
     // Listen for sessions in real-time for current user's organization
     func listenForSessions(completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
+        print("🔄 SessionService: listenForSessions called")
+        
         // Use cached organization ID if available, otherwise get it
         let cachedOrgID = UserManager.shared.getCachedOrganizationID()
+        print("🔄 SessionService: cached org ID = '\(cachedOrgID)'")
         
         if !cachedOrgID.isEmpty {
+            print("🔄 SessionService: Using cached org ID")
             return listenForSessionsWithOrganizationID(cachedOrgID, completion: completion)
         } else {
+            print("🔄 SessionService: No cached org ID, fetching async")
+            
             // Get organization ID and then set up listener
             UserManager.shared.getCurrentUserOrganizationID { organizationID in
+                print("🔄 SessionService: Async org ID fetch completed: '\(organizationID ?? "nil")'")
                 guard let orgID = organizationID else {
                     print("🔐 Cannot load sessions: no organization ID found")
                     completion([])
                     return
                 }
                 
-                // Now set up the listener with the organization ID
+                // Now set up the listener with the organization ID and call completion
                 let _ = self.listenForSessionsWithOrganizationID(orgID, completion: completion)
             }
             
-            // Return a valid dummy listener (empty collection with valid limit)
-            return db.collection("sessions").whereField("organizationID", isEqualTo: "temp").addSnapshotListener { _, _ in }
+            // Return a placeholder listener that doesn't interfere
+            return db.collection("sessions").whereField("organizationID", isEqualTo: "loading").addSnapshotListener { _, _ in
+                // This is a placeholder listener that won't match any real documents
+                print("🔄 SessionService: Placeholder listener fired (should not happen)")
+            }
         }
     }
     
@@ -147,7 +157,10 @@ class SessionService: ObservableObject {
                     }
             }
             
-            return db.collection("sessions").whereField("organizationID", isEqualTo: "temp").addSnapshotListener { _, _ in }
+            return db.collection("sessions").whereField("organizationID", isEqualTo: "loading").addSnapshotListener { _, _ in 
+                // This is a placeholder listener that won't match any real documents
+                print("🔄 SessionService: Placeholder listener fired (should not happen)")
+            }
         }
     }
     
@@ -207,7 +220,10 @@ class SessionService: ObservableObject {
                     }
             }
             
-            return db.collection("sessions").whereField("organizationID", isEqualTo: "temp").addSnapshotListener { _, _ in }
+            return db.collection("sessions").whereField("organizationID", isEqualTo: "loading").addSnapshotListener { _, _ in 
+                // This is a placeholder listener that won't match any real documents
+                print("🔄 SessionService: Placeholder listener fired (should not happen)")
+            }
         }
     }
     
