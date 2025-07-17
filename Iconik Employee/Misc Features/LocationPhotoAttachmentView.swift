@@ -583,28 +583,50 @@ struct LocationPhotoAttachmentView: View {
     // MARK: - Data Functions
     
     private func loadSchoolOptions() {
+        // Get current user's organization ID
+        guard let currentUser = Auth.auth().currentUser else {
+            errorMessage = "User not authenticated"
+            return
+        }
+        
         let db = Firestore.firestore()
-        db.collection("schools")
-            .whereField("type", isEqualTo: "school")
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    errorMessage = "Error loading schools: \(error.localizedDescription)"
-                    return
-                }
-                guard let docs = snapshot?.documents else { return }
-                var temp: [SchoolItem] = []
-                for doc in docs {
-                    let data = doc.data()
-                    if let value = data["value"] as? String,
-                       let address = data["schoolAddress"] as? String {
-                        let coordinates = data["coordinates"] as? String
-                        temp.append(SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates))
-                    }
-                }
-                temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                schoolOptions = temp
+        
+        // First get the user's organization ID
+        db.collection("users").document(currentUser.uid).getDocument { userDoc, error in
+            if let error = error {
+                self.errorMessage = "Error getting user data: \(error.localizedDescription)"
+                return
             }
-    }
+            
+            guard let userData = userDoc?.data(),
+                  let organizationID = userData["organizationID"] as? String else {
+                self.errorMessage = "User organization not found"
+                return
+            }
+            
+            // Now query schools for this organization
+            db.collection("schools")
+                .whereField("organizationID", isEqualTo: organizationID)
+                .getDocuments { snapshot, error in
+                    if let error = error {
+                        self.errorMessage = "Error loading schools: \(error.localizedDescription)"
+                        return
+                    }
+                    guard let docs = snapshot?.documents else { return }
+                    var temp: [SchoolItem] = []
+                    for doc in docs {
+                        let data = doc.data()
+                        if let value = data["value"] as? String,
+                           let address = data["schoolAddress"] as? String {
+                            let coordinates = data["coordinates"] as? String
+                            temp.append(SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates))
+                        }
+                    }
+                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
+                    self.schoolOptions = temp
+                }
+            }
+        }
     
     private func uploadLocationPhotos() {
         guard let school = selectedSchool else {

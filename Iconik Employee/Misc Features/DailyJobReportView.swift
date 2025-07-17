@@ -1370,12 +1370,18 @@ struct DailyJobReportView: View {
     }
     
     func calculateMultiStopMileage() {
-        guard !storedUserHomeAddress.isEmpty else { return }
+        guard !storedUserHomeAddress.isEmpty else { 
+            print("Cannot calculate mileage: No home address set for user")
+            totalMileage = ""
+            return 
+        }
         
         var stops: [String] = [storedUserHomeAddress]
         let selectedAddresses = selectedSchools.compactMap { $0?.address }
         stops.append(contentsOf: selectedAddresses)
         stops.append(storedUserHomeAddress)
+        
+        print("Calculating mileage with stops: \(stops)")
         
         totalMileage = "Calculating..."
         var totalDistance: Double = 0.0

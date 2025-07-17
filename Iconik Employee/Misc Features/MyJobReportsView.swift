@@ -17,6 +17,7 @@ struct JobReport: Identifiable {
 struct MyJobReportsView: View {
     @State private var reports: [JobReport] = []
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
+    @State private var userId: String? = nil
     
     var body: some View {
         List(reports) { report in
@@ -33,18 +34,43 @@ struct MyJobReportsView: View {
             }
         }
         .navigationTitle("My Daily Job Reports")
-        .onAppear(perform: loadReports)
+        .onAppear {
+            // Get current user ID
+            if let currentUser = Auth.auth().currentUser {
+                userId = currentUser.uid
+            }
+            loadReports()
+        }
     }
     
     func loadReports() {
-        guard !storedUserFirstName.isEmpty else { return }
         let db = Firestore.firestore()
-        db.collection("dailyJobReports")
-            .whereField("yourName", isEqualTo: storedUserFirstName)
-            .order(by: "date", descending: true)
-            .getDocuments { snapshot, error in
+        
+        // Build query - prefer userId if available, fallback to yourName
+        let baseCollection = db.collection("dailyJobReports")
+        let query: Query
+        
+        if let userId = userId {
+            print("Querying reports by userId: \(userId)")
+            query = baseCollection.whereField("userId", isEqualTo: userId)
+                .order(by: "date", descending: true)
+        } else if !storedUserFirstName.isEmpty {
+            print("Querying reports by yourName: \(storedUserFirstName)")
+            query = baseCollection.whereField("yourName", isEqualTo: storedUserFirstName)
+                .order(by: "date", descending: true)
+        } else {
+            print("No user ID or name available")
+            return
+        }
+        
+        query.getDocuments { snapshot, error in
                 if let error = error {
                     print("Error fetching reports: \(error.localizedDescription)")
+                    
+                    // More detailed error logging
+                    if (error as NSError).code == 7 { // Permission denied
+                        print("Permission denied. User ID: \(self.userId ?? "nil"), UserName: \(self.storedUserFirstName)")
+                    }
                     return
                 }
                 guard let documents = snapshot?.documents else { return }
