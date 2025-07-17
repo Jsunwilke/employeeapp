@@ -716,7 +716,8 @@ struct MainEmployeeView: View {
                             session: session,
                             allSessions: viewModel.allSessions, // Pass ALL sessions, not just the upcoming ones
                             currentUserID: UserManager.shared.getCurrentUserID()
-                        ),
+                        )
+                        .id(session.id), // Force SwiftUI to create fresh view for each session
                         isActive: Binding(
                             get: { selectedSession != nil },
                             set: { if !$0 { selectedSession = nil } }

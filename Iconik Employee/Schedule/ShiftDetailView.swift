@@ -83,21 +83,36 @@ struct ShiftDetailView: View {
     // Real-time listener
     @State private var sessionListener: ListenerRegistration?
     
+    // Loading state for initial data
+    @State private var isInitializing = true
+    
     // Services
     private let weatherService = WeatherService()
     private let sessionService = SessionService.shared
     
     var body: some View {
         ZStack(alignment: .top) {
-            // Fixed header at the top
-            headerView
-                .padding(.horizontal)
-                .padding(.vertical, 8)
+            if isInitializing {
+                // Loading view while data is being loaded
+                VStack(spacing: 20) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                    Text("Loading shift details...")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(.systemBackground))
-                .zIndex(1)
-            
-            // Scrollable content below the fixed header
-            ScrollView {
+            } else {
+                // Fixed header at the top
+                headerView
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemBackground))
+                    .zIndex(1)
+                
+                // Scrollable content below the fixed header
+                ScrollView {
                 VStack(spacing: 16) {
                     // Minimal padding to create slight separation from header
                     Color.clear.frame(height: 10)
@@ -136,7 +151,7 @@ struct ShiftDetailView: View {
                         
                         iconRow(systemName: "camera.fill",
                                 label: "Position",
-                                value: session.position)
+                                value: session.position.isEmpty ? "Position" : session.position)
                         
                         iconRow(systemName: "person.2.fill",
                                 label: "Coworkers",
@@ -380,19 +395,12 @@ struct ShiftDetailView: View {
                 scrollOffset = value
             }
             .padding(.top, 80)
+            }
         }
         .navigationTitle("Shift Details")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            loadEmployeeProfile()
-            loadCoworkerPhotos()
-            loadLocationPhotos()
-            loadUserHomeAddress()
-            loadSchoolAddress()
-            loadWeatherData()
-            startJobBoxListener()
-            setupNotificationObserver()
-            startSessionListener() // Start real-time updates
+            loadInitialData()
         }
         .onDisappear {
             // Remove the job box listener
@@ -443,7 +451,7 @@ struct ShiftDetailView: View {
         HStack(alignment: .center, spacing: 16) {
             // Session info
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.schoolName)
+                Text(session.schoolName.isEmpty ? "School" : session.schoolName)
                     .font(.title2)
                     .fontWeight(.bold)
                 
@@ -1124,12 +1132,12 @@ struct ShiftDetailView: View {
     }
     
     private var formattedFullDate: String {
-        guard let start = session.startDate else { return "" }
+        guard let start = session.startDate else { return "Date unavailable" }
         return dateFormatter.string(from: start)
     }
     
     private var timeRangeString: String {
-        guard let start = session.startDate, let end = session.endDate else { return "" }
+        guard let start = session.startDate, let end = session.endDate else { return "Time unavailable" }
         return "\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))"
     }
     
@@ -1143,7 +1151,7 @@ struct ShiftDetailView: View {
         if let userInfo = currentUserPhotographerInfo {
             return userInfo.name
         }
-        return session.employeeName // Fallback to session's employee name
+        return session.employeeName.isEmpty ? "Employee" : session.employeeName // Fallback with defensive check
     }
     
     private var displayNotes: String {
@@ -2250,6 +2258,32 @@ struct ShiftDetailView: View {
             return String(first.prefix(1)).uppercased()
         } else {
             return "?"
+        }
+    }
+    
+    // MARK: - Initial Data Loading
+    
+    private func loadInitialData() {
+        print("🔄 ShiftDetailView: Starting data load for session: \(session.id)")
+        print("🔄 ShiftDetailView: Session school: \(session.schoolName)")
+        print("🔄 ShiftDetailView: Session employee: \(session.employeeName)")
+        print("🔄 ShiftDetailView: Current user ID: \(currentUserID ?? "nil")")
+        
+        // Start loading all data asynchronously
+        loadEmployeeProfile()
+        loadCoworkerPhotos()
+        loadLocationPhotos()
+        loadUserHomeAddress()
+        loadSchoolAddress()
+        loadWeatherData()
+        startJobBoxListener()
+        setupNotificationObserver()
+        startSessionListener()
+        
+        // Set a minimum loading time to prevent flashing
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            print("🔄 ShiftDetailView: Finished loading for session: \(self.session.id)")
+            self.isInitializing = false
         }
     }
     

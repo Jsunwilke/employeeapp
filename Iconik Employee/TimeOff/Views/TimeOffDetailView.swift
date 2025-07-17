@@ -21,6 +21,7 @@ struct TimeOffDetailView: View {
         onCancel: (() -> Void)? = nil,
         onDelete: (() -> Void)? = nil
     ) {
+        print("🟡 TimeOffDetailView initialized for entry: \(timeOffEntry.id)")
         self.timeOffEntry = timeOffEntry
         self.onCancel = onCancel
         self.onDelete = onDelete
@@ -184,6 +185,9 @@ struct TimeOffDetailView: View {
                     presentationMode.wrappedValue.dismiss()
                 }
             )
+            .onAppear {
+                print("🟡 TimeOffDetailView appeared for entry: \(timeOffEntry.id)")
+            }
         }
         .alert(isPresented: $showingAlert) {
             Alert(
