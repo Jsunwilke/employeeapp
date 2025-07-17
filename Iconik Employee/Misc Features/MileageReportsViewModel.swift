@@ -3,6 +3,7 @@ import FirebaseFirestore
 import FirebaseFirestoreSwift
 import SwiftUI
 import Firebase
+import FirebaseAuth
 
 class MileageReportsViewModel: ObservableObject {
     @Published var currentPeriodMileage: Double = 0
@@ -11,6 +12,7 @@ class MileageReportsViewModel: ObservableObject {
     @Published var records: [MileageRecordWrapper] = []
     
     var userName: String
+    var userId: String?
     
     let calendar = Calendar.current
     let currentPeriodStart: Date
@@ -26,6 +28,11 @@ class MileageReportsViewModel: ObservableObject {
     
     init(userName: String) {
         self.userName = userName
+        
+        // Get the current user's ID for more reliable filtering
+        if let currentUser = Auth.auth().currentUser {
+            self.userId = currentUser.uid
+        }
         
         // Calculate the current pay period based on a reference date (2/25/2024).
         let payPeriodFormatter = DateFormatter()
@@ -81,14 +88,32 @@ class MileageReportsViewModel: ObservableObject {
         print("Loading mileage records from \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
         
         let db = Firestore.firestore()
-        db.collection("dailyJobReports")
-            .whereField("yourName", isEqualTo: userName)
-            .whereField("date", isGreaterThanOrEqualTo: periodStart)
-            .whereField("date", isLessThanOrEqualTo: periodEnd)
-            .getDocuments { [weak self] snapshot, error in
+        
+        // Build query - prefer userId if available, fallback to yourName
+        let baseCollection = db.collection("dailyJobReports")
+        let query: Query
+        
+        if let userId = userId {
+            print("Querying mileage reports by userId: \(userId)")
+            query = baseCollection.whereField("userId", isEqualTo: userId)
+                .whereField("date", isGreaterThanOrEqualTo: periodStart)
+                .whereField("date", isLessThanOrEqualTo: periodEnd)
+        } else {
+            print("Querying mileage reports by yourName: \(userName)")
+            query = baseCollection.whereField("yourName", isEqualTo: userName)
+                .whereField("date", isGreaterThanOrEqualTo: periodStart)
+                .whereField("date", isLessThanOrEqualTo: periodEnd)
+        }
+        
+        query.getDocuments { [weak self] snapshot, error in
                 DispatchQueue.main.async {
                     if let error = error {
                         print("Error fetching mileage reports: \(error.localizedDescription)")
+                        
+                        // More detailed error logging
+                        if (error as NSError).code == 7 { // Permission denied
+                            print("Permission denied. User ID: \(self?.userId ?? "nil"), UserName: \(self?.userName ?? "nil")")
+                        }
                         return
                     }
                     guard let documents = snapshot?.documents else { return }
@@ -167,14 +192,31 @@ class MileageReportsViewModel: ObservableObject {
         dateFormatter.timeStyle = .medium
         print("Loading year mileage from \(dateFormatter.string(from: yearStart)) to \(dateFormatter.string(from: yearEnd))")
         
-        db.collection("dailyJobReports")
-            .whereField("yourName", isEqualTo: userName)
-            .whereField("date", isGreaterThanOrEqualTo: yearStart)
-            .whereField("date", isLessThanOrEqualTo: yearEnd)
-            .getDocuments { [weak self] snapshot, error in
+        // Build query - prefer userId if available, fallback to yourName
+        let baseCollection = db.collection("dailyJobReports")
+        let query: Query
+        
+        if let userId = userId {
+            print("Querying mileage reports by userId: \(userId)")
+            query = baseCollection.whereField("userId", isEqualTo: userId)
+                .whereField("date", isGreaterThanOrEqualTo: yearStart)
+                .whereField("date", isLessThanOrEqualTo: yearEnd)
+        } else {
+            print("Querying mileage reports by yourName: \(userName)")
+            query = baseCollection.whereField("yourName", isEqualTo: userName)
+                .whereField("date", isGreaterThanOrEqualTo: yearStart)
+                .whereField("date", isLessThanOrEqualTo: yearEnd)
+        }
+        
+        query.getDocuments { [weak self] snapshot, error in
                 DispatchQueue.main.async {
                     if let error = error {
                         print("Error fetching yearly reports: \(error.localizedDescription)")
+                        
+                        // More detailed error logging
+                        if (error as NSError).code == 7 { // Permission denied
+                            print("Permission denied for yearly reports. User ID: \(self?.userId ?? "nil"), UserName: \(self?.userName ?? "nil")")
+                        }
                         return
                     }
                     guard let documents = snapshot?.documents else { return }

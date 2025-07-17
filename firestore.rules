@@ -1,0 +1,597 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to get user's organization ID
+    function getUserOrg(userId) {
+      let userDoc = get(/databases/$(database)/documents/users/$(userId));
+      return userDoc.data.organizationID;
+    }
+    
+    // Helper function to get user's role
+    function getUserRole(userId) {
+      let userDoc = get(/databases/$(database)/documents/users/$(userId));
+      return userDoc.data.role;
+    }
+    
+    // Helper function to check if user is admin
+    function isAdmin(userId) {
+      let userDoc = get(/databases/$(database)/documents/users/$(userId));
+      return userDoc.data.role == 'admin';
+    }
+    
+    // Helper function to check if user is admin or manager
+    function isAdminOrManager(userId) {
+      let userDoc = get(/databases/$(database)/documents/users/$(userId));
+      let role = userDoc.data.role;
+      return role == 'admin' || role == 'manager';
+    }
+    
+    // Helper function to check if user belongs to same organization
+    function belongsToSameOrg(userId, orgId) {
+      let userDoc = get(/databases/$(database)/documents/users/$(userId));
+      return userDoc.data.organizationID == orgId;
+    }
+    
+
+    // Organizations collection
+    match /organizations/{orgId} {
+      // Users can read their own organization
+      allow read: if request.auth != null && belongsToSameOrg(request.auth.uid, orgId);
+      
+      // **INVITATION FLOW: Allow reading specific organization for invitation display**
+      // This is needed when showing organization name on invitation acceptance page
+      allow read: if request.auth == null || request.auth != null;
+      
+      // Only authenticated users can create organizations (during studio signup)
+      allow create: if request.auth != null;
+      
+      // Only admins can update their organization
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, orgId) && 
+                       isAdmin(request.auth.uid);
+      
+      // No deletes allowed
+      allow delete: if false;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // Users can read their own profile
+      allow read: if request.auth != null && request.auth.uid == userId;
+      
+      // Users in same organization can read each other (for team management)
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // **INVITATION FLOW: Allow reading inactive users for invitation lookup**
+      allow read: if resource.data.isActive == false;
+      
+      // **INVITATION FLOW: Allow reading temporary invite documents**
+      allow read: if resource.data.keys().hasAny(['isTemporaryInvite']) && 
+                     resource.data.isTemporaryInvite == true;
+      
+      // Users can create their own profile (during signup)
+      allow create: if request.auth != null && request.auth.uid == userId;
+      
+      // **INVITATION FLOW: Admins can create temporary invite documents**
+      allow create: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID) &&
+                       (
+                         // Regular user creation (document ID matches Firebase UID)
+                         userId == request.auth.uid ||
+                         // Temporary invite creation (document ID starts with "invite_")
+                         (userId.matches('invite_.*') &&
+                          request.resource.data.isTemporaryInvite == true &&
+                          request.resource.data.isActive == false &&
+                          request.resource.data.keys().hasAll(['email', 'firstName', 'lastName', 'role', 'organizationID', 'isTemporaryInvite', 'isActive']))
+                       );
+      
+      // **INVITATION FLOW: Allow creating new user document during acceptance**
+      allow create: if request.auth != null && 
+                       request.auth.uid == userId &&
+                       // This is a new Firebase Auth user accepting an invitation
+                       request.resource.data.isActive == true &&
+                       (!request.resource.data.keys().hasAny(['isTemporaryInvite']) || 
+                        request.resource.data.isTemporaryInvite == false);
+      
+      // Users can update their own profile
+      allow update: if request.auth != null && 
+                       request.auth.uid == userId &&
+                       // Prevent users from changing their own role or organizationID
+                       request.resource.data.role == resource.data.role &&
+                       request.resource.data.organizationID == resource.data.organizationID;
+      
+      // Admins can update users in their organization
+      allow update: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Prevent changing organizationID
+                       request.resource.data.organizationID == resource.data.organizationID;
+      
+      // **INVITATION FLOW: Allow activating inactive invitations (legacy support)**
+      allow update: if request.auth != null &&
+                       resource.data.isActive == false &&
+                       request.resource.data.isActive == true &&
+                       // Prevent changing critical fields during activation
+                       request.resource.data.role == resource.data.role &&
+                       request.resource.data.organizationID == resource.data.organizationID &&
+                       request.resource.data.email == resource.data.email &&
+                       request.resource.data.firstName == resource.data.firstName &&
+                       request.resource.data.lastName == resource.data.lastName;
+      
+      // **INVITATION FLOW: Allow deleting temporary invite documents**
+      allow delete: if request.auth != null &&
+                       userId.matches('invite_.*') &&
+                       resource.data.isTemporaryInvite == true &&
+                       (
+                         // During acceptance process (any authenticated user can delete temp invite they're accepting)
+                         true ||
+                         // Admins can delete temporary invites (cleanup)
+                         (isAdmin(request.auth.uid) &&
+                          belongsToSameOrg(request.auth.uid, resource.data.organizationID))
+                       );
+    }
+
+    // Sessions collection
+    match /sessions/{sessionId} {
+      // Users can read sessions from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Users can create sessions for their organization
+      allow create: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID);
+      
+      // Users assigned to the session can update it
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       (isAdminOrManager(request.auth.uid) ||
+                        // Check if user is one of the assigned photographers
+                        (resource.data.keys().hasAny(['photographers']) && 
+                         request.auth.uid in resource.data.photographers.map(['id'])) ||
+                        // Legacy support for single photographer format
+                        (resource.data.keys().hasAny(['photographer']) && 
+                         request.auth.uid == resource.data.photographer.id));
+      
+      // Admins/Managers can update any session in their organization
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Admins can delete sessions
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // Daily Job Reports collection
+    match /dailyJobReports/{reportId} {
+      // Users can read their own reports by userId
+      allow read: if request.auth != null && 
+                     resource.data.userId == request.auth.uid;
+      
+      // Users can read reports from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Users can create reports for their organization
+      allow create: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID);
+      
+      // Users can update their own reports
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       (resource.data.keys().hasAny(['yourName']) && 
+                        resource.data.yourName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName);
+      
+      // Admins/Managers can update any report in their organization
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // No deletes
+      allow delete: if false;
+    }
+
+    // Schools collection
+    match /schools/{schoolId} {
+      // Users can read schools from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Admins/Managers can create schools
+      allow create: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID);
+      
+      // Users can add location photos to schools in their organization
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Only allow updating the locationPhotos field
+                       request.resource.data.keys().difference(resource.data.keys()).hasOnly(['locationPhotos']) &&
+                       // Ensure locationPhotos is an array
+                       request.resource.data.locationPhotos is list;
+      
+      // Admins/Managers can update schools
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Admins can delete schools (soft delete recommended)
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // Sports Jobs collection
+    match /sportsJobs/{jobId} {
+      // Users can read sports jobs from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Users can create sports jobs for their organization
+      allow create: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID);
+      
+      // Users assigned to the job can update it
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       (resource.data.keys().hasAny(['photographer']) && 
+                        resource.data.photographer == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName);
+      
+      // Admins/Managers can update any sports job in their organization
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Admins can delete sports jobs
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // Player Search Index collection
+    match /playerSearchIndex/{indexId} {
+      // Users can read search index from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Only allow system/cloud functions to write to search index
+      allow write: if false;
+    }
+
+    // Job Boxes collection
+    match /jobBoxes/{boxId} {
+      // Users can read job boxes from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Users can create/update job boxes for their organization
+      allow create, update: if request.auth != null && 
+                               belongsToSameOrg(request.auth.uid, request.resource.data.organizationID);
+      
+      // Admins can delete job boxes
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // SD Cards collection
+    match /sdCards/{cardId} {
+      // Users can read SD cards from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Users can create/update SD cards for their organization
+      allow create, update: if request.auth != null && 
+                               belongsToSameOrg(request.auth.uid, request.resource.data.organizationID);
+      
+      // Admins can delete SD cards
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // Records collection (general records)
+    match /records/{recordId} {
+      // Users can read records from their organization (if organizationID exists)
+      allow read: if request.auth != null && 
+                     (!resource.data.keys().hasAny(['organizationID']) || 
+                      belongsToSameOrg(request.auth.uid, resource.data.organizationID));
+      
+      // Users can create records
+      allow create: if request.auth != null;
+      
+      // Users can update their own records or admins can update any
+      allow update: if request.auth != null && 
+                       (resource.data.keys().hasAny(['createdBy']) && 
+                        request.auth.uid == resource.data.createdBy ||
+                        isAdmin(request.auth.uid));
+      
+      // Admins can delete records
+      allow delete: if request.auth != null && isAdmin(request.auth.uid);
+    }
+
+    // Report Templates collection (for custom daily report templates)
+    match /reportTemplates/{templateId} {
+      // Users can read templates from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Admins/Managers can create templates
+      allow create: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID) &&
+                       // Ensure required fields are present
+                       request.resource.data.keys().hasAll(['name', 'organizationID', 'fields', 'isActive']) &&
+                       // Validate data types
+                       request.resource.data.name is string &&
+                       request.resource.data.organizationID is string &&
+                       request.resource.data.fields is list &&
+                       request.resource.data.isActive is bool &&
+                       // Validate shootType if present
+                       (!request.resource.data.keys().hasAny(['shootType']) || request.resource.data.shootType is string) &&
+                       // Validate version if present
+                       (!request.resource.data.keys().hasAny(['version']) || request.resource.data.version is int) &&
+                       // Validate isDefault if present
+                       (!request.resource.data.keys().hasAny(['isDefault']) || request.resource.data.isDefault is bool);
+      
+      // Admins/Managers can update templates
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Prevent changing organizationID
+                       request.resource.data.organizationID == resource.data.organizationID &&
+                       // Validate required fields still present
+                       request.resource.data.keys().hasAll(['name', 'organizationID', 'fields', 'isActive']) &&
+                       // Validate data types
+                       request.resource.data.name is string &&
+                       request.resource.data.organizationID is string &&
+                       request.resource.data.fields is list &&
+                       request.resource.data.isActive is bool;
+      
+      // Admins can delete templates
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // Time Entries collection (for clock in/out tracking)
+    match /timeEntries/{entryId} {
+      // Users can read time entries from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Users can create their own time entries
+      allow create: if request.auth != null && 
+                       request.auth.uid == request.resource.data.userId &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID) &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['userId', 'organizationID', 'clockInTime', 'date', 'status']) &&
+                       // Validate data types
+                       request.resource.data.userId is string &&
+                       request.resource.data.organizationID is string &&
+                       request.resource.data.clockInTime is timestamp &&
+                       request.resource.data.date is string &&
+                       request.resource.data.status in ['clocked-in', 'clocked-out'] &&
+                       // Validate optional fields
+                       (!request.resource.data.keys().hasAny(['sessionId']) || request.resource.data.sessionId is string) &&
+                       (!request.resource.data.keys().hasAny(['clockOutTime']) || request.resource.data.clockOutTime is timestamp) &&
+                       (!request.resource.data.keys().hasAny(['notes']) || request.resource.data.notes is string);
+      
+      // Users can update their own time entries (for clock out and editing completed entries)
+      allow update: if request.auth != null && 
+                       request.auth.uid == resource.data.userId &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Prevent changing core identity fields
+                       request.resource.data.userId == resource.data.userId &&
+                       request.resource.data.organizationID == resource.data.organizationID &&
+                       (
+                         // Allow clock out operations (clockInTime and date unchanged)
+                         (request.resource.data.clockInTime == resource.data.clockInTime &&
+                          request.resource.data.date == resource.data.date) ||
+                         // Allow editing completed entries (can change times and date, but must be completed)
+                         (resource.data.status == 'clocked-out' &&
+                          request.resource.data.status == 'clocked-out' &&
+                          // Validate reasonable working hours (max 16 hours)
+                          request.resource.data.clockOutTime > request.resource.data.clockInTime &&
+                          (request.resource.data.clockOutTime.toMillis() - request.resource.data.clockInTime.toMillis()) <= 57600000 && // 16 hours in milliseconds
+                          // Validate data types for edited fields
+                          request.resource.data.clockInTime is timestamp &&
+                          request.resource.data.clockOutTime is timestamp &&
+                          request.resource.data.date is string &&
+                          (!request.resource.data.keys().hasAny(['notes']) || request.resource.data.notes is string) &&
+                          (!request.resource.data.keys().hasAny(['sessionId']) || request.resource.data.sessionId is string))
+                       );
+      
+      // Admins/Managers can create and update any time entries in their organization
+      allow create, update: if request.auth != null && 
+                               isAdminOrManager(request.auth.uid) &&
+                               belongsToSameOrg(request.auth.uid, request.resource.data.organizationID);
+      
+      // Users can delete their own time entries, admins can delete any
+      allow delete: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       (
+                         // Users can delete their own entries
+                         request.auth.uid == resource.data.userId ||
+                         // Admins can delete any entry in their organization
+                         isAdmin(request.auth.uid)
+                       );
+    }
+
+    // Time Off Requests collection
+    match /timeOffRequests/{requestId} {
+      // Users can read time off requests from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Users can create their own time off requests
+      allow create: if request.auth != null && 
+                       request.auth.uid == request.resource.data.photographerId &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID) &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['organizationID', 'photographerId', 'photographerName', 'startDate', 'endDate', 'reason', 'status']) &&
+                       // Validate data types
+                       request.resource.data.organizationID is string &&
+                       request.resource.data.photographerId is string &&
+                       request.resource.data.photographerName is string &&
+                       request.resource.data.startDate is timestamp &&
+                       request.resource.data.endDate is timestamp &&
+                       request.resource.data.reason is string &&
+                       request.resource.data.status == 'pending' &&
+                       // Validate optional fields
+                       (!request.resource.data.keys().hasAny(['notes']) || request.resource.data.notes is string);
+      
+      // Users can update their own pending requests (to cancel or edit)
+      // Admins/Managers can update any request (to approve/deny)
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       (
+                         // Users can update their own pending requests
+                         (request.auth.uid == resource.data.photographerId && 
+                          resource.data.status == 'pending' &&
+                          // Prevent changing core fields
+                          request.resource.data.photographerId == resource.data.photographerId &&
+                          request.resource.data.organizationID == resource.data.organizationID) ||
+                         // Admins/Managers can approve/deny
+                         (isAdminOrManager(request.auth.uid) &&
+                          // Validate approval fields
+                          ((request.resource.data.status == 'approved' && 
+                           request.resource.data.keys().hasAll(['approvedBy', 'approverName', 'approvedAt']) &&
+                           request.resource.data.approvedBy is string &&
+                           request.resource.data.approverName is string &&
+                           request.resource.data.approvedAt is timestamp) ||
+                          // Validate denial fields
+                          (request.resource.data.status == 'denied' && 
+                           request.resource.data.keys().hasAll(['deniedBy', 'denierName', 'deniedAt', 'denialReason']) &&
+                           request.resource.data.deniedBy is string &&
+                           request.resource.data.denierName is string &&
+                           request.resource.data.deniedAt is timestamp &&
+                           request.resource.data.denialReason is string) ||
+                          // Allow cancelled status
+                          request.resource.data.status == 'cancelled'))
+                       );
+      
+      // Only admins can delete time off requests
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // Workflow Templates collection
+    match /workflowTemplates/{templateId} {
+      // Users can read workflow templates from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Admins/Managers can create workflow templates
+      allow create: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID) &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['name', 'organizationID', 'steps', 'isActive']) &&
+                       // Validate data types
+                       request.resource.data.name is string &&
+                       request.resource.data.organizationID is string &&
+                       request.resource.data.steps is list &&
+                       request.resource.data.isActive is bool &&
+                       // Validate optional fields
+                       (!request.resource.data.keys().hasAny(['description']) || request.resource.data.description is string) &&
+                       (!request.resource.data.keys().hasAny(['sessionTypes']) || request.resource.data.sessionTypes is list) &&
+                       (!request.resource.data.keys().hasAny(['trackingTypes']) || request.resource.data.trackingTypes is list) &&
+                       (!request.resource.data.keys().hasAny(['estimatedDays']) || request.resource.data.estimatedDays is number) &&
+                       (!request.resource.data.keys().hasAny(['isDefault']) || request.resource.data.isDefault is bool) &&
+                       (!request.resource.data.keys().hasAny(['version']) || request.resource.data.version is number);
+      
+      // Admins/Managers can update workflow templates
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Prevent changing organizationID
+                       request.resource.data.organizationID == resource.data.organizationID;
+      
+      // Admins can delete workflow templates (soft delete - set isActive: false)
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // Workflows collection (workflow instances)
+    match /workflows/{workflowId} {
+      // Users can read workflows from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // System can create workflows (auto-created when sessions complete)
+      // Admins/Managers can also manually create workflows
+      // Supports both session-based workflows and tracking workflows
+      allow create: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID) &&
+                       // Common required fields
+                       request.resource.data.keys().hasAll(['organizationID', 'templateId', 'stepProgress']) &&
+                       request.resource.data.organizationID is string &&
+                       request.resource.data.templateId is string &&
+                       request.resource.data.stepProgress is map &&
+                       (
+                         // Session-based workflow validation
+                         (request.resource.data.keys().hasAll(['sessionId']) &&
+                          request.resource.data.sessionId is string &&
+                          (!request.resource.data.keys().hasAny(['workflowType']) || 
+                           request.resource.data.workflowType != 'tracking')) ||
+                         // Tracking workflow validation
+                         (request.resource.data.keys().hasAll(['schoolId', 'trackingTemplateId', 'academicYear', 'workflowType']) &&
+                          request.resource.data.schoolId is string &&
+                          request.resource.data.trackingTemplateId is string &&
+                          request.resource.data.academicYear is string &&
+                          request.resource.data.workflowType == 'tracking' &&
+                          (!request.resource.data.keys().hasAny(['trackingStartDate']) || request.resource.data.trackingStartDate is string) &&
+                          (!request.resource.data.keys().hasAny(['trackingEndDate']) || request.resource.data.trackingEndDate is string) &&
+                          (!request.resource.data.keys().hasAny(['schoolName']) || request.resource.data.schoolName is string))
+                       ) &&
+                       // Validate optional fields (common to both types)
+                       (!request.resource.data.keys().hasAny(['status']) || request.resource.data.status in ['active', 'completed', 'on_hold', 'cancelled', 'deleted']) &&
+                       (!request.resource.data.keys().hasAny(['templateName']) || request.resource.data.templateName is string) &&
+                       (!request.resource.data.keys().hasAny(['templateVersion']) || request.resource.data.templateVersion is number) &&
+                       (!request.resource.data.keys().hasAny(['currentStep']) || request.resource.data.currentStep is string);
+      
+      // Granular step-level permissions for workflow updates
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Prevent changing core identity fields
+                       request.resource.data.organizationID == resource.data.organizationID &&
+                       request.resource.data.templateId == resource.data.templateId &&
+                       (
+                         // Session-based workflow: prevent changing sessionId
+                         (resource.data.keys().hasAny(['sessionId']) &&
+                          request.resource.data.sessionId == resource.data.sessionId) ||
+                         // Tracking workflow: prevent changing tracking identity fields
+                         (resource.data.workflowType == 'tracking' &&
+                          request.resource.data.schoolId == resource.data.schoolId &&
+                          request.resource.data.trackingTemplateId == resource.data.trackingTemplateId &&
+                          request.resource.data.academicYear == resource.data.academicYear &&
+                          request.resource.data.workflowType == resource.data.workflowType)
+                       ) &&
+                       (
+                         // Admins/Managers can update any workflow
+                         isAdminOrManager(request.auth.uid) ||
+                         // Regular users can update workflows (simplified for now)
+                         // TODO: Add granular step-level permissions in future iteration
+                         true
+                       );
+      
+      // Admins can delete workflows
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // Deny all other documents
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
