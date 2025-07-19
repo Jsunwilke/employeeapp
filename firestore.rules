@@ -253,6 +253,16 @@ service cloud.firestore {
                        belongsToSameOrg(request.auth.uid, resource.data.organizationID);
     }
 
+    // Sports Jobs Locks subcollection for entry-level locking
+    match /sportsJobs/{jobId}/locks/{lockId} {
+      // Allow authenticated users to read/write locks for sports jobs in their organization
+      // This enables the entry locking system to prevent simultaneous editing conflicts
+      allow read, write: if request.auth != null && 
+                           request.auth.uid != null &&
+                           // Ensure user belongs to the same organization as the parent sports job
+                           belongsToSameOrg(request.auth.uid, get(/databases/$(database)/documents/sportsJobs/$(jobId)).data.organizationID);
+    }
+
     // Player Search Index collection
     match /playerSearchIndex/{indexId} {
       // Users can read search index from their organization

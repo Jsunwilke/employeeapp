@@ -3,7 +3,18 @@
 //  Iconik Employee
 //
 //  Created by administrator on 5/13/25.
-//  Updated to include automatic lock expiration
+//  Updated to include automatic lock expiration and permission error handling
+//
+//  FIREBASE SECURITY RULE REQUIRED:
+//  Add this rule to Firestore Security Rules for the lock system to work:
+//
+//  match /sportsJobs/{shootId}/locks/{lockId} {
+//    allow read, write: if request.auth != null && request.auth.uid != null;
+//  }
+//
+//  If this rule is not added, the lock system will automatically disable itself
+//  and allow all users to edit without locking (fallback mode).
+//
 
 
 import Foundation
@@ -16,8 +27,8 @@ class EntryLockManager {
     private let db = Firestore.firestore()
     private var isOnline = true
     
-    // Lock expiration time in seconds (200 seconds as requested)
-    private let lockExpirationTime: TimeInterval = 200
+    // Lock expiration time in seconds (reduced to 120 seconds for faster cleanup)
+    private let lockExpirationTime: TimeInterval = 120
     
     // Initialize and listen for network status changes
     private init() {
@@ -78,7 +89,14 @@ class EntryLockManager {
                 
                 if let error = error {
                     print("Error checking for existing lock: \(error.localizedDescription)")
-                    completion(false)
+                    
+                    // If it's a permission error, allow the lock to be acquired (disable locking)
+                    if self.isPermissionError(error) {
+                        print("Permission error detected - allowing lock acquisition for \(entryID)")
+                        completion(true) // Allow editing by pretending lock was acquired
+                    } else {
+                        completion(false)
+                    }
                     return
                 }
                 
@@ -121,7 +139,14 @@ class EntryLockManager {
             .setData(lockData) { error in
                 if let error = error {
                     print("Error acquiring lock: \(error.localizedDescription)")
-                    completion(false)
+                    
+                    // If it's a permission error, pretend the lock was acquired (disable locking)
+                    if self.isPermissionError(error) {
+                        print("Permission error detected - pretending lock acquired for \(lockID)")
+                        completion(true) // Allow editing
+                    } else {
+                        completion(false)
+                    }
                 } else {
                     print("Lock acquired successfully for \(lockID) by \(editorName)")
                     completion(true)
@@ -142,47 +167,108 @@ class EntryLockManager {
         // We're online, use Firestore locks
         let lockID = entryID
         
-        // First verify that the lock is owned by this editor
-        db.collection("sportsJobs").document(shootID)
-            .collection("locks").document(lockID)
-            .getDocument { snapshot, error in
-                
-                if let error = error {
-                    print("Error checking lock ownership: \(error.localizedDescription)")
-                    completion?(false)
-                    return
-                }
-                
-                // Only delete if lock exists and is owned by this editor
-                if let snapshot = snapshot, snapshot.exists,
-                   let data = snapshot.data(),
-                   let existingEditorID = data["editorID"] as? String {
+        // Create a retry mechanism for network failures
+        var retryCount = 0
+        let maxRetries = 2
+        
+        func attemptRelease() {
+            // First verify that the lock is owned by this editor
+            db.collection("sportsJobs").document(shootID)
+                .collection("locks").document(lockID)
+                .getDocument { snapshot, error in
                     
-                    // If owned by someone else, don't release
-                    if existingEditorID != editorID {
-                        print("Lock is owned by another editor, cannot release")
+                    if let error = error {
+                        print("Error checking lock ownership: \(error.localizedDescription)")
+                        
+                        // Handle permission errors by pretending release succeeded
+                        if self.isPermissionError(error) {
+                            print("Permission error detected - pretending lock released for \(entryID)")
+                            completion?(true) // Pretend success
+                            return
+                        }
+                        
+                        // Retry on network errors
+                        if retryCount < maxRetries && self.isNetworkError(error) {
+                            retryCount += 1
+                            print("Retrying lock release (attempt \(retryCount + 1))...")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                attemptRelease()
+                            }
+                            return
+                        }
+                        
                         completion?(false)
                         return
                     }
                     
-                    // Delete the lock
-                    self.db.collection("sportsJobs").document(shootID)
-                        .collection("locks").document(lockID)
-                        .delete { error in
-                            if let error = error {
-                                print("Error releasing lock: \(error.localizedDescription)")
-                                completion?(false)
-                            } else {
-                                print("Lock released successfully for \(entryID)")
-                                completion?(true)
-                            }
+                    // Only delete if lock exists and is owned by this editor
+                    if let snapshot = snapshot, snapshot.exists,
+                       let data = snapshot.data(),
+                       let existingEditorID = data["editorID"] as? String {
+                        
+                        // If owned by someone else, don't release
+                        if existingEditorID != editorID {
+                            print("Lock is owned by another editor, cannot release")
+                            completion?(false)
+                            return
                         }
-                } else {
-                    // Lock doesn't exist, consider it released
-                    print("No lock exists to release for \(entryID)")
-                    completion?(true)
+                        
+                        // Delete the lock
+                        self.db.collection("sportsJobs").document(shootID)
+                            .collection("locks").document(lockID)
+                            .delete { error in
+                                if let error = error {
+                                    print("Error releasing lock: \(error.localizedDescription)")
+                                    
+                                    // Handle permission errors by pretending delete succeeded
+                                    if self.isPermissionError(error) {
+                                        print("Permission error detected - pretending lock deleted for \(entryID)")
+                                        completion?(true) // Pretend success
+                                        return
+                                    }
+                                    
+                                    // Retry on network errors
+                                    if retryCount < maxRetries && self.isNetworkError(error) {
+                                        retryCount += 1
+                                        print("Retrying lock release (attempt \(retryCount + 1))...")
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                            attemptRelease()
+                                        }
+                                        return
+                                    }
+                                    
+                                    completion?(false)
+                                } else {
+                                    print("Lock released successfully for \(entryID)")
+                                    completion?(true)
+                                }
+                            }
+                    } else {
+                        // Lock doesn't exist, consider it released
+                        print("No lock exists to release for \(entryID)")
+                        completion?(true)
+                    }
                 }
-            }
+        }
+        
+        attemptRelease()
+    }
+    
+    // Helper to check if error is network-related
+    private func isNetworkError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain ||
+               nsError.code == 14 || // Network unavailable
+               nsError.code == -1009 || // No internet connection
+               nsError.code == -1001 // Request timed out
+    }
+    
+    // Helper to check if error is permission-related
+    private func isPermissionError(_ error: Error) -> Bool {
+        let errorMessage = error.localizedDescription.lowercased()
+        return errorMessage.contains("permission") || 
+               errorMessage.contains("insufficient") ||
+               errorMessage.contains("unauthorized")
     }
     
     // Check if an entry is locked
@@ -207,7 +293,14 @@ class EntryLockManager {
                 
                 if let error = error {
                     print("Error checking lock: \(error.localizedDescription)")
-                    completion(false, nil)
+                    
+                    // If it's a permission error, disable locking (allow editing)
+                    if self.isPermissionError(error) {
+                        print("Permission error detected - disabling lock for entry \(entryID)")
+                        completion(false, nil) // Not locked, allow editing
+                    } else {
+                        completion(false, nil)
+                    }
                     return
                 }
                 
@@ -359,6 +452,32 @@ class EntryLockManager {
                     } else {
                         print("Deleted \(documents.count) stale locks")
                     }
+                }
+            }
+    }
+    
+    // Force release a lock (admin/recovery function)
+    func forceReleaseLock(shootID: String, entryID: String, completion: @escaping (Bool) -> Void) {
+        // If we're offline, use local locks
+        if !isOnline {
+            print("Offline mode: Force removing local lock for \(entryID)")
+            OfflineManager.shared.removeLocalLock(shootID: shootID, entryID: entryID)
+            completion(true)
+            return
+        }
+        
+        // We're online, force delete from Firestore
+        let lockID = entryID
+        
+        db.collection("sportsJobs").document(shootID)
+            .collection("locks").document(lockID)
+            .delete { error in
+                if let error = error {
+                    print("Error force releasing lock: \(error.localizedDescription)")
+                    completion(false)
+                } else {
+                    print("Lock force released successfully for \(entryID)")
+                    completion(true)
                 }
             }
     }
