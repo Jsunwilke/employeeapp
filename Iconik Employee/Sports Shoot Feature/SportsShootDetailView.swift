@@ -18,6 +18,7 @@ struct SportsShootDetailView: View {
     @State private var isLoading = true
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
+    @State private var showingPermissionWarning = false
     @State private var selectedTab = 0 // 0 = Athletes, 1 = Groups
     
     // Network status
@@ -52,8 +53,12 @@ struct SportsShootDetailView: View {
     @State private var debounceTask: DispatchWorkItem?
     @State private var lastSavedValue: String = ""
     
+    // Track lock timestamps for force unlock feature
+    @State private var lockTimestamps: [String: Date] = [:]
+    
     // Environment
     // @Environment(\.presentationMode) var presentationMode // Removed - using NavigationLink
+    @Environment(\.scenePhase) var scenePhase
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     @AppStorage("userLastName") private var storedUserLastName: String = ""
     
@@ -68,8 +73,8 @@ struct SportsShootDetailView: View {
     // Focus state for keyboard navigation
     @FocusState private var focusedField: String?
     
-    // Timer for refreshing locked entries
-    let lockRefreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+    // Timer for refreshing locked entries - increased frequency for better responsiveness
+    let lockRefreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     
     // Filter options
     let specialFilters = ["Seniors", "8th Graders", "Coaches"]
@@ -186,6 +191,22 @@ struct SportsShootDetailView: View {
             loadSportsShoot()
             setupNetworkMonitoring()
             setupFirestoreListeners()
+            // Force cleanup of any stale locks when entering the view
+            forceCleanupStaleLocks()
+        }
+        .onDisappear {
+            // Release any active locks when leaving the view
+            if let entryID = currentlyEditingEntry {
+                releaseLock(shootID: shootID, entryID: entryID)
+            }
+        }
+        .onChange(of: scenePhase) { newPhase in
+            // Release locks when app goes to background
+            if newPhase == .background || newPhase == .inactive {
+                if let entryID = currentlyEditingEntry {
+                    releaseLock(shootID: shootID, entryID: entryID)
+                }
+            }
         }
         .onReceive(lockRefreshTimer) { _ in
             refreshLocks()
@@ -640,21 +661,35 @@ struct SportsShootDetailView: View {
                 
                 // Bottom row - Image input
                 if isCurrentlyEditing {
-                    AutosaveTextField(
-                        text: $editingImageNumber,
-                        placeholder: "Enter image numbers",
-                        onTapOutside: {
-                            // Field autosaves on text change
-                        },
-                        onEnterOrDown: {
-                            // Find the next editable entry and start editing it
-                            moveToNextEditableEntry(currentID: entry.id)
+                    HStack(spacing: 8) {
+                        AutosaveTextField(
+                            text: $editingImageNumber,
+                            placeholder: "Enter image numbers",
+                            onTapOutside: {
+                                // Field autosaves on text change
+                            },
+                            onEnterOrDown: {
+                                // Find the next editable entry and start editing it
+                                moveToNextEditableEntry(currentID: entry.id)
+                            }
+                        )
+                        .font(.system(size: 16))
+                        .frame(height: 40)
+                        .background(Color.blue.opacity(0.3))
+                        .cornerRadius(6)
+                        
+                        // Stop editing button
+                        Button(action: {
+                            // Save any pending changes and release lock
+                            if let entryID = currentlyEditingEntry {
+                                releaseLock(shootID: shoot.id, entryID: entryID)
+                            }
+                        }) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 24))
+                                .foregroundColor(.green)
                         }
-                    )
-                    .font(.system(size: 16))
-                    .frame(height: 40)
-                    .background(Color.blue.opacity(0.3))
-                    .cornerRadius(6)
+                    }
                 } else if isLockedByOthers {
                     VStack(spacing: 2) {
                         Text(entry.imageNumbers.isEmpty ? "No images recorded" : entry.imageNumbers)
@@ -663,9 +698,22 @@ struct SportsShootDetailView: View {
                             .lineLimit(1)
                         
                         if let editor = lockedEntries[entry.id] {
-                            Text("Editing: \(editor)")
-                                .font(.caption)
-                                .foregroundColor(.red)
+                            HStack(spacing: 4) {
+                                Text("Editing: \(editor)")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                                
+                                // Add force unlock button for locks older than 60 seconds
+                                if shouldShowForceUnlock(for: entry.id) {
+                                    Button(action: {
+                                        forceUnlockEntry(shootID: shoot.id, entryID: entry.id)
+                                    }) {
+                                        Image(systemName: "lock.open.fill")
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                    }
+                                }
+                            }
                         }
                     }
                     .frame(height: 40)
@@ -1148,6 +1196,21 @@ struct SportsShootDetailView: View {
     private func setupLockListener() {
         EntryLockManager.shared.listenForLocks(shootID: shootID) { locks in
             DispatchQueue.main.async {
+                // Track when we first see each lock
+                for (entryID, editor) in locks {
+                    if self.lockedEntries[entryID] == nil {
+                        // New lock detected, record timestamp
+                        self.lockTimestamps[entryID] = Date()
+                    }
+                }
+                
+                // Clean up timestamps for released locks
+                for entryID in self.lockedEntries.keys {
+                    if locks[entryID] == nil {
+                        self.lockTimestamps.removeValue(forKey: entryID)
+                    }
+                }
+                
                 self.lockedEntries = locks
             }
         }
@@ -1186,45 +1249,79 @@ struct SportsShootDetailView: View {
         
         // Check if we already have a lock on this entry
         if isOwnLock(entry.id) {
-            self.currentlyEditingEntry = entry.id
-            self.editingImageNumber = entry.imageNumbers
-            self.lastSavedValue = entry.imageNumbers
+            print("🔓 Using existing lock for entry \(entry.id), setting editingImageNumber to: '\(entry.imageNumbers)'")
+            DispatchQueue.main.async {
+                self.currentlyEditingEntry = entry.id
+                self.editingImageNumber = entry.imageNumbers
+                self.lastSavedValue = entry.imageNumbers
+                print("🔓 State set synchronously: currentlyEditingEntry=\(self.currentlyEditingEntry ?? "nil"), editingImageNumber='\(self.editingImageNumber)'")
+            }
             return
         }
         
         // Release any previous lock
         if let previousEntryID = currentlyEditingEntry {
-            releaseLock(shootID: shootID, entryID: previousEntryID)
+            // Don't clear editing state when switching entries - just release the lock
+            releaseLockWithoutClearingState(shootID: shootID, entryID: previousEntryID)
         }
         
         // Set up editing state
-        self.editingImageNumber = entry.imageNumbers
-        self.lastSavedValue = entry.imageNumbers
+        print("🔓 Setting up editing state for entry \(entry.id), setting editingImageNumber to: '\(entry.imageNumbers)'")
+        DispatchQueue.main.async {
+            self.editingImageNumber = entry.imageNumbers
+            self.lastSavedValue = entry.imageNumbers
+            print("🔓 Pre-lock state set: editingImageNumber='\(self.editingImageNumber)'")
+        }
         
         // Acquire lock for this entry
-        acquireLock(shootID: shootID, entryID: entry.id)
+        acquireLock(shootID: shootID, entryID: entry.id, targetImageNumbers: entry.imageNumbers)
     }
     
-    private func acquireLock(shootID: String, entryID: String) {
-        let editorID = Auth.auth().currentUser?.uid ?? UUID().uuidString
+    private func acquireLock(shootID: String, entryID: String, targetImageNumbers: String) {
+        // Use consistent editor ID - prefer auth user ID, fallback to device session
+        let editorID = Auth.auth().currentUser?.uid ?? Self.deviceSessionID
         let editorName = currentEditorIdentifier
         
         EntryLockManager.shared.acquireLock(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName) { success in
             if success {
                 DispatchQueue.main.async {
+                    print("🔓 Lock acquired for entry \(entryID), setting editingImageNumber to target value: '\(targetImageNumbers)'")
                     self.currentlyEditingEntry = entryID
+                    // Set the correct value for this specific entry
+                    self.editingImageNumber = targetImageNumbers
+                    self.lastSavedValue = targetImageNumbers
                 }
             } else {
                 DispatchQueue.main.async {
-                    self.errorMessage = "This entry is being edited by someone else. Please try again later."
+                    self.errorMessage = "This field is locked because another user is editing. The lock will expire in a few minutes, or you can try the force unlock button if available."
                     self.showingErrorAlert = true
                 }
             }
         }
     }
     
+    private func releaseLockWithoutClearingState(shootID: String, entryID: String) {
+        // Release lock without clearing editing state - used when switching between entries
+        let editorID = Auth.auth().currentUser?.uid ?? Self.deviceSessionID
+        
+        EntryLockManager.shared.releaseLock(shootID: shootID, entryID: entryID, editorID: editorID) { success in
+            // Don't clear any state - just log the result
+            if success {
+                print("🔓 Lock released for entry \(entryID) (without clearing state)")
+            } else {
+                print("⚠️ Failed to release lock for entry \(entryID)")
+            }
+        }
+    }
+    
     private func releaseLock(shootID: String, entryID: String) {
-        let editorID = Auth.auth().currentUser?.uid ?? ""
+        // Store the device session ID to ensure consistent editor ID
+        let editorID = Auth.auth().currentUser?.uid ?? Self.deviceSessionID
+        
+        // Cancel any pending autosave before releasing lock
+        if currentlyEditingEntry == entryID {
+            debounceTask?.cancel()
+        }
         
         EntryLockManager.shared.releaseLock(shootID: shootID, entryID: entryID, editorID: editorID) { success in
             DispatchQueue.main.async {
@@ -1233,6 +1330,21 @@ struct SportsShootDetailView: View {
                     self.editingImageNumber = ""
                     self.lastSavedValue = ""
                     self.debounceTask?.cancel()
+                }
+                
+                if !success {
+                    // Enhanced user feedback for lock release failure
+                    self.errorMessage = "Warning: Unable to properly release the editing lock. Your changes have been saved, but other users may need to wait longer before they can edit this entry."
+                    self.showingErrorAlert = true
+                    
+                    print("Warning: Failed to release lock for entry \(entryID)")
+                    
+                    // Even if release failed, clear local state to allow user to continue
+                    if self.currentlyEditingEntry == entryID {
+                        self.currentlyEditingEntry = nil
+                        self.editingImageNumber = ""
+                        self.lastSavedValue = ""
+                    }
                 }
             }
         }
@@ -1416,6 +1528,58 @@ struct SportsShootDetailView: View {
         ]
         
         return colors[hash % colors.count]
+    }
+    
+    // MARK: - Lock Cleanup Helpers
+    
+    private func forceCleanupStaleLocks() {
+        // Force cleanup of locks older than 100 seconds (half the normal expiration time)
+        EntryLockManager.shared.cleanupStaleLocks(shootID: shootID, timeThreshold: 100)
+        
+        // Test if we have lock permissions by attempting a simple check
+        EntryLockManager.shared.checkLock(shootID: shootID, entryID: "permission_test") { isLocked, editorName in
+            // This is just to trigger permission checks - we ignore the result
+        }
+    }
+    
+    private func showPermissionWarningIfNeeded() {
+        // Show a one-time warning about lock permissions
+        if !showingPermissionWarning {
+            showingPermissionWarning = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                errorMessage = "Note: Lock system is disabled due to permission restrictions. Multiple users can edit simultaneously - please coordinate to avoid conflicts."
+                showingErrorAlert = true
+            }
+        }
+    }
+    
+    // MARK: - Force Unlock Helpers
+    
+    private func shouldShowForceUnlock(for entryID: String) -> Bool {
+        // Show force unlock if lock has been held for more than 60 seconds
+        guard let lockTimestamp = lockTimestamps[entryID] else { return false }
+        let timeSinceLock = Date().timeIntervalSince(lockTimestamp)
+        return timeSinceLock > 60 // 60 seconds
+    }
+    
+    private func forceUnlockEntry(shootID: String, entryID: String) {
+        // Force unlock by cleaning up the lock
+        EntryLockManager.shared.forceReleaseLock(shootID: shootID, entryID: entryID) { success in
+            DispatchQueue.main.async {
+                if success {
+                    // Remove from local tracking
+                    self.lockedEntries.removeValue(forKey: entryID)
+                    self.lockTimestamps.removeValue(forKey: entryID)
+                    
+                    // Show success message
+                    self.errorMessage = "Lock released successfully. You can now edit this entry."
+                    self.showingErrorAlert = true
+                } else {
+                    self.errorMessage = "Failed to release lock. Please try again."
+                    self.showingErrorAlert = true
+                }
+            }
+        }
     }
 }
 

@@ -289,7 +289,8 @@ struct SportsShootListView: View {
                                 },
                                 onMakeAvailableOffline: {
                                     cacheShootForOffline(id: sportsShoot.id)
-                                }
+                                },
+                                isInsideNavigationLink: true // Tell the row it's inside a NavigationLink
                             )
                         }
                     }
@@ -949,54 +950,67 @@ struct SportsShootListView: View {
         let onSelect: () -> Void
         let onSyncNow: () -> Void
         let onMakeAvailableOffline: () -> Void
+        var isInsideNavigationLink: Bool = false // New parameter to control Button wrapper
         
         // Use state to avoid redrawing the entire row on every status check
         @State private var syncStatus: OfflineManager.CacheStatus = .notCached
         @State private var isOnline: Bool = true
         
         var body: some View {
-            Button(action: onSelect) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(shoot.schoolName)
-                                .font(.headline)
-                            Spacer()
-                            Text(shoot.sportName)
-                                .font(.subheadline)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(Color.blue.opacity(0.2))
-                                .cornerRadius(4)
-                        }
-                        
-                        Text(formatDate(shoot.shootDate))
+            let content = HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(shoot.schoolName)
+                            .font(.headline)
+                        Spacer()
+                        Text(shoot.sportName)
                             .font(.subheadline)
-                            .foregroundColor(.gray)
-                        
-                        HStack {
-                            Label("\(shoot.roster.count) Athletes", systemImage: "person.3")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            
-                            Spacer()
-                            
-                            Label("\(shoot.groupImages.count) Groups", systemImage: "person.3.sequence")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.top, 4)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.2))
+                            .cornerRadius(4)
                     }
                     
-                    // Sync status badge - moved to a separate component
-                    statusBadge
-                        .font(.system(size: 18))
-                        .padding(.leading, 4)
+                    Text(formatDate(shoot.shootDate))
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                    
+                    HStack {
+                        Label("\(shoot.roster.count) Athletes", systemImage: "person.3")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        Spacer()
+                        
+                        Label("\(shoot.groupImages.count) Groups", systemImage: "person.3.sequence")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 4)
                 }
-                .padding(.vertical, 4)
+                
+                // Sync status badge - moved to a separate component
+                statusBadge
+                    .font(.system(size: 18))
+                    .padding(.leading, 4)
             }
-            .buttonStyle(PlainButtonStyle())
-            .contentShape(Rectangle())
+            .padding(.vertical, 4)
+            
+            // Conditionally wrap in Button based on isInsideNavigationLink
+            Group {
+                if isInsideNavigationLink {
+                    // When inside NavigationLink, don't wrap in Button
+                    content
+                        .contentShape(Rectangle())
+                } else {
+                    // When not inside NavigationLink (iPad), wrap in Button
+                    Button(action: onSelect) {
+                        content
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .contentShape(Rectangle())
+                }
+            }
             .contextMenu {
                 // Offline related options in context menu
                 if OfflineManager.shared.isShootCached(id: shoot.id) {
