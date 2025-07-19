@@ -17,9 +17,15 @@ struct AutosaveTextField: View {
     // Track the previous focus state to detect when focus is lost
     @State private var wasFocused = false
     
+    // Store the initial value to ensure proper display
+    @State private var localText: String = ""
+    @State private var isInitialized = false
+    
     var body: some View {
-        TextField(placeholder, text: $text)
+        TextField(placeholder, text: $localText)
             .keyboardType(.numberPad)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
             .textFieldStyle(RoundedBorderTextFieldStyle())
             .focused($isFocused)
             .toolbar {
@@ -49,33 +55,55 @@ struct AutosaveTextField: View {
                 // When submit is triggered, go to next field
                 onEnterOrDown?()
             }
-            // Save when text changes - maintains autosave functionality
-            .onReceive(Just(text)) { newValue in
-                print("📝 AutosaveTextField text changed to: '\(newValue)'")
+            // Handle local text changes
+            .onChange(of: localText) { newValue in
+                print("📝 AutosaveTextField localText changed to: '\(newValue)'")
                 // Filter to only allow numbers, commas, hyphens, and spaces
                 let filtered = newValue.filter { "0123456789,- ".contains($0) }
                 if filtered != newValue {
                     print("📝 AutosaveTextField filtering '\(newValue)' to '\(filtered)'")
-                    self.text = filtered
+                    localText = filtered
+                } else {
+                    // Update the binding when local text changes
+                    text = filtered
                 }
             }
-            // Set up auto-focus when appearing
+            // Sync binding changes to local text
+            .onChange(of: text) { newValue in
+                if localText != newValue {
+                    print("📝 AutosaveTextField syncing binding value: '\(newValue)' (was: '\(localText)')")
+                    localText = newValue
+                    
+                    // If we're focused and the value changed significantly, ensure cursor is at end
+                    if isFocused && !newValue.isEmpty && localText.isEmpty {
+                        // This handles the case where value is set after focus
+                        DispatchQueue.main.async {
+                            // Force a small UI update to ensure text field shows the new value
+                            self.localText = newValue
+                        }
+                    }
+                }
+            }
+            // Set up initial value and focus
             .onAppear {
                 print("📝 AutosaveTextField onAppear: text = '\(text)', hasAppeared = \(hasAppeared)")
+                
+                // Always sync the local text with binding value on appear
+                localText = text
+                if !isInitialized {
+                    isInitialized = true
+                    print("📝 AutosaveTextField initialized with value: '\(localText)'")
+                }
+                
                 if !hasAppeared {
-                    // Small delay to ensure parent state is fully updated
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        print("📝 AutosaveTextField focusing, text is: '\(self.text)'")
-                        
-                        // Ensure we have the latest binding value
-                        if self.text != text {
-                            print("📝 AutosaveTextField correcting text from '\(self.text)' to '\(text)'")
-                            self.text = text
+                    hasAppeared = true
+                    
+                    // Only auto-focus on iPhone, let iPad users tap to focus
+                    if UIDevice.current.userInterfaceIdiom == .phone {
+                        DispatchQueue.main.async {
+                            self.isFocused = true
+                            self.wasFocused = true
                         }
-                        
-                        self.isFocused = true
-                        self.hasAppeared = true
-                        self.wasFocused = true
                     }
                 }
             }
