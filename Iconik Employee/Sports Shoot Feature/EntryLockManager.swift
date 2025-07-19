@@ -79,13 +79,29 @@ class EntryLockManager {
             return
         }
         
-        // We're online, use Firestore locks
+        // We're online, use Firestore locks with retry mechanism
+        acquireLockWithRetry(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName, retryCount: 0, completion: completion)
+    }
+    
+    // Helper method to handle lock acquisition with retry logic
+    private func acquireLockWithRetry(shootID: String, entryID: String, editorID: String, editorName: String, retryCount: Int, completion: @escaping (Bool) -> Void) {
+        let maxRetries = 3
         let lockID = entryID
+        
+        // Add timeout for lock acquisition
+        let timeoutTask = DispatchWorkItem {
+            print("Lock acquisition timed out for \(entryID) after 10 seconds")
+            completion(false)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0, execute: timeoutTask)
         
         // First check if a lock already exists for this entry
         db.collection("sportsJobs").document(shootID)
             .collection("locks").document(lockID)
             .getDocument { snapshot, error in
+                
+                // Cancel timeout if we got a response
+                timeoutTask.cancel()
                 
                 if let error = error {
                     print("Error checking for existing lock: \(error.localizedDescription)")
@@ -94,9 +110,21 @@ class EntryLockManager {
                     if self.isPermissionError(error) {
                         print("Permission error detected - allowing lock acquisition for \(entryID)")
                         completion(true) // Allow editing by pretending lock was acquired
-                    } else {
-                        completion(false)
+                        return
                     }
+                    
+                    // Retry on network errors
+                    if retryCount < maxRetries && self.isNetworkError(error) {
+                        let retryDelay = Double(retryCount + 1) * 1.0 // Exponential backoff
+                        print("Retrying lock acquisition for \(entryID) (attempt \(retryCount + 1)/\(maxRetries)) in \(retryDelay) seconds...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) {
+                            self.acquireLockWithRetry(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName, retryCount: retryCount + 1, completion: completion)
+                        }
+                        return
+                    }
+                    
+                    print("Failed to acquire lock for \(entryID) after \(retryCount) retries")
+                    completion(false)
                     return
                 }
                 
@@ -111,7 +139,7 @@ class EntryLockManager {
                     // If lock is expired, we can acquire it regardless of who owned it
                     // Or if the lock is owned by this editor, we can update it
                     if timeSinceCreation > self.lockExpirationTime || existingEditorID == editorID {
-                        self.createOrUpdateLock(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, completion: completion)
+                        self.createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: retryCount, completion: completion)
                     } else {
                         print("Entry is already locked by another editor and not expired")
                         completion(false)
@@ -120,12 +148,21 @@ class EntryLockManager {
                 }
                 
                 // No existing lock, so create a new one
-                self.createOrUpdateLock(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, completion: completion)
+                self.createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: retryCount, completion: completion)
             }
     }
     
-    // Helper method to create or update a lock
-    private func createOrUpdateLock(shootID: String, lockID: String, editorID: String, editorName: String, completion: @escaping (Bool) -> Void) {
+    // Helper method to create or update a lock with retry logic
+    private func createOrUpdateLockWithRetry(shootID: String, lockID: String, editorID: String, editorName: String, retryCount: Int, completion: @escaping (Bool) -> Void) {
+        let maxRetries = 3
+        
+        // Add timeout for lock creation
+        let timeoutTask = DispatchWorkItem {
+            print("Lock creation timed out for \(lockID) after 10 seconds")
+            completion(false)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0, execute: timeoutTask)
+        
         // Create lock data with current timestamp
         let lockData: [String: Any] = [
             "entryID": lockID,
@@ -137,6 +174,10 @@ class EntryLockManager {
         self.db.collection("sportsJobs").document(shootID)
             .collection("locks").document(lockID)
             .setData(lockData) { error in
+                
+                // Cancel timeout if we got a response
+                timeoutTask.cancel()
+                
                 if let error = error {
                     print("Error acquiring lock: \(error.localizedDescription)")
                     
@@ -144,14 +185,31 @@ class EntryLockManager {
                     if self.isPermissionError(error) {
                         print("Permission error detected - pretending lock acquired for \(lockID)")
                         completion(true) // Allow editing
-                    } else {
-                        completion(false)
+                        return
                     }
+                    
+                    // Retry on network errors
+                    if retryCount < maxRetries && self.isNetworkError(error) {
+                        let retryDelay = Double(retryCount + 1) * 1.0 // Exponential backoff
+                        print("Retrying lock creation for \(lockID) (attempt \(retryCount + 1)/\(maxRetries)) in \(retryDelay) seconds...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) {
+                            self.createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: retryCount + 1, completion: completion)
+                        }
+                        return
+                    }
+                    
+                    print("Failed to create lock for \(lockID) after \(retryCount) retries")
+                    completion(false)
                 } else {
                     print("Lock acquired successfully for \(lockID) by \(editorName)")
                     completion(true)
                 }
             }
+    }
+    
+    // Helper method to create or update a lock (legacy method for backward compatibility)
+    private func createOrUpdateLock(shootID: String, lockID: String, editorID: String, editorName: String, completion: @escaping (Bool) -> Void) {
+        createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: 0, completion: completion)
     }
     
     // Release a lock
@@ -257,10 +315,37 @@ class EntryLockManager {
     // Helper to check if error is network-related
     private func isNetworkError(_ error: Error) -> Bool {
         let nsError = error as NSError
-        return nsError.domain == NSURLErrorDomain ||
-               nsError.code == 14 || // Network unavailable
-               nsError.code == -1009 || // No internet connection
-               nsError.code == -1001 // Request timed out
+        let errorMessage = error.localizedDescription.lowercased()
+        
+        // Check NSURLError codes
+        if nsError.domain == NSURLErrorDomain {
+            return true
+        }
+        
+        // Check common Firebase network error codes
+        let networkErrorCodes = [
+            14, // Network unavailable (Firebase)
+            -1009, // No internet connection
+            -1001, // Request timed out
+            -1004, // Could not connect to server
+            -1005, // Network connection lost
+            -1006, // DNS lookup failed
+            -1011, // Bad server response
+            8 // Deadline exceeded (Firebase)
+        ]
+        
+        if networkErrorCodes.contains(nsError.code) {
+            return true
+        }
+        
+        // Check error message for network-related keywords
+        let networkKeywords = [
+            "network", "connection", "timeout", "unreachable", 
+            "deadline exceeded", "cancelled", "unavailable",
+            "dns", "server", "internet", "offline"
+        ]
+        
+        return networkKeywords.contains { errorMessage.contains($0) }
     }
     
     // Helper to check if error is permission-related
@@ -284,12 +369,22 @@ class EntryLockManager {
             return
         }
         
-        // We're online, use Firestore locks
+        // We're online, use Firestore locks with timeout
         let lockID = entryID
+        
+        // Add timeout for lock check
+        let timeoutTask = DispatchWorkItem {
+            print("Lock check timed out for \(entryID) after 8 seconds")
+            completion(false, nil) // Assume not locked on timeout
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0, execute: timeoutTask)
         
         db.collection("sportsJobs").document(shootID)
             .collection("locks").document(lockID)
             .getDocument { snapshot, error in
+                
+                // Cancel timeout if we got a response
+                timeoutTask.cancel()
                 
                 if let error = error {
                     print("Error checking lock: \(error.localizedDescription)")
@@ -298,6 +393,9 @@ class EntryLockManager {
                     if self.isPermissionError(error) {
                         print("Permission error detected - disabling lock for entry \(entryID)")
                         completion(false, nil) // Not locked, allow editing
+                    } else if self.isNetworkError(error) {
+                        print("Network error detected while checking lock for \(entryID) - assuming not locked")
+                        completion(false, nil) // Assume not locked on network errors
                     } else {
                         completion(false, nil)
                     }
@@ -314,7 +412,7 @@ class EntryLockManager {
                         print("Lock has expired for \(entryID)")
                         completion(false, nil)
                         
-                        // Optionally, remove the expired lock
+                        // Optionally, remove the expired lock (non-blocking)
                         self.db.collection("sportsJobs").document(shootID)
                             .collection("locks").document(lockID)
                             .delete { error in

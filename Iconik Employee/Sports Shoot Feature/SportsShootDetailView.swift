@@ -663,7 +663,17 @@ struct SportsShootDetailView: View {
                 if isCurrentlyEditing {
                     HStack(spacing: 8) {
                         AutosaveTextField(
-                            text: $editingImageNumber,
+                            text: Binding(
+                                get: { 
+                                    // Use the entry's value if editingImageNumber is empty
+                                    // This handles the iPad timing issue
+                                    if self.editingImageNumber.isEmpty && !entry.imageNumbers.isEmpty {
+                                        return entry.imageNumbers
+                                    }
+                                    return self.editingImageNumber
+                                },
+                                set: { self.editingImageNumber = $0 }
+                            ),
                             placeholder: "Enter image numbers",
                             onTapOutside: {
                                 // Field autosaves on text change
@@ -1288,8 +1298,10 @@ struct SportsShootDetailView: View {
                     print("🔓 Lock acquired for entry \(entryID), setting editingImageNumber to target value: '\(targetImageNumbers)'")
                     self.currentlyEditingEntry = entryID
                     // Set the correct value for this specific entry
+                    // Force set it even if it was already set to handle iPad timing issues
                     self.editingImageNumber = targetImageNumbers
                     self.lastSavedValue = targetImageNumbers
+                    print("🔓 Final state after lock: editingImageNumber='\(self.editingImageNumber)'")
                 }
             } else {
                 DispatchQueue.main.async {
