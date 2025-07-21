@@ -474,23 +474,17 @@ class EntryLockManager {
                         let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date(timeIntervalSince1970: 0)
                         let timeSinceCreation = Date().timeIntervalSince(timestamp)
                         
-                        if timeSinceCreation <= self.lockExpirationTime {
-                            // Only include non-expired locks
-                            if let entryID = data["entryID"] as? String,
-                               let editorName = data["editorName"] as? String {
-                                locks[entryID] = editorName
+                        // Always include locks in the list, even if expired
+                        // This prevents race conditions where one device deletes another's lock
+                        if let entryID = data["entryID"] as? String,
+                           let editorName = data["editorName"] as? String {
+                            locks[entryID] = editorName
+                            
+                            if timeSinceCreation > self.lockExpirationTime {
+                                print("Lock for entry \(entryID) by \(editorName) (expired: \(Int(timeSinceCreation))s old)")
+                            } else {
                                 print("Lock for entry \(entryID) by \(editorName)")
                             }
-                        } else {
-                            // Lock has expired, remove it
-                            print("Removing expired lock document: \(doc.documentID)")
-                            self.db.collection("sportsJobs").document(shootID)
-                                .collection("locks").document(doc.documentID)
-                                .delete { error in
-                                    if let error = error {
-                                        print("Error removing expired lock: \(error.localizedDescription)")
-                                    }
-                                }
                         }
                     }
                 }
