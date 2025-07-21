@@ -23,23 +23,35 @@ class SessionService: ObservableObject {
     
     // Listen for sessions in real-time for current user's organization
     func listenForSessions(completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
+        #if DEBUG
         print("🔄 SessionService: listenForSessions called")
+        #endif
         
         // Use cached organization ID if available, otherwise get it
         let cachedOrgID = UserManager.shared.getCachedOrganizationID()
+        #if DEBUG
         print("🔄 SessionService: cached org ID = '\(cachedOrgID)'")
+        #endif
         
         if !cachedOrgID.isEmpty {
+            #if DEBUG
             print("🔄 SessionService: Using cached org ID")
+            #endif
             return listenForSessionsWithOrganizationID(cachedOrgID, completion: completion)
         } else {
+            #if DEBUG
             print("🔄 SessionService: No cached org ID, fetching async")
+            #endif
             
             // Get organization ID and then set up listener
             UserManager.shared.getCurrentUserOrganizationID { organizationID in
+                #if DEBUG
                 print("🔄 SessionService: Async org ID fetch completed: '\(organizationID ?? "nil")'")
+                #endif
                 guard let orgID = organizationID else {
+                    #if DEBUG
                     print("🔐 Cannot load sessions: no organization ID found")
+                    #endif
                     completion([])
                     return
                 }
@@ -51,7 +63,9 @@ class SessionService: ObservableObject {
             // Return a placeholder listener that doesn't interfere
             return db.collection("sessions").whereField("organizationID", isEqualTo: "loading").addSnapshotListener { _, _ in
                 // This is a placeholder listener that won't match any real documents
+                #if DEBUG
                 print("🔄 SessionService: Placeholder listener fired (should not happen)")
+                #endif
             }
         }
     }
@@ -81,7 +95,9 @@ class SessionService: ObservableObject {
                     Session(id: document.documentID, data: document.data())
                 }
                 
+                #if DEBUG
                 print("📅 Loaded \(sessions.count) sessions for organization \(organizationID)")
+                #endif
                 completion(sessions)
             }
     }
@@ -128,7 +144,9 @@ class SessionService: ObservableObject {
             // Get organization ID first
             UserManager.shared.getCurrentUserOrganizationID { organizationID in
                 guard let orgID = organizationID else {
+                    #if DEBUG
                     print("🔐 Cannot load sessions: no organization ID found")
+                    #endif
                     completion([])
                     return
                 }
@@ -159,7 +177,9 @@ class SessionService: ObservableObject {
             
             return db.collection("sessions").whereField("organizationID", isEqualTo: "loading").addSnapshotListener { _, _ in 
                 // This is a placeholder listener that won't match any real documents
+                #if DEBUG
                 print("🔄 SessionService: Placeholder listener fired (should not happen)")
+                #endif
             }
         }
     }
@@ -222,7 +242,9 @@ class SessionService: ObservableObject {
             
             return db.collection("sessions").whereField("organizationID", isEqualTo: "loading").addSnapshotListener { _, _ in 
                 // This is a placeholder listener that won't match any real documents
+                #if DEBUG
                 print("🔄 SessionService: Placeholder listener fired (should not happen)")
+                #endif
             }
         }
     }

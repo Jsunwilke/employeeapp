@@ -166,10 +166,43 @@ class MainEmployeeViewModel: ObservableObject {
         }
     }
     
-    // Load weather data for sessions
+    // Load weather data for sessions - optimized to batch by location
     func loadWeatherForSessions(_ sessions: [Session]) {
+        // Group sessions by location and date to reduce API calls
+        var locationDateGroups: [String: Date] = [:]
+        
         for session in sessions {
-            loadWeatherForSession(session)
+            guard let sessionDate = session.startDate,
+                  let location = session.location,
+                  !location.isEmpty else {
+                continue
+            }
+            
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            let dateString = dateFormatter.string(from: sessionDate)
+            let cacheKey = "\(location)-\(dateString)"
+            
+            // Skip if we already have weather data
+            if weatherDataBySession[cacheKey] == nil {
+                locationDateGroups[cacheKey] = sessionDate
+            }
+        }
+        
+        // Load weather for unique location-date combinations (max 5 to prevent overloading)
+        for (index, (cacheKey, date)) in locationDateGroups.prefix(5).enumerated() {
+            let location = String(cacheKey.split(separator: "-").dropLast().joined(separator: "-"))
+            
+            // Stagger requests slightly to avoid rate limiting
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.1) { [weak self] in
+                self?.weatherService.getWeatherData(for: location, date: date) { weatherData, errorMessage in
+                    if let weatherData = weatherData {
+                        DispatchQueue.main.async {
+                            self?.weatherDataBySession[cacheKey] = weatherData
+                        }
+                    }
+                }
+            }
         }
     }
     
@@ -398,6 +431,9 @@ struct MainEmployeeView: View {
     
     // Local edit mode for reordering
     @State private var localEditMode: EditMode = .inactive
+    
+    // Track initialization state to prevent duplicate loads
+    @State private var hasInitializedData = false
     
     // Environment
     @Environment(\.colorScheme) var colorScheme
@@ -807,14 +843,27 @@ struct MainEmployeeView: View {
                     UITableView.appearance().backgroundColor = .clear
                 }
                 
-                // Initialize user organization ID for session filtering
-                UserManager.shared.initializeOrganizationID()
-                
-                // Refresh time tracking service to ensure proper user setup
-                timeTrackingService.refreshUserAndStatus()
-                
-                listenForFlagStatus() // Listen for Firebase updates
-                loadSchedule()
+                // Only initialize data once to prevent duplicate loads
+                if !hasInitializedData {
+                    hasInitializedData = true
+                    
+                    // Initialize user organization ID for session filtering
+                    UserManager.shared.initializeOrganizationID()
+                    
+                    // Refresh time tracking service to ensure proper user setup
+                    timeTrackingService.refreshUserAndStatus()
+                    
+                    // Delay data loading slightly to ensure organization ID is cached
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        listenForFlagStatus() // Listen for Firebase updates
+                        loadSchedule()
+                    }
+                } else {
+                    // On subsequent appears, only refresh if needed
+                    if viewModel.upcomingShifts.isEmpty {
+                        loadSchedule()
+                    }
+                }
                 
                 // Reset selections when view appears
                 selectedFeatureID = nil
