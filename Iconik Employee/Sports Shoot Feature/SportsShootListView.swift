@@ -212,6 +212,7 @@ struct SportsShootListView: View {
                 iPadView
             }
         }
+        .customKeyboardOverlay() // Add custom keyboard support
         .onAppear {
             loadSportsShoots()
             setupNetworkMonitoring()
@@ -1601,6 +1602,10 @@ struct SportsShootListView: View {
                         onEnterOrDown: {
                             // Find the next editable entry and start editing it
                             moveToNextEditableEntry(currentID: entry.id)
+                        },
+                        onEnterOrUp: {
+                            // Find the previous editable entry and start editing it
+                            moveToPreviousEditableEntry(currentID: entry.id)
                         }
                     )
                     .font(.system(size: 20))
@@ -1827,6 +1832,61 @@ struct SportsShootListView: View {
                                         
                                         // Start editing the entry
                                         startEditing(shootID: shoot.id, entry: nextEntry)
+                                        return
+                                    }
+                                }
+                                
+                                // Option 2: Just release the current lock if no other entries are available
+                                if let currentEntryID = viewModel.currentlyEditingEntry {
+                                    releaseLock(shootID: shoot.id, entryID: currentEntryID)
+                                }
+                            }
+                            
+                            // Function to move to the previous editable entry when pressing Up arrow
+                            private func moveToPreviousEditableEntry(currentID: String) {
+                                guard let shoot = viewModel.selectedShoot else { return }
+                                
+                                // Get the filtered and sorted roster as displayed in the list
+                                let displayedRoster = sortedRoster(filterRoster(shoot.roster))
+                                
+                                // Find the index of the current entry
+                                guard let currentIndex = displayedRoster.firstIndex(where: { $0.id == currentID }) else {
+                                    return
+                                }
+                                
+                                // Try to find the previous entry that's not locked by others
+                                for index in (0..<currentIndex).reversed() {
+                                    let prevEntry = displayedRoster[index]
+                                    let isLocked = viewModel.lockedEntries[prevEntry.id] != nil && viewModel.lockedEntries[prevEntry.id] != currentEditorIdentifier
+                                    
+                                    if !isLocked {
+                                        // Release current lock
+                                        if let currentEntryID = viewModel.currentlyEditingEntry {
+                                            releaseLock(shootID: shoot.id, entryID: currentEntryID)
+                                        }
+                                        
+                                        // Start editing the previous entry
+                                        startEditing(shootID: shoot.id, entry: prevEntry)
+                                        
+                                        return
+                                    }
+                                }
+                                
+                                // If we reach here, we're at the first entry or all previous entries are locked
+                                // Option 1: Loop back to the last entry
+                                for index in (currentIndex + 1..<displayedRoster.count).reversed() {
+                                    let prevEntry = displayedRoster[index]
+                                    let isLocked = viewModel.lockedEntries[prevEntry.id] != nil && viewModel.lockedEntries[prevEntry.id] != currentEditorIdentifier
+                                    
+                                    if !isLocked {
+                                        // Release current lock
+                                        if let currentEntryID = viewModel.currentlyEditingEntry {
+                                            releaseLock(shootID: shoot.id, entryID: currentEntryID)
+                                        }
+                                        
+                                        // Start editing the entry
+                                        startEditing(shootID: shoot.id, entry: prevEntry)
+                                        
                                         return
                                     }
                                 }

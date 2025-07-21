@@ -7,6 +7,7 @@ struct AutosaveTextField: View {
     var placeholder: String
     var onTapOutside: (() -> Void)? = nil
     var onEnterOrDown: (() -> Void)? = nil  // Callback for Enter or Down arrow
+    var onEnterOrUp: (() -> Void)? = nil  // Callback for Up arrow
     
     // Focus state
     @FocusState private var isFocused: Bool
@@ -21,27 +22,64 @@ struct AutosaveTextField: View {
     @State private var localText: String
     @State private var isInitialized = false
     
-    init(text: Binding<String>, placeholder: String, onTapOutside: (() -> Void)? = nil, onEnterOrDown: (() -> Void)? = nil) {
+    init(text: Binding<String>, placeholder: String, onTapOutside: (() -> Void)? = nil, onEnterOrDown: (() -> Void)? = nil, onEnterOrUp: (() -> Void)? = nil) {
         self._text = text
         self.placeholder = placeholder
         self.onTapOutside = onTapOutside
         self.onEnterOrDown = onEnterOrDown
+        self.onEnterOrUp = onEnterOrUp
         // Initialize localText with the current binding value
         self._localText = State(initialValue: text.wrappedValue)
     }
     
     var body: some View {
-        TextField(placeholder, text: $localText)
-            .keyboardType(.numberPad)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled(true)
-            .textFieldStyle(RoundedBorderTextFieldStyle())
-            .focused($isFocused)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            // Use custom keyboard on iPad
+            CustomKeyboardTextField(
+                text: $localText,
+                placeholder: placeholder,
+                onEnterOrDown: onEnterOrDown,
+                onEnterOrUp: onEnterOrUp
+            )
+            .onChange(of: localText) { newValue in
+                handleTextChange(newValue)
+            }
+            // Auto-focus behavior for custom keyboard
+            .onAppear {
+                if !hasAppeared {
+                    hasAppeared = true
+                    // Auto-show keyboard
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        KeyboardManager.shared.showKeyboard(
+                            for: $localText,
+                            onUp: onEnterOrUp,
+                            onDown: onEnterOrDown
+                        )
+                    }
+                }
+            }
+        } else {
+            // Use system keyboard on iPhone
+            TextField(placeholder, text: $localText)
+                .keyboardType(.numberPad)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .focused($isFocused)
             .toolbar {
                 // Safe toolbar implementation that avoids constraint issues
                 if isFocused {
                     ToolbarItemGroup(placement: .keyboard) {
                         Spacer()
+                        
+                        // Up arrow button
+                        Button(action: {
+                            onEnterOrUp?()
+                        }) {
+                            Image(systemName: "arrow.up")
+                                .foregroundColor(.blue)
+                        }
+                        .padding(.horizontal, 4)
                         
                         // Down arrow button
                         Button(action: {
@@ -52,11 +90,16 @@ struct AutosaveTextField: View {
                         }
                         .padding(.horizontal, 4)
                         
-                        // Done button
-                        Button("Done") {
-                            isFocused = false
-                            onTapOutside?()
+                        // Hyphen button
+                        Button(action: {
+                            // Insert hyphen at current cursor position
+                            localText.append("-")
+                        }) {
+                            Text("-")
+                                .font(.system(size: 24, weight: .medium))
+                                .foregroundColor(.blue)
                         }
+                        .padding(.horizontal, 8)
                     }
                 }
             }
@@ -66,16 +109,7 @@ struct AutosaveTextField: View {
             }
             // Handle local text changes
             .onChange(of: localText) { newValue in
-                print("📝 AutosaveTextField localText changed to: '\(newValue)'")
-                // Filter to only allow numbers, commas, hyphens, and spaces
-                let filtered = newValue.filter { "0123456789,- ".contains($0) }
-                if filtered != newValue {
-                    print("📝 AutosaveTextField filtering '\(newValue)' to '\(filtered)'")
-                    localText = filtered
-                } else {
-                    // Update the binding when local text changes
-                    text = filtered
-                }
+                handleTextChange(newValue)
             }
             // Sync binding changes to local text
             .onChange(of: text) { newValue in
@@ -124,5 +158,19 @@ struct AutosaveTextField: View {
                 }
                 wasFocused = newFocus
             }
+        }
+    }
+    
+    private func handleTextChange(_ newValue: String) {
+        print("📝 AutosaveTextField localText changed to: '\(newValue)'")
+        // Filter to only allow numbers, commas, hyphens, and spaces
+        let filtered = newValue.filter { "0123456789,- ".contains($0) }
+        if filtered != newValue {
+            print("📝 AutosaveTextField filtering '\(newValue)' to '\(filtered)'")
+            localText = filtered
+        } else {
+            // Update the binding when local text changes
+            text = filtered
+        }
     }
 }
