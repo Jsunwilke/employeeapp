@@ -18,8 +18,17 @@ struct AutosaveTextField: View {
     @State private var wasFocused = false
     
     // Store the initial value to ensure proper display
-    @State private var localText: String = ""
+    @State private var localText: String
     @State private var isInitialized = false
+    
+    init(text: Binding<String>, placeholder: String, onTapOutside: (() -> Void)? = nil, onEnterOrDown: (() -> Void)? = nil) {
+        self._text = text
+        self.placeholder = placeholder
+        self.onTapOutside = onTapOutside
+        self.onEnterOrDown = onEnterOrDown
+        // Initialize localText with the current binding value
+        self._localText = State(initialValue: text.wrappedValue)
+    }
     
     var body: some View {
         TextField(placeholder, text: $localText)
@@ -73,15 +82,6 @@ struct AutosaveTextField: View {
                 if localText != newValue {
                     print("📝 AutosaveTextField syncing binding value: '\(newValue)' (was: '\(localText)')")
                     localText = newValue
-                    
-                    // If we're focused and the value changed significantly, ensure cursor is at end
-                    if isFocused && !newValue.isEmpty && localText.isEmpty {
-                        // This handles the case where value is set after focus
-                        DispatchQueue.main.async {
-                            // Force a small UI update to ensure text field shows the new value
-                            self.localText = newValue
-                        }
-                    }
                 }
             }
             // Set up initial value and focus
@@ -89,7 +89,11 @@ struct AutosaveTextField: View {
                 print("📝 AutosaveTextField onAppear: text = '\(text)', hasAppeared = \(hasAppeared)")
                 
                 // Always sync the local text with binding value on appear
-                localText = text
+                // Force update even if localText thinks it has a value
+                if localText != text {
+                    localText = text
+                }
+                
                 if !isInitialized {
                     isInitialized = true
                     print("📝 AutosaveTextField initialized with value: '\(localText)'")
@@ -98,28 +102,27 @@ struct AutosaveTextField: View {
                 if !hasAppeared {
                     hasAppeared = true
                     
-                    // Only auto-focus on iPhone, let iPad users tap to focus
-                    if UIDevice.current.userInterfaceIdiom == .phone {
-                        DispatchQueue.main.async {
-                            self.isFocused = true
-                            self.wasFocused = true
-                        }
+                    // Auto-focus on all devices for better UX
+                    DispatchQueue.main.async {
+                        self.isFocused = true
+                        self.wasFocused = true
                     }
                 }
             }
             // Track changes in focus state
             .onChange(of: isFocused) { newFocus in
+                // If we're gaining focus, ensure localText is synced with the binding
+                if !wasFocused && newFocus {
+                    if localText != text && !text.isEmpty {
+                        print("📝 AutosaveTextField syncing on focus: text='\(text)', localText='\(localText)'")
+                        localText = text
+                    }
+                }
                 // If focus was lost, trigger the save
                 if wasFocused && !newFocus {
                     onTapOutside?()
                 }
                 wasFocused = newFocus
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if !isFocused {
-                    isFocused = true
-                }
             }
     }
 }

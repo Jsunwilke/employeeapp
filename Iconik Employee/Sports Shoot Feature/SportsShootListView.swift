@@ -2251,7 +2251,7 @@ struct SportsShootListView: View {
                                     if success {
                                         DispatchQueue.main.async {
                                             print("Lock acquired successfully for: \(entryID)")
-                                            self.viewModel.currentlyEditingEntry = entryID
+                                            // currentlyEditingEntry is already set synchronously in startEditing
                                         }
                                     } else {
                                         // Show error if lock acquisition fails
@@ -2329,6 +2329,7 @@ struct SportsShootListView: View {
                                 // Set up editing state
                                 viewModel.editingImageNumber = entry.imageNumbers
                                 viewModel.lastSavedValue = entry.imageNumbers // Set initial saved value
+                                viewModel.currentlyEditingEntry = entry.id // Set synchronously to avoid placeholder showing
                                 
                                 // Acquire lock for this entry
                                 acquireLock(shootID: shootID, entryID: entry.id)

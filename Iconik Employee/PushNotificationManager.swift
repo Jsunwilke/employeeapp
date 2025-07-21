@@ -21,10 +21,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     let notificationCenter = NotificationCenter.default
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
-        // Configure Firebase only once.
-        if FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-        }
+        // Firebase is already configured in Iconik_EmployeeApp.swift init()
         
         if #available(iOS 10.0, *) {
             let center = UNUserNotificationCenter.current()

@@ -40,7 +40,7 @@ struct SportsShootDetailView: View {
     
     // Field editing state
     @State private var currentlyEditingEntry: String? = nil // ID of entry being edited
-    @State private var editingImageNumber: String = ""
+    @State private var editingValues: [String: String] = [:] // [entryID: imageNumber]
     @State private var lockedEntries: [String: String] = [:] // [entryID: editorName]
     
     // Filter states
@@ -51,7 +51,7 @@ struct SportsShootDetailView: View {
     
     // Autosave states - these need to be @State properties, not simple vars
     @State private var debounceTask: DispatchWorkItem?
-    @State private var lastSavedValue: String = ""
+    @State private var lastSavedValues: [String: String] = [:] // [entryID: lastSavedValue]
     
     // Track lock timestamps for force unlock feature
     @State private var lockTimestamps: [String: Date] = [:]
@@ -211,12 +211,13 @@ struct SportsShootDetailView: View {
         .onReceive(lockRefreshTimer) { _ in
             refreshLocks()
         }
-        .onChange(of: editingImageNumber) { newValue in
+        .onChange(of: editingValues) { newValues in
             // Auto-save when the text changes
             if let entryID = currentlyEditingEntry,
+               let newValue = newValues[entryID],
                let shoot = sportsShoot,
                let entry = shoot.roster.first(where: { $0.id == entryID }),
-               newValue != lastSavedValue {
+               newValue != (lastSavedValues[entryID] ?? entry.imageNumbers) {
                 
                 // Cancel any existing debounce task
                 debounceTask?.cancel()
@@ -230,7 +231,7 @@ struct SportsShootDetailView: View {
                         switch result {
                         case .success:
                             // Update the lastSavedValue to prevent redundant saves
-                            lastSavedValue = newValue
+                            lastSavedValues[entryID] = newValue
                             
                             // Refresh the shoot data
                             refreshSportsShoot()
@@ -664,17 +665,10 @@ struct SportsShootDetailView: View {
                     HStack(spacing: 8) {
                         AutosaveTextField(
                             text: Binding(
-                                get: { 
-                                    // Use the entry's value if editingImageNumber is empty
-                                    // This handles the iPad timing issue
-                                    if self.editingImageNumber.isEmpty && !entry.imageNumbers.isEmpty {
-                                        return entry.imageNumbers
-                                    }
-                                    return self.editingImageNumber
-                                },
-                                set: { self.editingImageNumber = $0 }
+                                get: { self.editingValues[entry.id] ?? entry.imageNumbers },
+                                set: { self.editingValues[entry.id] = $0 }
                             ),
-                            placeholder: "Enter image numbers",
+                            placeholder: "",
                             onTapOutside: {
                                 // Field autosaves on text change
                             },
@@ -1259,13 +1253,11 @@ struct SportsShootDetailView: View {
         
         // Check if we already have a lock on this entry
         if isOwnLock(entry.id) {
-            print("🔓 Using existing lock for entry \(entry.id), setting editingImageNumber to: '\(entry.imageNumbers)'")
-            DispatchQueue.main.async {
-                self.currentlyEditingEntry = entry.id
-                self.editingImageNumber = entry.imageNumbers
-                self.lastSavedValue = entry.imageNumbers
-                print("🔓 State set synchronously: currentlyEditingEntry=\(self.currentlyEditingEntry ?? "nil"), editingImageNumber='\(self.editingImageNumber)'")
-            }
+            print("🔓 Using existing lock for entry \(entry.id), setting editingValues to: '\(entry.imageNumbers)'")
+            self.currentlyEditingEntry = entry.id
+            self.editingValues[entry.id] = entry.imageNumbers
+            self.lastSavedValues[entry.id] = entry.imageNumbers
+            print("🔓 State set synchronously: currentlyEditingEntry=\(self.currentlyEditingEntry ?? "nil"), editingValues[entry.id]='\(self.editingValues[entry.id] ?? "")'")
             return
         }
         
@@ -1276,12 +1268,11 @@ struct SportsShootDetailView: View {
         }
         
         // Set up editing state
-        print("🔓 Setting up editing state for entry \(entry.id), setting editingImageNumber to: '\(entry.imageNumbers)'")
-        DispatchQueue.main.async {
-            self.editingImageNumber = entry.imageNumbers
-            self.lastSavedValue = entry.imageNumbers
-            print("🔓 Pre-lock state set: editingImageNumber='\(self.editingImageNumber)'")
-        }
+        print("🔓 Setting up editing state for entry \(entry.id), setting editingValues to: '\(entry.imageNumbers)'")
+        self.editingValues[entry.id] = entry.imageNumbers
+        self.lastSavedValues[entry.id] = entry.imageNumbers
+        self.currentlyEditingEntry = entry.id
+        print("🔓 Pre-lock state set: currentlyEditingEntry=\(self.currentlyEditingEntry ?? "nil"), editingValues[entry.id]='\(self.editingValues[entry.id] ?? "")'")
         
         // Acquire lock for this entry
         acquireLock(shootID: shootID, entryID: entry.id, targetImageNumbers: entry.imageNumbers)
@@ -1295,13 +1286,8 @@ struct SportsShootDetailView: View {
         EntryLockManager.shared.acquireLock(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName) { success in
             if success {
                 DispatchQueue.main.async {
-                    print("🔓 Lock acquired for entry \(entryID), setting editingImageNumber to target value: '\(targetImageNumbers)'")
-                    self.currentlyEditingEntry = entryID
-                    // Set the correct value for this specific entry
-                    // Force set it even if it was already set to handle iPad timing issues
-                    self.editingImageNumber = targetImageNumbers
-                    self.lastSavedValue = targetImageNumbers
-                    print("🔓 Final state after lock: editingImageNumber='\(self.editingImageNumber)'")
+                    print("🔓 Lock acquired for entry \(entryID)")
+                    // Values are already set synchronously in startEditing, no need to set again
                 }
             } else {
                 DispatchQueue.main.async {
@@ -1339,8 +1325,8 @@ struct SportsShootDetailView: View {
             DispatchQueue.main.async {
                 if self.currentlyEditingEntry == entryID {
                     self.currentlyEditingEntry = nil
-                    self.editingImageNumber = ""
-                    self.lastSavedValue = ""
+                    self.editingValues.removeValue(forKey: entryID)
+                    self.lastSavedValues.removeValue(forKey: entryID)
                     self.debounceTask?.cancel()
                 }
                 
@@ -1354,8 +1340,8 @@ struct SportsShootDetailView: View {
                     // Even if release failed, clear local state to allow user to continue
                     if self.currentlyEditingEntry == entryID {
                         self.currentlyEditingEntry = nil
-                        self.editingImageNumber = ""
-                        self.lastSavedValue = ""
+                        self.editingValues.removeValue(forKey: entryID)
+                        self.lastSavedValues.removeValue(forKey: entryID)
                     }
                 }
             }
