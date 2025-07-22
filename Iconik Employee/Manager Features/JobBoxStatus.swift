@@ -27,6 +27,13 @@ struct JobBox: Identifiable {
     let scannedBy: String
     let timestamp: Date
     
+    // New fields from updated schema
+    let boxNumber: String
+    let organizationID: String
+    let school: String
+    let schoolId: String
+    let userId: String
+    
     init(id: String, data: [String: Any]) {
         self.id = id
         self.shiftUid = data["shiftUid"] as? String ?? ""
@@ -37,7 +44,7 @@ struct JobBox: Identifiable {
             self.status = .unknown
         }
         
-        // FIXED: Map the 'photographer' field to scannedBy
+        // Map the 'photographer' field to scannedBy
         self.scannedBy = data["photographer"] as? String ?? ""
         
         if let timestamp = data["timestamp"] as? Timestamp {
@@ -46,8 +53,15 @@ struct JobBox: Identifiable {
             self.timestamp = Date()
         }
         
+        // New fields
+        self.boxNumber = data["boxNumber"] as? String ?? ""
+        self.organizationID = data["organizationID"] as? String ?? ""
+        self.school = data["school"] as? String ?? ""
+        self.schoolId = data["schoolId"] as? String ?? ""
+        self.userId = data["userId"] as? String ?? ""
+        
         // DEBUG: Print all fields when initializing a JobBox
-        print("DEBUG-JOBBOX-INIT - Created JobBox: id=\(id), shiftUid=\(self.shiftUid), status=\(self.status.rawValue), scannedBy=\(self.scannedBy)")
+        print("DEBUG-JOBBOX-INIT - Created JobBox: id=\(id), shiftUid=\(self.shiftUid), status=\(self.status.rawValue), scannedBy=\(self.scannedBy), boxNumber=\(self.boxNumber)")
     }
 }
 
@@ -89,26 +103,22 @@ class JobBoxService {
     }
     
     // Listen for job box updates for a specific shift
-    func listenForJobBoxes(forShift event: ICSEvent, completion: @escaping ([JobBox]) -> Void) -> ListenerRegistration? {
-        guard let shiftDate = event.startDate else {
-            print("ERROR-JOBBOX - No shift date available")
-            completion([])
-            return nil
-        }
-        
+    func listenForJobBoxes(forShift event: ICSEvent, organizationID: String, completion: @escaping ([JobBox]) -> Void) -> ListenerRegistration? {
         print("DEBUG-JOBBOX-LISTEN - ===== LISTENER SETUP START =====")
+        print("DEBUG-JOBBOX-LISTEN - Event ID (Session ID): '\(event.id)'")
         print("DEBUG-JOBBOX-LISTEN - School Name: '\(event.schoolName)'")
-        print("DEBUG-JOBBOX-LISTEN - Date: \(shiftDate)")
+        print("DEBUG-JOBBOX-LISTEN - Organization ID: '\(organizationID)'")
         
-        // Generate the shift UID using the same formula as the other app
-        let shiftUid = JobBoxService.generateCustomShiftID(schoolName: event.schoolName, date: shiftDate)
-        print("DEBUG-JOBBOX-LISTEN - Generated shiftUid: '\(shiftUid)'")
+        // Use the event ID (which is the session ID) as the shiftUid
+        let shiftUid = event.id
+        print("DEBUG-JOBBOX-LISTEN - Using shiftUid: '\(shiftUid)'")
         
-        // Set up a listener for job boxes with the matching shift UID
-        print("DEBUG-JOBBOX-LISTEN - Setting up Firestore listener for collection 'jobBoxes' where shiftUid = '\(shiftUid)'")
+        // Set up a listener for job boxes with the matching shift UID and organization
+        print("DEBUG-JOBBOX-LISTEN - Setting up Firestore listener for collection 'jobBoxes' where shiftUid = '\(shiftUid)' AND organizationID = '\(organizationID)'")
         
         return db.collection("jobBoxes")
             .whereField("shiftUid", isEqualTo: shiftUid)
+            .whereField("organizationID", isEqualTo: organizationID)
             .addSnapshotListener { snapshot, error in
                 print("DEBUG-JOBBOX-LISTEN - Snapshot listener triggered")
                 
