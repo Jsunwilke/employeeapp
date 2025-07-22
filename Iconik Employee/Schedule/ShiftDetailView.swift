@@ -184,8 +184,18 @@ struct ShiftDetailView: View {
                     // Job Box Status section with pill shapes and full width
                     if latestJobBoxStatus != .unknown {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Job Box Status")
-                                .font(.headline)
+                            HStack {
+                                Text("Job Box Status")
+                                    .font(.headline)
+                                
+                                if let latestBox = jobBoxes.sorted(by: { $0.timestamp > $1.timestamp }).first,
+                                   !latestBox.boxNumber.isEmpty {
+                                    Spacer()
+                                    Text("Box #\(latestBox.boxNumber)")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
                             
                             // Status indicators as pills in a centered HStack
                             HStack(spacing: 8) {
@@ -1044,7 +1054,7 @@ struct ShiftDetailView: View {
         )
         
         // Start a new listener
-        jobBoxListener = JobBoxService.shared.listenForJobBoxes(forShift: compatibilityEvent) { jobBoxes in
+        jobBoxListener = JobBoxService.shared.listenForJobBoxes(forShift: compatibilityEvent, organizationID: session.organizationID) { jobBoxes in
             DispatchQueue.main.async {
                 self.jobBoxes = jobBoxes
                 
@@ -1071,10 +1081,7 @@ struct ShiftDetailView: View {
             }
             
             // Check if the notification is for this shift
-            let currentShiftUid = JobBoxService.generateCustomShiftID(
-                schoolName: self.session.schoolName,
-                date: self.session.startDate ?? Date()
-            )
+            let currentShiftUid = self.session.id
             
             if shiftUid == currentShiftUid {
                 // Process the notification to update UI
