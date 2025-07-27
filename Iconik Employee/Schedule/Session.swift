@@ -48,10 +48,11 @@ struct Session: Identifiable, Equatable, Hashable {
         // Set position based on sessionType or default
         self.position = self.sessionType ?? "Photographer"
         
-        // Description from notes or sessionType
-        if let firstPhotographer = self.photographers.first,
-           let notes = firstPhotographer["notes"] as? String, !notes.isEmpty {
-            self.description = notes
+        // Description from session-level notes field, or fallback to sessionType
+        if let sessionNotes = data["notes"] as? String, !sessionNotes.isEmpty {
+            self.description = sessionNotes
+        } else if let sessionDescription = data["description"] as? String, !sessionDescription.isEmpty {
+            self.description = sessionDescription
         } else {
             self.description = self.sessionType
         }

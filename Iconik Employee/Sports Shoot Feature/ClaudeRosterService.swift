@@ -243,14 +243,76 @@ class ClaudeRosterService {
         }
     }
     
+    // Helper function to compress image to stay under 5MB limit
+    private func compressImageForAPI(_ image: UIImage) -> Data? {
+        let maxSizeInBytes = 5 * 1024 * 1024 // 5MB in bytes
+        let compressionQualities: [CGFloat] = [0.8, 0.6, 0.4, 0.2, 0.1]
+        
+        // Try different compression qualities
+        for quality in compressionQualities {
+            if let imageData = image.jpegData(compressionQuality: quality) {
+                let sizeInMB = Double(imageData.count) / (1024.0 * 1024.0)
+                
+                if debugMode {
+                    print("Image size at quality \(quality): \(String(format: "%.2f", sizeInMB)) MB")
+                }
+                
+                if imageData.count <= maxSizeInBytes {
+                    return imageData
+                }
+            }
+        }
+        
+        // If still too large, resize the image
+        let maxDimension: CGFloat = 2048
+        let scale = min(maxDimension / image.size.width, maxDimension / image.size.height)
+        
+        if scale < 1.0 {
+            let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            
+            UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+            let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
+            UIGraphicsEndImageContext()
+            
+            if debugMode {
+                print("Resized image from \(image.size) to \(newSize)")
+            }
+            
+            // Try compression again on resized image
+            if let resizedImage = resizedImage {
+                for quality in compressionQualities {
+                    if let imageData = resizedImage.jpegData(compressionQuality: quality) {
+                        let sizeInMB = Double(imageData.count) / (1024.0 * 1024.0)
+                        
+                        if debugMode {
+                            print("Resized image size at quality \(quality): \(String(format: "%.2f", sizeInMB)) MB")
+                        }
+                        
+                        if imageData.count <= maxSizeInBytes {
+                            return imageData
+                        }
+                    }
+                }
+            }
+        }
+        
+        return nil
+    }
+    
     // This is the actual extraction logic, only called once we have a valid API key
     private func proceedWithRosterExtraction(_ image: UIImage, startingSubjectID: Int, apiKey: String, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
-        // Convert image to base64
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+        // Convert and compress image to stay under 5MB
+        guard let imageData = compressImageForAPI(image) else {
             let error = NSError(domain: "ClaudeRosterService", code: 100,
-                                userInfo: [NSLocalizedDescriptionKey: "Failed to convert image to data"])
+                                userInfo: [NSLocalizedDescriptionKey: "Failed to compress image to acceptable size (under 5MB)"])
             completion(.failure(error))
             return
+        }
+        
+        let sizeInMB = Double(imageData.count) / (1024.0 * 1024.0)
+        if debugMode {
+            print("Final image size for API: \(String(format: "%.2f", sizeInMB)) MB")
         }
         
         let base64Image = imageData.base64EncodedString()

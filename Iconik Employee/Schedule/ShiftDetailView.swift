@@ -200,6 +200,7 @@ struct ShiftDetailView: View {
                             // Status indicators as pills in a centered HStack
                             HStack(spacing: 8) {
                                 let stepsCompleted = statusToStep(latestJobBoxStatus)
+                                let _ = print("DEBUG-JOBBOX-UI - Current status: \(latestJobBoxStatus), stepsCompleted: \(stepsCompleted)")
                                 
                                 Spacer(minLength: 0) // Add spacer for centering
                                 
@@ -207,18 +208,22 @@ struct ShiftDetailView: View {
                                 VStack(spacing: 2) {
                                     ZStack {
                                         Capsule() // Pill shape instead of Circle
-                                            .fill(getStepColor(isActive: stepsCompleted >= 1, isCompleted: stepsCompleted > 1))
+                                            .fill({
+                                                let isCompleted = stepsCompleted >= 1
+                                                print("DEBUG-JOBBOX-STEP1 - stepsCompleted: \(stepsCompleted), isCompleted: \(isCompleted)")
+                                                return isCompleted ? .green : Color(.systemGray4)
+                                            }())
                                             .frame(height: 24) // Fixed height
                                             .frame(maxWidth: .infinity) // Fill available width
                                         
-                                        if stepsCompleted > 1 {
+                                        if stepsCompleted >= 1 {
                                             Image(systemName: "checkmark")
                                                 .font(.system(size: 12, weight: .bold))
                                                 .foregroundColor(.white)
                                         } else {
                                             Text("1")
                                                 .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(stepsCompleted >= 1 ? .white : .gray)
+                                                .foregroundColor(.gray)
                                         }
                                     }
                                     Text("Packed")
@@ -230,18 +235,18 @@ struct ShiftDetailView: View {
                                 VStack(spacing: 2) {
                                     ZStack {
                                         Capsule()
-                                            .fill(getStepColor(isActive: stepsCompleted >= 2, isCompleted: stepsCompleted > 2))
+                                            .fill(stepsCompleted >= 2 ? .green : Color(.systemGray4))
                                             .frame(height: 24)
                                             .frame(maxWidth: .infinity)
                                         
-                                        if stepsCompleted > 2 {
+                                        if stepsCompleted >= 2 {
                                             Image(systemName: "checkmark")
                                                 .font(.system(size: 12, weight: .bold))
                                                 .foregroundColor(.white)
                                         } else {
                                             Text("2")
                                                 .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(stepsCompleted >= 2 ? .white : .gray)
+                                                .foregroundColor(.gray)
                                         }
                                     }
                                     Text("Picked Up")
@@ -253,18 +258,18 @@ struct ShiftDetailView: View {
                                 VStack(spacing: 2) {
                                     ZStack {
                                         Capsule()
-                                            .fill(getStepColor(isActive: stepsCompleted >= 3, isCompleted: stepsCompleted > 3))
+                                            .fill(stepsCompleted >= 3 ? .green : Color(.systemGray4))
                                             .frame(height: 24)
                                             .frame(maxWidth: .infinity)
                                         
-                                        if stepsCompleted > 3 {
+                                        if stepsCompleted >= 3 {
                                             Image(systemName: "checkmark")
                                                 .font(.system(size: 12, weight: .bold))
                                                 .foregroundColor(.white)
                                         } else {
                                             Text("3")
                                                 .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(stepsCompleted >= 3 ? .white : .gray)
+                                                .foregroundColor(.gray)
                                         }
                                     }
                                     Text("Left Job")
@@ -276,7 +281,7 @@ struct ShiftDetailView: View {
                                 VStack(spacing: 2) {
                                     ZStack {
                                         Capsule()
-                                            .fill(getStepColor(isActive: stepsCompleted >= 4, isCompleted: stepsCompleted >= 4))
+                                            .fill(stepsCompleted >= 4 ? .green : Color(.systemGray4))
                                             .frame(height: 24)
                                             .frame(maxWidth: .infinity)
                                         
@@ -1012,11 +1017,15 @@ struct ShiftDetailView: View {
     
     // Get the color for a step based on its state
     private func getStepColor(isActive: Bool, isCompleted: Bool) -> Color {
+        print("DEBUG-JOBBOX-COLOR - isActive: \(isActive), isCompleted: \(isCompleted)")
         if isCompleted {
+            print("DEBUG-JOBBOX-COLOR - Returning GREEN")
             return .green
         } else if isActive {
+            print("DEBUG-JOBBOX-COLOR - Returning BLUE")
             return .blue
         } else {
+            print("DEBUG-JOBBOX-COLOR - Returning GRAY")
             return Color(.systemGray4)
         }
     }
