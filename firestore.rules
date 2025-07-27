@@ -487,7 +487,7 @@ service cloud.firestore {
                           // Prevent changing core fields
                           request.resource.data.photographerId == resource.data.photographerId &&
                           request.resource.data.organizationID == resource.data.organizationID) ||
-                         // Admins/Managers can approve/deny
+                         // Admins/Managers can approve/deny/mark as under review
                          (isAdminOrManager(request.auth.uid) &&
                           // Validate approval fields
                           ((request.resource.data.status == 'approved' && 
@@ -502,6 +502,12 @@ service cloud.firestore {
                            request.resource.data.denierName is string &&
                            request.resource.data.deniedAt is timestamp &&
                            request.resource.data.denialReason is string) ||
+                          // Validate under review fields
+                          (request.resource.data.status == 'under_review' && 
+                           request.resource.data.keys().hasAll(['reviewedBy', 'reviewerName', 'reviewedAt']) &&
+                           request.resource.data.reviewedBy is string &&
+                           request.resource.data.reviewerName is string &&
+                           request.resource.data.reviewedAt is timestamp) ||
                           // Allow cancelled status
                           request.resource.data.status == 'cancelled'))
                        );
