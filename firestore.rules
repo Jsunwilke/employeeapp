@@ -161,6 +161,18 @@ service cloud.firestore {
                        isAdminOrManager(request.auth.uid) &&
                        belongsToSameOrg(request.auth.uid, resource.data.organizationID);
       
+      // Allow job box assignment updates by any user in the organization
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Only allow updating job box assignment fields
+                       request.resource.data.keys().difference(resource.data.keys()).hasOnly(['hasJobBoxAssigned', 'jobBoxRecordId']) &&
+                       // Validate field types and values
+                       request.resource.data.hasJobBoxAssigned is bool &&
+                       (request.resource.data.jobBoxRecordId == null || 
+                        request.resource.data.jobBoxRecordId is string) &&
+                       // Prevent changing other session data
+                       request.resource.data.organizationID == resource.data.organizationID;
+      
       // Admins can delete sessions
       allow delete: if request.auth != null && 
                        isAdmin(request.auth.uid) &&
@@ -454,7 +466,15 @@ service cloud.firestore {
                        request.resource.data.reason is string &&
                        request.resource.data.status == 'pending' &&
                        // Validate optional fields
-                       (!request.resource.data.keys().hasAny(['notes']) || request.resource.data.notes is string);
+                       (!request.resource.data.keys().hasAny(['notes']) || request.resource.data.notes is string) &&
+                       // Validate priority fields
+                       (!request.resource.data.keys().hasAny(['priority']) || request.resource.data.priority in ['normal', 'high']) &&
+                       (!request.resource.data.keys().hasAny(['priorityReason']) || request.resource.data.priorityReason is string) &&
+                       (!request.resource.data.keys().hasAny(['bypassedBlockedDates']) || request.resource.data.bypassedBlockedDates is bool) &&
+                       (!request.resource.data.keys().hasAny(['blockedDatesAcknowledged']) || request.resource.data.blockedDatesAcknowledged is bool) &&
+                       // If high priority, priorityReason must be provided
+                       ((!request.resource.data.keys().hasAny(['priority']) || request.resource.data.priority == 'normal') || 
+                        (request.resource.data.priority == 'high' && request.resource.data.keys().hasAny(['priorityReason']) && request.resource.data.priorityReason is string));
       
       // Users can update their own pending requests (to cancel or edit)
       // Admins/Managers can update any request (to approve/deny)
@@ -596,6 +616,49 @@ service cloud.firestore {
       // Admins can delete workflows
       allow delete: if request.auth != null && 
                        isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // Blocked Dates collection (for blocking time off requests)
+    match /blockedDates/{blockedDateId} {
+      // Users in the same organization can read blocked dates
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Only admins and managers can create blocked dates
+      allow create: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID) &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['organizationID', 'startDate', 'endDate', 'reason', 'createdBy', 'createdAt', 'allowHighPriority']) &&
+                       // Validate data types
+                       request.resource.data.organizationID is string &&
+                       request.resource.data.startDate is timestamp &&
+                       request.resource.data.endDate is timestamp &&
+                       request.resource.data.reason is string &&
+                       request.resource.data.createdBy is string &&
+                       request.resource.data.createdAt is timestamp &&
+                       request.resource.data.allowHighPriority is bool &&
+                       // Ensure end date is after start date
+                       request.resource.data.endDate > request.resource.data.startDate;
+      
+      // Only admins and managers can update blocked dates
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Prevent changing organizationID
+                       request.resource.data.organizationID == resource.data.organizationID &&
+                       // Validate data types if fields are being updated
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['startDate']) || request.resource.data.startDate is timestamp) &&
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['endDate']) || request.resource.data.endDate is timestamp) &&
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['reason']) || request.resource.data.reason is string) &&
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['allowHighPriority']) || request.resource.data.allowHighPriority is bool) &&
+                       // Ensure end date is after start date
+                       request.resource.data.endDate > request.resource.data.startDate;
+      
+      // Only admins and managers can delete blocked dates
+      allow delete: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
                        belongsToSameOrg(request.auth.uid, resource.data.organizationID);
     }
 

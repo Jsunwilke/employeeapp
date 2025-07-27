@@ -177,6 +177,28 @@ service firebase.storage {
       // Auto-delete rule should be set up via Firebase Functions
     }
 
+    // Daily job report photos
+    match /dailyReports/{userId}/{fileName} {
+      allow read: if isAuthenticated() && 
+                     (userId == getUserId() || 
+                      getOrganizationId() == getUserData().organizationID);
+      allow write: if isAuthenticated() && 
+                      userId == getUserId() &&
+                      isValidImageType() &&
+                      isValidFileSize(20); // 20MB limit
+      allow delete: if isAuthenticated() && 
+                       userId == getUserId();
+    }
+
+    // Photoshoot notes photos
+    match /photoshootNotes/{noteId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && 
+                      isValidImageType() &&
+                      isValidFileSize(20); // 20MB limit
+      allow delete: if isAuthenticated();
+    }
+
     // Public assets (if any) - read-only
     match /public/{fileName} {
       allow read: if true;
