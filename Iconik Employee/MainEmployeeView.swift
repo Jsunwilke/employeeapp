@@ -410,7 +410,7 @@ struct MainEmployeeView: View {
     @StateObject private var timeTrackingService = TimeTrackingService()
     
     // Tab bar management
-    @StateObject private var tabBarManager = TabBarManager()
+    @StateObject private var tabBarManager = TabBarManager.shared
     @StateObject private var chatManager = ChatManager.shared
     
     // Fixed manager features
@@ -463,10 +463,9 @@ struct MainEmployeeView: View {
                     // Bottom tab bar
                     BottomTabBar(
                         selectedTab: $tabBarManager.selectedTab,
-                        items: tabBarManager.getQuickAccessItems(),
+                        tabBarManager: tabBarManager,
                         chatManager: chatManager,
-                        timeTrackingService: timeTrackingService,
-                        showLabels: tabBarManager.configuration.showLabels
+                        timeTrackingService: timeTrackingService
                     )
                 }
                 

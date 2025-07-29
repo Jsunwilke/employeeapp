@@ -2,7 +2,7 @@ import SwiftUI
 import FirebaseAuth
 
 struct SettingsView: View {
-    @StateObject private var tabBarManager = TabBarManager()
+    @StateObject private var tabBarManager = TabBarManager.shared
     @StateObject private var mainViewModel = MainEmployeeViewModel()
     
     var body: some View {
