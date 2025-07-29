@@ -10,12 +10,14 @@
 import SwiftUI
 import Firebase
 import FirebaseFirestore
+import FirebaseAuth
 
 struct ManagerDailyRecord: Identifiable {
     let id: String
     let date: Date
     let schoolName: String
     let totalMileage: Double
+    let photoURLs: [String]
 }
 
 class ManagerEmployeeDetailViewModel: ObservableObject {
@@ -37,12 +39,38 @@ class ManagerEmployeeDetailViewModel: ObservableObject {
     }
     
     func loadRecords() {
+        // Get current user's organization ID
+        guard let currentUser = Auth.auth().currentUser else {
+            self.errorMessage = "Not authenticated"
+            return
+        }
+        
         let db = Firestore.firestore()
-        db.collection("dailyJobReports")
-            .whereField("yourName", isEqualTo: employeeName)
-            .whereField("date", isGreaterThanOrEqualTo: periodStart)
-            .whereField("date", isLessThanOrEqualTo: periodEnd)
-            .getDocuments { [weak self] snapshot, error in
+        
+        // First get the user's organization ID
+        db.collection("users").document(currentUser.uid).getDocument { [weak self] userDoc, error in
+            if let error = error {
+                DispatchQueue.main.async {
+                    self?.errorMessage = "Error getting user data: \(error.localizedDescription)"
+                }
+                return
+            }
+            
+            guard let userData = userDoc?.data(),
+                  let organizationID = userData["organizationID"] as? String else {
+                DispatchQueue.main.async {
+                    self?.errorMessage = "User organization not found"
+                }
+                return
+            }
+            
+            // Now query with organization ID
+            db.collection("dailyJobReports")
+                .whereField("organizationID", isEqualTo: organizationID)
+                .whereField("yourName", isEqualTo: self?.employeeName ?? "")
+                .whereField("date", isGreaterThanOrEqualTo: self?.periodStart ?? Date())
+                .whereField("date", isLessThanOrEqualTo: self?.periodEnd ?? Date())
+                .getDocuments { [weak self] snapshot, error in
                 if let error = error {
                     DispatchQueue.main.async {
                         self?.errorMessage = "Error loading records: \(error.localizedDescription)"
@@ -61,6 +89,7 @@ class ManagerEmployeeDetailViewModel: ObservableObject {
                     let dateVal = ts.dateValue()
                     let school  = data["schoolOrDestination"] as? String ?? "Unknown"
                     let miles   = data["totalMileage"] as? Double ?? 0.0
+                    let photoURLs = data["photoURLs"] as? [String] ?? []
                     totalMiles += miles
                     
                     tempRecords.append(
@@ -68,7 +97,8 @@ class ManagerEmployeeDetailViewModel: ObservableObject {
                             id: doc.documentID,
                             date: dateVal,
                             schoolName: school,
-                            totalMileage: miles
+                            totalMileage: miles,
+                            photoURLs: photoURLs
                         )
                     )
                 }
@@ -81,6 +111,7 @@ class ManagerEmployeeDetailViewModel: ObservableObject {
                     self.totalPeriodMileage = totalMiles
                 }
             }
+        }
     }
     
     var periodRangeText: String {
@@ -127,16 +158,56 @@ struct ManagerEmployeeDetailView: View {
             // 4) List of daily records
             List(viewModel.records) { record in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(dateFormatter.string(from: record.date))
-                        .font(.headline)
-                    Text(record.schoolName)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
                     HStack {
-                        Text(String(format: "%.1f miles", record.totalMileage))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(dateFormatter.string(from: record.date))
+                                .font(.headline)
+                            Text(record.schoolName)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Text(String(format: "%.1f miles", record.totalMileage))
+                                .font(.footnote)
+                        }
+                        
                         Spacer()
+                        
+                        if !record.photoURLs.isEmpty {
+                            HStack(spacing: 4) {
+                                Image(systemName: "photo.fill")
+                                    .font(.caption)
+                                Text("\(record.photoURLs.count)")
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.blue)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(10)
+                        }
                     }
-                    .font(.footnote)
+                    
+                    // Show photo thumbnails if available
+                    if !record.photoURLs.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(record.photoURLs.prefix(5), id: \.self) { photoURL in
+                                    FirebaseImageThumbnail(imageURL: photoURL, size: 60)
+                                }
+                                if record.photoURLs.count > 5 {
+                                    ZStack {
+                                        Rectangle()
+                                            .fill(Color.gray.opacity(0.3))
+                                            .frame(width: 60, height: 60)
+                                            .cornerRadius(8)
+                                        Text("+\(record.photoURLs.count - 5)")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
                 }
                 .padding(.vertical, 4)
             }

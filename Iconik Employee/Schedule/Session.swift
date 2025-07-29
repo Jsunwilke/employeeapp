@@ -18,21 +18,27 @@ struct Session: Identifiable, Equatable, Hashable {
     let date: String?
     let startTime: String?
     let endTime: String?
-    let sessionType: String?
+    let sessionType: [String]?
     let status: String?
     let schoolId: String?
+    let sessionColor: String?  // Hex color string
     let photographers: [[String: Any]]
     
     init(id: String, data: [String: Any]) {
         self.id = id
         
+        // Debug: Log all fields in the data
+        print("📦 Session '\(id)' data fields: \(data.keys.sorted())")
+        
         // Parse raw Firestore fields
         self.date = data["date"] as? String
         self.startTime = data["startTime"] as? String
         self.endTime = data["endTime"] as? String
-        self.sessionType = data["sessionType"] as? String
+        self.sessionType = data["sessionTypes"] as? [String]
+        print("🏷️ Session '\(self.id)' sessionTypes: \(self.sessionType ?? [])")
         self.status = data["status"] as? String
         self.schoolId = data["schoolId"] as? String
+        self.sessionColor = data["sessionColor"] as? String
         self.schoolName = data["schoolName"] as? String ?? ""
         self.photographers = data["photographers"] as? [[String: Any]] ?? []
         self.organizationID = data["organizationID"] as? String ?? ""
@@ -45,8 +51,8 @@ struct Session: Identifiable, Equatable, Hashable {
             self.employeeName = ""
         }
         
-        // Set position based on sessionType or default
-        self.position = self.sessionType ?? "Photographer"
+        // Set position based on first sessionType or default
+        self.position = self.sessionType?.first ?? "Photographer"
         
         // Description from session-level notes field, or fallback to sessionType
         if let sessionNotes = data["notes"] as? String, !sessionNotes.isEmpty {
@@ -54,7 +60,7 @@ struct Session: Identifiable, Equatable, Hashable {
         } else if let sessionDescription = data["description"] as? String, !sessionDescription.isEmpty {
             self.description = sessionDescription
         } else {
-            self.description = self.sessionType
+            self.description = self.sessionType?.first
         }
         
         // Location - might need to fetch from schoolId later
@@ -104,9 +110,10 @@ struct Session: Identifiable, Equatable, Hashable {
         self.date = nil
         self.startTime = nil
         self.endTime = nil
-        self.sessionType = position
+        self.sessionType = [position]
         self.status = "scheduled"
         self.schoolId = nil
+        self.sessionColor = nil
         self.photographers = []
     }
     

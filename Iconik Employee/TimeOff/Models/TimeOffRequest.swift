@@ -20,6 +20,11 @@ struct TimeOffRequest: Identifiable, Codable {
     let startTime: String? // Format: "09:00"
     let endTime: String? // Format: "17:00"
     
+    // PTO fields
+    let isPaidTimeOff: Bool
+    let ptoHoursRequested: Double?
+    let projectedPTOBalance: Double? // Expected balance at request date
+    
     // Approval fields (optional)
     let approvedBy: String?
     let approverName: String?
@@ -30,6 +35,11 @@ struct TimeOffRequest: Identifiable, Codable {
     let denierName: String?
     let deniedAt: Date?
     let denialReason: String?
+    
+    // Review fields (optional)
+    let reviewedBy: String?
+    let reviewerName: String?
+    let reviewedAt: Date?
     
     // Firestore initializer
     init(id: String, data: [String: Any]) {
@@ -74,6 +84,11 @@ struct TimeOffRequest: Identifiable, Codable {
         self.startTime = data["startTime"] as? String
         self.endTime = data["endTime"] as? String
         
+        // PTO fields
+        self.isPaidTimeOff = data["isPaidTimeOff"] as? Bool ?? false
+        self.ptoHoursRequested = data["ptoHoursRequested"] as? Double
+        self.projectedPTOBalance = data["projectedPTOBalance"] as? Double
+        
         // Timestamps
         if let createdTimestamp = data["createdAt"] as? Timestamp {
             self.createdAt = createdTimestamp.dateValue()
@@ -105,6 +120,15 @@ struct TimeOffRequest: Identifiable, Codable {
             self.deniedAt = nil
         }
         self.denialReason = data["denialReason"] as? String
+        
+        // Optional review fields
+        self.reviewedBy = data["reviewedBy"] as? String
+        self.reviewerName = data["reviewerName"] as? String
+        if let reviewedTimestamp = data["reviewedAt"] as? Timestamp {
+            self.reviewedAt = reviewedTimestamp.dateValue()
+        } else {
+            self.reviewedAt = nil
+        }
     }
     
     // Standard initializer for creating new requests
@@ -120,7 +144,10 @@ struct TimeOffRequest: Identifiable, Codable {
         notes: String = "",
         isPartialDay: Bool = false,
         startTime: String? = nil,
-        endTime: String? = nil
+        endTime: String? = nil,
+        isPaidTimeOff: Bool = false,
+        ptoHoursRequested: Double? = nil,
+        projectedPTOBalance: Double? = nil
     ) {
         self.id = id
         self.organizationID = organizationID
@@ -140,6 +167,11 @@ struct TimeOffRequest: Identifiable, Codable {
         self.startTime = startTime
         self.endTime = endTime
         
+        // PTO fields
+        self.isPaidTimeOff = isPaidTimeOff
+        self.ptoHoursRequested = ptoHoursRequested
+        self.projectedPTOBalance = projectedPTOBalance
+        
         // Optional fields start as nil
         self.approvedBy = nil
         self.approverName = nil
@@ -148,6 +180,9 @@ struct TimeOffRequest: Identifiable, Codable {
         self.denierName = nil
         self.deniedAt = nil
         self.denialReason = nil
+        self.reviewedBy = nil
+        self.reviewerName = nil
+        self.reviewedAt = nil
     }
 }
 
@@ -233,12 +268,12 @@ extension TimeOffRequest {
     
     // Check if request can be edited (only pending requests by the same user)
     var canBeEdited: Bool {
-        return status == .pending
+        return status == .pending || status == .underReview
     }
     
     // Check if request can be cancelled
     var canBeCancelled: Bool {
-        return status == .pending
+        return status == .pending || status == .underReview
     }
     
     // Status color for UI
@@ -246,6 +281,8 @@ extension TimeOffRequest {
         switch status {
         case .pending:
             return "orange"
+        case .underReview:
+            return "blue"
         case .approved:
             return "green"
         case .denied:
@@ -273,8 +310,17 @@ extension TimeOffRequest {
             "status": status.rawValue,
             "createdAt": Timestamp(date: createdAt),
             "updatedAt": Timestamp(date: updatedAt),
-            "isPartialDay": isPartialDay
+            "isPartialDay": isPartialDay,
+            "isPaidTimeOff": isPaidTimeOff
         ]
+        
+        // Add PTO fields if applicable
+        if let ptoHoursRequested = ptoHoursRequested {
+            data["ptoHoursRequested"] = ptoHoursRequested
+        }
+        if let projectedPTOBalance = projectedPTOBalance {
+            data["projectedPTOBalance"] = projectedPTOBalance
+        }
         
         // Add partial day fields if applicable
         if isPartialDay {
@@ -309,6 +355,17 @@ extension TimeOffRequest {
         }
         if let denialReason = denialReason {
             data["denialReason"] = denialReason
+        }
+        
+        // Add optional review fields
+        if let reviewedBy = reviewedBy {
+            data["reviewedBy"] = reviewedBy
+        }
+        if let reviewerName = reviewerName {
+            data["reviewerName"] = reviewerName
+        }
+        if let reviewedAt = reviewedAt {
+            data["reviewedAt"] = Timestamp(date: reviewedAt)
         }
         
         return data

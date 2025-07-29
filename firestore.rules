@@ -34,6 +34,12 @@ service cloud.firestore {
       return userDoc.data.organizationID == orgId;
     }
     
+    // Helper function to validate PTO document ID format and ownership
+    function isValidPTODocumentAccess(balanceId, userId) {
+      // Check if document ID follows pattern: orgId_userId
+      let idParts = balanceId.split('_');
+      return idParts.size() == 2 && idParts[1] == userId;
+    }
 
     // Organizations collection
     match /organizations/{orgId} {
@@ -50,7 +56,18 @@ service cloud.firestore {
       // Only admins can update their organization
       allow update: if request.auth != null && 
                        belongsToSameOrg(request.auth.uid, orgId) && 
-                       isAdmin(request.auth.uid);
+                       isAdmin(request.auth.uid) &&
+                       // Validate PTO settings if being updated
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ptoSettings']) ||
+                        (request.resource.data.ptoSettings is map &&
+                         (!request.resource.data.ptoSettings.keys().hasAny(['enabled']) || request.resource.data.ptoSettings.enabled is bool) &&
+                         (!request.resource.data.ptoSettings.keys().hasAny(['accrualRate']) || request.resource.data.ptoSettings.accrualRate is number) &&
+                         (!request.resource.data.ptoSettings.keys().hasAny(['accrualPeriod']) || request.resource.data.ptoSettings.accrualPeriod is number) &&
+                         (!request.resource.data.ptoSettings.keys().hasAny(['maxAccrual']) || request.resource.data.ptoSettings.maxAccrual is number) &&
+                         (!request.resource.data.ptoSettings.keys().hasAny(['rolloverPolicy']) || request.resource.data.ptoSettings.rolloverPolicy in ['none', 'unlimited', 'limited']) &&
+                         (!request.resource.data.ptoSettings.keys().hasAny(['rolloverLimit']) || request.resource.data.ptoSettings.rolloverLimit is number) &&
+                         (!request.resource.data.ptoSettings.keys().hasAny(['resetDate']) || request.resource.data.ptoSettings.resetDate is string) &&
+                         (!request.resource.data.ptoSettings.keys().hasAny(['yearlyAllotment']) || request.resource.data.ptoSettings.yearlyAllotment is number)));
       
       // No deletes allowed
       allow delete: if false;
@@ -472,6 +489,15 @@ service cloud.firestore {
                        (!request.resource.data.keys().hasAny(['priorityReason']) || request.resource.data.priorityReason is string) &&
                        (!request.resource.data.keys().hasAny(['bypassedBlockedDates']) || request.resource.data.bypassedBlockedDates is bool) &&
                        (!request.resource.data.keys().hasAny(['blockedDatesAcknowledged']) || request.resource.data.blockedDatesAcknowledged is bool) &&
+                       // Validate PTO fields
+                       (!request.resource.data.keys().hasAny(['isPaidTimeOff']) || request.resource.data.isPaidTimeOff is bool) &&
+                       (!request.resource.data.keys().hasAny(['ptoHoursRequested']) || 
+                        (request.resource.data.ptoHoursRequested is number && 
+                         request.resource.data.ptoHoursRequested >= 0 && 
+                         request.resource.data.ptoHoursRequested <= 8)) &&
+                       // If using PTO, hours must be specified
+                       ((!request.resource.data.keys().hasAny(['isPaidTimeOff']) || !request.resource.data.isPaidTimeOff) || 
+                        (request.resource.data.keys().hasAny(['ptoHoursRequested']) && request.resource.data.ptoHoursRequested > 0)) &&
                        // If high priority, priorityReason must be provided
                        ((!request.resource.data.keys().hasAny(['priority']) || request.resource.data.priority == 'normal') || 
                         (request.resource.data.priority == 'high' && request.resource.data.keys().hasAny(['priorityReason']) && request.resource.data.priorityReason is string));
@@ -666,6 +692,129 @@ service cloud.firestore {
       allow delete: if request.auth != null && 
                        isAdminOrManager(request.auth.uid) &&
                        belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // ============================================================================
+    // PRODUCTION-READY PTO BALANCES COLLECTION
+    // ============================================================================
+    match /ptoBalances/{balanceId} {
+      // PRODUCTION PTO READ RULES - Handles both existing and non-existent documents
+      allow read: if request.auth != null && 
+                     (
+                       // Case 1: Document exists - validate user belongs to same organization
+                       (resource != null && 
+                        resource.data.keys().hasAny(['organizationID']) &&
+                        belongsToSameOrg(request.auth.uid, resource.data.organizationID)) ||
+                       
+                       // Case 2: Document doesn't exist - validate predictable ID format and ownership
+                       (resource == null && 
+                        isValidPTODocumentAccess(balanceId, request.auth.uid)) ||
+                       
+                       // Case 3: Admin access - admins can read any PTO balance in their organization
+                       (resource != null && 
+                        resource.data.keys().hasAny(['organizationID']) &&
+                        isAdmin(request.auth.uid) && 
+                        belongsToSameOrg(request.auth.uid, resource.data.organizationID))
+                     );
+      
+      // PRODUCTION PTO CREATE RULES - Auto-creation of balance documents
+      allow create: if (request.auth != null && 
+                       // Validate document ID follows predictable format
+                       isValidPTODocumentAccess(balanceId, request.auth.uid) &&
+                       // Validate user belongs to organization being created
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID)) ||
+                       // Allow Cloud Functions to create PTO balance documents
+                       (request.auth == null) &&
+                       // Validate required fields are present
+                       request.resource.data.keys().hasAll(['userId', 'organizationID']) &&
+                       // Validate core field types
+                       request.resource.data.userId is string &&
+                       request.resource.data.organizationID is string &&
+                       request.resource.data.userId == request.auth.uid &&
+                       // Validate optional numeric fields (must be numbers if present)
+                       (!request.resource.data.keys().hasAny(['currentBalance']) || 
+                        (request.resource.data.currentBalance is number && request.resource.data.currentBalance >= 0)) &&
+                       (!request.resource.data.keys().hasAny(['pendingBalance']) || 
+                        (request.resource.data.pendingBalance is number && request.resource.data.pendingBalance >= 0)) &&
+                       (!request.resource.data.keys().hasAny(['usedThisYear']) || 
+                        (request.resource.data.usedThisYear is number && request.resource.data.usedThisYear >= 0)) &&
+                       (!request.resource.data.keys().hasAny(['earnedThisYear']) || 
+                        (request.resource.data.earnedThisYear is number && request.resource.data.earnedThisYear >= 0)) &&
+                       // Validate optional timestamp fields
+                       (!request.resource.data.keys().hasAny(['lastAccrualDate']) || 
+                        request.resource.data.lastAccrualDate is timestamp || request.resource.data.lastAccrualDate == null) &&
+                       (!request.resource.data.keys().hasAny(['lastResetDate']) || 
+                        request.resource.data.lastResetDate is timestamp || request.resource.data.lastResetDate == null) &&
+                       (!request.resource.data.keys().hasAny(['createdAt']) || 
+                        request.resource.data.createdAt is timestamp) &&
+                       (!request.resource.data.keys().hasAny(['updatedAt']) || 
+                        request.resource.data.updatedAt is timestamp);
+      
+      // PRODUCTION PTO UPDATE RULES - Balance updates and accrual
+      allow update: if (request.auth != null && 
+                       // Validate user belongs to same organization
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Prevent changing core identity fields
+                       request.resource.data.userId == resource.data.userId &&
+                       request.resource.data.organizationID == resource.data.organizationID &&
+                       (
+                         // Case 1: User updating their own balance (for accrual, reservations, usage)
+                         (resource.data.userId == request.auth.uid &&
+                          // Validate numeric fields are valid if being updated
+                          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalBalance']) || 
+                           (request.resource.data.totalBalance is number && request.resource.data.totalBalance >= 0)) &&
+                          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['pendingBalance']) || 
+                           (request.resource.data.pendingBalance is number && request.resource.data.pendingBalance >= 0)) &&
+                          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['usedThisYear']) || 
+                           (request.resource.data.usedThisYear is number && request.resource.data.usedThisYear >= 0))) ||
+                         
+                         // Case 2: Admin making manual adjustments
+                         (isAdmin(request.auth.uid) &&
+                          belongsToSameOrg(request.auth.uid, resource.data.organizationID))
+                       )) ||
+                       // Case 3: Cloud Functions automatic processing
+                       (request.auth == null &&
+                        // Validate core identity fields don't change
+                        request.resource.data.userId == resource.data.userId &&
+                        request.resource.data.organizationID == resource.data.organizationID);
+      
+      // PRODUCTION PTO DELETE RULES - Only admins can delete (for cleanup)
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
+    // ============================================================================
+    // PRODUCTION-READY PTO ADJUSTMENTS COLLECTION (Audit Trail)
+    // ============================================================================
+    match /ptoAdjustments/{adjustmentId} {
+      // Only admins and managers can read adjustment history
+      allow read: if request.auth != null && 
+                     isAdminOrManager(request.auth.uid) &&
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Only admins can create manual PTO adjustments
+      allow create: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID) &&
+                       // Validate required fields for audit trail
+                       request.resource.data.keys().hasAll(['userId', 'organizationID', 'adjustment', 'reason', 'adminId', 'previousBalance', 'newBalance']) &&
+                       // Validate field types
+                       request.resource.data.userId is string &&
+                       request.resource.data.organizationID is string &&
+                       request.resource.data.adjustment is number &&
+                       request.resource.data.reason is string &&
+                       request.resource.data.adminId == request.auth.uid &&
+                       request.resource.data.previousBalance is number &&
+                       request.resource.data.newBalance is number &&
+                       request.resource.data.previousBalance >= 0 &&
+                       request.resource.data.newBalance >= 0 &&
+                       // Validate timestamps
+                       (!request.resource.data.keys().hasAny(['createdAt']) || 
+                        request.resource.data.createdAt is timestamp);
+      
+      // No updates or deletes allowed (immutable audit trail)
+      allow update, delete: if false;
     }
 
     // Deny all other documents

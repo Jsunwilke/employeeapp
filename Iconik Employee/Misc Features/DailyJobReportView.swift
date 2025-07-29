@@ -1503,16 +1503,27 @@ struct DailyJobReportView: View {
             return
         }
         
+        guard !storedUserOrganizationID.isEmpty else {
+            errorMessage = "Cannot upload photos: no organization ID found"
+            finishSubmission()
+            return
+        }
+        
         let storageRef = Storage.storage().reference()
         let dispatchGroup = DispatchGroup()
         
         for image in selectedImages {
             dispatchGroup.enter()
             if let imageData = image.jpegData(compressionQuality: 0.8) {
-                let fileName = "dailyReports/\(user.uid)/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
+                // Updated path to include organization ID
+                let fileName = "dailyReports/\(storedUserOrganizationID)/\(user.uid)/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
                 let imageRef = storageRef.child(fileName)
                 
-                imageRef.putData(imageData, metadata: nil) { _, error in
+                // Set metadata with content type
+                let metadata = StorageMetadata()
+                metadata.contentType = "image/jpeg"
+                
+                imageRef.putData(imageData, metadata: metadata) { _, error in
                     if let error = error {
                         DispatchQueue.main.async {
                             self.errorMessage = "Upload error: \(error.localizedDescription)"

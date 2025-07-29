@@ -13,9 +13,15 @@ struct TimeOffApprovalView: View {
         return timeOffService.pendingRequests.sorted { $0.createdAt < $1.createdAt }
     }
     
+    private var inReviewRequests: [TimeOffRequest] {
+        return timeOffService.timeOffRequests
+            .filter { $0.status == .underReview }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+    
     private var historyRequests: [TimeOffRequest] {
         return timeOffService.timeOffRequests
-            .filter { $0.status != .pending }
+            .filter { $0.status != .pending && $0.status != .underReview }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
     
@@ -30,9 +36,13 @@ struct TimeOffApprovalView: View {
                 pendingRequestsView
                     .tag(0)
                 
+                // In Review tab
+                inReviewRequestsView
+                    .tag(1)
+                
                 // History tab
                 historyRequestsView
-                    .tag(1)
+                    .tag(2)
             }
             .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
         }
@@ -78,11 +88,19 @@ struct TimeOffApprovalView: View {
             }
             
             TabButton(
-                title: "History",
-                badge: nil,
+                title: "In Review",
+                badge: inReviewRequests.count,
                 isSelected: selectedTab == 1
             ) {
                 selectedTab = 1
+            }
+            
+            TabButton(
+                title: "History",
+                badge: nil,
+                isSelected: selectedTab == 2
+            ) {
+                selectedTab = 2
             }
         }
         .padding(.horizontal)
@@ -101,6 +119,43 @@ struct TimeOffApprovalView: View {
             } else {
                 List {
                     ForEach(pendingRequests) { request in
+                        TimeOffRequestCard(
+                            request: request,
+                            showActions: false,
+                            onApprove: {
+                                approveRequest(request)
+                            },
+                            onDeny: {
+                                requestToDeny = request
+                                showingDenialDialog = true
+                            },
+                            onReview: {
+                                putRequestInReview(request)
+                            }
+                        )
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowSeparator(.hidden)
+                    }
+                }
+                .listStyle(PlainListStyle())
+                .refreshable {
+                    timeOffService.refreshRequests()
+                }
+            }
+        }
+    }
+    
+    // MARK: - In Review Requests View
+    
+    private var inReviewRequestsView: some View {
+        Group {
+            if timeOffService.isLoading {
+                loadingView
+            } else if inReviewRequests.isEmpty {
+                emptyInReviewView
+            } else {
+                List {
+                    ForEach(inReviewRequests) { request in
                         TimeOffRequestCard(
                             request: request,
                             showActions: false,
@@ -180,6 +235,26 @@ struct TimeOffApprovalView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
+    private var emptyInReviewView: some View {
+        VStack(spacing: 24) {
+            Image(systemName: "magnifyingglass.circle")
+                .font(.system(size: 60))
+                .foregroundColor(.blue)
+            
+            VStack(spacing: 8) {
+                Text("No Requests In Review")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                
+                Text("There are no time off requests currently under review.")
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
     private var emptyHistoryView: some View {
         VStack(spacing: 24) {
             Image(systemName: "clock.arrow.circlepath")
@@ -234,6 +309,19 @@ struct TimeOffApprovalView: View {
                 // Reset dialog state
                 denialReason = ""
                 requestToDeny = nil
+            }
+        }
+    }
+    
+    private func putRequestInReview(_ request: TimeOffRequest) {
+        timeOffService.putTimeOffRequestInReview(requestId: request.id) { success, error in
+            DispatchQueue.main.async {
+                if success {
+                    alertMessage = "Request placed in review"
+                } else {
+                    alertMessage = error ?? "Failed to put request in review"
+                }
+                showingAlert = true
             }
         }
     }

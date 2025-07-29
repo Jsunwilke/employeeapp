@@ -458,6 +458,31 @@ struct ShiftDetailView: View {
                 PhotoDetailView(imageURL: photo.url, label: photo.label)
             }
         }
+        .overlay(
+            // Loading overlay for contacts
+            Group {
+                if isLoadingContacts {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            
+                            Text("Loading contact information...")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                        }
+                        .padding(24)
+                        .background(Color(.systemBackground))
+                        .cornerRadius(12)
+                        .shadow(radius: 10)
+                    }
+                }
+            }
+        )
     }
     
     // MARK: - View Components
@@ -751,15 +776,7 @@ struct ShiftDetailView: View {
     
     private var messageComposerView: some View {
         VStack(spacing: 20) {
-            if isLoadingContacts {
-                VStack(spacing: 20) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("Loading contact information...")
-                        .font(.headline)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if MFMessageComposeViewController.canSendText() {
+            if MFMessageComposeViewController.canSendText() {
                 MessageComposeView(
                     recipients: coworkerContacts.map { $0.phoneNumber },
                     body: messageBody,
@@ -1954,14 +1971,17 @@ struct ShiftDetailView: View {
         
         // Check if we need to load contacts
         if coworkerContacts.isEmpty {
-            // Show loading state and load contacts
+            // Show loading state
             isLoadingContacts = true
-            isShowingMessageComposer = true // Show sheet with loading indicator
             
             // Load real contacts from Firestore
             loadCoworkerPhoneNumbers { success in
                 DispatchQueue.main.async {
                     self.isLoadingContacts = false
+                    // Only show the sheet after contacts are loaded
+                    if success || !self.coworkerContacts.isEmpty {
+                        self.isShowingMessageComposer = true
+                    }
                 }
             }
         } else {
@@ -1972,56 +1992,7 @@ struct ShiftDetailView: View {
     
     // Helper to create the message text
     private func createMessageText() -> String {
-        var message = "Hi team!\n\n"
-        
-        if let start = session.startDate, let end = session.endDate {
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateStyle = .full
-            
-            let timeFormatter = DateFormatter()
-            timeFormatter.timeStyle = .short
-            
-            message += "We're scheduled for a shoot at \(session.schoolName) on \(dateFormatter.string(from: start)) from \(timeFormatter.string(from: start)) to \(timeFormatter.string(from: end)).\n\n"
-        } else {
-            message += "We're scheduled for a shoot at \(session.schoolName).\n\n"
-        }
-        
-        // Add more details if available
-        if let location = session.location, !location.isEmpty {
-            message += "Location: \(location)\n"
-        }
-        
-        message += "Position: \(session.position)\n\n"
-        
-        if let description = session.description, !description.isEmpty {
-            message += "Notes: \(description)\n\n"
-        }
-        
-        // Add travel planning information if available
-        if let leaveTime = travelPlan.suggestedLeaveTime, let arrivalTime = travelPlan.arrivalTime {
-            message += "Suggested leave time: \(shortTimeFormatter.string(from: leaveTime))\n"
-            message += "Arrival time: \(shortTimeFormatter.string(from: arrivalTime))\n\n"
-        }
-        
-        // Add weather info if available
-        if let weather = weatherData {
-            message += "Weather: \(weather.condition ?? "Unknown"), \(weather.temperatureString)\n\n"
-        }
-        
-        // Add job box status if available
-        if latestJobBoxStatus != .unknown {
-            message += "Job Box Status: \(latestJobBoxStatus.rawValue)\n"
-            if !latestJobBoxScannedBy.isEmpty {
-                message += "Last scanned by: \(latestJobBoxScannedBy)\n"
-                if let timestamp = latestJobBoxTimestamp {
-                    message += "Scan time: \(formatTimestamp(timestamp))\n\n"
-                }
-            }
-        }
-        
-        message += "See you there!"
-        
-        return message
+        return "Hey crew, "
     }
     
     // Load phone numbers from Firestore with completion handler
@@ -2306,21 +2277,21 @@ struct ShiftDetailView: View {
     // MARK: - Real-time Session Updates
     
     private func startSessionListener() {
-        // Listen for updates to all sessions
-        sessionListener = sessionService.listenForSessions { sessions in
+        // Listen for updates to the specific session only
+        sessionListener = sessionService.listenForSession(sessionId: session.id) { updatedSession in
             DispatchQueue.main.async {
-                
-                // Update the current session if it changed
-                if let updatedSession = sessions.first(where: { $0.id == self.session.id }) {
+                if let updatedSession = updatedSession {
                     self.session = updatedSession
                     
                     // Reload related data that might have changed
                     self.loadCoworkerPhotos()
                     self.loadWeatherData()
+                    
+                    // Update this session in allSessions array if it exists
+                    if let index = self.allSessions.firstIndex(where: { $0.id == updatedSession.id }) {
+                        self.allSessions[index] = updatedSession
+                    }
                 }
-                
-                // Update all sessions for coworker calculations
-                self.allSessions = sessions
             }
         }
     }

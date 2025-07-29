@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseAuth
 
 struct TimeOffRequestView: View {
     @ObservedObject var timeOffService: TimeOffService
@@ -15,11 +16,21 @@ struct TimeOffRequestView: View {
     @State private var startTime = Date()
     @State private var endTime = Date()
     
+    // PTO state
+    @State private var isPaidTimeOff = true
+    @State private var ptoHoursRequested = 0.0
+    @State private var currentPTOBalance: PTOBalance?
+    @State private var projectedPTOBalance = 0.0
+    @State private var ptoSettings: PTOSettings?
+    
     // UI state
     @State private var showingAlert = false
     @State private var alertMessage = ""
     @State private var isSubmitting = false
     @State private var conflicts: [String] = []
+    
+    // PTO Service
+    private let ptoService = PTOService.shared
     
     // Editing mode
     let editingRequest: TimeOffRequest?
@@ -37,6 +48,12 @@ struct TimeOffRequestView: View {
         return formatter
     }
     
+    private var shortDateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        return formatter
+    }
+    
     init(timeOffService: TimeOffService, editingRequest: TimeOffRequest? = nil) {
         self.timeOffService = timeOffService
         self.editingRequest = editingRequest
@@ -48,6 +65,8 @@ struct TimeOffRequestView: View {
             _endDate = State(initialValue: request.endDate)
             _selectedReason = State(initialValue: request.reason)
             _notes = State(initialValue: request.notes)
+            _isPaidTimeOff = State(initialValue: request.isPaidTimeOff)
+            _ptoHoursRequested = State(initialValue: request.ptoHoursRequested ?? 0)
             
             // Set times for partial day
             if request.isPartialDay,
@@ -155,6 +174,66 @@ struct TimeOffRequestView: View {
                         .frame(minHeight: 80)
                 }
                 
+                // PTO Section
+                Section(header: Text("Paid Time Off")) {
+                    Toggle("Use PTO Balance", isOn: $isPaidTimeOff)
+                        .onChange(of: isPaidTimeOff) { _ in
+                            updatePTOCalculations()
+                        }
+                    
+                    if isPaidTimeOff {
+                        // Current balance
+                        if let balance = currentPTOBalance {
+                            HStack {
+                                Text("Current Balance:")
+                                Spacer()
+                                Text(ptoService.formatPTOHours(balance.availableBalance))
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        
+                        // Projected balance
+                        HStack {
+                            Text("Projected Balance by \(startDate, formatter: shortDateFormatter):")
+                            Spacer()
+                            Text(ptoService.formatPTOHours(projectedPTOBalance))
+                                .fontWeight(.medium)
+                                .foregroundColor(projectedPTOBalance >= ptoHoursRequested ? .green : .orange)
+                        }
+                        
+                        // PTO hours input
+                        HStack {
+                            Text("PTO Hours Requested:")
+                            Spacer()
+                            TextField("Hours", value: $ptoHoursRequested, format: .number.precision(.fractionLength(0...1)))
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 80)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                        }
+                        
+                        // Validation message
+                        if ptoHoursRequested > projectedPTOBalance {
+                            HStack {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                Text("You will not have sufficient PTO by the request date")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+                        } else if ptoHoursRequested > 0 && projectedPTOBalance > currentPTOBalance?.availableBalance ?? 0 {
+                            HStack {
+                                Image(systemName: "info.circle.fill")
+                                    .foregroundColor(.blue)
+                                Text("This uses future PTO accrual")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                }
+                
                 // Conflicts Section (if any)
                 if !conflicts.isEmpty {
                     Section(header: 
@@ -237,6 +316,23 @@ struct TimeOffRequestView: View {
         }
         .onAppear {
             checkForConflicts()
+            loadPTOData()
+            updatePTOCalculations()
+        }
+        .onChange(of: startDate) { _ in
+            updatePTOCalculations()
+        }
+        .onChange(of: endDate) { _ in
+            updatePTOCalculations()
+        }
+        .onChange(of: isPartialDay) { _ in
+            updatePTOCalculations()
+        }
+        .onChange(of: startTime) { _ in
+            updatePTOCalculations()
+        }
+        .onChange(of: endTime) { _ in
+            updatePTOCalculations()
         }
     }
     
@@ -316,6 +412,52 @@ struct TimeOffRequestView: View {
         }
     }
     
+    // MARK: - PTO Methods
+    
+    private func loadPTOData() {
+        guard let userId = Auth.auth().currentUser?.uid,
+              let orgId = UserDefaults.standard.string(forKey: "userOrganizationID") else { return }
+        
+        // Load PTO balance
+        ptoService.getPTOBalance(userId: userId, organizationID: orgId) { balance in
+            DispatchQueue.main.async {
+                self.currentPTOBalance = balance
+            }
+        }
+        
+        // Load PTO settings
+        ptoService.getPTOSettings(organizationID: orgId) { settings in
+            DispatchQueue.main.async {
+                self.ptoSettings = settings
+            }
+        }
+    }
+    
+    private func updatePTOCalculations() {
+        // Calculate PTO hours based on request duration
+        let calculatedHours = ptoService.calculatePTOHours(
+            startDate: startDate,
+            endDate: endDate,
+            isPartialDay: isPartialDay,
+            startTime: isPartialDay ? timeStringFormatter.string(from: startTime) : nil,
+            endTime: isPartialDay ? timeStringFormatter.string(from: endTime) : nil
+        )
+        
+        // Only update if user hasn't manually changed it
+        if ptoHoursRequested == 0 || ptoHoursRequested == calculatedHours {
+            ptoHoursRequested = calculatedHours
+        }
+        
+        // Calculate projected balance
+        if let balance = currentPTOBalance, let settings = ptoSettings {
+            projectedPTOBalance = ptoService.calculateProjectedBalance(
+                currentBalance: balance,
+                settings: settings,
+                targetDate: startDate
+            )
+        }
+    }
+    
     private func submitRequest() {
         isSubmitting = true
         
@@ -332,7 +474,10 @@ struct TimeOffRequestView: View {
                 notes: notes,
                 isPartialDay: isPartialDay,
                 startTime: startTimeString,
-                endTime: endTimeString
+                endTime: endTimeString,
+                isPaidTimeOff: isPaidTimeOff,
+                ptoHoursRequested: isPaidTimeOff ? ptoHoursRequested : nil,
+                projectedPTOBalance: isPaidTimeOff ? projectedPTOBalance : nil
             ) { success, error in
                 DispatchQueue.main.async {
                     isSubmitting = false
@@ -354,7 +499,10 @@ struct TimeOffRequestView: View {
                 notes: notes,
                 isPartialDay: isPartialDay,
                 startTime: startTimeString,
-                endTime: endTimeString
+                endTime: endTimeString,
+                isPaidTimeOff: isPaidTimeOff,
+                ptoHoursRequested: isPaidTimeOff ? ptoHoursRequested : nil,
+                projectedPTOBalance: isPaidTimeOff ? projectedPTOBalance : nil
             ) { success, error in
                 DispatchQueue.main.async {
                     isSubmitting = false

@@ -259,6 +259,7 @@ struct TimeOffRequestCard: View {
     let onCancel: (() -> Void)?
     let onApprove: (() -> Void)?
     let onDeny: (() -> Void)?
+    let onReview: (() -> Void)?
     
     init(
         request: TimeOffRequest,
@@ -266,7 +267,8 @@ struct TimeOffRequestCard: View {
         onEdit: (() -> Void)? = nil,
         onCancel: (() -> Void)? = nil,
         onApprove: (() -> Void)? = nil,
-        onDeny: (() -> Void)? = nil
+        onDeny: (() -> Void)? = nil,
+        onReview: (() -> Void)? = nil
     ) {
         self.request = request
         self.showActions = showActions
@@ -274,6 +276,7 @@ struct TimeOffRequestCard: View {
         self.onCancel = onCancel
         self.onApprove = onApprove
         self.onDeny = onDeny
+        self.onReview = onReview
     }
     
     var body: some View {
@@ -340,6 +343,18 @@ struct TimeOffRequestCard: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+            } else if request.status == .underReview, let reviewerName = request.reviewerName, let reviewedAt = request.reviewedAt {
+                HStack {
+                    Image(systemName: "magnifyingglass.circle.fill")
+                        .foregroundColor(.blue)
+                    Text("In review by \(reviewerName)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(formatDate(reviewedAt))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             } else if request.status == .denied, let denierName = request.denierName, let deniedAt = request.deniedAt {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -397,8 +412,21 @@ struct TimeOffRequestCard: View {
             }
             
             // Manager actions
-            if let onApprove = onApprove, let onDeny = onDeny, request.status == .pending {
+            if let onApprove = onApprove, let onDeny = onDeny, (request.status == .pending || request.status == .underReview) {
                 HStack(spacing: 12) {
+                    if request.status == .pending, let onReview = onReview {
+                        Button("Put in Review") {
+                            onReview()
+                        }
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.blue)
+                        .clipShape(Capsule())
+                    }
+                    
                     Button("Approve") {
                         onApprove()
                     }

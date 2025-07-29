@@ -39,6 +39,8 @@ struct TimeOffDetailView: View {
         switch timeOffEntry.status {
         case .pending:
             return .orange
+        case .underReview:
+            return .blue
         case .approved:
             return .green
         case .denied:

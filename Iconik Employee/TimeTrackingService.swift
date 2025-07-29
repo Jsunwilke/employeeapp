@@ -13,9 +13,22 @@ class TimeTrackingService: ObservableObject {
     private var currentUserId: String?
     private var currentOrgId: String?
     
+    // Listeners for real-time updates
+    private var currentEntryListener: ListenerRegistration?
+    private var entriesListener: ListenerRegistration?
+    
+    // Cache for time entries
+    private var timeEntriesCache: [TimeEntry] = []
+    private var lastCacheUpdate: Date?
+    
     init() {
         setupUser()
         checkCurrentStatus()
+    }
+    
+    deinit {
+        currentEntryListener?.remove()
+        entriesListener?.remove()
     }
     
     func setupUser() {
@@ -185,11 +198,15 @@ class TimeTrackingService: ObservableObject {
     // MARK: - Helper Functions
     
     private func getCurrentTimeEntry(userId: String, organizationID: String, completion: @escaping (TimeEntry?) -> Void) {
-        db.collection("timeEntries")
+        // Remove existing listener if any
+        currentEntryListener?.remove()
+        
+        // Use real-time listener for current entry
+        currentEntryListener = db.collection("timeEntries")
             .whereField("userId", isEqualTo: userId)
             .whereField("organizationID", isEqualTo: organizationID)
             .whereField("status", isEqualTo: "clocked-in")
-            .getDocuments { snapshot, error in
+            .addSnapshotListener { snapshot, error in
                 if let error = error {
                     print("Error getting current time entry: \(error)")
                     completion(nil)
@@ -198,6 +215,7 @@ class TimeTrackingService: ObservableObject {
                 
                 if let document = snapshot?.documents.first {
                     let timeEntry = TimeEntry(document: document)
+                    
                     completion(timeEntry)
                 } else {
                     completion(nil)
@@ -212,14 +230,32 @@ class TimeTrackingService: ObservableObject {
             return
         }
         
-        db.collection("timeEntries")
+        // Check cache first if dates match
+        if !timeEntriesCache.isEmpty,
+           let lastUpdate = lastCacheUpdate,
+           Date().timeIntervalSince(lastUpdate) < 300 { // 5 minute cache
+            // Filter cached entries by date range
+            let filteredEntries = timeEntriesCache.filter { entry in
+                let entryDate = entry.date
+                return entryDate >= startDate && entryDate <= endDate
+            }
+            completion(filteredEntries)
+            return
+        }
+        
+        // Remove existing listener if any
+        entriesListener?.remove()
+        
+        // Set up real-time listener
+        entriesListener = db.collection("timeEntries")
             .whereField("userId", isEqualTo: userId)
             .whereField("organizationID", isEqualTo: orgId)
             .whereField("date", isGreaterThanOrEqualTo: startDate)
             .whereField("date", isLessThanOrEqualTo: endDate)
             .order(by: "date", descending: true)
             .order(by: "createdAt", descending: true)
-            .getDocuments { snapshot, error in
+            .limit(to: 100) // Limit to prevent excessive reads
+            .addSnapshotListener { [weak self] snapshot, error in
                 if let error = error {
                     print("Error getting time entries: \(error)")
                     completion([])
@@ -229,6 +265,10 @@ class TimeTrackingService: ObservableObject {
                 let timeEntries = snapshot?.documents.compactMap { document in
                     TimeEntry(document: document)
                 } ?? []
+                
+                // Update cache
+                self?.timeEntriesCache = timeEntries
+                self?.lastCacheUpdate = Date()
                 
                 completion(timeEntries)
             }

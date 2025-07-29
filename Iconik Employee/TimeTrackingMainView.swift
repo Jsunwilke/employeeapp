@@ -18,7 +18,8 @@ struct TimeTrackingMainView: View {
             
             // Time entries list - expanded to show more entries
             TimeEntryListView(timeTrackingService: timeTrackingService)
-                .frame(maxHeight: .infinity) // Allow it to expand
+            
+            Spacer()
         }
         .padding(.horizontal, 16)
         .padding(.top, 4)

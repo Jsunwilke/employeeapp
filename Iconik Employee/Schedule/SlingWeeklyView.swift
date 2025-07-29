@@ -44,6 +44,9 @@ struct SlingWeeklyView: View {
     // User manager for getting current user ID
     private let userManager = UserManager.shared
     
+    // Organization service for session types
+    @StateObject private var organizationService = OrganizationService.shared
+    
     // Time off service and data
     private let timeOffService = TimeOffService.shared
     @State private var timeOffEntries: [TimeOffCalendarEntry] = []
@@ -137,15 +140,29 @@ struct SlingWeeklyView: View {
             // Initialize organization ID cache to prevent dummy listeners
             UserManager.shared.initializeOrganizationID()
             
-            loadSessions()
+            // Start listening to organization data for session types
+            if !userManager.getCachedOrganizationID().isEmpty {
+                organizationService.startListeningToOrganization(organizationID: userManager.getCachedOrganizationID())
+            }
+            
+            // Only load sessions if we don't have any or no active listener
+            if sessions.isEmpty || sessionListener == nil {
+                loadSessions()
+            }
+            
             if selectedDay == nil {
                 selectedDay = Date()
             }
-            loadTimeOffForVisibleWeek()
+            
+            // Only load time off if we don't have an active listener
+            if timeOffListener == nil {
+                loadTimeOffForVisibleWeek()
+            }
         }
         .onDisappear {
             sessionListener?.remove()
             timeOffListener?.remove()
+            organizationService.stopListening()
         }
         .onChange(of: weekOffset) { _ in
             updateDisplayedSessions()
@@ -421,7 +438,8 @@ struct SlingWeeklyView: View {
                             session: session,
                             isMyShiftsMode: scheduleMode == .myShifts,
                             weatherData: getWeatherDataForSession(session),
-                            currentUserID: userManager.getCurrentUserID()
+                            currentUserID: userManager.getCurrentUserID(),
+                            organizationService: organizationService
                         )
                         .padding(.horizontal)
                         .onTapGesture {
@@ -544,6 +562,7 @@ struct SlingWeeklyView: View {
         let isMyShiftsMode: Bool
         let weatherData: WeatherData? // Weather specific to this event's location
         let currentUserID: String?
+        let organizationService: OrganizationService
         
         @Environment(\.colorScheme) var colorScheme
         
@@ -583,6 +602,19 @@ struct SlingWeeklyView: View {
         }
         
         private var colorForPosition: Color {
+            // First priority: use sessionColor if available
+            if let sessionColor = session.sessionColor {
+                return Color(hex: sessionColor)
+            }
+            
+            // Second priority: try to get color from session types
+            if let sessionTypeIds = session.sessionType,
+               let firstTypeId = sessionTypeIds.first,
+               let sessionType = organizationService.getSessionType(by: firstTypeId) {
+                return Color(hex: sessionType.color)
+            }
+            
+            // Fallback to position color map
             if let positionColor = positionColorMap[session.position] {
                 return positionColor
             }
@@ -628,14 +660,34 @@ struct SlingWeeklyView: View {
                     
                     Spacer()
                     
-                    // Position tag with rounded background
-                    Text(session.position)
-                        .font(.subheadline)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .background(colorForPosition.opacity(0.2))
-                        .foregroundColor(colorForPosition)
-                        .cornerRadius(16)
+                    // Session type badges
+                    if let sessionTypeIds = session.sessionType {
+                        HStack(spacing: 4) {
+                            ForEach(sessionTypeIds, id: \.self) { typeId in
+                                let _ = print("🏷️ Looking for sessionType '\(typeId)' in \(organizationService.sessionTypes.count) types")
+                                if let sessionType = organizationService.getSessionType(by: typeId) {
+                                    Text(sessionType.name)
+                                        .font(.caption2)
+                                        .fontWeight(.medium)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Color(hex: sessionType.color).opacity(0.2))
+                                        .foregroundColor(Color(hex: sessionType.color))
+                                        .cornerRadius(12)
+                                } else {
+                                    // Fallback: show the typeId if no definition found
+                                    Text(typeId)
+                                        .font(.caption2)
+                                        .fontWeight(.medium)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Color.gray.opacity(0.2))
+                                        .foregroundColor(.gray)
+                                        .cornerRadius(12)
+                                }
+                            }
+                        }
+                    }
                 }
                 .padding(.bottom, 8)
                 
@@ -1001,26 +1053,29 @@ struct SlingWeeklyView: View {
     // MARK: - Data Loading
     
     private func loadSessions() {
-        isLoading = true
+        // Don't show loading if we already have sessions (cached data)
+        if sessions.isEmpty {
+            isLoading = true
+        }
         errorMessage = ""
         
-        // Remove any existing listener
-        sessionListener?.remove()
-        
-        // Start listening for sessions
-        sessionListener = sessionService.listenForSessions { sessions in
-            DispatchQueue.main.async {
-                print("📊 SlingWeeklyView: Loaded \(sessions.count) sessions")
-                for session in sessions {
-                    print("📊 Session: \(session.schoolName) on \(session.date ?? "nil") at \(session.startTime ?? "nil")")
-                    print("📊 Employee name: '\(session.employeeName)'")
+        // Only remove existing listener if we're forcing a reload
+        // Otherwise reuse the existing listener to avoid duplicate reads
+        if sessionListener == nil {
+            // Start listening for sessions
+            sessionListener = sessionService.listenForSessions { sessions in
+                DispatchQueue.main.async {
+                    print("📊 SlingWeeklyView: Received \(sessions.count) sessions")
+                    self.sessions = sessions
+                    self.updateDisplayedSessions()
+                    self.loadWeatherForVisibleSessions()
+                    self.isLoading = false
                 }
-                
-                self.sessions = sessions
-                self.updateDisplayedSessions()
-                self.loadWeatherForVisibleSessions()
-                self.isLoading = false
             }
+        } else {
+            // We already have a listener, just update the displayed sessions
+            print("📊 SlingWeeklyView: Reusing existing listener")
+            updateDisplayedSessions()
         }
     }
     
@@ -1190,7 +1245,20 @@ struct SlingWeeklyView: View {
         }
         
         // Check for time off on this date
-        let hasTimeOff = timeOffEntries.contains { timeOffEntry in
+        var timeOffToCheck = timeOffEntries
+        
+        // Filter by user if in "My Shifts" mode
+        if scheduleMode == .myShifts {
+            guard let currentUserID = userManager.getCurrentUserID() else {
+                return hasSessions // Return only session status if no user ID
+            }
+            
+            timeOffToCheck = timeOffToCheck.filter { entry in
+                entry.photographerId == currentUserID
+            }
+        }
+        
+        let hasTimeOff = timeOffToCheck.contains { timeOffEntry in
             let entryDate = calendar.startOfDay(for: timeOffEntry.date)
             let targetDate = calendar.startOfDay(for: date)
             return entryDate == targetDate

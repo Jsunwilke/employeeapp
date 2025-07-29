@@ -20,7 +20,9 @@ struct EditDailyJobReportView: View {
     @State private var jobBoxAndCameraCards: String = "NA"
     @State private var sportsBackgroundShot: String = "NA"
     @State private var schoolOrDestination: String = ""
-    // (Photo attachments and photoshoot note selection logic are omitted for brevity.)
+    @State private var existingPhotoURLs: [String] = []
+    @State private var showPhotoDetail: Bool = false
+    @State private var selectedPhotoURL: String = ""
     
     @State private var isSubmitting: Bool = false
     @State private var errorMessage: String = ""
@@ -176,6 +178,14 @@ struct EditDailyJobReportView: View {
                 Text(errorMessage)
                     .foregroundColor(.red)
             }
+            
+            // Photos section
+            if !existingPhotoURLs.isEmpty {
+                Section(header: Text("Attached Photos")) {
+                    FirebasePhotoGallery(photoURLs: existingPhotoURLs, columns: 3)
+                        .padding(.vertical, 8)
+                }
+            }
         }
         .navigationTitle("Edit Job Report")
         .onAppear(perform: loadReportData)
@@ -220,32 +230,58 @@ struct EditDailyJobReportView: View {
             if let school = data["schoolOrDestination"] as? String {
                 schoolOrDestination = school
             }
+            // Load existing photo URLs
+            if let photoURLs = data["photoURLs"] as? [String] {
+                existingPhotoURLs = photoURLs
+            }
         }
         
         loadSchools()
     }
     
     func loadSchools() {
+        guard let currentUser = Auth.auth().currentUser else {
+            errorMessage = "User not signed in."
+            return
+        }
+        
         let db = Firestore.firestore()
-        db.collection("schools")
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    errorMessage = error.localizedDescription
-                    return
-                }
-                guard let docs = snapshot?.documents else { return }
-                var temp: [SchoolItem] = []
-                for doc in docs {
-                    let data = doc.data()
-                    if let value = data["value"] as? String,
-                       let address = data["schoolAddress"] as? String {
-                        let coordinates = data["coordinates"] as? String
-                        temp.append(SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates))
-                    }
-                }
-                temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                schoolOptions = temp
+        
+        // First get the user's organization ID
+        db.collection("users").document(currentUser.uid).getDocument { userDoc, error in
+            if let error = error {
+                self.errorMessage = "Error getting user data: \(error.localizedDescription)"
+                return
             }
+            
+            guard let userData = userDoc?.data(),
+                  let organizationID = userData["organizationID"] as? String else {
+                self.errorMessage = "User organization not found"
+                return
+            }
+            
+            // Now query schools with organization ID filter
+            db.collection("schools")
+                .whereField("organizationID", isEqualTo: organizationID)
+                .getDocuments { snapshot, error in
+                    if let error = error {
+                        self.errorMessage = error.localizedDescription
+                        return
+                    }
+                    guard let docs = snapshot?.documents else { return }
+                    var temp: [SchoolItem] = []
+                    for doc in docs {
+                        let data = doc.data()
+                        if let value = data["value"] as? String,
+                           let address = data["schoolAddress"] as? String {
+                            let coordinates = data["coordinates"] as? String
+                            temp.append(SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates))
+                        }
+                    }
+                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
+                    self.schoolOptions = temp
+                }
+        }
     }
     
     func submitUpdate() {

@@ -36,7 +36,7 @@ struct ICSEvent: Identifiable, Equatable {
         
         // Create unique ID for this photographer's event
         self.id = "\(session.id)-\(photographerID)"
-        self.summary = "\(photographerName) - \(session.sessionType ?? "Photographer") - \(session.schoolName)"
+        self.summary = "\(photographerName) - \(session.sessionType?.first ?? "Photographer") - \(session.schoolName)"
         self.startDate = session.startDate
         self.endDate = session.endDate
         self.description = photographerNotes.isEmpty ? session.description : photographerNotes

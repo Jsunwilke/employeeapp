@@ -57,6 +57,11 @@ class MainEmployeeViewModel: ObservableObject {
         loadEmployeeFeatureOrder()
     }
     
+    deinit {
+        // Clean up the session listener
+        sessionListener?.remove()
+    }
+    
     func loadEmployeeFeatureOrder() {
         let saved = UserDefaults.standard.string(forKey: employeeOrderKey) ?? ""
         if saved.isEmpty {
@@ -88,12 +93,16 @@ class MainEmployeeViewModel: ObservableObject {
     
     // Function to fetch upcoming events from Firestore
     func fetchUpcomingEvents(employeeName: String = "") {
-        isLoadingSchedule = true
-        upcomingShifts = []
-        allSessions = []
+        // Don't show loading if we already have sessions
+        if upcomingShifts.isEmpty {
+            isLoadingSchedule = true
+        }
         
-        // Remove any existing listener before creating a new one
-        sessionListener?.remove()
+        // Check if we already have a listener - avoid creating duplicates
+        if sessionListener != nil {
+            print("📅 MainEmployeeView: Already have active listener, skipping fetch")
+            return
+        }
         
         // Load sessions from Firestore with real-time updates
         sessionListener = sessionService.listenForSessions { [weak self] sessions in
