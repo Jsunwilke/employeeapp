@@ -12,8 +12,7 @@ struct SchoolInfoListView: View {
     @AppStorage("userOrganizationID") var storedUserOrganizationID: String = ""
     
     var body: some View {
-        NavigationView {
-            VStack {
+        VStack {
                 if isLoading {
                     ProgressView("Loading schools...")
                         .padding()
@@ -85,7 +84,6 @@ struct SchoolInfoListView: View {
                       dismissButton: .default(Text("OK")) {
                           errorMessage = ""
                       })
-            }
         }
     }
     

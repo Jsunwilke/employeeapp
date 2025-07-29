@@ -169,8 +169,7 @@ struct TabBarConfigurationView: View {
     @State private var editMode: EditMode = .active
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
                 // Header with instructions and count
                 VStack(spacing: 8) {
                     Text("Select up to 5 features for quick access")
@@ -257,26 +256,25 @@ struct TabBarConfigurationView: View {
                 }
                 .listStyle(InsetGroupedListStyle())
                 .environment(\.editMode, $editMode)
-            }
-            .navigationTitle("Customize Tab Bar")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .fontWeight(.semibold)
+        }
+        .navigationTitle("Customize Tab Bar")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("Cancel") {
+                    dismiss()
                 }
             }
-            .onAppear {
-                loadFeatures()
+            
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Done") {
+                    dismiss()
+                }
+                .fontWeight(.semibold)
             }
+        }
+        .onAppear {
+            loadFeatures()
         }
     }
     

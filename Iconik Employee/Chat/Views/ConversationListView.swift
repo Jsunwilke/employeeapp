@@ -21,8 +21,7 @@ struct ConversationListView: View {
     }
     
     var body: some View {
-        NavigationView {
-            ZStack {
+        ZStack {
                 if chatManager.isLoading && chatManager.conversations.isEmpty {
                     ProgressView("Loading conversations...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -78,9 +77,7 @@ struct ConversationListView: View {
             })
             .onChange(of: chatManager.errorMessage) { error in
                 showErrorAlert = error != nil
-            }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
     }
     
     // MARK: - Views
@@ -315,6 +312,8 @@ struct ConversationRow: View {
 // MARK: - Preview
 struct ConversationListView_Previews: PreviewProvider {
     static var previews: some View {
-        ConversationListView()
+        NavigationView {
+            ConversationListView()
+        }
     }
 }
