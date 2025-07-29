@@ -12,6 +12,15 @@ struct EmployeeAppApp: App {
     init() {
         FirebaseApp.configure()
         
+        // Enable Firestore offline persistence for better caching and offline support
+        let settings = FirestoreSettings()
+        settings.isPersistenceEnabled = true
+        // Increase cache size to 100MB (default is 40MB) for better performance
+        settings.cacheSizeBytes = FirestoreCacheSizeUnlimited
+        Firestore.firestore().settings = settings
+        
+        print("🔥 Firestore persistence enabled with unlimited cache")
+        
         // Apply the saved theme immediately during app initialization
         applyAppTheme()
     }

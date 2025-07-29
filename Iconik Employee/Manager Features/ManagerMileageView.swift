@@ -35,6 +35,9 @@ class ManagerMileageViewModel: ObservableObject {
     // Optional: hold an error message for display in an alert
     @Published var errorMessage: String? = nil
     
+    // Store organization ID
+    private var organizationID: String = ""
+    
     // 14-day pay period logic
     private let calendar = Calendar.current
     let currentPeriodStart: Date
@@ -80,6 +83,9 @@ class ManagerMileageViewModel: ObservableObject {
     
     /// Loads employees from Firestore, then automatically loads stats for the current pay period.
     func loadEmployees(orgID: String) {
+        // Store the organization ID
+        self.organizationID = orgID
+        
         let db = Firestore.firestore()
         db.collection("users")
             .whereField("organizationID", isEqualTo: orgID)
@@ -155,6 +161,7 @@ class ManagerMileageViewModel: ObservableObject {
         for emp in employees {
             group.enter()
             db.collection("dailyJobReports")
+                .whereField("organizationID", isEqualTo: organizationID)
                 .whereField("yourName", isEqualTo: emp.firstName)
                 .whereField("date", isGreaterThanOrEqualTo: yearStart)
                 .whereField("date", isLessThanOrEqualTo: yearEnd)

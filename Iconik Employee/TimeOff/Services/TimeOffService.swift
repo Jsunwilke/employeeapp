@@ -16,6 +16,13 @@ class TimeOffService: ObservableObject {
     private var currentUserId: String?
     private var currentOrgId: String?
     
+    // Cache management
+    private var lastCacheUpdate: Date?
+    private let cacheValidityDuration: TimeInterval = 300 // 5 minutes
+    
+    // Track if we have an active listener to prevent duplicates
+    private var hasActiveListener = false
+    
     private init() {
         setupUser()
     }
@@ -38,7 +45,20 @@ class TimeOffService: ObservableObject {
             return
         }
         
+        // Check if we already have an active listener
+        if hasActiveListener {
+            print("📅 TimeOffService: Reusing existing listener")
+            // If we have cached data and it's still valid, use it
+            if let lastUpdate = lastCacheUpdate,
+               Date().timeIntervalSince(lastUpdate) < cacheValidityDuration,
+               !timeOffRequests.isEmpty {
+                updateFilteredLists()
+            }
+            return
+        }
+        
         requestsListener?.remove()
+        hasActiveListener = true
         
         requestsListener = db.collection("timeOffRequests")
             .whereField("organizationID", isEqualTo: orgId)
@@ -55,6 +75,8 @@ class TimeOffService: ObservableObject {
                     self?.timeOffRequests = documents.compactMap { doc in
                         TimeOffRequest(id: doc.documentID, data: doc.data())
                     }
+                    
+                    self?.lastCacheUpdate = Date()
                     
                     self?.updateFilteredLists()
                 }
@@ -74,6 +96,7 @@ class TimeOffService: ObservableObject {
     func stopListening() {
         requestsListener?.remove()
         requestsListener = nil
+        hasActiveListener = false
     }
     
     // MARK: - Create Request
@@ -86,6 +109,9 @@ class TimeOffService: ObservableObject {
         isPartialDay: Bool,
         startTime: String? = nil,
         endTime: String? = nil,
+        isPaidTimeOff: Bool = false,
+        ptoHoursRequested: Double? = nil,
+        projectedPTOBalance: Double? = nil,
         completion: @escaping (Bool, String?) -> Void
     ) {
         guard let userId = currentUserId,
@@ -113,7 +139,10 @@ class TimeOffService: ObservableObject {
             notes: notes,
             isPartialDay: isPartialDay,
             startTime: startTime,
-            endTime: endTime
+            endTime: endTime,
+            isPaidTimeOff: isPaidTimeOff,
+            ptoHoursRequested: ptoHoursRequested,
+            projectedPTOBalance: projectedPTOBalance
         )
         
         // Validate request
@@ -133,6 +162,18 @@ class TimeOffService: ObservableObject {
                 if let error = error {
                     completion(false, "Error creating request: \(error.localizedDescription)")
                 } else {
+                    // If using PTO, reserve the hours
+                    if isPaidTimeOff, let ptoHours = ptoHoursRequested {
+                        PTOService.shared.reservePTOHours(
+                            userId: userId,
+                            organizationID: orgId,
+                            hours: ptoHours
+                        ) { reserved, ptoError in
+                            if !reserved {
+                                print("Warning: Failed to reserve PTO hours: \(ptoError ?? "Unknown error")")
+                            }
+                        }
+                    }
                     completion(true, nil)
                 }
             }
@@ -150,6 +191,9 @@ class TimeOffService: ObservableObject {
         isPartialDay: Bool,
         startTime: String? = nil,
         endTime: String? = nil,
+        isPaidTimeOff: Bool = false,
+        ptoHoursRequested: Double? = nil,
+        projectedPTOBalance: Double? = nil,
         completion: @escaping (Bool, String?) -> Void
     ) {
         guard let userId = currentUserId,
@@ -170,8 +214,8 @@ class TimeOffService: ObservableObject {
             return
         }
         
-        if existingRequest.status != .pending {
-            completion(false, "You can only edit pending requests")
+        if existingRequest.status != .pending && existingRequest.status != .underReview {
+            completion(false, "You can only edit pending or under review requests")
             return
         }
         
@@ -183,8 +227,23 @@ class TimeOffService: ObservableObject {
             "reason": reason.rawValue,
             "notes": notes,
             "isPartialDay": isPartialDay,
+            "isPaidTimeOff": isPaidTimeOff,
             "updatedAt": Timestamp(date: Date())
         ]
+        
+        // Add PTO fields if using PTO
+        if isPaidTimeOff {
+            if let ptoHours = ptoHoursRequested {
+                updateData["ptoHoursRequested"] = ptoHours
+            }
+            if let projBalance = projectedPTOBalance {
+                updateData["projectedPTOBalance"] = projBalance
+            }
+        } else {
+            // Remove PTO fields if not using PTO
+            updateData["ptoHoursRequested"] = FieldValue.delete()
+            updateData["projectedPTOBalance"] = FieldValue.delete()
+        }
         
         // Handle partial day fields
         if isPartialDay {
@@ -233,8 +292,8 @@ class TimeOffService: ObservableObject {
             return
         }
         
-        if existingRequest.status != .pending {
-            completion(false, "You can only cancel pending requests")
+        if existingRequest.status != .pending && existingRequest.status != .underReview {
+            completion(false, "You can only cancel pending or under review requests")
             return
         }
         
@@ -252,6 +311,18 @@ class TimeOffService: ObservableObject {
                 if let error = error {
                     completion(false, "Error cancelling request: \(error.localizedDescription)")
                 } else {
+                    // If request was using PTO, release the reserved hours
+                    if existingRequest.isPaidTimeOff, let ptoHours = existingRequest.ptoHoursRequested {
+                        PTOService.shared.releasePTOHours(
+                            userId: userId,
+                            organizationID: self?.currentOrgId ?? "",
+                            hours: ptoHours
+                        ) { released, ptoError in
+                            if !released {
+                                print("Warning: Failed to release PTO hours: \(ptoError ?? "Unknown error")")
+                            }
+                        }
+                    }
                     completion(true, nil)
                 }
             }
@@ -263,6 +334,12 @@ class TimeOffService: ObservableObject {
     func approveTimeOffRequest(requestId: String, completion: @escaping (Bool, String?) -> Void) {
         guard let userId = currentUserId else {
             completion(false, "User not authenticated")
+            return
+        }
+        
+        // Find the request to check if it uses PTO
+        guard let request = timeOffRequests.first(where: { $0.id == requestId }) else {
+            completion(false, "Request not found")
             return
         }
         
@@ -288,6 +365,18 @@ class TimeOffService: ObservableObject {
                 if let error = error {
                     completion(false, "Error approving request: \(error.localizedDescription)")
                 } else {
+                    // If request uses PTO, deduct the hours
+                    if request.isPaidTimeOff, let ptoHours = request.ptoHoursRequested {
+                        PTOService.shared.usePTOHours(
+                            userId: request.photographerId,
+                            organizationID: request.organizationID,
+                            hours: ptoHours
+                        ) { used, ptoError in
+                            if !used {
+                                print("Warning: Failed to deduct PTO hours: \(ptoError ?? "Unknown error")")
+                            }
+                        }
+                    }
                     completion(true, nil)
                 }
             }
@@ -302,6 +391,12 @@ class TimeOffService: ObservableObject {
         
         if denialReason.trimmingCharacters(in: .whitespaces).isEmpty {
             completion(false, "Denial reason is required")
+            return
+        }
+        
+        // Find the request to check if it uses PTO
+        guard let request = timeOffRequests.first(where: { $0.id == requestId }) else {
+            completion(false, "Request not found")
             return
         }
         
@@ -327,6 +422,64 @@ class TimeOffService: ObservableObject {
                 
                 if let error = error {
                     completion(false, "Error denying request: \(error.localizedDescription)")
+                } else {
+                    // If request was using PTO, release the reserved hours
+                    if request.isPaidTimeOff, let ptoHours = request.ptoHoursRequested {
+                        PTOService.shared.releasePTOHours(
+                            userId: request.photographerId,
+                            organizationID: request.organizationID,
+                            hours: ptoHours
+                        ) { released, ptoError in
+                            if !released {
+                                print("Warning: Failed to release PTO hours: \(ptoError ?? "Unknown error")")
+                            }
+                        }
+                    }
+                    completion(true, nil)
+                }
+            }
+        }
+    }
+    
+    func putTimeOffRequestInReview(requestId: String, completion: @escaping (Bool, String?) -> Void) {
+        guard let userId = currentUserId else {
+            completion(false, "User not authenticated")
+            return
+        }
+        
+        // Find the request
+        guard let request = timeOffRequests.first(where: { $0.id == requestId }) else {
+            completion(false, "Request not found")
+            return
+        }
+        
+        // Only pending requests can be put in review
+        if request.status != .pending {
+            completion(false, "Only pending requests can be put in review")
+            return
+        }
+        
+        // Get reviewer info
+        let firstName = UserDefaults.standard.string(forKey: "userFirstName") ?? ""
+        let lastName = UserDefaults.standard.string(forKey: "userLastName") ?? ""
+        let reviewerName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+        
+        isLoading = true
+        
+        let updateData: [String: Any] = [
+            "status": TimeOffStatus.underReview.rawValue,
+            "reviewedBy": userId,
+            "reviewerName": reviewerName,
+            "reviewedAt": Timestamp(date: Date()),
+            "updatedAt": Timestamp(date: Date())
+        ]
+        
+        db.collection("timeOffRequests").document(requestId).updateData(updateData) { [weak self] error in
+            DispatchQueue.main.async {
+                self?.isLoading = false
+                
+                if let error = error {
+                    completion(false, "Error putting request in review: \(error.localizedDescription)")
                 } else {
                     completion(true, nil)
                 }
@@ -405,12 +558,12 @@ class TimeOffService: ObservableObject {
     
     func canEditRequest(_ request: TimeOffRequest) -> Bool {
         guard let userId = currentUserId else { return false }
-        return request.photographerId == userId && request.status == .pending
+        return request.photographerId == userId && (request.status == .pending || request.status == .underReview)
     }
     
     func canCancelRequest(_ request: TimeOffRequest) -> Bool {
         guard let userId = currentUserId else { return false }
-        return request.photographerId == userId && request.status == .pending
+        return request.photographerId == userId && (request.status == .pending || request.status == .underReview)
     }
     
     // MARK: - Calendar Integration
@@ -425,7 +578,7 @@ class TimeOffService: ObservableObject {
         // Include both pending and approved requests for calendar display
         db.collection("timeOffRequests")
             .whereField("organizationID", isEqualTo: orgId)
-            .whereField("status", in: ["pending", "approved"])
+            .whereField("status", in: ["pending", "under_review", "approved"])
             .whereField("startDate", isLessThanOrEqualTo: Timestamp(date: dateRange.end))
             .whereField("endDate", isGreaterThanOrEqualTo: Timestamp(date: dateRange.start))
             .getDocuments { snapshot, error in
@@ -447,6 +600,7 @@ class TimeOffService: ObservableObject {
                 // Convert to calendar entries
                 let calendarEntries = self.convertToCalendarEntries(requests: requests)
                 
+                
                 DispatchQueue.main.async {
                     completion(calendarEntries)
                 }
@@ -459,10 +613,27 @@ class TimeOffService: ObservableObject {
             return nil
         }
         
+        // Instead of creating a separate listener, filter from the main timeOffRequests
+        // if we already have an active listener
+        if hasActiveListener && !timeOffRequests.isEmpty {
+            let filteredRequests = timeOffRequests.filter { request in
+                (request.status == .pending || request.status == .underReview || request.status == .approved) &&
+                request.startDate <= dateRange.end &&
+                request.endDate >= dateRange.start
+            }
+            let calendarEntries = convertToCalendarEntries(requests: filteredRequests)
+            completion(calendarEntries)
+            
+            // Return a dummy listener that does nothing when removed
+            return ListenerRegistrationWrapper {
+                print("📅 TimeOff calendar: Using filtered data from main listener")
+            }
+        }
+        
         // Set up real-time listener for calendar time off updates
         return db.collection("timeOffRequests")
             .whereField("organizationID", isEqualTo: orgId)
-            .whereField("status", in: ["pending", "approved"])
+            .whereField("status", in: ["pending", "under_review", "approved"])
             .whereField("startDate", isLessThanOrEqualTo: Timestamp(date: dateRange.end))
             .whereField("endDate", isGreaterThanOrEqualTo: Timestamp(date: dateRange.start))
             .addSnapshotListener { snapshot, error in
@@ -483,6 +654,7 @@ class TimeOffService: ObservableObject {
                 
                 // Convert to calendar entries
                 let calendarEntries = self.convertToCalendarEntries(requests: requests)
+                
                 
                 DispatchQueue.main.async {
                     completion(calendarEntries)

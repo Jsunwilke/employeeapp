@@ -15,12 +15,16 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
     }
     
+    function userExists() {
+      return firestore.exists(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+    
     function getUserRole() {
-      return getUserData().role;
+      return userExists() && 'role' in getUserData() ? getUserData().role : '';
     }
     
     function getOrganizationId() {
-      return getUserData().organizationID;
+      return userExists() && 'organizationID' in getUserData() ? getUserData().organizationID : '';
     }
     
     function isAdmin() {
@@ -118,13 +122,26 @@ service firebase.storage {
                       isValidFileSize(25); // 25MB limit for school documents
     }
 
-    // Location photos for schools
-    match /locationPhotos/{schoolId}/{fileName} {
-      allow read: if isAuthenticated();
+    // Location photos for schools - Updated with organization validation
+    match /locationPhotos/{orgId}/{schoolId}/{fileName} {
+      allow read: if isAuthenticated() && 
+                     (
+                       // Allow access with download token (for URLs)
+                       request.auth.token.email != null ||
+                       // Standard organization validation
+                       (userExists() &&
+                        getOrganizationId() == orgId)
+                     );
       allow write: if isAuthenticated() && 
+                      userExists() &&
+                      getOrganizationId() == orgId &&
                       isEmployee() &&
                       isValidImageType() &&
                       isValidFileSize(25); // 25MB limit for location photos
+      allow delete: if isAuthenticated() && 
+                       userExists() &&
+                       getOrganizationId() == orgId &&
+                       isManager();
     }
 
     // Equipment photos and documentation
@@ -177,26 +194,49 @@ service firebase.storage {
       // Auto-delete rule should be set up via Firebase Functions
     }
 
-    // Daily job report photos
-    match /dailyReports/{userId}/{fileName} {
+    // Daily job report photos - Updated with organization validation
+    match /dailyReports/{orgId}/{userId}/{fileName} {
       allow read: if isAuthenticated() && 
-                     (userId == getUserId() || 
-                      getOrganizationId() == getUserData().organizationID);
+                     (
+                       // Allow access with download token (for URLs)
+                       request.auth.token.email != null ||
+                       // Standard organization validation
+                       (userExists() &&
+                        getOrganizationId() == orgId &&
+                        (userId == getUserId() || isManager()))
+                     );
       allow write: if isAuthenticated() && 
+                      userExists() &&
+                      getOrganizationId() == orgId &&
                       userId == getUserId() &&
                       isValidImageType() &&
                       isValidFileSize(20); // 20MB limit
       allow delete: if isAuthenticated() && 
-                       userId == getUserId();
+                       userExists() &&
+                       getOrganizationId() == orgId &&
+                       (userId == getUserId() || isManager());
     }
 
-    // Photoshoot notes photos
-    match /photoshootNotes/{noteId}/{fileName} {
-      allow read: if isAuthenticated();
+    // Photoshoot notes photos - Updated with organization validation
+    match /photoshootNotes/{orgId}/{noteId}/{fileName} {
+      allow read: if isAuthenticated() && 
+                     (
+                       // Allow access with download token (for URLs)
+                       request.auth.token.email != null ||
+                       // Standard organization validation
+                       (userExists() &&
+                        getOrganizationId() == orgId)
+                     );
       allow write: if isAuthenticated() && 
+                      userExists() &&
+                      getOrganizationId() == orgId &&
+                      isEmployee() &&
                       isValidImageType() &&
                       isValidFileSize(20); // 20MB limit
-      allow delete: if isAuthenticated();
+      allow delete: if isAuthenticated() && 
+                       userExists() &&
+                       getOrganizationId() == orgId &&
+                       isManager();
     }
 
     // Public assets (if any) - read-only

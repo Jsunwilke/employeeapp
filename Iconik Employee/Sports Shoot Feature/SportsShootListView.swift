@@ -116,11 +116,14 @@ struct SportsShootListView: View {
     // Device orientation detection
     @State private var orientation = UIDeviceOrientation.unknown
     
+    // Track if view is visible to optimize timers
+    @State private var isViewVisible = false
+    
     // Timer for refreshing locked entries - using a longer interval to prevent flickering
-    let lockRefreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+    let lockRefreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     
     // Sync statuses refresh timer - using a longer interval to prevent flickering
-    let syncStatusTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+    let syncStatusTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     
     // Filter options
     let specialFilters = ["Seniors", "8th Graders", "Coaches"]
@@ -214,15 +217,23 @@ struct SportsShootListView: View {
         }
         .customKeyboardOverlay() // Add custom keyboard support
         .onAppear {
+            isViewVisible = true
             loadSportsShoots()
             setupNetworkMonitoring()
             setupConflictHandling()
         }
+        .onDisappear {
+            isViewVisible = false
+        }
         .onReceive(lockRefreshTimer) { _ in
-            refreshLocks()
+            if isViewVisible {
+                refreshLocks()
+            }
         }
         .onReceive(syncStatusTimer) { _ in
-            viewModel.triggerUpdate()
+            if isViewVisible {
+                viewModel.triggerUpdate()
+            }
         }
         .alert(isPresented: $viewModel.showingErrorAlert) {
             Alert(
@@ -842,6 +853,7 @@ struct SportsShootListView: View {
         }
         .navigationViewStyle(DoubleColumnNavigationViewStyle())
         .onAppear {
+            isViewVisible = true
             loadSportsShoots()
             // Force the sidebar to be visible on first appear and ensure it stays visible
             forceSidebarVisibility()

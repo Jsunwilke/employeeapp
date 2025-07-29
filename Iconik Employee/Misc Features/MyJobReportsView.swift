@@ -6,12 +6,14 @@ import SwiftUI
 import FirebaseFirestore
 import FirebaseAuth
 
-// Updated JobReport struct now includes a "school" field.
+// Updated JobReport struct now includes a "school" field and photo count.
 struct JobReport: Identifiable {
     let id: String
     let date: Date
     let school: String
     let totalMileage: Double
+    let photoCount: Int
+    let photoURLs: [String]
 }
 
 struct MyJobReportsView: View {
@@ -22,13 +24,31 @@ struct MyJobReportsView: View {
     var body: some View {
         List(reports) { report in
             NavigationLink(destination: EditDailyJobReportView(report: report)) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(report.date, style: .date)
-                        .font(.headline)
-                    Text(report.school)
-                        .font(.subheadline)
-                    Text("Mileage: \(report.totalMileage, specifier: "%.1f")")
-                        .font(.footnote)
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(report.date, style: .date)
+                            .font(.headline)
+                        Text(report.school)
+                            .font(.subheadline)
+                        HStack {
+                            Text("Mileage: \(report.totalMileage, specifier: "%.1f")")
+                                .font(.footnote)
+                            if report.photoCount > 0 {
+                                Spacer()
+                                HStack(spacing: 4) {
+                                    Image(systemName: "photo.fill")
+                                        .font(.caption)
+                                    Text("\(report.photoCount)")
+                                        .font(.caption)
+                                }
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(Color.blue.opacity(0.1))
+                                .cornerRadius(10)
+                            }
+                        }
+                    }
                 }
                 .padding(.vertical, 4)
             }
@@ -79,10 +99,16 @@ struct MyJobReportsView: View {
                     guard let timestamp = data["date"] as? Timestamp,
                           let school = data["schoolOrDestination"] as? String,
                           let totalMileage = data["totalMileage"] as? Double else { return nil }
+                    
+                    // Get photo URLs from the report
+                    let photoURLs = data["photoURLs"] as? [String] ?? []
+                    
                     return JobReport(id: doc.documentID,
                                      date: timestamp.dateValue(),
                                      school: school,
-                                     totalMileage: totalMileage)
+                                     totalMileage: totalMileage,
+                                     photoCount: photoURLs.count,
+                                     photoURLs: photoURLs)
                 }
             }
     }

@@ -9,6 +9,11 @@ struct SettingsView: View {
                 Label("Account Info", systemImage: "person.crop.circle")
             }
             
+            // PTO Balance
+            NavigationLink(destination: PTOBalanceView()) {
+                Label("PTO Balance", systemImage: "clock.fill")
+            }
+            
             // Profile Photo
             NavigationLink(destination: ProfilePhotoView()) {
                 Label("Upload Profile Photo", systemImage: "photo")

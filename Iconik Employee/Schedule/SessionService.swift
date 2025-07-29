@@ -2,6 +2,8 @@ import Foundation
 import FirebaseFirestore
 import FirebaseAuth
 import Network
+import SwiftUI
+import Combine
 
 class SessionService: ObservableObject {
     // Singleton instance
@@ -14,6 +16,20 @@ class SessionService: ObservableObject {
     @Published var isConnected: Bool = true
     @Published var lastError: String?
     @Published var isRetrying: Bool = false
+    
+    // Cache for sessions
+    private var sessionsCache: [Session] = []
+    private var lastCacheUpdate: Date?
+    private let cacheValidityDuration: TimeInterval = 300 // 5 minutes
+    
+    // Track active listeners to prevent duplicates
+    private var activeListeners: [String: ListenerRegistration] = [:]
+    private let listenerQueue = DispatchQueue(label: "SessionServiceListeners")
+    
+    // Pagination support
+    private let pageSize = 50
+    private var lastDocument: DocumentSnapshot?
+    private var hasMorePages = true
     
     private init() {
         setupNetworkMonitoring()
@@ -43,6 +59,9 @@ class SessionService: ObservableObject {
             print("🔄 SessionService: No cached org ID, fetching async")
             #endif
             
+            // Create a dummy listener that we'll replace once we have the org ID
+            var realListener: ListenerRegistration?
+            
             // Get organization ID and then set up listener
             UserManager.shared.getCurrentUserOrganizationID { organizationID in
                 #if DEBUG
@@ -56,28 +75,76 @@ class SessionService: ObservableObject {
                     return
                 }
                 
-                // Now set up the listener with the organization ID and call completion
-                let _ = self.listenForSessionsWithOrganizationID(orgID, completion: completion)
+                // Now set up the real listener with the organization ID
+                realListener = self.listenForSessionsWithOrganizationID(orgID, completion: completion)
             }
             
-            // Return a placeholder listener that doesn't interfere
-            return db.collection("sessions").whereField("organizationID", isEqualTo: "loading").addSnapshotListener { _, _ in
-                // This is a placeholder listener that won't match any real documents
-                #if DEBUG
-                print("🔄 SessionService: Placeholder listener fired (should not happen)")
-                #endif
+            // Return a wrapper that will remove the real listener when called
+            return ListenerRegistrationWrapper {
+                realListener?.remove()
             }
         }
     }
     
     // Helper method to listen for sessions with a specific organization ID
     private func listenForSessionsWithOrganizationID(_ organizationID: String, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
-        return db.collection("sessions")
+        let listenerKey = "sessions-org-\(organizationID)"
+        
+        // Check if we already have an active listener for this query
+        var existingListener: ListenerRegistration?
+        listenerQueue.sync {
+            existingListener = activeListeners[listenerKey]
+        }
+        
+        if existingListener != nil {
+            #if DEBUG
+            print("📅 Reusing existing listener for org: \(organizationID)")
+            #endif
+            // Return cached data immediately if available
+            if !sessionsCache.isEmpty {
+                completion(sessionsCache)
+            }
+            // Return wrapper that removes reference but doesn't actually remove the shared listener
+            return ListenerRegistrationWrapper { [weak self] in
+                self?.listenerQueue.sync {
+                    // Don't remove the actual listener as others might be using it
+                    #if DEBUG
+                    print("📅 Listener reference removed but keeping shared listener active")
+                    #endif
+                }
+            }
+        }
+        
+        // Check cache first
+        if let lastUpdate = lastCacheUpdate,
+           Date().timeIntervalSince(lastUpdate) < cacheValidityDuration,
+           !sessionsCache.isEmpty {
+            #if DEBUG
+            print("📅 Using cached sessions: \(sessionsCache.count) sessions")
+            #endif
+            completion(sessionsCache)
+            
+            // Return a dummy listener that does nothing when removed
+            // This prevents creating a new listener when we have valid cache
+            return ListenerRegistrationWrapper {
+                #if DEBUG
+                print("📅 Dummy listener removed (was using cache)")
+                #endif
+            }
+        }
+        
+        // Create new listener
+        let listener = db.collection("sessions")
             .whereField("organizationID", isEqualTo: organizationID)
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error = error {
                     self?.handleError(error, operation: "Listening for sessions")
-                    completion([])
+                    // Return cached data on error if available
+                    if let self = self, !self.sessionsCache.isEmpty {
+                        completion(self.sessionsCache)
+                    } else {
+                        completion([])
+                    }
                     return
                 }
                 
@@ -95,10 +162,59 @@ class SessionService: ObservableObject {
                     Session(id: document.documentID, data: document.data())
                 }
                 
-                #if DEBUG
+                // Update cache
+                self?.sessionsCache = sessions
+                self?.lastCacheUpdate = Date()
+                
                 print("📅 Loaded \(sessions.count) sessions for organization \(organizationID)")
-                #endif
                 completion(sessions)
+            }
+        
+        // Store the listener
+        listenerQueue.sync {
+            activeListeners[listenerKey] = listener
+        }
+        
+        // Return wrapper that properly manages the listener
+        return ListenerRegistrationWrapper { [weak self] in
+            self?.listenerQueue.sync {
+                // Only remove if this is the actual listener owner
+                if self?.activeListeners[listenerKey] != nil {
+                    self?.activeListeners[listenerKey]?.remove()
+                    self?.activeListeners.removeValue(forKey: listenerKey)
+                    #if DEBUG
+                    print("📅 Removed listener for key: \(listenerKey)")
+                    #endif
+                }
+            }
+        }
+    }
+    
+    // Listen for a specific session by ID
+    func listenForSession(sessionId: String, completion: @escaping (Session?) -> Void) -> ListenerRegistration {
+        return db.collection("sessions").document(sessionId)
+            .addSnapshotListener { [weak self] snapshot, error in
+                if let error = error {
+                    self?.handleError(error, operation: "Listening for session \(sessionId)")
+                    completion(nil)
+                    return
+                }
+                
+                // Clear any previous errors on successful data load
+                DispatchQueue.main.async {
+                    self?.lastError = nil
+                }
+                
+                guard let document = snapshot, document.exists,
+                      let data = document.data() else {
+                    completion(nil)
+                    return
+                }
+                
+                let session = Session(id: document.documentID, data: data)
+                
+                print("📅 Updated session \(session.schoolName)")
+                completion(session)
             }
     }
     
@@ -141,6 +257,9 @@ class SessionService: ObservableObject {
                     completion(sessions)
                 }
         } else {
+            // Create a dummy listener that we'll replace once we have the org ID
+            var realListener: ListenerRegistration?
+            
             // Get organization ID first
             UserManager.shared.getCurrentUserOrganizationID { organizationID in
                 guard let orgID = organizationID else {
@@ -151,7 +270,7 @@ class SessionService: ObservableObject {
                     return
                 }
                 
-                let _ = self.db.collection("sessions")
+                realListener = self.db.collection("sessions")
                     .whereField("organizationID", isEqualTo: orgID)
                     .whereField("date", isGreaterThanOrEqualTo: startDateString)
                     .whereField("date", isLessThan: endDateString)
@@ -171,15 +290,14 @@ class SessionService: ObservableObject {
                             Session(id: document.documentID, data: document.data())
                         }
                         
+                        
                         completion(sessions)
                     }
             }
             
-            return db.collection("sessions").whereField("organizationID", isEqualTo: "loading").addSnapshotListener { _, _ in 
-                // This is a placeholder listener that won't match any real documents
-                #if DEBUG
-                print("🔄 SessionService: Placeholder listener fired (should not happen)")
-                #endif
+            // Return a wrapper that will remove the real listener when called
+            return ListenerRegistrationWrapper {
+                realListener?.remove()
             }
         }
     }
@@ -211,13 +329,16 @@ class SessionService: ObservableObject {
                     completion(sessions)
                 }
         } else {
+            // Create a dummy listener that we'll replace once we have the org ID
+            var realListener: ListenerRegistration?
+            
             UserManager.shared.getCurrentUserOrganizationID { organizationID in
                 guard let orgID = organizationID else {
                     completion([])
                     return
                 }
                 
-                let _ = self.db.collection("sessions")
+                realListener = self.db.collection("sessions")
                     .whereField("organizationID", isEqualTo: orgID)
                     .whereField("employeeName", isEqualTo: employeeName)
                     .addSnapshotListener { snapshot, error in
@@ -236,15 +357,14 @@ class SessionService: ObservableObject {
                             Session(id: document.documentID, data: document.data())
                         }
                         
+                        
                         completion(sessions)
                     }
             }
             
-            return db.collection("sessions").whereField("organizationID", isEqualTo: "loading").addSnapshotListener { _, _ in 
-                // This is a placeholder listener that won't match any real documents
-                #if DEBUG
-                print("🔄 SessionService: Placeholder listener fired (should not happen)")
-                #endif
+            // Return a wrapper that will remove the real listener when called
+            return ListenerRegistrationWrapper {
+                realListener?.remove()
             }
         }
     }
@@ -336,6 +456,12 @@ class SessionService: ObservableObject {
     
     // MARK: - Helper Methods
     
+    // Clear the sessions cache
+    func clearCache() {
+        sessionsCache = []
+        lastCacheUpdate = nil
+    }
+    
     // Check if user has permission to manage sessions (for future admin features)
     func userCanManageSessions() -> Bool {
         // For now, allow all authenticated users to read sessions
@@ -391,6 +517,55 @@ class SessionService: ObservableObject {
         }
     }
     
+    // MARK: - Paginated Loading
+    
+    // Load sessions with pagination support
+    func loadSessionsPage(organizationID: String, completion: @escaping ([Session], Bool) -> Void) {
+        guard hasMorePages else {
+            completion([], false)
+            return
+        }
+        
+        var query = db.collection("sessions")
+            .whereField("organizationID", isEqualTo: organizationID)
+            .order(by: "date", descending: true)
+            .limit(to: pageSize)
+        
+        // If we have a last document, start after it
+        if let lastDoc = lastDocument {
+            query = query.start(afterDocument: lastDoc)
+        }
+        
+        query.getDocuments { [weak self] snapshot, error in
+            if let error = error {
+                print("Error loading sessions page: \(error.localizedDescription)")
+                completion([], false)
+                return
+            }
+            
+            guard let documents = snapshot?.documents else {
+                completion([], false)
+                return
+            }
+            
+            let sessions = documents.map { document in
+                Session(id: document.documentID, data: document.data())
+            }
+            
+            // Update pagination state
+            self?.lastDocument = documents.last
+            self?.hasMorePages = documents.count == self?.pageSize
+            
+            completion(sessions, self?.hasMorePages ?? false)
+        }
+    }
+    
+    // Reset pagination state
+    func resetPagination() {
+        lastDocument = nil
+        hasMorePages = true
+    }
+    
     // MARK: - Network Monitoring
     
     private func setupNetworkMonitoring() {
@@ -440,3 +615,4 @@ class SessionService: ObservableObject {
         monitor.cancel()
     }
 }
+

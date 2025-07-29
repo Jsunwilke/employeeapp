@@ -634,59 +634,87 @@ struct LocationPhotoAttachmentView: View {
             return
         }
         
+        guard let currentUser = Auth.auth().currentUser else {
+            errorMessage = "User not authenticated"
+            return
+        }
+        
         isUploading = true
         
         let storageRef = Storage.storage().reference()
         let db = Firestore.firestore()
         
-        var uploadedPhotoDicts: [[String: String]] = []
-        let dispatchGroup = DispatchGroup()
-        
-        for labeledImage in labeledImages {
-            guard let imageData = labeledImage.image.jpegData(compressionQuality: 0.8) else { continue }
-            dispatchGroup.enter()
-            
-            // Create a unique path for each image.
-            let fileName = "locationPhotos/\(school.id)/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
-            let photoRef = storageRef.child(fileName)
-            
-            photoRef.putData(imageData, metadata: nil) { metadata, error in
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self.isUploading = false
-                        self.errorMessage = "Upload error: \(error.localizedDescription)"
-                    }
-                    dispatchGroup.leave()
-                    return
+        // First get the user's organization ID
+        db.collection("users").document(currentUser.uid).getDocument { userDoc, error in
+            if let error = error {
+                DispatchQueue.main.async {
+                    self.isUploading = false
+                    self.errorMessage = "Error getting user data: \(error.localizedDescription)"
                 }
-                // Once uploaded, get the download URL.
-                photoRef.downloadURL { url, error in
+                return
+            }
+            
+            guard let userData = userDoc?.data(),
+                  let organizationID = userData["organizationID"] as? String else {
+                DispatchQueue.main.async {
+                    self.isUploading = false
+                    self.errorMessage = "User organization not found"
+                }
+                return
+            }
+            
+            var uploadedPhotoDicts: [[String: String]] = []
+            let dispatchGroup = DispatchGroup()
+            
+            for labeledImage in self.labeledImages {
+                guard let imageData = labeledImage.image.jpegData(compressionQuality: 0.8) else { continue }
+                dispatchGroup.enter()
+                
+                // Updated path to include organization ID
+                let fileName = "locationPhotos/\(organizationID)/\(school.id)/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
+                let photoRef = storageRef.child(fileName)
+                
+                // Set metadata with content type
+                let metadata = StorageMetadata()
+                metadata.contentType = "image/jpeg"
+                
+                photoRef.putData(imageData, metadata: metadata) { metadata, error in
                     if let error = error {
                         DispatchQueue.main.async {
                             self.isUploading = false
-                            self.errorMessage = "Download URL error: \(error.localizedDescription)"
+                            self.errorMessage = "Upload error: \(error.localizedDescription)"
                         }
-                    } else if let downloadURL = url {
-                        // Create a dictionary with URL and label.
-                        let dict: [String: String] = [
-                            "url": downloadURL.absoluteString,
-                            "label": labeledImage.label.isEmpty ? "Location Photo" : labeledImage.label
-                        ]
-                        uploadedPhotoDicts.append(dict)
+                        dispatchGroup.leave()
+                        return
                     }
-                    dispatchGroup.leave()
+                    // Once uploaded, get the download URL.
+                    photoRef.downloadURL { url, error in
+                        if let error = error {
+                            DispatchQueue.main.async {
+                                self.isUploading = false
+                                self.errorMessage = "Download URL error: \(error.localizedDescription)"
+                            }
+                        } else if let downloadURL = url {
+                            // Create a dictionary with URL and label.
+                            let dict: [String: String] = [
+                                "url": downloadURL.absoluteString,
+                                "label": labeledImage.label.isEmpty ? "Location Photo" : labeledImage.label
+                            ]
+                            uploadedPhotoDicts.append(dict)
+                        }
+                        dispatchGroup.leave()
+                    }
                 }
             }
-        }
-        
-        // After all uploads complete, update Firestore.
-        dispatchGroup.notify(queue: .main) {
-            let locationDocRef = db.collection("schools").document(school.id)
-            // Use arrayUnion to append new dictionaries to the "locationPhotos" field.
-            locationDocRef.updateData([
-                "locationPhotos": FieldValue.arrayUnion(uploadedPhotoDicts)
-            ]) { error in
-                self.isUploading = false
+            
+            // After all uploads complete, update Firestore.
+            dispatchGroup.notify(queue: .main) {
+                let locationDocRef = db.collection("schools").document(school.id)
+                // Use arrayUnion to append new dictionaries to the "locationPhotos" field.
+                locationDocRef.updateData([
+                    "locationPhotos": FieldValue.arrayUnion(uploadedPhotoDicts)
+                ]) { error in
+                    self.isUploading = false
                 
                 if let error = error {
                     self.errorMessage = "Firestore update error: \(error.localizedDescription)"
@@ -697,6 +725,7 @@ struct LocationPhotoAttachmentView: View {
                     }
                 }
             }
+        }
         }
     }
 }

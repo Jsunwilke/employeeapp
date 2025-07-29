@@ -3,10 +3,17 @@ import SwiftUI
 struct TimeTrackingButton: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
     @State private var showingTimeTrackingView = false
+    @State private var showingSessionSelection = false
     
     var body: some View {
         Button(action: {
-            showingTimeTrackingView = true
+            if timeTrackingService.isClockIn {
+                // If clocked in, show the main view to allow clock out
+                showingTimeTrackingView = true
+            } else {
+                // If clocked out, go directly to session selection
+                showingSessionSelection = true
+            }
         }) {
             HStack(spacing: 6) {
                 // Main timer icon or status
@@ -45,11 +52,33 @@ struct TimeTrackingButton: View {
         .scaleEffect(showingTimeTrackingView ? 0.95 : 1.0)
         .animation(.easeInOut(duration: 0.1), value: showingTimeTrackingView)
         .sheet(isPresented: $showingTimeTrackingView) {
-            TimeTrackingMainView(timeTrackingService: timeTrackingService)
+            NavigationView {
+                TimeTrackingMainView(timeTrackingService: timeTrackingService)
+            }
+        }
+        .sheet(isPresented: $showingSessionSelection) {
+            SessionSelectionView(
+                timeTrackingService: timeTrackingService,
+                onClockIn: { sessionId, notes in
+                    clockIn(sessionId: sessionId, notes: notes)
+                }
+            )
         }
         .onAppear {
             // Check current status when button appears
             timeTrackingService.checkCurrentStatus()
+        }
+    }
+    
+    // MARK: - Helper Functions
+    
+    private func clockIn(sessionId: String?, notes: String?) {
+        timeTrackingService.clockIn(sessionId: sessionId, notes: notes) { success, errorMessage in
+            DispatchQueue.main.async {
+                if success {
+                    showingSessionSelection = false
+                }
+            }
         }
     }
 }

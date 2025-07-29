@@ -82,14 +82,31 @@ class ManagerJobBoxViewModel: ObservableObject {
     // Flag to indicate if we're searching by card number
     private var isSearchingByCardNumber: Bool = false
     
+    // Store organization ID
+    private var organizationID: String = ""
+    
     private var db = Firestore.firestore()
     
     init() {
-        loadJobBoxes()
+        // Don't load job boxes until organization ID is set
+    }
+    
+    func setOrganizationID(_ orgID: String) {
+        self.organizationID = orgID
+        if !orgID.isEmpty {
+            loadJobBoxes()
+        }
     }
     
     // Load all job boxes
     func loadJobBoxes() {
+        // Don't load if organization ID is not set
+        guard !organizationID.isEmpty else {
+            errorMessage = "Organization ID not set"
+            isLoading = false
+            return
+        }
+        
         isLoading = true
         errorMessage = ""
         
@@ -102,6 +119,7 @@ class ManagerJobBoxViewModel: ObservableObject {
         let thirtyDaysAgo = calendar.date(byAdding: .day, value: -30, to: Date()) ?? Date()
         
         var query: Query = db.collection("jobBoxes")
+            .whereField("organizationID", isEqualTo: organizationID)
             .whereField("timestamp", isGreaterThan: Timestamp(date: thirtyDaysAgo))
         
         // Get today's date bounds for the "today" filter
@@ -353,6 +371,7 @@ class ManagerJobBoxViewModel: ObservableObject {
 
 struct ManagerJobBoxTrackerView: View {
     @StateObject private var viewModel = ManagerJobBoxViewModel()
+    @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
     
     // State for the job box being edited
     @State private var selectedJobBox: JobBoxWithEvent? = nil
@@ -658,7 +677,7 @@ struct ManagerJobBoxTrackerView: View {
             }
         }
         .onAppear {
-            viewModel.loadJobBoxes()
+            viewModel.setOrganizationID(storedUserOrganizationID)
         }
     }
     

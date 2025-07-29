@@ -451,48 +451,82 @@ struct PhotoshootNotesView: View {
         }
         
         isUploadingImage = true
-        let storageRef = Storage.storage().reference()
         
-        // Using the path that matches your Firebase rules
-        let photoPath = "photoshootNotes/\(note.id.uuidString)/\(UUID().uuidString).jpg"
-        let photoRef = storageRef.child(photoPath)
-        
-        photoRef.putData(imageData, metadata: nil) { metadata, error in
-            if let error = error {
+        // Get organization ID to comply with updated security rules
+        UserManager.shared.getCurrentUserOrganizationID { organizationID in
+            guard let orgID = organizationID else {
                 DispatchQueue.main.async {
                     self.isUploadingImage = false
-                    self.errorMessage = "Error uploading photo: \(error.localizedDescription)"
-                    print("Firebase storage error: \(error)")
+                    self.errorMessage = "Cannot upload photo: no organization ID found"
                 }
                 return
             }
             
-            photoRef.downloadURL { url, error in
-                DispatchQueue.main.async {
-                    self.isUploadingImage = false
-                    
-                    if let error = error {
-                        self.errorMessage = "Error getting download URL: \(error.localizedDescription)"
-                        return
+            // Debug: Log user information
+            if let currentUser = Auth.auth().currentUser {
+                print("🔍 Upload Debug - User ID: \(currentUser.uid)")
+                print("🔍 Upload Debug - Organization ID: \(orgID)")
+                
+                // Verify user document in Firestore
+                let db = Firestore.firestore()
+                db.collection("users").document(currentUser.uid).getDocument { document, error in
+                    if let document = document, document.exists {
+                        let data = document.data() ?? [:]
+                        print("🔍 Upload Debug - User role: \(data["role"] ?? "nil")")
+                        print("🔍 Upload Debug - User organizationID: \(data["organizationID"] ?? "nil")")
+                    } else {
+                        print("🔍 Upload Debug - User document not found or error: \(error?.localizedDescription ?? "unknown")")
                     }
-                    
-                    guard let downloadURL = url else {
-                        self.errorMessage = "Failed to get download URL"
-                        return
+                }
+            }
+            
+            let storageRef = Storage.storage().reference()
+            
+            // Updated path to include organization ID
+            let photoPath = "photoshootNotes/\(orgID)/\(note.id.uuidString)/\(UUID().uuidString).jpg"
+            let photoRef = storageRef.child(photoPath)
+            
+            // Set metadata with content type
+            let metadata = StorageMetadata()
+            metadata.contentType = "image/jpeg"
+            
+            photoRef.putData(imageData, metadata: metadata) { metadata, error in
+                if let error = error {
+                    DispatchQueue.main.async {
+                        self.isUploadingImage = false
+                        self.errorMessage = "Error uploading photo: \(error.localizedDescription)"
+                        print("Firebase storage error: \(error)")
                     }
-                    
-                    // Update the note with the new photo URL
-                    if let index = self.notes.firstIndex(where: { $0.id == note.id }) {
-                        var updatedNote = self.notes[index]
-                        updatedNote.photoURLs.append(downloadURL.absoluteString)
-                        self.notes[index] = updatedNote
-                        self.selectedNote = updatedNote
-                        self.saveNotes()
-                        self.successMessage = "Photo added successfully"
+                    return
+                }
+                
+                photoRef.downloadURL { url, error in
+                    DispatchQueue.main.async {
+                        self.isUploadingImage = false
                         
-                        // Clear success message after delay
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                            self.successMessage = ""
+                        if let error = error {
+                            self.errorMessage = "Error getting download URL: \(error.localizedDescription)"
+                            return
+                        }
+                        
+                        guard let downloadURL = url else {
+                            self.errorMessage = "Failed to get download URL"
+                            return
+                        }
+                        
+                        // Update the note with the new photo URL
+                        if let index = self.notes.firstIndex(where: { $0.id == note.id }) {
+                            var updatedNote = self.notes[index]
+                            updatedNote.photoURLs.append(downloadURL.absoluteString)
+                            self.notes[index] = updatedNote
+                            self.selectedNote = updatedNote
+                            self.saveNotes()
+                            self.successMessage = "Photo added successfully"
+                            
+                            // Clear success message after delay
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                self.successMessage = ""
+                            }
                         }
                     }
                 }
