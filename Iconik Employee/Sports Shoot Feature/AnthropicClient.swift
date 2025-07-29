@@ -42,7 +42,7 @@ class Anthropic {
         self.apiKey = apiKey
     }
     
-    func messages(request: inout MessageRequest) async throws -> MessageResponse {
+    func messages(request: inout AnthropicMessageRequest) async throws -> MessageResponse {
         // Create URL
         guard let url = URL(string: baseURL) else {
             throw AnthropicAPIError(type: .requestFailed, message: "Invalid API URL")
@@ -99,13 +99,13 @@ class Anthropic {
 
 // MARK: - Model Definitions
 
-struct MessageRequest: Encodable {
+struct AnthropicMessageRequest: Encodable {
     let model: String
-    let messages: [Message]
+    let messages: [AnthropicMessage]
     let maxTokens: Int
     let system: String?
     
-    init(model: String, messages: [Message], maxTokens: Int, system: String? = nil) {
+    init(model: String, messages: [AnthropicMessage], maxTokens: Int, system: String? = nil) {
         self.model = model
         self.messages = messages
         self.maxTokens = maxTokens
@@ -120,11 +120,11 @@ struct MessageRequest: Encodable {
     }
 }
 
-struct Message: Encodable {
+struct AnthropicMessage: Encodable {
     let role: Role
-    let content: [MessageContent]
+    let content: [AnthropicMessageContent]
     
-    init(role: Role, content: [MessageContent]) {
+    init(role: Role, content: [AnthropicMessageContent]) {
         self.role = role
         self.content = content
     }
@@ -135,7 +135,7 @@ enum Role: String, Codable {
     case assistant
 }
 
-enum MessageContent: Encodable {
+enum AnthropicMessageContent: Encodable {
     case text(String)
     case image(String)
     

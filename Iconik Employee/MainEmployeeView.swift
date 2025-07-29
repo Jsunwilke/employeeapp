@@ -409,6 +409,10 @@ struct MainEmployeeView: View {
     // Shared time tracking service for header button
     @StateObject private var timeTrackingService = TimeTrackingService()
     
+    // Tab bar management
+    @StateObject private var tabBarManager = TabBarManager()
+    @StateObject private var chatManager = ChatManager.shared
+    
     // Fixed manager features
     let managerFeatures: [FeatureItem] = [
         FeatureItem(id: "timeOffApprovals", title: "Time Off Approvals", systemImage: "checkmark.circle.fill", description: "Approve or deny time off requests"),
@@ -451,6 +455,69 @@ struct MainEmployeeView: View {
     var body: some View {
         NavigationView {
             ZStack {
+                // Main content with tab bar
+                VStack(spacing: 0) {
+                    // Main content area
+                    mainContent
+                    
+                    // Bottom tab bar
+                    BottomTabBar(
+                        selectedTab: $tabBarManager.selectedTab,
+                        items: tabBarManager.getQuickAccessItems(),
+                        chatManager: chatManager,
+                        timeTrackingService: timeTrackingService,
+                        showLabels: tabBarManager.configuration.showLabels
+                    )
+                }
+                
+                // Flag notification banner overlay
+                if isFlagged && !flagNote.isEmpty {
+                    flagNotificationBanner
+                }
+            }
+            .navigationBarTitle("", displayMode: .inline)
+            .toolbar {
+                toolbarContent
+            }
+            .onChange(of: tabBarManager.selectedTab) { newTab in
+                // Clean up chat if we're leaving it
+                if tabBarManager.selectedTab == "chat" && newTab != "chat" {
+                    ChatManager.shared.cleanup()
+                }
+                
+                // Handle tab selection
+                if newTab != "home" {
+                    selectedFeatureID = newTab
+                }
+            }
+            .onAppear {
+                onAppearActions()
+            }
+            .onDisappear {
+                viewModel.saveEmployeeFeatureOrder()
+                viewModel.cleanup() // Remove real-time listener
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+    }
+    
+    // MARK: - Main Content View
+    
+    private var mainContent: some View {
+        Group {
+            if tabBarManager.selectedTab == "home" || tabBarManager.selectedTab == "" {
+                homeView
+            } else {
+                // Show selected feature view
+                featureView(for: tabBarManager.selectedTab)
+            }
+        }
+    }
+    
+    // MARK: - Home View (Schedule and Features List)
+    
+    private var homeView: some View {
+        ZStack {
                 // Background with proper flag coloring
                 if isFlagged {
                     Color.red.opacity(0.1).ignoresSafeArea()
@@ -458,8 +525,8 @@ struct MainEmployeeView: View {
                     backgroundGradient.ignoresSafeArea()
                 }
                 
-                VStack(spacing: 0) {
-                    List {
+            VStack(spacing: 0) {
+                List {
                         // Upcoming schedule section
                         Section(header: Text("Your Schedule (Next 2 Days)")) {
                             if viewModel.isLoadingSchedule {
@@ -493,8 +560,8 @@ struct MainEmployeeView: View {
                             }
                         }
                         
-                        // Employee Features Section (re-orderable)
-                        Section(header: Text("Employee Features")) {
+                    // Employee Features Section (re-orderable)
+                    Section(header: Text("All Features")) {
                             ForEach(viewModel.employeeFeatures) { feature in
                                 if localEditMode == .active {
                                     // Simple row in edit mode
@@ -705,6 +772,14 @@ struct MainEmployeeView: View {
                         selection: $selectedFeatureID
                     ) { EmptyView() }
                     
+                    // Chat navigation link
+                    NavigationLink(
+                        destination: ConversationListView(),
+                        tag: "chat",
+                        selection: $selectedFeatureID
+                    ) { EmptyView() }
+                    .isDetailLink(false)
+                    
                     // Manager features navigation links
                     NavigationLink(
                         destination: TimeOffApprovalView(),
@@ -770,126 +845,182 @@ struct MainEmployeeView: View {
                     ) { EmptyView() }
                     .hidden()
                 }
-                
-            }
-            .navigationBarTitle("", displayMode: .inline)
-            .toolbar {
-                // Left toolbar: optional logo
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Image("employeeStaff")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 44)
-                }
-                
-                // Right toolbar: edit/done button or profile info
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if localEditMode == .active {
-                        Button("Done") {
-                            withAnimation { localEditMode = .inactive }
-                            viewModel.saveEmployeeFeatureOrder()
-                        }
-                    } else {
-                        HStack(spacing: 10) {
-                            // Time Tracking Button - priority layout
-                            TimeTrackingButton(timeTrackingService: timeTrackingService)
-                                .layoutPriority(1)
-                            
-                            Text(storedUserFirstName)
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                            if let url = URL(string: storedUserPhotoURL), !storedUserPhotoURL.isEmpty {
-                                AsyncImage(url: url) { phase in
-                                    switch phase {
-                                    case .empty:
-                                        ProgressView()
-                                    case .success(let image):
-                                        image.resizable()
-                                            .scaledToFill()
-                                            .frame(width: 40, height: 40)
-                                            .clipShape(Circle())
-                                    case .failure(_):
-                                        Image(systemName: "person.crop.circle.badge.exclam")
-                                            .resizable()
-                                            .frame(width: 40, height: 40)
-                                    @unknown default:
-                                        EmptyView()
-                                    }
-                                }
-                            } else {
-                                Image(systemName: "person.crop.circle")
-                                    .resizable()
-                                    .frame(width: 40, height: 40)
-                                    .foregroundColor(.gray)
-                            }
-                            Menu {
-                                Button(action: { showSettings = true }) {
-                                    Label("Settings", systemImage: "gear")
-                                }
-                                Button(action: { showThemePicker = true }) {
-                                    Label("Appearance", systemImage: "paintbrush")
-                                }
-                                Button("Logout") {
-                                    do {
-                                        try Auth.auth().signOut()
-                                        isSignedIn = false
-                                    } catch {
-                                        print("Logout error: \(error.localizedDescription)")
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "line.3.horizontal")
-                            }
-                        }
-                    }
-                }
-            }
-            .environment(\.editMode, $localEditMode)
-            .onAppear {
-                if #available(iOS 16.0, *) {
-                    UITableView.appearance().backgroundColor = .clear
-                }
-                
-                // Only initialize data once to prevent duplicate loads
-                if !hasInitializedData {
-                    hasInitializedData = true
-                    
-                    // Initialize user organization ID for session filtering
-                    UserManager.shared.initializeOrganizationID()
-                    
-                    // Refresh time tracking service to ensure proper user setup
-                    timeTrackingService.refreshUserAndStatus()
-                    
-                    // Delay data loading slightly to ensure organization ID is cached
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        listenForFlagStatus() // Listen for Firebase updates
-                        loadSchedule()
-                    }
-                } else {
-                    // On subsequent appears, only refresh if needed
-                    if viewModel.upcomingShifts.isEmpty {
-                        loadSchedule()
-                    }
-                }
-                
-                // Reset selections when view appears
-                selectedFeatureID = nil
-                selectedSession = nil
-                
-                // Apply the saved theme when the app starts or the view appears
-                applyAppTheme()
-            }
-            .onDisappear {
-                viewModel.saveEmployeeFeatureOrder()
-                viewModel.cleanup() // Remove real-time listener
-            }
-            .sheet(isPresented: $showThemePicker) {
-                themePickerSheet
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+    
+    // MARK: - Feature View Navigation
+    
+    @ViewBuilder
+    private func featureView(for featureId: String) -> some View {
+        switch featureId {
+        case "timeTracking":
+            TimeTrackingMainView(timeTrackingService: timeTrackingService)
+        case "chat":
+            ConversationListView()
+        case "photoshootNotes":
+            PhotoshootNotesView()
+        case "dailyJobReport":
+            DailyJobReportView()
+        case "sportsShoot":
+            SportsShootListView()
+        case "customDailyReports":
+            CustomDailyReportsView()
+        case "myDailyJobReports":
+            MyJobReportsView()
+        case "mileageReports":
+            MileageReportsView(userName: storedUserFirstName)
+        case "schedule":
+            SlingWeeklyView()
+        case "locationPhotos":
+            LocationPhotoAttachmentView()
+        case "timeOffRequests":
+            MyTimeOffRequestsView()
+        case "timeOffApprovals":
+            TimeOffApprovalView()
+        case "flagUser":
+            FlagUserView()
+        case "unflagUser":
+            UnflagUserView()
+        case "managerMileage":
+            ManagerMileageView()
+        case "stats":
+            StatsView()
+        case "galleryCreator":
+            GalleryCreatorView()
+        case "jobBoxTracker":
+            ManagerJobBoxTrackerView()
+        default:
+            homeView
+        }
+    }
+    
+    // MARK: - Toolbar Content
+    
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        // Left toolbar: optional logo
+        ToolbarItem(placement: .navigationBarLeading) {
+            if tabBarManager.selectedTab == "home" || tabBarManager.selectedTab == "" {
+                Image("employeeStaff")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 44)
+            } else {
+                Button(action: {
+                    tabBarManager.selectedTab = "home"
+                    selectedFeatureID = nil
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Home")
+                    }
+                }
+            }
+        }
+        
+        // Right toolbar: edit/done button or profile info
+        ToolbarItem(placement: .navigationBarTrailing) {
+            if localEditMode == .active {
+                Button("Done") {
+                    withAnimation { localEditMode = .inactive }
+                    viewModel.saveEmployeeFeatureOrder()
+                }
+            } else {
+                HStack(spacing: 10) {
+                    Text(storedUserFirstName)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if let url = URL(string: storedUserPhotoURL), !storedUserPhotoURL.isEmpty {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .empty:
+                                ProgressView()
+                            case .success(let image):
+                                image.resizable()
+                                    .scaledToFill()
+                                    .frame(width: 40, height: 40)
+                                    .clipShape(Circle())
+                            case .failure(_):
+                                Image(systemName: "person.crop.circle.badge.exclam")
+                                    .resizable()
+                                    .frame(width: 40, height: 40)
+                            @unknown default:
+                                EmptyView()
+                            }
+                        }
+                    } else {
+                        Image(systemName: "person.crop.circle")
+                            .resizable()
+                            .frame(width: 40, height: 40)
+                            .foregroundColor(.gray)
+                    }
+                    Menu {
+                        Button(action: { showSettings = true }) {
+                            Label("Settings", systemImage: "gear")
+                        }
+                        Button(action: { showThemePicker = true }) {
+                            Label("Appearance", systemImage: "paintbrush")
+                        }
+                        Button("Logout") {
+                            do {
+                                try Auth.auth().signOut()
+                                isSignedIn = false
+                            } catch {
+                                print("Logout error: \(error.localizedDescription)")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "line.3.horizontal")
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - On Appear Actions
+    
+    private func onAppearActions() {
+        if #available(iOS 16.0, *) {
+            UITableView.appearance().backgroundColor = .clear
+        }
+        
+        // Only initialize data once to prevent duplicate loads
+        if !hasInitializedData {
+            hasInitializedData = true
+            
+            // Initialize user organization ID for session filtering
+            UserManager.shared.initializeOrganizationID()
+            
+            // Refresh time tracking service to ensure proper user setup
+            timeTrackingService.refreshUserAndStatus()
+            
+            // Initialize chat manager
+            Task {
+                await chatManager.initialize()
+            }
+            
+            // Delay data loading slightly to ensure organization ID is cached
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                listenForFlagStatus() // Listen for Firebase updates
+                loadSchedule()
+            }
+        } else {
+            // On subsequent appears, only refresh if needed
+            if viewModel.upcomingShifts.isEmpty {
+                loadSchedule()
+            }
+        }
+        
+        // Reset selections when view appears
+        if tabBarManager.selectedTab == "home" {
+            selectedFeatureID = nil
+        }
+        selectedSession = nil
+        
+        // Apply the saved theme when the app starts or the view appears
+        applyAppTheme()
     }
     
     // MARK: - Computed Properties & UI Components
@@ -1041,13 +1172,14 @@ struct MainEmployeeView: View {
         case "mileageReports": return .orange
         case "schedule": return .red
         case "locationPhotos": return .pink
-        case "sportsShoot": return .indigo  // Color for Sports Shoot
+        case "sportsShoot": return .indigo
+        case "chat": return .blue
         case "flagUser": return .red
         case "unflagUser": return .green
         case "managerMileage": return .blue
         case "stats": return .indigo
         case "galleryCreator": return .green
-        case "jobBoxTracker": return .teal  // Color for Job Box Tracker
+        case "jobBoxTracker": return .teal
         default: return .gray
         }
     }
@@ -1076,22 +1208,22 @@ struct MainEmployeeView: View {
                     return
                 }
                 if let boolVal = data["isFlagged"] as? Bool {
-                    isFlagged = boolVal
+                    self.isFlagged = boolVal
                 } else if let intVal = data["isFlagged"] as? Int {
-                    isFlagged = (intVal == 1)
+                    self.isFlagged = (intVal == 1)
                 } else {
-                    isFlagged = false
+                    self.isFlagged = false
                 }
-                flagNote = data["flagNote"] as? String ?? ""
+                self.flagNote = data["flagNote"] as? String ?? ""
                 if let flaggedByID = data["flaggedBy"] as? String, !flaggedByID.isEmpty {
-                    loadFlaggedByName(flaggedByID: flaggedByID)
+                    self.loadFlaggedByName(flaggedByID: flaggedByID)
                 } else {
-                    flaggedByName = ""
+                    self.flaggedByName = ""
                 }
                 if let updatedPhotoURL = data["photoURL"] as? String,
                    !updatedPhotoURL.isEmpty,
-                   updatedPhotoURL != storedUserPhotoURL {
-                    storedUserPhotoURL = updatedPhotoURL
+                   updatedPhotoURL != self.storedUserPhotoURL {
+                    self.storedUserPhotoURL = updatedPhotoURL
                 }
             }
     }
@@ -1101,14 +1233,14 @@ struct MainEmployeeView: View {
         db.collection("users").document(flaggedByID).getDocument { snapshot, error in
             if let error = error {
                 print("Error fetching flaggedBy user: \(error.localizedDescription)")
-                flaggedByName = ""
+                self.flaggedByName = ""
                 return
             }
             guard let data = snapshot?.data() else {
-                flaggedByName = ""
+                self.flaggedByName = ""
                 return
             }
-            flaggedByName = data["firstName"] as? String ?? ""
+            self.flaggedByName = data["firstName"] as? String ?? ""
         }
     }
 }
