@@ -498,7 +498,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = "1.1           ";
 				MTL_ENABLE_API_VALIDATION = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = "Iconik.Iconik-Employee";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -539,7 +539,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = "1.1           ";
 				MTL_ENABLE_API_VALIDATION = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = "Iconik.Iconik-Employee";
 				PRODUCT_NAME = "$(TARGET_NAME)";

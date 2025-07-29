@@ -11,6 +11,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     enum NotificationType: String {
         case flag = "flag"
         case jobBox = "jobbox"
+        case chatMessage = "chat_message"
         case unknown = "unknown"
     }
     
@@ -102,6 +103,9 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case .jobBox:
             // Process job box notification
             handleJobBoxNotification(userInfo: userInfo)
+        case .chatMessage:
+            // Process chat notification
+            handleChatNotification(userInfo: userInfo)
         case .unknown:
             print("Received unknown notification type: \(type)")
         }
@@ -122,5 +126,26 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         notificationCenter.post(name: Notification.Name("didReceiveJobBoxNotification"),
                                  object: nil,
                                  userInfo: userInfo)
+    }
+    
+    /// Handle chat message notifications
+    private func handleChatNotification(userInfo: [AnyHashable: Any]) {
+        guard let conversationId = userInfo["conversationId"] as? String else {
+            print("Missing conversation ID in chat notification")
+            return
+        }
+        
+        let senderId = userInfo["senderId"] as? String
+        let senderName = userInfo["senderName"] as? String ?? "Someone"
+        let messageText = userInfo["messageText"] as? String ?? "New message"
+        
+        print("Received chat notification: From: \(senderName), ConversationId: \(conversationId)")
+        
+        // Post a notification that Views can listen for
+        notificationCenter.post(name: Notification.Name("didReceiveChatNotification"),
+                                 object: nil,
+                                 userInfo: userInfo)
+        
+        // TODO: Navigate to the specific conversation when app opens from notification
     }
 }
