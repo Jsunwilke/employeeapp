@@ -255,8 +255,7 @@ struct SportsShootListView: View {
     // MARK: - iPhone View
     
     private var iPhoneView: some View {
-        NavigationView {
-            List {
+        List {
                 if viewModel.isLoading {
                     ProgressView("Loading sports shoots...")
                         .padding()
@@ -327,14 +326,12 @@ struct SportsShootListView: View {
                             .padding(.vertical, 4)
                     }
                 }
-            }
-            .navigationTitle("Sports Shoots")
-            .refreshable {
-                viewModel.clearAllStatusCaches()
-                loadSportsShoots()
-            }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .navigationTitle("Sports Shoots")
+        .refreshable {
+            viewModel.clearAllStatusCaches()
+            loadSportsShoots()
+        }
     }
     
     // MARK: - iPad View (existing implementation)

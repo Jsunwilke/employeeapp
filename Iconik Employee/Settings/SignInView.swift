@@ -54,6 +54,7 @@ struct SignInView: View {
       }
       .padding()
     }
+    .navigationViewStyle(StackNavigationViewStyle())
   }
   
   func signIn() {
