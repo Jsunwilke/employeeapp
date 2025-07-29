@@ -2,21 +2,20 @@ import SwiftUI
 
 struct BottomTabBar: View {
     @Binding var selectedTab: String
-    let items: [TabBarItem]
+    @ObservedObject var tabBarManager: TabBarManager
     let chatManager: ChatManager
     let timeTrackingService: TimeTrackingService
-    let showLabels: Bool
     
     @State private var animateSelection = false
     @Namespace private var tabBarNamespace
     
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(items.prefix(5)) { item in
+            ForEach(tabBarManager.getQuickAccessItems()) { item in
                 TabBarButton(
                     item: updatedItem(item),
                     isSelected: selectedTab == item.id,
-                    showLabel: showLabels,
+                    showLabel: tabBarManager.configuration.showLabels,
                     namespace: tabBarNamespace,
                     action: {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
@@ -172,26 +171,68 @@ struct TabBarConfigurationView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Instructions
-                Text("Select up to 5 features for quick access")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .padding()
+                // Header with instructions and count
+                VStack(spacing: 8) {
+                    Text("Select up to 5 features for quick access")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    Text("\(selectedFeatures.count) of 5 selected")
+                        .font(.caption)
+                        .foregroundColor(selectedFeatures.count >= 5 ? .red : .secondary)
+                        .fontWeight(selectedFeatures.count >= 5 ? .semibold : .regular)
+                }
+                .padding()
                 
-                // Selected features (reorderable)
-                Section {
-                    List {
-                        ForEach(selectedFeatures) { item in
+                // Single combined list
+                List {
+                    // Selected features (reorderable)
+                    ForEach(selectedFeatures) { item in
+                        HStack {
+                            Image(systemName: item.systemImage)
+                                .foregroundColor(.white)
+                                .frame(width: 30, height: 30)
+                                .background(Circle().fill(featureColorFor(item.id)))
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title)
+                                    .font(.headline)
+                                Text(item.description)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .padding(.leading, 8)
+                            
+                            Spacer()
+                            
+                            // Show minus button
+                            Button(action: {
+                                removeFeature(item)
+                            }) {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundColor(.red)
+                                    .font(.title2)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .onMove(perform: moveSelectedFeatures)
+                    
+                    // Available features (not selected)
+                    ForEach(availableFeatures) { feature in
+                        if !selectedFeatures.contains(where: { $0.id == feature.id }) {
                             HStack {
-                                Image(systemName: item.systemImage)
+                                Image(systemName: feature.systemImage)
                                     .foregroundColor(.white)
                                     .frame(width: 30, height: 30)
-                                    .background(Circle().fill(featureColorFor(item.id)))
+                                    .background(Circle().fill(featureColorFor(feature.id)))
                                 
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.title)
+                                    Text(feature.title)
                                         .font(.headline)
-                                    Text(item.description)
+                                    Text(feature.description)
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                         .lineLimit(1)
@@ -200,79 +241,22 @@ struct TabBarConfigurationView: View {
                                 
                                 Spacer()
                                 
-                                Image(systemName: "line.3.horizontal")
-                                    .foregroundColor(.gray)
+                                Button(action: {
+                                    addFeature(feature)
+                                }) {
+                                    Image(systemName: "plus.circle.fill")
+                                        .foregroundColor(selectedFeatures.count >= 5 ? .gray : .green)
+                                        .font(.title2)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                .disabled(selectedFeatures.count >= 5)
                             }
                             .padding(.vertical, 4)
                         }
-                        .onMove(perform: moveSelectedFeatures)
-                        .onDelete(perform: deleteSelectedFeatures)
                     }
-                    .listStyle(InsetGroupedListStyle())
-                    .environment(\.editMode, $editMode)
-                    .frame(maxHeight: 300)
-                } header: {
-                    HStack {
-                        Text("Quick Access Features")
-                            .font(.headline)
-                        Spacer()
-                        Text("\(selectedFeatures.count)/5")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal)
                 }
-                
-                Divider()
-                
-                // Available features
-                Section {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(availableFeatures) { feature in
-                                if !selectedFeatures.contains(where: { $0.id == feature.id }) {
-                                    Button(action: {
-                                        addFeature(feature)
-                                    }) {
-                                        HStack {
-                                            Image(systemName: feature.systemImage)
-                                                .foregroundColor(.white)
-                                                .frame(width: 30, height: 30)
-                                                .background(Circle().fill(featureColorFor(feature.id)))
-                                            
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(feature.title)
-                                                    .font(.headline)
-                                                    .foregroundColor(.primary)
-                                                Text(feature.description)
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                                    .lineLimit(1)
-                                            }
-                                            .padding(.leading, 8)
-                                            
-                                            Spacer()
-                                            
-                                            Image(systemName: "plus.circle")
-                                                .foregroundColor(.blue)
-                                        }
-                                        .padding(.horizontal)
-                                        .padding(.vertical, 8)
-                                    }
-                                    .disabled(selectedFeatures.count >= 5)
-                                    
-                                    Divider()
-                                        .padding(.leading, 58)
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Available Features")
-                        .font(.headline)
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                }
+                .listStyle(InsetGroupedListStyle())
+                .environment(\.editMode, $editMode)
             }
             .navigationTitle("Customize Tab Bar")
             .navigationBarTitleDisplayMode(.inline)
@@ -285,7 +269,6 @@ struct TabBarConfigurationView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
-                        saveConfiguration()
                         dismiss()
                     }
                     .fontWeight(.semibold)
@@ -317,6 +300,24 @@ struct TabBarConfigurationView: View {
             isQuickAccess: true
         )
         selectedFeatures.append(tabItem)
+        saveConfiguration() // Save immediately
+    }
+    
+    private func removeFeature(_ item: TabBarItem) {
+        selectedFeatures.removeAll { $0.id == item.id }
+        
+        // Update order
+        selectedFeatures = selectedFeatures.enumerated().map { index, item in
+            TabBarItem(
+                id: item.id,
+                title: item.title,
+                systemImage: item.systemImage,
+                description: item.description,
+                order: index,
+                isQuickAccess: true
+            )
+        }
+        saveConfiguration() // Save immediately
     }
     
     private func moveSelectedFeatures(from source: IndexSet, to destination: Int) {
@@ -333,6 +334,7 @@ struct TabBarConfigurationView: View {
                 isQuickAccess: true
             )
         }
+        saveConfiguration() // Save immediately
     }
     
     private func deleteSelectedFeatures(at offsets: IndexSet) {
@@ -349,6 +351,7 @@ struct TabBarConfigurationView: View {
                 isQuickAccess: true
             )
         }
+        saveConfiguration() // Save immediately
     }
     
     private func saveConfiguration() {

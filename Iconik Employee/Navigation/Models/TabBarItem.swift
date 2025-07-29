@@ -91,12 +91,14 @@ struct TabBarConfiguration: Codable {
 
 // MARK: - Tab Bar Manager
 class TabBarManager: ObservableObject {
+    static let shared = TabBarManager()
+    
     @Published var configuration: TabBarConfiguration
     @Published var selectedTab: String = ""
     
     private let configurationKey = "TabBarConfiguration"
     
-    init() {
+    private init() {
         // Load saved configuration or use default
         if let savedData = UserDefaults.standard.data(forKey: configurationKey),
            let savedConfig = try? JSONDecoder().decode(TabBarConfiguration.self, from: savedData) {
