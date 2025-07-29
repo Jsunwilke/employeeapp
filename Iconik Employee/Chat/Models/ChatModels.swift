@@ -12,6 +12,7 @@ struct Conversation: Codable, Identifiable {
     let lastActivity: Timestamp
     let lastMessage: LastMessage?
     let unreadCounts: [String: Int]
+    var pinnedBy: [String]?
     
     // Resolved display name (populated by ChatManager)
     var resolvedDisplayName: String?
@@ -41,6 +42,11 @@ struct Conversation: Codable, Identifiable {
         return unreadCounts[userId] ?? 0
     }
     
+    // Check if conversation is pinned by user
+    func isPinned(by userId: String) -> Bool {
+        return pinnedBy?.contains(userId) ?? false
+    }
+    
     // Custom decoding to handle web app compatibility
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -57,10 +63,11 @@ struct Conversation: Codable, Identifiable {
         lastActivity = try container.decode(Timestamp.self, forKey: .lastActivity)
         lastMessage = try container.decodeIfPresent(LastMessage.self, forKey: .lastMessage)
         unreadCounts = try container.decodeIfPresent([String: Int].self, forKey: .unreadCounts) ?? [:]
+        pinnedBy = try container.decodeIfPresent([String].self, forKey: .pinnedBy)
     }
     
     private enum CodingKeys: String, CodingKey {
-        case id, participants, type, name, defaultName, createdAt, lastActivity, lastMessage, unreadCounts
+        case id, participants, type, name, defaultName, createdAt, lastActivity, lastMessage, unreadCounts, pinnedBy
     }
     
     // Custom encoding to exclude resolvedDisplayName
@@ -75,6 +82,7 @@ struct Conversation: Codable, Identifiable {
         try container.encode(lastActivity, forKey: .lastActivity)
         try container.encodeIfPresent(lastMessage, forKey: .lastMessage)
         try container.encode(unreadCounts, forKey: .unreadCounts)
+        try container.encodeIfPresent(pinnedBy, forKey: .pinnedBy)
     }
 }
 
@@ -96,22 +104,56 @@ struct LastMessage: Codable {
 // MARK: - Chat Message Model
 struct ChatMessage: Codable, Identifiable {
     let id: String
-    let senderId: String
-    let senderName: String
+    let senderId: String?  // Optional for system messages
+    let senderName: String?  // Optional for system messages
     let text: String
     let type: MessageType
     let fileUrl: String?
     let timestamp: Timestamp
     let createdAt: Timestamp
     
+    // System message fields
+    let systemAction: String?
+    let addedBy: String?
+    let addedByName: String?
+    let addedParticipants: [String]?
+    let removedBy: String?
+    let removedByName: String?
+    let removedParticipant: String?
+    let removedParticipantName: String?
+    let leftUserId: String?
+    let leftUserName: String?
+    
     enum MessageType: String, Codable {
         case text = "text"
         case file = "file"
+        case system = "system"
     }
     
     // Computed properties for UI
     var isTextMessage: Bool {
         return type == .text
+    }
+    
+    var isSystemMessage: Bool {
+        return type == .system
+    }
+    
+    // Generate display text for system messages
+    var systemMessageText: String {
+        guard type == .system else { return text }
+        
+        switch systemAction {
+        case "participants_added":
+            let names = addedParticipants?.joined(separator: ", ") ?? "participants"
+            return "\(addedByName ?? "Someone") added \(names) to the group"
+        case "participant_removed":
+            return "\(removedByName ?? "Someone") removed \(removedParticipantName ?? "a participant") from the group"
+        case "participant_left":
+            return "\(leftUserName ?? "Someone") left the group"
+        default:
+            return text
+        }
     }
     
     var formattedTime: String {

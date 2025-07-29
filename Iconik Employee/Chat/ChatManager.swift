@@ -60,6 +60,22 @@ class ChatManager: ObservableObject {
     
     // MARK: - Conversation Management
     
+    func sortConversations(_ conversations: [Conversation]) -> [Conversation] {
+        guard let userId = currentUserId else { return conversations }
+        
+        return conversations.sorted { conv1, conv2 in
+            let isPinned1 = conv1.isPinned(by: userId)
+            let isPinned2 = conv2.isPinned(by: userId)
+            
+            // If one is pinned and the other isn't, pinned comes first
+            if isPinned1 && !isPinned2 { return true }
+            if !isPinned1 && isPinned2 { return false }
+            
+            // Otherwise sort by lastActivity
+            return conv1.lastActivity.dateValue() > conv2.lastActivity.dateValue()
+        }
+    }
+    
     func loadConversations() async {
         guard let userId = currentUserId else {
             errorMessage = "Not authenticated"
@@ -69,7 +85,8 @@ class ChatManager: ObservableObject {
         
         // 1. Load from cache first
         if let cachedConversations = cacheService.getCachedConversations() {
-            self.conversations = resolveConversationNames(cachedConversations)
+            let resolvedConversations = resolveConversationNames(cachedConversations)
+            self.conversations = sortConversations(resolvedConversations)
             self.isLoading = false
             updateTotalUnreadCount()
             readCounter.recordCacheHit(collection: "conversations", component: "ChatManager", savedReads: cachedConversations.count)
@@ -81,8 +98,9 @@ class ChatManager: ObservableObject {
         conversationsListener = chatService.subscribeToUserConversations(userId: userId) { [weak self] updatedConversations in
             guard let self = self else { return }
             
-            // Resolve names before setting conversations
-            self.conversations = self.resolveConversationNames(updatedConversations)
+            // Resolve names and sort conversations
+            let resolvedConversations = self.resolveConversationNames(updatedConversations)
+            self.conversations = self.sortConversations(resolvedConversations)
             self.isLoading = false
             self.updateTotalUnreadCount()
             
@@ -305,7 +323,17 @@ class ChatManager: ObservableObject {
                 type: type,
                 fileUrl: fileUrl,
                 timestamp: Timestamp(date: Date()),
-                createdAt: Timestamp(date: Date())
+                createdAt: Timestamp(date: Date()),
+                systemAction: nil,
+                addedBy: nil,
+                addedByName: nil,
+                addedParticipants: nil,
+                removedBy: nil,
+                removedByName: nil,
+                removedParticipant: nil,
+                removedParticipantName: nil,
+                leftUserId: nil,
+                leftUserName: nil
             )
             
             // Add optimistic message immediately
@@ -372,6 +400,123 @@ class ChatManager: ObservableObject {
             )
         } catch {
             errorMessage = "Failed to load users"
+        }
+    }
+    
+    // MARK: - Group Management
+    
+    func togglePinConversation(_ conversation: Conversation) async {
+        guard let userId = currentUserId else { return }
+        
+        let isPinned = conversation.isPinned(by: userId)
+        
+        do {
+            try await chatService.togglePinConversation(
+                conversationId: conversation.id,
+                userId: userId,
+                isPinned: !isPinned
+            )
+            
+            // Update local state immediately for better UX
+            if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+                var updatedConversation = conversations[index]
+                if isPinned {
+                    updatedConversation.pinnedBy?.removeAll { $0 == userId }
+                } else {
+                    if updatedConversation.pinnedBy == nil {
+                        updatedConversation.pinnedBy = [userId]
+                    } else {
+                        updatedConversation.pinnedBy?.append(userId)
+                    }
+                }
+                conversations[index] = updatedConversation
+                conversations = sortConversations(conversations)
+            }
+        } catch {
+            errorMessage = "Failed to update pin status"
+        }
+    }
+    
+    func updateConversationName(_ conversation: Conversation, newName: String) async {
+        do {
+            try await chatService.updateConversationName(
+                conversationId: conversation.id,
+                newName: newName
+            )
+        } catch {
+            errorMessage = "Failed to update conversation name"
+        }
+    }
+    
+    func addParticipants(_ userIds: [String], to conversation: Conversation) async {
+        guard let currentUser = Auth.auth().currentUser else { return }
+        
+        do {
+            let addedByName = await getSenderName()
+            try await chatService.addParticipantsToConversation(
+                conversationId: conversation.id,
+                newParticipantIds: userIds,
+                addedBy: (id: currentUser.uid, name: addedByName)
+            )
+        } catch {
+            errorMessage = "Failed to add participants"
+        }
+    }
+    
+    func removeParticipant(_ participantId: String, from conversation: Conversation, participantName: String) async {
+        guard let currentUser = Auth.auth().currentUser else { return }
+        
+        do {
+            let removedByName = await getSenderName()
+            try await chatService.removeParticipantFromConversation(
+                conversationId: conversation.id,
+                participantId: participantId,
+                removedBy: (id: currentUser.uid, name: removedByName),
+                removedUserName: participantName
+            )
+        } catch {
+            errorMessage = "Failed to remove participant"
+        }
+    }
+    
+    func deleteConversation(_ conversation: Conversation) async {
+        do {
+            try await chatService.deleteConversation(conversationId: conversation.id)
+            
+            // Remove from local list
+            conversations.removeAll { $0.id == conversation.id }
+        } catch {
+            errorMessage = "Failed to delete conversation"
+        }
+    }
+    
+    func leaveConversation(_ conversation: Conversation) async -> Bool {
+        guard let currentUser = Auth.auth().currentUser else {
+            errorMessage = "Not authenticated"
+            return false
+        }
+        
+        do {
+            let userName = await getSenderName()
+            try await chatService.leaveConversation(
+                conversationId: conversation.id,
+                userId: currentUser.uid,
+                userName: userName
+            )
+            
+            // Remove from local list
+            conversations.removeAll { $0.id == conversation.id }
+            
+            // Clear active conversation if it's the one we're leaving
+            if activeConversation?.id == conversation.id {
+                activeConversation = nil
+                messages = []
+            }
+            
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
         }
     }
     
@@ -480,6 +625,9 @@ enum ChatError: LocalizedError {
     case conversationNotFound
     case messageSendFailed
     case permissionDenied
+    case notAParticipant
+    case cannotLeaveDirect
+    case cannotLeaveLastTwo
     
     var errorDescription: String? {
         switch self {
@@ -493,6 +641,12 @@ enum ChatError: LocalizedError {
             return "Failed to send message"
         case .permissionDenied:
             return "You don't have permission to access this conversation"
+        case .notAParticipant:
+            return "You are not a participant in this conversation"
+        case .cannotLeaveDirect:
+            return "Cannot leave direct conversations"
+        case .cannotLeaveLastTwo:
+            return "Cannot leave group - at least 2 participants must remain"
         }
     }
 }
