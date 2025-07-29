@@ -4,6 +4,8 @@ import FirebaseAuth
 struct ConversationListView: View {
     @StateObject private var chatManager = ChatManager.shared
     @State private var showNewConversation = false
+    @State private var showGroupNaming = false
+    @State private var selectedUsersForGroup: [ChatUser] = []
     @State private var searchText = ""
     @State private var selectedConversation: Conversation?
     @State private var showErrorAlert = false
@@ -50,8 +52,22 @@ struct ConversationListView: View {
             }
             .sheet(isPresented: $showNewConversation) {
                 EmployeeSelectorView { selectedUsers in
+                    if selectedUsers.count > 1 {
+                        // Multiple users selected, show group naming
+                        selectedUsersForGroup = selectedUsers
+                        showGroupNaming = true
+                    } else {
+                        // Single user, create direct conversation
+                        Task {
+                            await createNewConversation(with: selectedUsers, groupName: nil)
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $showGroupNaming) {
+                GroupNameView(selectedUsers: selectedUsersForGroup) { groupName in
                     Task {
-                        await createNewConversation(with: selectedUsers)
+                        await createNewConversation(with: selectedUsersForGroup, groupName: groupName)
                     }
                 }
             }
@@ -108,11 +124,27 @@ struct ConversationListView: View {
                 .onTapGesture {
                     selectedConversation = conversation
                 }
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button(role: .destructive) {
-                        // TODO: Implement archive/delete functionality
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    Button {
+                        Task {
+                            await chatManager.togglePinConversation(conversation)
+                        }
                     } label: {
-                        Label("Archive", systemImage: "archivebox")
+                        let isPinned = conversation.isPinned(by: Auth.auth().currentUser?.uid ?? "")
+                        Label(isPinned ? "Unpin" : "Pin", 
+                              systemImage: isPinned ? "pin.slash" : "pin")
+                    }
+                    .tint(conversation.isPinned(by: Auth.auth().currentUser?.uid ?? "") ? .gray : .orange)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    if conversation.type == .group {
+                        Button(role: .destructive) {
+                            Task {
+                                await chatManager.deleteConversation(conversation)
+                            }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
                     }
                 }
             }
@@ -133,7 +165,7 @@ struct ConversationListView: View {
     
     // MARK: - Methods
     
-    private func createNewConversation(with users: [ChatUser]) async {
+    private func createNewConversation(with users: [ChatUser], groupName: String?) async {
         guard !users.isEmpty else { return }
         
         do {
@@ -142,7 +174,8 @@ struct ConversationListView: View {
             
             let conversationId = try await chatManager.createConversation(
                 with: participantIds,
-                type: conversationType
+                type: conversationType,
+                customName: groupName
             )
             
             // Find the newly created conversation and navigate to it
@@ -177,6 +210,12 @@ struct ConversationRow: View {
             // Content
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
+                    if conversation.isPinned(by: currentUserId) {
+                        Image(systemName: "pin.fill")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                    
                     Text(conversation.displayName)
                         .font(.headline)
                         .fontWeight(hasUnreadMessages ? .bold : .medium)
@@ -221,6 +260,11 @@ struct ConversationRow: View {
             }
         }
         .padding(.vertical, 8)
+        .background(
+            conversation.isPinned(by: currentUserId) ? 
+            Color.orange.opacity(0.1) : Color.clear
+        )
+        .cornerRadius(8)
     }
     
     private var conversationAvatar: some View {

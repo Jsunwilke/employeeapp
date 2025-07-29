@@ -6,6 +6,7 @@ struct MessageThreadView: View {
     @StateObject private var chatManager = ChatManager.shared
     @State private var messageText = ""
     @State private var scrollToBottom = false
+    @State private var showConversationSettings = false
     @FocusState private var isMessageFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     
@@ -87,9 +88,9 @@ struct MessageThreadView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Button(action: {
-                        // TODO: Show conversation info
+                        showConversationSettings = true
                     }) {
-                        Label("Conversation Info", systemImage: "info.circle")
+                        Label("Conversation Settings", systemImage: "gear")
                     }
                     
                     if conversation?.type == .direct {
@@ -125,6 +126,11 @@ struct MessageThreadView: View {
         }
         .onTapGesture {
             isMessageFieldFocused = false
+        }
+        .sheet(isPresented: $showConversationSettings) {
+            if let conversation = conversation {
+                ConversationSettingsView(conversation: conversation)
+            }
         }
     }
     
@@ -185,6 +191,11 @@ struct MessageThreadView: View {
     // MARK: - Helper Methods
     
     private func shouldShowSenderName(for message: ChatMessage) -> Bool {
+        // Don't show sender name for system messages
+        if message.type == .system {
+            return false
+        }
+        
         // Show sender name in group conversations
         guard conversation?.type == .group else { return false }
         
@@ -213,26 +224,73 @@ struct MessageBubbleView: View {
     let showSenderName: Bool
     
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            if isOwnMessage { Spacer(minLength: 60) }
-            
-            VStack(alignment: isOwnMessage ? .trailing : .leading, spacing: 4) {
-                if showSenderName && !isOwnMessage {
-                    Text(message.senderName)
+        if message.type == .system {
+            // System message layout
+            HStack {
+                Spacer()
+                VStack(spacing: 4) {
+                    Text(systemMessageText)
                         .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
+                    
+                    Text(message.formattedTime)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 4)
+        } else {
+            // Regular message layout
+            HStack(alignment: .bottom, spacing: 8) {
+                if isOwnMessage { Spacer(minLength: 60) }
+                
+                VStack(alignment: isOwnMessage ? .trailing : .leading, spacing: 4) {
+                    if showSenderName && !isOwnMessage, let senderName = message.senderName {
+                        Text(senderName)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    ChatMessageContent(message: message, isOwnMessage: isOwnMessage)
+                    
+                    Text(message.formattedTime)
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
                 
-                ChatMessageContent(message: message, isOwnMessage: isOwnMessage)
-                
-                Text(message.formattedTime)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                if !isOwnMessage { Spacer(minLength: 60) }
             }
-            
-            if !isOwnMessage { Spacer(minLength: 60) }
+            .padding(.vertical, 2)
         }
-        .padding(.vertical, 2)
+    }
+    
+    private var systemMessageText: String {
+        switch message.systemAction {
+        case "participants_added":
+            if let addedByName = message.addedByName,
+               let addedParticipants = message.addedParticipants {
+                let names = addedParticipants.joined(separator: ", ")
+                return "\(addedByName) added \(names) to the group"
+            }
+        case "participant_removed":
+            if let removedByName = message.removedByName,
+               let removedParticipantName = message.removedParticipantName {
+                return "\(removedByName) removed \(removedParticipantName) from the group"
+            }
+        case "participant_left":
+            if let leftUserName = message.leftUserName {
+                return "\(leftUserName) left the group"
+            }
+        default:
+            break
+        }
+        return "System message"
     }
 }
 
@@ -253,6 +311,10 @@ struct ChatMessageContent: View {
                     .cornerRadius(16)
             case .file:
                 FileMessageView(message: message, isOwnMessage: isOwnMessage)
+            case .system:
+                Text(message.text)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
     }

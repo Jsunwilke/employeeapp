@@ -22,6 +22,13 @@ protocol ChatServiceProtocol {
     // User Management
     func getOrganizationUsers(organizationId: String) async throws -> [ChatUser]
     func updateUserPresence(userId: String, isOnline: Bool, conversationId: String?) async throws
+    
+    // Group Management
+    func togglePinConversation(conversationId: String, userId: String, isPinned: Bool) async throws
+    func addParticipantsToConversation(conversationId: String, newParticipantIds: [String], addedBy: (id: String, name: String)) async throws
+    func removeParticipantFromConversation(conversationId: String, participantId: String, removedBy: (id: String, name: String), removedUserName: String) async throws
+    func deleteConversation(conversationId: String) async throws
+    func leaveConversation(conversationId: String, userId: String, userName: String) async throws
 }
 
 // MARK: - Chat Service Implementation
@@ -366,6 +373,172 @@ class ChatService: ChatServiceProtocol {
         try await db.collection(userPresenceCollection)
             .document(userId)
             .setData(presenceData, merge: true)
+    }
+    
+    // MARK: - Group Management
+    
+    func togglePinConversation(conversationId: String, userId: String, isPinned: Bool) async throws {
+        let conversationRef = db.collection(conversationsCollection).document(conversationId)
+        
+        if isPinned {
+            // Add user to pinnedBy array
+            try await conversationRef.updateData([
+                "pinnedBy": FieldValue.arrayUnion([userId])
+            ])
+        } else {
+            // Remove user from pinnedBy array
+            try await conversationRef.updateData([
+                "pinnedBy": FieldValue.arrayRemove([userId])
+            ])
+        }
+    }
+    
+    func addParticipantsToConversation(conversationId: String, newParticipantIds: [String], addedBy: (id: String, name: String)) async throws {
+        let conversationRef = db.collection(conversationsCollection).document(conversationId)
+        
+        // Get current conversation data
+        let conversation = try await conversationRef.getDocument()
+        guard let data = conversation.data(),
+              var unreadCounts = data["unreadCounts"] as? [String: Int] else {
+            throw NSError(domain: "ChatService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Conversation not found"])
+        }
+        
+        // Initialize unread counts for new participants
+        for participantId in newParticipantIds {
+            unreadCounts[participantId] = 0
+        }
+        
+        // Update conversation
+        try await conversationRef.updateData([
+            "participants": FieldValue.arrayUnion(newParticipantIds),
+            "unreadCounts": unreadCounts
+        ])
+        
+        // Add system message
+        let messageData: [String: Any] = [
+            "type": "system",
+            "text": "",  // Required field, but not used for system messages
+            "systemAction": "participants_added",
+            "addedBy": addedBy.id,
+            "addedByName": addedBy.name,
+            "addedParticipants": newParticipantIds,
+            "timestamp": FieldValue.serverTimestamp(),
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+        
+        try await db.collection(messagesCollection)
+            .document(conversationId)
+            .collection("messages")
+            .addDocument(data: messageData)
+    }
+    
+    func removeParticipantFromConversation(conversationId: String, participantId: String, removedBy: (id: String, name: String), removedUserName: String) async throws {
+        let conversationRef = db.collection(conversationsCollection).document(conversationId)
+        
+        // Get current conversation data
+        let conversation = try await conversationRef.getDocument()
+        guard var data = conversation.data(),
+              var unreadCounts = data["unreadCounts"] as? [String: Int] else {
+            throw NSError(domain: "ChatService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Conversation not found"])
+        }
+        
+        // Remove unread count for the participant
+        unreadCounts.removeValue(forKey: participantId)
+        
+        // Update conversation
+        try await conversationRef.updateData([
+            "participants": FieldValue.arrayRemove([participantId]),
+            "unreadCounts": unreadCounts
+        ])
+        
+        // Add system message
+        let messageData: [String: Any] = [
+            "type": "system",
+            "text": "",  // Required field, but not used for system messages
+            "systemAction": "participant_removed",
+            "removedBy": removedBy.id,
+            "removedByName": removedBy.name,
+            "removedParticipant": participantId,
+            "removedParticipantName": removedUserName,
+            "timestamp": FieldValue.serverTimestamp(),
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+        
+        try await db.collection(messagesCollection)
+            .document(conversationId)
+            .collection("messages")
+            .addDocument(data: messageData)
+    }
+    
+    func deleteConversation(conversationId: String) async throws {
+        // Delete all messages first
+        let messagesRef = db.collection(messagesCollection)
+            .document(conversationId)
+            .collection("messages")
+        
+        let messages = try await messagesRef.getDocuments()
+        
+        // Batch delete messages
+        let batch = db.batch()
+        for document in messages.documents {
+            batch.deleteDocument(document.reference)
+        }
+        
+        // Delete the conversation document
+        let conversationRef = db.collection(conversationsCollection).document(conversationId)
+        batch.deleteDocument(conversationRef)
+        
+        try await batch.commit()
+    }
+    
+    func leaveConversation(conversationId: String, userId: String, userName: String) async throws {
+        let conversationRef = db.collection(conversationsCollection).document(conversationId)
+        
+        // Get conversation to validate
+        let conversation = try await conversationRef.getDocument()
+        guard let data = conversation.data() else {
+            throw NSError(domain: "ChatService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Conversation not found"])
+        }
+        
+        // Check if user is a participant
+        guard let participants = data["participants"] as? [String],
+              participants.contains(userId) else {
+            throw NSError(domain: "ChatService", code: 403, userInfo: [NSLocalizedDescriptionKey: "You are not a participant in this conversation"])
+        }
+        
+        // Validate conversation type and participant count
+        if data["type"] as? String == "direct" {
+            throw NSError(domain: "ChatService", code: 400, userInfo: [NSLocalizedDescriptionKey: "Cannot leave direct conversations"])
+        }
+        
+        if participants.count <= 2 {
+            throw NSError(domain: "ChatService", code: 400, userInfo: [NSLocalizedDescriptionKey: "Cannot leave group - at least 2 participants must remain"])
+        }
+        
+        // Remove user from participants and unread counts
+        var unreadCounts = data["unreadCounts"] as? [String: Int] ?? [:]
+        unreadCounts.removeValue(forKey: userId)
+        
+        try await conversationRef.updateData([
+            "participants": FieldValue.arrayRemove([userId]),
+            "unreadCounts": unreadCounts
+        ])
+        
+        // Add system message
+        let messageData: [String: Any] = [
+            "type": "system",
+            "text": "",  // Required field, but not used for system messages
+            "systemAction": "participant_left",
+            "leftUserId": userId,
+            "leftUserName": userName,
+            "timestamp": FieldValue.serverTimestamp(),
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+        
+        try await db.collection(messagesCollection)
+            .document(conversationId)
+            .collection("messages")
+            .addDocument(data: messageData)
     }
     
     // MARK: - Helper Methods
