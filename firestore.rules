@@ -156,6 +156,16 @@ service cloud.firestore {
                          (isAdmin(request.auth.uid) &&
                           belongsToSameOrg(request.auth.uid, resource.data.organizationID))
                        );
+      
+      // **ADMIN USER DELETION: Allow admins to delete users in their organization**
+      allow delete: if request.auth != null &&
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Prevent self-deletion
+                       request.auth.uid != userId &&
+                       // Only delete real user accounts (not temporary invites)
+                       (!resource.data.keys().hasAny(['isTemporaryInvite']) || 
+                        resource.data.isTemporaryInvite != true);
     }
 
     // Sessions collection
@@ -287,6 +297,11 @@ service cloud.firestore {
       // Admins/Managers can update any sports job in their organization
       allow update: if request.auth != null && 
                        isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Employees can update sports jobs in their organization
+      allow update: if request.auth != null && 
+                       isEmployee(request.auth.uid) &&
                        belongsToSameOrg(request.auth.uid, resource.data.organizationID);
       
       // Admins can delete sports jobs
@@ -928,12 +943,14 @@ service cloud.firestore {
                          // System messages - for participant changes
                          (request.resource.data.type == 'system' &&
                           request.resource.data.keys().hasAll(['type', 'systemAction']) &&
-                          request.resource.data.systemAction in ['participants_added', 'participant_removed'] &&
+                          request.resource.data.systemAction in ['participants_added', 'participant_removed', 'participant_left'] &&
                           // Validate system message fields based on action
                           ((request.resource.data.systemAction == 'participants_added' &&
                             request.resource.data.keys().hasAny(['addedBy', 'addedByName', 'addedParticipants'])) ||
                            (request.resource.data.systemAction == 'participant_removed' &&
-                            request.resource.data.keys().hasAny(['removedBy', 'removedByName', 'removedParticipant']))))
+                            request.resource.data.keys().hasAny(['removedBy', 'removedByName', 'removedParticipant'])) ||
+                           (request.resource.data.systemAction == 'participant_left' &&
+                            request.resource.data.keys().hasAny(['leftUserId', 'leftUserName']))))
                        ) &&
                        // Validate optional timestamp fields (allow server timestamps)
                        (!request.resource.data.keys().hasAny(['timestamp']) || 
