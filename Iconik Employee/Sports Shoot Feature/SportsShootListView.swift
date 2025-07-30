@@ -46,9 +46,8 @@ class SportsShootListViewModel: ObservableObject {
     @Published var selectedSpecialFilters: Set<String> = []
     @Published var imageFilterType: ImageFilterType = .all
     
-    // Autosave states
-    var debounceTask: DispatchWorkItem?
-    var lastSavedValue: String = ""
+    // Track if value has changed for save-on-blur
+    @Published var hasUnsavedChanges: Bool = false
     
     // Shoot status cache to avoid unnecessary UI updates
     private var shootStatusCache: [String: OfflineManager.CacheStatus] = [:]
@@ -90,6 +89,7 @@ class SportsShootListViewModel: ObservableObject {
     func clearAllStatusCaches() {
         shootStatusCache.removeAll()
     }
+    
 }
 
 struct SportsShootListView: View {
@@ -118,9 +118,6 @@ struct SportsShootListView: View {
     
     // Track if view is visible to optimize timers
     @State private var isViewVisible = false
-    
-    // Timer for refreshing locked entries - using a longer interval to prevent flickering
-    let lockRefreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     
     // Sync statuses refresh timer - using a longer interval to prevent flickering
     let syncStatusTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -224,11 +221,6 @@ struct SportsShootListView: View {
         }
         .onDisappear {
             isViewVisible = false
-        }
-        .onReceive(lockRefreshTimer) { _ in
-            if isViewVisible {
-                refreshLocks()
-            }
         }
         .onReceive(syncStatusTimer) { _ in
             if isViewVisible {
@@ -815,18 +807,21 @@ struct SportsShootListView: View {
                     
                     // Set up a real-time listener for Firestore updates
                     setupFirestoreListeners()
+                    
+                    // Clean up stale locks immediately on view load
+                    if let shootID = viewModel.selectedShoot?.id {
+                        EntryLockManager.shared.cleanupStaleLocks(shootID: shootID)
+                    }
                 }
                 .onDisappear {
                     // Remove orientation notification observer
                     NotificationCenter.default.removeObserver(self, name: UIDevice.orientationDidChangeNotification, object: nil)
                     
-                    // Release any locks when leaving the view
+                    // Save and release any locks when leaving the view
                     if let entryID = viewModel.currentlyEditingEntry, let shootID = viewModel.selectedShoot?.id {
+                        saveCurrentEditingEntry()
                         releaseLock(shootID: shootID, entryID: entryID)
                     }
-                    
-                    // Cancel any pending autosave tasks
-                    viewModel.debounceTask?.cancel()
                 }
             } else {
                 // Initial detail view (secondary/detail view) when no item is selected
@@ -860,41 +855,6 @@ struct SportsShootListView: View {
             
             // Listen for conflict notifications
             setupConflictHandling()
-        }
-        .onChange(of: viewModel.editingImageNumber) { newValue in
-            // Auto-save when the text changes
-            if let entryID = viewModel.currentlyEditingEntry,
-               let shootID = viewModel.selectedShoot?.id,
-               let entry = viewModel.selectedShoot?.roster.first(where: { $0.id == entryID }),
-               newValue != viewModel.lastSavedValue {
-                
-                // Cancel any existing debounce task
-                viewModel.debounceTask?.cancel()
-                
-                // Create a new debounce task with a 0.5-second delay
-                let task = DispatchWorkItem {
-                    var updatedEntry = entry
-                    updatedEntry.imageNumbers = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                    
-                    SportsShootService.shared.updateRosterEntry(shootID: shootID, entry: updatedEntry) { result in
-                        switch result {
-                        case .success:
-                            // Update the lastSavedValue to prevent redundant saves
-                            viewModel.lastSavedValue = newValue
-                            
-                            // Trigger a partial update to notify other devices of changes
-                            // This notifies listeners that a specific entry has been updated
-                            onShootUpdated(shootID, entry: updatedEntry)
-                        case .failure(let error):
-                            print("Autosave error: \(error.localizedDescription)")
-                        }
-                    }
-                }
-                
-                // Schedule the new task
-                viewModel.debounceTask = task
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
-            }
         }
         .sheet(isPresented: $viewModel.showingAddRosterEntry) {
             if let shoot = viewModel.selectedShoot {
@@ -1606,13 +1566,19 @@ struct SportsShootListView: View {
                         text: $viewModel.editingImageNumber,
                         placeholder: "Enter image numbers",
                         onTapOutside: {
-                            // Field autosaves on text change
+                            print("📝 onTapOutside triggered for entry \(entry.id)")
+                            // Just call the centralized save function
+                            saveCurrentEditingEntry()
                         },
                         onEnterOrDown: {
+                            // Save current entry before moving to next
+                            saveCurrentEditingEntry()
                             // Find the next editable entry and start editing it
                             moveToNextEditableEntry(currentID: entry.id)
                         },
                         onEnterOrUp: {
+                            // Save current entry before moving to previous
+                            saveCurrentEditingEntry()
                             // Find the previous editable entry and start editing it
                             moveToPreviousEditableEntry(currentID: entry.id)
                         }
@@ -2031,6 +1997,7 @@ struct SportsShootListView: View {
                                             if let index = currentRoster.firstIndex(where: { $0.id == updatedEntry.id }) {
                                                 currentRoster[index] = updatedEntry
                                                 viewModel.selectedShoot?.roster = currentRoster
+                                                
                                             }
                                         }
                                     } else {
@@ -2346,21 +2313,67 @@ struct SportsShootListView: View {
                                         }
                                         
                                         if self.viewModel.currentlyEditingEntry == entryID {
+                                            // Save before clearing the editing state
+                                            self.saveCurrentEditingEntry()
                                             self.viewModel.currentlyEditingEntry = nil
                                             self.viewModel.editingImageNumber = ""
-                                            self.viewModel.lastSavedValue = ""
-                                            self.viewModel.debounceTask?.cancel()
                                         }
                                     }
                                 }
                             }
                             
-                            private func refreshLocks() {
-                                guard let shootID = viewModel.selectedShoot?.id else { return }
-                                EntryLockManager.shared.cleanupStaleLocks(shootID: shootID)
-                            }
                             
                             // MARK: - Editing Functions
+                            
+                            // Save the current editing entry if it has changed
+                            private func saveCurrentEditingEntry() {
+                                // Check authentication first
+                                guard Auth.auth().currentUser != nil else {
+                                    print("📝 Save error: User not authenticated")
+                                    viewModel.errorMessage = "You must be signed in to save changes"
+                                    viewModel.showingErrorAlert = true
+                                    return
+                                }
+                                
+                                guard let entryID = viewModel.currentlyEditingEntry,
+                                      let shootID = viewModel.selectedShoot?.id,
+                                      let currentEntry = viewModel.selectedShoot?.roster.first(where: { $0.id == entryID }),
+                                      viewModel.editingImageNumber != currentEntry.imageNumbers else {
+                                    print("📝 No save needed - no changes or entry not found")
+                                    return
+                                }
+                                
+                                var updatedEntry = currentEntry
+                                updatedEntry.imageNumbers = viewModel.editingImageNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                                
+                                print("📝 Saving current entry: '\(updatedEntry.imageNumbers)' for entry \(entryID) (was: '\(currentEntry.imageNumbers)')")
+                                print("📝 User: \(Auth.auth().currentUser?.uid ?? "unknown"), OrgID: \(storedUserOrganizationID)")
+                                
+                                SportsShootService.shared.updateRosterEntry(shootID: shootID, entry: updatedEntry) { result in
+                                    DispatchQueue.main.async {
+                                        switch result {
+                                        case .success:
+                                            print("📝 Successfully saved entry \(entryID)")
+                                            // Update the local roster to reflect the change
+                                            if let index = self.viewModel.selectedShoot?.roster.firstIndex(where: { $0.id == entryID }) {
+                                                self.viewModel.selectedShoot?.roster[index] = updatedEntry
+                                            }
+                                        case .failure(let error):
+                                            print("📝 Save error for entry \(entryID): \(error.localizedDescription)")
+                                            
+                                            // Check if it's a permission error
+                                            let errorMessage = error.localizedDescription.lowercased()
+                                            if errorMessage.contains("permission") || errorMessage.contains("insufficient") {
+                                                self.viewModel.errorMessage = "Permission denied. Please contact your administrator to ensure you have access to edit this sports shoot."
+                                                print("📝 Permission error details - ShootID: \(shootID), OrgID: \(self.storedUserOrganizationID)")
+                                            } else {
+                                                self.viewModel.errorMessage = "Failed to save: \(error.localizedDescription)"
+                                            }
+                                            self.viewModel.showingErrorAlert = true
+                                        }
+                                    }
+                                }
+                            }
                             
                             private func startEditing(shootID: String, entry: RosterEntry) {
                                 print("Attempting to start editing entry: \(entry.id)")
@@ -2386,18 +2399,17 @@ struct SportsShootListView: View {
                                     // We already have the lock, just start editing without acquiring a new lock
                                     viewModel.currentlyEditingEntry = entry.id
                                     viewModel.editingImageNumber = entry.imageNumbers
-                                    viewModel.lastSavedValue = entry.imageNumbers
                                     return
                                 }
                                 
-                                // Release any previous lock
+                                // Save and release any previous lock
                                 if let previousEntryID = viewModel.currentlyEditingEntry {
+                                    saveCurrentEditingEntry()
                                     releaseLock(shootID: shootID, entryID: previousEntryID)
                                 }
                                 
                                 // Set up editing state
                                 viewModel.editingImageNumber = entry.imageNumbers
-                                viewModel.lastSavedValue = entry.imageNumbers // Set initial saved value
                                 viewModel.currentlyEditingEntry = entry.id // Set synchronously to avoid placeholder showing
                                 
                                 // Acquire lock for this entry

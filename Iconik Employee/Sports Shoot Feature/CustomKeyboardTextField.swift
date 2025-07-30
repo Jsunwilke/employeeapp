@@ -5,6 +5,7 @@ struct CustomKeyboardTextField: View {
     var placeholder: String
     var onEnterOrDown: (() -> Void)? = nil
     var onEnterOrUp: (() -> Void)? = nil
+    var onDismiss: (() -> Void)? = nil
     
     @StateObject private var keyboardManager = KeyboardManager.shared
     @State private var isActive = false
@@ -47,7 +48,8 @@ struct CustomKeyboardTextField: View {
             keyboardManager.showKeyboard(
                 for: $text,
                 onUp: onEnterOrUp,
-                onDown: onEnterOrDown
+                onDown: onEnterOrDown,
+                onDismiss: onDismiss
             )
         }
         .onChange(of: keyboardManager.isShowingCustomKeyboard) { isShowing in

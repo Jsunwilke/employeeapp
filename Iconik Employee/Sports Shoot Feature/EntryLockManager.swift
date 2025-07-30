@@ -27,8 +27,8 @@ class EntryLockManager {
     private let db = Firestore.firestore()
     private var isOnline = true
     
-    // Lock expiration time in seconds (reduced to 120 seconds for faster cleanup)
-    private let lockExpirationTime: TimeInterval = 120
+    // Lock expiration time in seconds (reduced to 60 seconds for faster cleanup)
+    private let lockExpirationTime: TimeInterval = 60
     
     // Initialize and listen for network status changes
     private init() {
@@ -474,15 +474,22 @@ class EntryLockManager {
                         let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date(timeIntervalSince1970: 0)
                         let timeSinceCreation = Date().timeIntervalSince(timestamp)
                         
-                        // Always include locks in the list, even if expired
-                        // This prevents race conditions where one device deletes another's lock
                         if let entryID = data["entryID"] as? String,
                            let editorName = data["editorName"] as? String {
-                            locks[entryID] = editorName
                             
                             if timeSinceCreation > self.lockExpirationTime {
-                                print("Lock for entry \(entryID) by \(editorName) (expired: \(Int(timeSinceCreation))s old)")
+                                print("Lock for entry \(entryID) by \(editorName) is expired (\(Int(timeSinceCreation))s old) - removing")
+                                // Delete expired lock immediately
+                                doc.reference.delete { error in
+                                    if let error = error {
+                                        print("Error deleting expired lock: \(error.localizedDescription)")
+                                    } else {
+                                        print("Successfully deleted expired lock for \(entryID)")
+                                    }
+                                }
                             } else {
+                                // Only include non-expired locks
+                                locks[entryID] = editorName
                                 print("Lock for entry \(entryID) by \(editorName)")
                             }
                         }

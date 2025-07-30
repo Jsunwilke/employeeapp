@@ -7,21 +7,27 @@ class KeyboardManager: ObservableObject {
     @Published var activeFieldText: Binding<String>?
     @Published var onUp: (() -> Void)?
     @Published var onDown: (() -> Void)?
+    @Published var onDismiss: (() -> Void)?
     
     private init() {}
     
-    func showKeyboard(for text: Binding<String>, onUp: (() -> Void)? = nil, onDown: (() -> Void)? = nil) {
+    func showKeyboard(for text: Binding<String>, onUp: (() -> Void)? = nil, onDown: (() -> Void)? = nil, onDismiss: (() -> Void)? = nil) {
         self.activeFieldText = text
         self.onUp = onUp
         self.onDown = onDown
+        self.onDismiss = onDismiss
         self.isShowingCustomKeyboard = true
     }
     
     func hideKeyboard() {
+        // Call onDismiss before clearing
+        self.onDismiss?()
+        
         self.isShowingCustomKeyboard = false
         self.activeFieldText = nil
         self.onUp = nil
         self.onDown = nil
+        self.onDismiss = nil
     }
 }
 
