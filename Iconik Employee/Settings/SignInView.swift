@@ -75,7 +75,7 @@ struct SignInView: View {
           errorMessage = "User data not found."
           return
         }
-        // Save user data
+        // Save user data to AppStorage
         storedUserOrganizationID = data["organizationID"] as? String ?? ""
         storedUserFirstName = data["firstName"] as? String ?? ""
         storedUserLastName = data["lastName"] as? String ?? ""
@@ -83,7 +83,22 @@ struct SignInView: View {
         storedUserCoordinates = data["userCoordinates"] as? String ?? ""
         userRole = data["role"] as? String ?? "employee"
         
-        isSignedIn = true
+        // Use UserProfileService to fetch and store all profile fields
+        UserProfileService.shared.fetchUserProfile(uid: uid) { result in
+          switch result {
+          case .success:
+            // Profile data is automatically stored in AppStorage by UserProfileService
+            DispatchQueue.main.async {
+              isSignedIn = true
+            }
+          case .failure(let error):
+            // If profile fetch fails, still sign in with basic data
+            print("Warning: Failed to fetch full profile: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+              isSignedIn = true
+            }
+          }
+        }
       }
     }
   }

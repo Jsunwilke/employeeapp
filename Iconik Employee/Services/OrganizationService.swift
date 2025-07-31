@@ -14,6 +14,8 @@ class OrganizationService: ObservableObject {
     private let db = Firestore.firestore()
     
     @Published var sessionTypes: [SessionTypeDefinition] = []
+    @Published var organizationAddress: String = ""
+    @Published var organizationCoordinates: String = ""  // Format: "lat,lng"
     private var organizationListener: ListenerRegistration?
     
     private init() {}
@@ -50,6 +52,22 @@ class OrganizationService: ObservableObject {
                 } else {
                     print("No sessionTypes found in organization data")
                     self?.sessionTypes = []
+                }
+                
+                // Parse organization address and coordinates
+                if let address = data["address"] as? String {
+                    self?.organizationAddress = address
+                    print("🏢 Organization address: \(address)")
+                }
+                
+                if let coordinates = data["coordinates"] as? String {
+                    self?.organizationCoordinates = coordinates
+                    print("📍 Organization coordinates: \(coordinates)")
+                } else if let location = data["location"] as? [String: Any],
+                          let lat = location["latitude"] as? Double,
+                          let lng = location["longitude"] as? Double {
+                    self?.organizationCoordinates = "\(lat),\(lng)"
+                    print("📍 Organization coordinates: \(lat),\(lng)")
                 }
             }
     }

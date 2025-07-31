@@ -16,6 +16,7 @@ struct MapViewComponent: UIViewRepresentable {
     @Binding var pinCoordinate: CLLocationCoordinate2D
     @Binding var region: MKCoordinateRegion
     @Binding var isDragging: Bool
+    var mapType: MKMapType = .standard
     
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: MapViewComponent
@@ -79,17 +80,23 @@ struct MapViewComponent: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
+        mapView.mapType = mapType
         
         // Add the draggable pin
         let annotation = MKPointAnnotation()
         annotation.coordinate = pinCoordinate
-        annotation.title = "School Location"
+        annotation.title = "Location"
         mapView.addAnnotation(annotation)
         
         return mapView
     }
     
     func updateUIView(_ mapView: MKMapView, context: Context) {
+        // Update map type if it changed
+        if mapView.mapType != mapType {
+            mapView.mapType = mapType
+        }
+        
         // Update the region if it changed
         if mapView.region.center.latitude != region.center.latitude ||
            mapView.region.center.longitude != region.center.longitude ||

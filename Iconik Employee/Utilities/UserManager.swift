@@ -2,14 +2,36 @@ import Foundation
 import Firebase
 import FirebaseAuth
 import FirebaseFirestore
+import Combine
 
 class UserManager: ObservableObject {
     static let shared = UserManager()
     
     private let db = Firestore.firestore()
     @Published var currentUserOrganizationID: String = ""
+    @Published var isRefreshing = false
     
-    private init() {}
+    private var profileListener: ListenerRegistration?
+    private var cancellables = Set<AnyCancellable>()
+    
+    private init() {
+        // Listen for auth state changes
+        Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            if let user = user {
+                self?.startListeningToUserProfile(uid: user.uid)
+                self?.refreshUserProfile()
+            } else {
+                self?.stopListeningToUserProfile()
+            }
+        }
+        
+        // Listen for app foreground to refresh profile
+        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+            .sink { [weak self] _ in
+                self?.refreshUserProfile()
+            }
+            .store(in: &cancellables)
+    }
     
     // Get current user's organizationID
     func getCurrentUserOrganizationID(completion: @escaping (String?) -> Void) {
@@ -57,5 +79,59 @@ class UserManager: ObservableObject {
         getCurrentUserOrganizationID { _ in
             // Organization ID is now cached
         }
+    }
+    
+    // Refresh user profile data
+    func refreshUserProfile() {
+        guard Auth.auth().currentUser != nil else { return }
+        
+        DispatchQueue.main.async {
+            self.isRefreshing = true
+        }
+        
+        // Use UserProfileService to refresh profile
+        UserProfileService.shared.refreshCurrentUserProfile()
+        
+        // Also refresh organization ID
+        getCurrentUserOrganizationID { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.isRefreshing = false
+            }
+        }
+    }
+    
+    // Start listening to real-time updates for user profile
+    private func startListeningToUserProfile(uid: String) {
+        stopListeningToUserProfile()
+        
+        profileListener = db.collection("users").document(uid).addSnapshotListener { [weak self] snapshot, error in
+            if let error = error {
+                print("🔐 Error listening to user profile: \(error.localizedDescription)")
+                return
+            }
+            
+            guard let data = snapshot?.data(),
+                  let organizationID = data["organizationID"] as? String else {
+                return
+            }
+            
+            DispatchQueue.main.async {
+                if self?.currentUserOrganizationID != organizationID {
+                    self?.currentUserOrganizationID = organizationID
+                    // Trigger profile refresh when organization changes
+                    UserProfileService.shared.refreshCurrentUserProfile()
+                }
+            }
+        }
+    }
+    
+    // Stop listening to user profile updates
+    private func stopListeningToUserProfile() {
+        profileListener?.remove()
+        profileListener = nil
+    }
+    
+    deinit {
+        stopListeningToUserProfile()
     }
 }
