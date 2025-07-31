@@ -288,20 +288,8 @@ service cloud.firestore {
       allow create: if request.auth != null && 
                        belongsToSameOrg(request.auth.uid, request.resource.data.organizationID);
       
-      // Users assigned to the job can update it
+      // Any user in the organization can update sports jobs
       allow update: if request.auth != null && 
-                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
-                       (resource.data.keys().hasAny(['photographer']) && 
-                        resource.data.photographer == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName);
-      
-      // Admins/Managers can update any sports job in their organization
-      allow update: if request.auth != null && 
-                       isAdminOrManager(request.auth.uid) &&
-                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
-      
-      // Employees can update sports jobs in their organization
-      allow update: if request.auth != null && 
-                       isEmployee(request.auth.uid) &&
                        belongsToSameOrg(request.auth.uid, resource.data.organizationID);
       
       // Admins can delete sports jobs

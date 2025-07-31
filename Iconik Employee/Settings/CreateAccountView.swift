@@ -10,19 +10,21 @@ struct CreateAccountView: View {
     @State private var organizationID = ""
     @State private var firstName = ""
     @State private var lastName = ""
-    @State private var homeAddress = ""
+    @State private var fullAddress = ""  // Full formatted address
+    @State private var coordinates = ""  // Lat,lng format
+    @State private var city = ""
+    @State private var state = ""
+    @State private var zipCode = ""
     @State private var email = ""
     @State private var password = ""
     @State private var confirmPassword = ""
     
     @State private var errorMessage = ""
     @State private var accountCreated = false
+    @State private var showMap = false
     
-    // Geocoder for verifying the home address
-    private let geocoder = CLGeocoder()
-    
-    // Address completer for suggestions
-    @StateObject private var addressCompleter = AddressCompleter()
+    // Google Places service for address autocomplete
+    @StateObject private var placesService = GooglePlacesService.shared
     
     var body: some View {
         ScrollView {
@@ -49,28 +51,24 @@ struct CreateAccountView: View {
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                 
                 // Home Address field with suggestions
-                TextField("Home Address", text: $homeAddress)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onChange(of: homeAddress) { newValue in
-                        addressCompleter.queryFragment = newValue
-                    }
+                // Address field with Google Places autocomplete
+                AddressAutocompleteField(
+                    address: $fullAddress,
+                    coordinates: $coordinates,
+                    showMap: $showMap,
+                    city: $city,
+                    state: $state,
+                    zipCode: $zipCode,
+                    country: .constant("United States")
+                )
                 
-                // Display suggestions if available
-                if !addressCompleter.suggestions.isEmpty {
-                    ForEach(addressCompleter.suggestions, id: \.self) { suggestion in
-                        Button(action: {
-                            homeAddress = suggestion.title + ", " + suggestion.subtitle
-                            addressCompleter.suggestions = []
-                        }) {
-                            VStack(alignment: .leading) {
-                                Text(suggestion.title)
-                                    .font(.body)
-                                Text(suggestion.subtitle)
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                        .padding(.horizontal)
+                if showMap && isValidCoordinates(coordinates) {
+                    AddressMapView(
+                        coordinates: $coordinates,
+                        address: $fullAddress
+                    ) { newCoordinate in
+                        // Update coordinates when pin is dragged
+                        coordinates = "\(newCoordinate.latitude),\(newCoordinate.longitude)"
                     }
                 }
                 
@@ -125,7 +123,7 @@ struct CreateAccountView: View {
         guard !organizationID.isEmpty,
               !firstName.isEmpty,
               !lastName.isEmpty,
-              !homeAddress.isEmpty,
+              !fullAddress.isEmpty,
               !email.isEmpty,
               !password.isEmpty else {
             self.errorMessage = "Please fill in all fields."
@@ -138,21 +136,14 @@ struct CreateAccountView: View {
             return
         }
         
-        // Use the geocoder to verify the address
-        geocoder.geocodeAddressString(homeAddress) { placemarks, error in
-            if let error = error {
-                self.errorMessage = "Address not recognized: \(error.localizedDescription)"
-                return
-            }
-            
-            if let placemark = placemarks?.first {
-                print("Address validated: \(placemark)")
-                // Proceed to create the account if address is validated
-                self.createAccount()
-            } else {
-                self.errorMessage = "Address not recognized. Please check it."
-            }
+        // Verify we have coordinates
+        guard !coordinates.isEmpty else {
+            self.errorMessage = "Please select a valid address from the suggestions."
+            return
         }
+        
+        // Proceed to create the account
+        self.createAccount()
     }
     
     private func createAccount() {
@@ -169,7 +160,12 @@ struct CreateAccountView: View {
                 "organizationID": organizationID,
                 "firstName": firstName,
                 "lastName": lastName,
-                "homeAddress": homeAddress,
+                "homeAddress": coordinates,  // Store coordinates in homeAddress
+                "address": fullAddress,  // Store full formatted address
+                "city": city,
+                "state": state,
+                "zipCode": zipCode,
+                "country": "United States",
                 "email": email,
                 "role": "employee"
             ]
@@ -183,6 +179,20 @@ struct CreateAccountView: View {
                 }
             }
         }
+    }
+    
+    private func isValidCoordinates(_ coordString: String) -> Bool {
+        let parts = coordString.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+        
+        if parts.count == 2,
+           let lat = Double(parts[0]),
+           let lng = Double(parts[1]),
+           lat.isFinite && lng.isFinite,
+           lat >= -90 && lat <= 90,
+           lng >= -180 && lng <= 180 {
+            return true
+        }
+        return false
     }
 }
 
