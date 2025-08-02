@@ -82,7 +82,7 @@ struct TabBarConfiguration: Codable {
         items: [
             TabBarItem(id: "timeTracking", title: "Time", systemImage: "clock.fill", description: "Clock in/out and track your hours", order: 0, isQuickAccess: true),
             TabBarItem(id: "chat", title: "Chat", systemImage: "bubble.left.and.bubble.right.fill", description: "Message your team", order: 1, isQuickAccess: true),
-            TabBarItem(id: "scan", title: "Scan", systemImage: "wave.3.right.circle.fill", description: "Scan SD cards and job boxes", order: 2, isQuickAccess: true),
+            TabBarItem(id: "scan", title: "Scan", systemImage: "wave.3.right.circle.fill", description: "Scan SD cards and job boxes", order: 999, isQuickAccess: true), // High order to always be in middle
             TabBarItem(id: "photoshootNotes", title: "Notes", systemImage: "note.text", description: "Create and manage notes for your photoshoots", order: 3, isQuickAccess: true),
             TabBarItem(id: "dailyJobReport", title: "Reports", systemImage: "doc.text", description: "Submit your daily job report", order: 4, isQuickAccess: false),
             TabBarItem(id: "sportsShoot", title: "Sports", systemImage: "sportscourt", description: "Manage sports shoot rosters and images", order: 5, isQuickAccess: false)
@@ -104,8 +104,27 @@ class TabBarManager: ObservableObject {
         if let savedData = UserDefaults.standard.data(forKey: configurationKey),
            let savedConfig = try? JSONDecoder().decode(TabBarConfiguration.self, from: savedData) {
             self.configuration = savedConfig
+            ensureScanIsAlwaysQuickAccess()
         } else {
             self.configuration = TabBarConfiguration.defaultConfiguration
+        }
+    }
+    
+    private func ensureScanIsAlwaysQuickAccess() {
+        // Find scan item and ensure it's always quick access
+        if let scanIndex = configuration.items.firstIndex(where: { $0.id == "scan" }) {
+            configuration.items[scanIndex].isQuickAccess = true
+        } else {
+            // If scan is missing, add it
+            let scanItem = TabBarItem(
+                id: "scan",
+                title: "Scan",
+                systemImage: "wave.3.right.circle.fill",
+                description: "Scan SD cards and job boxes",
+                order: 999,
+                isQuickAccess: true
+            )
+            configuration.items.append(scanItem)
         }
     }
     
@@ -117,6 +136,7 @@ class TabBarManager: ObservableObject {
     
     func updateTabBarItems(_ items: [TabBarItem]) {
         configuration.items = items
+        ensureScanIsAlwaysQuickAccess()
         saveConfiguration()
     }
     
@@ -130,7 +150,19 @@ class TabBarManager: ObservableObject {
         return configuration.items
             .filter { $0.isQuickAccess }
             .sorted { $0.order < $1.order }
-            .prefix(5)
+            .prefix(7) // Allow up to 7 items total
             .map { $0 }
+    }
+    
+    func getQuickAccessItemsExcludingScan() -> [TabBarItem] {
+        return configuration.items
+            .filter { $0.isQuickAccess && $0.id != "scan" }
+            .sorted { $0.order < $1.order }
+            .prefix(6) // 6 customizable items plus fixed scan = 7 total
+            .map { $0 }
+    }
+    
+    func getScanItem() -> TabBarItem? {
+        return configuration.items.first { $0.id == "scan" }
     }
 }

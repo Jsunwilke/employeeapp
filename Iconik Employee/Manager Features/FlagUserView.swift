@@ -38,12 +38,28 @@ struct FlagUserView: View {
                 Text("Loading users...")
                     .onAppear(perform: loadPhotographers)
             } else {
-                Picker("Select a User to Flag", selection: $selectedPhotographer) {
+                // Custom dropdown button
+                Menu {
                     ForEach(photographers) { user in
-                        Text(user.name).tag(user as Photographer?)
+                        Button(action: {
+                            selectedPhotographer = user
+                        }) {
+                            Text(user.name)
+                        }
                     }
+                } label: {
+                    HStack {
+                        Text(selectedPhotographer?.name ?? "Select a photographer")
+                            .foregroundColor(selectedPhotographer == nil ? .gray : .primary)
+                        Spacer()
+                        Image(systemName: "chevron.down")
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                    }
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
                 }
-                .pickerStyle(MenuPickerStyle())
                 .padding(.horizontal)
             }
             
