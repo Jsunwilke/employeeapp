@@ -11,13 +11,7 @@ struct JobBoxBubbleView: View {
     }
     
     private var statusColor: Color {
-        switch record.status {
-        case .packed: return .blue
-        case .pickedUp: return .orange
-        case .leftJob: return .red
-        case .turnedIn: return .green
-        case .unknown: return .gray
-        }
+        StatusColors.color(for: record.status.rawValue, isJobBox: true)
     }
     
     var body: some View {

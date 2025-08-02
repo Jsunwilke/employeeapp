@@ -1,0 +1,61 @@
+{
+  "sdCardStatuses": {
+    "job box": {
+      "hex": "#FF9500",
+      "rgb": {"r": 255, "g": 149, "b": 0},
+      "name": "Orange"
+    },
+    "camera": {
+      "hex": "#34C759",
+      "rgb": {"r": 52, "g": 199, "b": 89},
+      "name": "Green"
+    },
+    "envelope": {
+      "hex": "#FFCC00",
+      "rgb": {"r": 255, "g": 204, "b": 0},
+      "name": "Yellow"
+    },
+    "uploaded": {
+      "hex": "#007AFF",
+      "rgb": {"r": 0, "g": 122, "b": 255},
+      "name": "Blue"
+    },
+    "cleared": {
+      "hex": "#8E8E93",
+      "rgb": {"r": 142, "g": 142, "b": 147},
+      "name": "Gray"
+    },
+    "camera bag": {
+      "hex": "#AF52DE",
+      "rgb": {"r": 175, "g": 82, "b": 222},
+      "name": "Purple"
+    },
+    "personal": {
+      "hex": "#5856D6",
+      "rgb": {"r": 88, "g": 86, "b": 214},
+      "name": "Indigo"
+    }
+  },
+  "jobBoxStatuses": {
+    "packed": {
+      "hex": "#007AFF",
+      "rgb": {"r": 0, "g": 122, "b": 255},
+      "name": "Blue"
+    },
+    "picked up": {
+      "hex": "#34C759",
+      "rgb": {"r": 52, "g": 199, "b": 89},
+      "name": "Green"
+    },
+    "left job": {
+      "hex": "#FF9500",
+      "rgb": {"r": 255, "g": 149, "b": 0},
+      "name": "Orange"
+    },
+    "turned in": {
+      "hex": "#8E8E93",
+      "rgb": {"r": 142, "g": 142, "b": 147},
+      "name": "Gray"
+    }
+  }
+}
