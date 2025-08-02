@@ -55,10 +55,15 @@ struct SlingWeeklyView: View {
     // Environment for color scheme
     @Environment(\.colorScheme) var colorScheme
     
-    // Interactive drag state
+    // Interactive drag state for week navigation
     @State private var offset: CGFloat = 0
     @State private var isDragging = false
     @State private var isAnimating = false
+    
+    // Interactive drag state for day navigation
+    @State private var dayOffset: CGFloat = 0
+    @State private var isDraggingDay = false
+    @State private var isAnimatingDay = false
     
     // Animation parameters
     private let transitionDuration: Double = 0.3
@@ -125,9 +130,39 @@ struct SlingWeeklyView: View {
                         .padding(.bottom, 8)
                 }
                 
-                // Events list for selected day
+                // Events list for selected day with swipe gestures
                 if let selectedDate = selectedDay {
-                    eventsListView(for: selectedDate)
+                    ZStack {
+                        eventsListView(for: selectedDate)
+                            .offset(x: dayOffset)
+                            .gesture(
+                                DragGesture()
+                                    .onChanged { value in
+                                        if !isAnimatingDay {
+                                            isDraggingDay = true
+                                            dayOffset = value.translation.width
+                                        }
+                                    }
+                                    .onEnded { value in
+                                        isDraggingDay = false
+                                        let threshold = screenWidth * 0.3
+                                        
+                                        if value.translation.width < -threshold {
+                                            // Swipe left - next day
+                                            animateToNextDay()
+                                        } else if value.translation.width > threshold {
+                                            // Swipe right - previous day
+                                            animateToPreviousDay()
+                                        } else {
+                                            // Snap back to center
+                                            withAnimation(.spring()) {
+                                                dayOffset = 0
+                                            }
+                                        }
+                                    }
+                            )
+                    }
+                    .clipped() // Prevent content from showing outside bounds during swipe
                 }
                 
                 Spacer() // Push content to the top
@@ -551,6 +586,84 @@ struct SlingWeeklyView: View {
             // Animation complete
             DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
                 isAnimating = false
+            }
+        }
+    }
+    
+    // MARK: - Day Navigation Functions
+    
+    private func animateToNextDay() {
+        guard let currentSelected = selectedDay else { return }
+        
+        isAnimatingDay = true
+        
+        // Calculate next day
+        let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: currentSelected) ?? currentSelected
+        
+        // Check if we need to move to next week
+        let currentWeekday = Calendar.current.component(.weekday, from: currentSelected)
+        let isLastDayOfWeek = currentWeekday == 7 // Saturday
+        
+        // Animate the day view sliding out
+        withAnimation(.easeInOut(duration: transitionDuration/2)) {
+            dayOffset = -screenWidth
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
+            // Update selected day
+            selectedDay = nextDay
+            
+            // If moving to next week, update week offset
+            if isLastDayOfWeek {
+                weekOffset += 1
+            }
+            
+            // Reset position and animate in from right
+            dayOffset = screenWidth
+            withAnimation(.easeInOut(duration: transitionDuration/2)) {
+                dayOffset = 0
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
+                isAnimatingDay = false
+            }
+        }
+    }
+    
+    private func animateToPreviousDay() {
+        guard let currentSelected = selectedDay else { return }
+        
+        isAnimatingDay = true
+        
+        // Calculate previous day
+        let previousDay = Calendar.current.date(byAdding: .day, value: -1, to: currentSelected) ?? currentSelected
+        
+        // Check if we need to move to previous week
+        let currentWeekday = Calendar.current.component(.weekday, from: currentSelected)
+        let isFirstDayOfWeek = currentWeekday == 1 // Sunday
+        
+        // Animate the day view sliding out
+        withAnimation(.easeInOut(duration: transitionDuration/2)) {
+            dayOffset = screenWidth
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
+            // Update selected day
+            selectedDay = previousDay
+            
+            // If moving to previous week, update week offset
+            if isFirstDayOfWeek {
+                weekOffset -= 1
+            }
+            
+            // Reset position and animate in from left
+            dayOffset = -screenWidth
+            withAnimation(.easeInOut(duration: transitionDuration/2)) {
+                dayOffset = 0
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
+                isAnimatingDay = false
             }
         }
     }
