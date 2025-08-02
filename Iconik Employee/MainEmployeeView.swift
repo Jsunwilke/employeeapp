@@ -438,6 +438,9 @@ struct MainEmployeeView: View {
     @State private var isFlagged: Bool = false
     @State private var flagNote: String = ""
     @State private var flaggedByName: String = ""
+    @State private var flagListener: ListenerRegistration?
+    @State private var isBannerDismissed: Bool = false
+    @State private var currentListeningUserID: String? = nil
     
     // For navigating to Settings and appearance
     @State private var showSettings = false
@@ -471,7 +474,7 @@ struct MainEmployeeView: View {
                 }
                 
                 // Flag notification banner overlay
-                if isFlagged && !flagNote.isEmpty {
+                if isFlagged && !flagNote.isEmpty && !isBannerDismissed {
                     flagNotificationBanner
                 }
             }
@@ -496,6 +499,13 @@ struct MainEmployeeView: View {
             .onDisappear {
                 viewModel.saveEmployeeFeatureOrder()
                 viewModel.cleanup() // Remove real-time listener
+                flagListener?.remove() // Clean up flag listener
+                
+                // Clear flag state when view disappears
+                isFlagged = false
+                flagNote = ""
+                flaggedByName = ""
+                isBannerDismissed = false
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
@@ -520,13 +530,35 @@ struct MainEmployeeView: View {
         ZStack {
                 // Background with proper flag coloring
                 if isFlagged {
-                    Color.red.opacity(0.1).ignoresSafeArea()
+                    Color.red.opacity(0.3).ignoresSafeArea()
                 } else {
                     backgroundGradient.ignoresSafeArea()
                 }
                 
             VStack(spacing: 0) {
                 List {
+                    // Flag notification section
+                    if isFlagged && !flagNote.isEmpty {
+                        Section {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Image(systemName: "flag.fill").foregroundColor(.red)
+                                    if flaggedByName.isEmpty {
+                                        Text("Flag Note").font(.headline)
+                                    } else {
+                                        Text("Flag Note from \(flaggedByName)").font(.headline)
+                                    }
+                                    Spacer()
+                                }
+                                Text(flagNote)
+                                    .font(.body)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .listRowBackground(Color.red.opacity(0.2))
+                    }
+                    
                         // Upcoming schedule section
                         Section(header: Text("Your Schedule (Next 2 Days)")) {
                             if viewModel.isLoadingSchedule {
@@ -618,6 +650,7 @@ struct MainEmployeeView: View {
                                     }
                                     .buttonStyle(PlainButtonStyle())
                                     .contentShape(Rectangle())
+                                    .listRowBackground(isFlagged ? Color.red.opacity(0.1) : Color(UIColor.secondarySystemGroupedBackground))
                                     .contextMenu {
                                         Button(action: {
                                             withAnimation {
@@ -669,19 +702,17 @@ struct MainEmployeeView: View {
                                         .padding(.vertical, 4)
                                     }
                                     .buttonStyle(PlainButtonStyle())
+                                    .listRowBackground(isFlagged ? Color.red.opacity(0.1) : Color(UIColor.secondarySystemGroupedBackground))
                                 }
                             }
                         }
                     }
                     .listStyle(InsetGroupedListStyle())
+                    .scrollContentBackground(isFlagged ? .hidden : .automatic)
+                    .background(isFlagged ? Color.red.opacity(0.05) : Color.clear)
                     .refreshable {
                         loadSchedule()
                     }
-                }
-                
-                // Flag notification banner
-                if isFlagged && !flagNote.isEmpty {
-                    flagNotificationBanner
                 }
                 
                 // Navigation links for sheets
@@ -996,6 +1027,14 @@ struct MainEmployeeView: View {
             UITableView.appearance().backgroundColor = .clear
         }
         
+        // Check if user has changed
+        let currentUID = Auth.auth().currentUser?.uid
+        if currentUID != currentListeningUserID {
+            // User changed, update flag listener
+            currentListeningUserID = currentUID
+            listenForFlagStatus()
+        }
+        
         // Only initialize data once to prevent duplicate loads
         if !hasInitializedData {
             hasInitializedData = true
@@ -1013,7 +1052,6 @@ struct MainEmployeeView: View {
             
             // Delay data loading slightly to ensure organization ID is cached
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                listenForFlagStatus() // Listen for Firebase updates
                 loadSchedule()
             }
         } else {
@@ -1062,9 +1100,9 @@ struct MainEmployeeView: View {
                     }
                     Spacer()
                     Button(action: {
-                        // Hide the flag temporarily in the UI
+                        // Dismiss the banner overlay
                         withAnimation {
-                            flagNote = ""
+                            isBannerDismissed = true
                         }
                     }) {
                         Image(systemName: "xmark.circle.fill")
@@ -1203,12 +1241,15 @@ struct MainEmployeeView: View {
     
     // Firebase listener for flag status
     func listenForFlagStatus() {
+        // Remove previous listener if exists
+        flagListener?.remove()
+        
         guard let currentUID = Auth.auth().currentUser?.uid else {
             print("No current user UID.")
             return
         }
         let db = Firestore.firestore()
-        db.collection("users").document(currentUID)
+        flagListener = db.collection("users").document(currentUID)
             .addSnapshotListener { snapshot, error in
                 if let error = error {
                     print("Error listening for user doc changes: \(error.localizedDescription)")
@@ -1236,6 +1277,14 @@ struct MainEmployeeView: View {
                    updatedPhotoURL != self.storedUserPhotoURL {
                     self.storedUserPhotoURL = updatedPhotoURL
                 }
+                
+                // Reset banner dismissal when flag status changes
+                if self.isFlagged && !self.flagNote.isEmpty {
+                    self.isBannerDismissed = false
+                }
+                
+                // Debug logging
+                print("🚩 Flag status updated - isFlagged: \(self.isFlagged), note: '\(self.flagNote)', flaggedBy: '\(self.flaggedByName)'")
             }
     }
     
