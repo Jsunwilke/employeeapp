@@ -137,6 +137,7 @@ struct TabBarButton: View {
         switch item.id {
         case "timeTracking": return .cyan
         case "chat": return .blue
+        case "scan": return .orange
         case "photoshootNotes": return .purple
         case "dailyJobReport": return .green
         case "sportsShoot": return .indigo
@@ -282,6 +283,7 @@ struct TabBarConfigurationView: View {
         // Combine all features
         availableFeatures = mainViewModel.defaultEmployeeFeatures + [
             FeatureItem(id: "chat", title: "Chat", systemImage: "bubble.left.and.bubble.right.fill", description: "Message your team"),
+            FeatureItem(id: "scan", title: "Scam", systemImage: "wave.3.right.circle.fill", description: "Scan SD cards and job boxes"),
             FeatureItem(id: "timeOffRequests", title: "Time Off", systemImage: "calendar.badge.plus", description: "Request time off")
         ]
         
@@ -369,6 +371,7 @@ struct TabBarConfigurationView: View {
         switch id {
         case "timeTracking": return .cyan
         case "chat": return .blue
+        case "scan": return .orange
         case "photoshootNotes": return .purple
         case "dailyJobReport": return .green
         case "customDailyReports": return .mint

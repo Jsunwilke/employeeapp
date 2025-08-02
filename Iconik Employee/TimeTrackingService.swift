@@ -531,6 +531,58 @@ class TimeTrackingService: ObservableObject {
             }
     }
     
+    func getAvailableSessionsForJobBox(completion: @escaping ([Session]) -> Void) {
+        guard let orgId = currentOrgId else {
+            completion([])
+            return
+        }
+        
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let twoWeeksFromNow = calendar.date(byAdding: .day, value: 14, to: today)!
+        
+        // Format dates for comparison
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let todayString = dateFormatter.string(from: today)
+        let twoWeeksString = dateFormatter.string(from: twoWeeksFromNow)
+        
+        db.collection("sessions")
+            .whereField("organizationID", isEqualTo: orgId)
+            .whereField("status", isEqualTo: "scheduled")
+            .whereField("date", isGreaterThanOrEqualTo: todayString)
+            .whereField("date", isLessThanOrEqualTo: twoWeeksString)
+            .getDocuments(completion: { snapshot, error in
+                if let error = error {
+                    print("Error getting available sessions for job box: \(error)")
+                    completion([])
+                    return
+                }
+                
+                let sessions: [Session] = snapshot?.documents.compactMap { document in
+                    let data = document.data()
+                    // Filter out sessions that are already assigned to a job box
+                    if let hasJobBoxAssigned = data["hasJobBoxAssigned"] as? Bool, hasJobBoxAssigned {
+                        return nil
+                    }
+                    return Session(id: document.documentID, data: data)
+                } ?? []
+                
+                // Sort by date and time
+                let sortedSessions = sessions.sorted { (session1, session2) in
+                    if let date1 = session1.date, let date2 = session2.date, date1 != date2 {
+                        return date1 < date2
+                    }
+                    if let time1 = session1.startTime, let time2 = session2.startTime {
+                        return time1 < time2
+                    }
+                    return false
+                }
+                
+                completion(sortedSessions)
+            })
+    }
+    
     // MARK: - Overlap Detection
     
     func checkTimeOverlap(startTime: Date, endTime: Date, excludeEntryId: String? = nil, completion: @escaping (Bool, Int) -> Void) {

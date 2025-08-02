@@ -494,3 +494,73 @@ extension TimeInterval {
         return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
     }
 }
+
+// MARK: - NFC SD Tracker Models
+
+import FirebaseFirestoreSwift
+
+struct FirestoreRecord: Codable, Identifiable {
+    @DocumentID var id: String?
+    let timestamp: Date
+    let photographer: String
+    let cardNumber: String
+    let school: String
+    let status: String
+    let uploadedFromJasonsHouse: String?
+    let uploadedFromAndysHouse: String?
+    let organizationID: String
+    let userId: String // User ID for Firebase Auth
+    
+    // Manual initializer for Firestore data
+    init(id: String, data: [String: Any]) {
+        self.id = id
+        
+        // Handle timestamp conversion
+        if let timestamp = data["timestamp"] as? Timestamp {
+            self.timestamp = timestamp.dateValue()
+        } else {
+            self.timestamp = Date()
+        }
+        
+        self.photographer = data["photographer"] as? String ?? ""
+        self.cardNumber = data["cardNumber"] as? String ?? ""
+        self.school = data["school"] as? String ?? ""
+        self.status = data["status"] as? String ?? ""
+        self.uploadedFromJasonsHouse = data["uploadedFromJasonsHouse"] as? String
+        self.uploadedFromAndysHouse = data["uploadedFromAndysHouse"] as? String
+        self.organizationID = data["organizationID"] as? String ?? ""
+        self.userId = data["userId"] as? String ?? ""
+    }
+    
+    // Member-wise initializer for creating new records
+    init(id: String? = nil,
+         timestamp: Date,
+         photographer: String,
+         cardNumber: String,
+         school: String,
+         status: String,
+         uploadedFromJasonsHouse: String? = nil,
+         uploadedFromAndysHouse: String? = nil,
+         organizationID: String,
+         userId: String) {
+        self.id = id
+        self.timestamp = timestamp
+        self.photographer = photographer
+        self.cardNumber = cardNumber
+        self.school = school
+        self.status = status
+        self.uploadedFromJasonsHouse = uploadedFromJasonsHouse
+        self.uploadedFromAndysHouse = uploadedFromAndysHouse
+        self.organizationID = organizationID
+        self.userId = userId
+    }
+}
+
+// JobBoxRecord removed - using existing JobBox struct from Manager Features/JobBoxStatus.swift
+
+struct DropdownRecord: Codable, Identifiable {
+    @DocumentID var id: String?
+    let type: String?
+    let value: String
+    let organizationID: String?
+}
