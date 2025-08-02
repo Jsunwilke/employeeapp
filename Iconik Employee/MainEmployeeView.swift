@@ -779,6 +779,14 @@ struct MainEmployeeView: View {
                     ) { EmptyView() }
                     .isDetailLink(false)
                     
+                    // Scan navigation link
+                    NavigationLink(
+                        destination: NFCContainerView(),
+                        tag: "scan",
+                        selection: $selectedFeatureID
+                    ) { EmptyView() }
+                    .isDetailLink(false)
+                    
                     // Manager features navigation links
                     NavigationLink(
                         destination: TimeOffApprovalView(),
@@ -856,6 +864,8 @@ struct MainEmployeeView: View {
             TimeTrackingMainView(timeTrackingService: timeTrackingService)
         case "chat":
             ConversationListView()
+        case "scan":
+            NFCContainerView()
         case "photoshootNotes":
             PhotoshootNotesView()
         case "dailyJobReport":
@@ -1173,6 +1183,7 @@ struct MainEmployeeView: View {
         case "locationPhotos": return .pink
         case "sportsShoot": return .indigo
         case "chat": return .blue
+        case "scan": return .orange
         case "flagUser": return .red
         case "unflagUser": return .green
         case "managerMileage": return .blue

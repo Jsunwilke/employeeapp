@@ -82,9 +82,10 @@ struct TabBarConfiguration: Codable {
         items: [
             TabBarItem(id: "timeTracking", title: "Time", systemImage: "clock.fill", description: "Clock in/out and track your hours", order: 0, isQuickAccess: true),
             TabBarItem(id: "chat", title: "Chat", systemImage: "bubble.left.and.bubble.right.fill", description: "Message your team", order: 1, isQuickAccess: true),
-            TabBarItem(id: "photoshootNotes", title: "Notes", systemImage: "note.text", description: "Create and manage notes for your photoshoots", order: 2, isQuickAccess: true),
-            TabBarItem(id: "dailyJobReport", title: "Reports", systemImage: "doc.text", description: "Submit your daily job report", order: 3, isQuickAccess: true),
-            TabBarItem(id: "sportsShoot", title: "Sports", systemImage: "sportscourt", description: "Manage sports shoot rosters and images", order: 4, isQuickAccess: true)
+            TabBarItem(id: "scan", title: "Scan", systemImage: "wave.3.right.circle.fill", description: "Scan SD cards and job boxes", order: 2, isQuickAccess: true),
+            TabBarItem(id: "photoshootNotes", title: "Notes", systemImage: "note.text", description: "Create and manage notes for your photoshoots", order: 3, isQuickAccess: true),
+            TabBarItem(id: "dailyJobReport", title: "Reports", systemImage: "doc.text", description: "Submit your daily job report", order: 4, isQuickAccess: false),
+            TabBarItem(id: "sportsShoot", title: "Sports", systemImage: "sportscourt", description: "Manage sports shoot rosters and images", order: 5, isQuickAccess: false)
         ]
     )
 }
