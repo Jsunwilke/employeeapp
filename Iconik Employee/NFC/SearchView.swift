@@ -87,12 +87,12 @@ struct SearchView: View {
                 .padding(.horizontal)
                 .padding(.top, 8)
                 .onChange(of: isJobBoxMode) { _ in
-                    // Clear results when switching modes
+                    // Clear everything when switching modes
+                    searchValue = ""
+                    searchField = "cardNumber"
+                    statusSearchPerformed = false
                     searchResults = []
                     jobBoxSearchResults = []
-                    if !searchValue.isEmpty {
-                        performSearch()
-                    }
                 }
                 
                 Picker("Search Field", selection: $searchField) {

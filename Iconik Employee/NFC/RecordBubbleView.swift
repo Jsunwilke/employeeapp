@@ -11,16 +11,7 @@ struct RecordBubbleView: View {
     }
     
     private var statusColor: Color {
-        switch record.status.lowercased() {
-        case "job box": return .blue
-        case "camera": return .orange
-        case "envelope": return .purple
-        case "uploaded": return .green
-        case "cleared": return .gray
-        case "camera bag": return .brown
-        case "personal": return .indigo
-        default: return .gray
-        }
+        StatusColors.color(for: record.status, isJobBox: false)
     }
     
     var body: some View {

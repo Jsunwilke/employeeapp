@@ -88,43 +88,9 @@ struct StatisticsView: View {
         let durationDays: Double
     }
     
-    // Status colors (matching RecordBubbleView)
+    // Status colors using unified color scheme
     func statusColor(_ status: String) -> Color {
-        if !isJobBoxMode {
-            // SD Card status colors
-            switch status.lowercased() {
-            case "job box":
-                return Color.orange
-            case "camera":
-                return Color.green
-            case "envelope":
-                return Color.yellow
-            case "uploaded":
-                return Color.blue
-            case "cleared":
-                return Color.gray
-            case "camera bag":
-                return Color.purple
-            case "personal":
-                return Color.pink
-            default:
-                return Color(.systemGray4)
-            }
-        } else {
-            // Job Box status colors
-            switch status.lowercased() {
-            case "packed":
-                return Color.blue
-            case "picked up":
-                return Color.green
-            case "left job":
-                return Color.orange
-            case "turned in":
-                return Color.gray
-            default:
-                return Color(.systemGray4)
-            }
-        }
+        StatusColors.color(for: status, isJobBox: isJobBoxMode)
     }
     
     var body: some View {
@@ -146,7 +112,7 @@ struct StatisticsView: View {
                 HStack {
                     Text("Time Frame:")
                         .font(.headline)
-                        .foregroundColor(.white)
+                        .foregroundColor(.primary)
                     
                     Picker("Time Frame", selection: $selectedTimeFrame) {
                         ForEach(TimeFrame.allCases) { timeFrame in
@@ -164,7 +130,7 @@ struct StatisticsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(isJobBoxMode ? "Job Box Status Distribution" : "Card Status Distribution")
                         .font(.headline)
-                        .foregroundColor(.white)
+                        .foregroundColor(.primary)
                         .padding(.horizontal)
                     
                     if (isJobBoxMode ? jobBoxStatusCounts.isEmpty : statusCounts.isEmpty) {
@@ -177,8 +143,8 @@ struct StatisticsView: View {
                         ZStack {
                             // Background Card
                             RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(.systemBackground))
-                                .shadow(radius: 4)
+                                .fill(Color(.secondarySystemBackground))
+                                .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                             
                             VStack {
                                 Text("Total \(isJobBoxMode ? "Job Boxes" : "Cards"): \(isJobBoxMode ? totalJobBoxes : totalCards)")
@@ -225,7 +191,7 @@ struct StatisticsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Average Time in Status")
                         .font(.headline)
-                        .foregroundColor(.white)
+                        .foregroundColor(.primary)
                         .padding(.horizontal)
                     
                     timeInStatusView
@@ -236,7 +202,7 @@ struct StatisticsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Card Lifecycle")
                             .font(.headline)
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                             .padding(.horizontal)
                         
                         cardLifecycleView
@@ -246,7 +212,7 @@ struct StatisticsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Job Box Process Time")
                             .font(.headline)
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                             .padding(.horizontal)
                         
                         jobBoxProcessTimeView
@@ -257,7 +223,7 @@ struct StatisticsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Photographer Performance")
                         .font(.headline)
-                        .foregroundColor(.white)
+                        .foregroundColor(.primary)
                         .padding(.horizontal)
                     
                     photographerPerformanceView
@@ -268,7 +234,7 @@ struct StatisticsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Job Box 'Left Job' Duration by Photographer")
                             .font(.headline)
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                             .padding(.horizontal)
                         
                         PhotographerJobBoxMetrics(photographerLeftJobTimes: photographerLeftJobTimes)
@@ -279,17 +245,7 @@ struct StatisticsView: View {
         }
         .navigationTitle("Statistics")
         .navigationBarTitleDisplayMode(.inline)
-        .background(
-            LinearGradient(
-                gradient: Gradient(colors: [
-                    Color(red: 43/255, green: 62/255, blue: 80/255),
-                    Color(red: 25/255, green: 38/255, blue: 55/255)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        )
+        .background(Color(UIColor.systemBackground).ignoresSafeArea())
         .onAppear {
             print("DEBUG: StatisticsView appeared")
             loadData()
@@ -396,8 +352,8 @@ struct StatisticsView: View {
                 ZStack {
                     // Background Card
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(.systemBackground))
-                        .shadow(radius: 4)
+                        .fill(Color(.secondarySystemBackground))
+                        .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                     
                     VStack {
                         if #available(iOS 16.0, *) {
@@ -476,8 +432,8 @@ struct StatisticsView: View {
         ZStack {
             // Background Card
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.systemBackground))
-                .shadow(radius: 4)
+                .fill(Color(.secondarySystemBackground))
+                .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                 .padding(.horizontal)
             
             VStack(alignment: .leading, spacing: 12) {
@@ -611,8 +567,8 @@ struct StatisticsView: View {
         ZStack {
             // Background Card
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.systemBackground))
-                .shadow(radius: 4)
+                .fill(Color(.secondarySystemBackground))
+                .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                 .padding(.horizontal)
             
             VStack(alignment: .leading, spacing: 12) {
@@ -728,8 +684,8 @@ struct StatisticsView: View {
         ZStack {
             // Background Card
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.systemBackground))
-                .shadow(radius: 4)
+                .fill(Color(.secondarySystemBackground))
+                .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                 .padding(.horizontal)
             
             VStack(alignment: .leading, spacing: 12) {
@@ -1442,8 +1398,8 @@ struct PhotographerJobBoxMetrics: View {
         ZStack {
             // Background Card
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.systemBackground))
-                .shadow(radius: 4)
+                .fill(Color(.secondarySystemBackground))
+                .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                 .padding(.horizontal)
             
             VStack(alignment: .leading, spacing: 12) {
