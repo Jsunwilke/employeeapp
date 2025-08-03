@@ -472,6 +472,7 @@ struct MainEmployeeView: View {
                         timeTrackingService: timeTrackingService
                     )
                 }
+                .ignoresSafeArea(edges: .bottom)
                 
                 // Flag notification banner overlay
                 if isFlagged && !flagNote.isEmpty && !isBannerDismissed {

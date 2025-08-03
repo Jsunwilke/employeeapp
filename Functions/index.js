@@ -1052,10 +1052,12 @@ exports.sendFlagNotificationCallable = onCall({
         }
 
         const callerData = callerDoc.data();
-        // Add your permission logic here, for example:
-        // if (!callerData.isManager && !callerData.canFlagUsers) {
-        //     throw new Error('Insufficient permissions to flag users');
-        // }
+        
+        // Check if the caller has admin or manager role
+        const callerRole = callerData.role;
+        if (callerRole !== 'admin' && callerRole !== 'manager') {
+            throw new Error('Access denied: Only administrators and managers can flag users');
+        }
 
         // Format and send the notification
         const notification = notificationService.formatNotification(NotificationType.FLAG, {
