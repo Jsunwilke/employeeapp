@@ -150,73 +150,64 @@ class NotificationService {
         for (let i = 0; i < tokens.length; i += BATCH_SIZE) {
             const batch = tokens.slice(i, i + BATCH_SIZE);
             
-            const message = {
-                tokens: batch,
-                notification: {
-                    title: notification.title,
-                    body: notification.body
-                },
-                data: {
-                    ...notification.data,
-                    type: notification.type,
-                    timestamp: new Date().toISOString()
-                },
-                apns: {
-                    payload: {
-                        aps: {
-                            alert: {
-                                title: notification.title,
-                                body: notification.body
-                            },
-                            badge: notification.badge || 0,
-                            sound: notification.sound || 'default',
-                            'content-available': 1
-                        }
-                    }
-                },
-                android: {
+            // Send individually instead of batch due to FCM batch endpoint issues
+            const sendPromises = batch.map(async (token) => {
+                const userId = tokenMap.get(token);
+                const individualMessage = {
+                    token: token,
                     notification: {
-                        sound: notification.sound || 'default',
-                        priority: 'high'
+                        title: notification.title,
+                        body: notification.body
                     },
-                    ttl: NOTIFICATION_TTL * 1000 // Convert to milliseconds
-                }
-            };
-
-            try {
-                const response = await messaging.sendMulticast(message);
-                
-                // Process individual results
-                response.responses.forEach((resp, idx) => {
-                    const token = batch[idx];
-                    const userId = tokenMap.get(token);
-                    
-                    if (resp.success) {
-                        results.push({ userId, success: true, messageId: resp.messageId });
-                    } else {
-                        results.push({ userId, success: false, error: resp.error.message });
-                        
-                        // Handle invalid tokens
-                        if (resp.error.code === 'messaging/invalid-registration-token' ||
-                            resp.error.code === 'messaging/registration-token-not-registered') {
-                            this.removeInvalidToken(userId).catch(err => 
-                                logger.error(`Failed to remove invalid token for user ${userId}:`, err)
-                            );
+                    data: {
+                        ...notification.data,
+                        type: notification.type,
+                        timestamp: new Date().toISOString()
+                    },
+                    apns: {
+                        payload: {
+                            aps: {
+                                alert: {
+                                    title: notification.title,
+                                    body: notification.body
+                                },
+                                badge: notification.badge || 0,
+                                sound: notification.sound || 'default',
+                                'content-available': 1
+                            }
                         }
+                    },
+                    android: {
+                        notification: {
+                            sound: notification.sound || 'default',
+                            priority: 'high'
+                        },
+                        ttl: NOTIFICATION_TTL * 1000
                     }
-                });
+                };
 
-                // Log batch results
-                logger.info(`Batch sent: ${response.successCount} success, ${response.failureCount} failed`);
+                try {
+                    const messageId = await messaging.send(individualMessage);
+                    return { userId, success: true, messageId };
+                } catch (error) {
+                    // Handle invalid tokens
+                    if (error.code === 'messaging/invalid-registration-token' ||
+                        error.code === 'messaging/registration-token-not-registered') {
+                        this.removeInvalidToken(userId).catch(err => 
+                            logger.error(`Failed to remove invalid token for user ${userId}:`, err)
+                        );
+                    }
+                    return { userId, success: false, error: error.message };
+                }
+            });
 
-            } catch (error) {
-                logger.error('Error sending batch:', error);
-                // Mark all tokens in this batch as failed
-                batch.forEach(token => {
-                    const userId = tokenMap.get(token);
-                    results.push({ userId, success: false, error: error.message });
-                });
-            }
+            // Wait for all individual sends to complete
+            const batchResults = await Promise.all(sendPromises);
+            results.push(...batchResults);
+
+            // Log batch results
+            const successCount = batchResults.filter(r => r.success).length;
+            logger.info(`Batch processed: ${successCount} success, ${batchResults.length - successCount} failed`);
         }
 
         return results;

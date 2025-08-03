@@ -3,7 +3,7 @@ import SwiftUI
 struct BottomTabBar: View {
     @Binding var selectedTab: String
     @ObservedObject var tabBarManager: TabBarManager
-    let chatManager: ChatManager
+    @ObservedObject var chatManager: ChatManager
     let timeTrackingService: TimeTrackingService
     
     @State private var animateSelection = false
@@ -112,6 +112,7 @@ struct BottomTabBar: View {
                 .background(Color(.separator)),
             alignment: .top
         )
+        .id("bottomTabBar_\(chatManager.totalUnreadCount)") // Force redraw when unread count changes
     }
     
     // Update item with current badge values

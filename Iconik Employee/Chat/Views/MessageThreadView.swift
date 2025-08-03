@@ -116,7 +116,8 @@ struct MessageThreadView: View {
         .onAppear {
             if let conversation = conversation {
                 Task {
-                    await chatManager.selectConversation(conversation)
+                    // Only mark as read when the view actually appears (user is viewing it)
+                    await chatManager.selectConversation(conversation, markAsRead: true)
                 }
             }
         }

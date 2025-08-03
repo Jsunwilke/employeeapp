@@ -1,7 +1,6 @@
 import Foundation
 import FirebaseFirestore
 import FirebaseAuth
-import FirebaseFunctions
 
 // MARK: - Chat Service Protocol
 protocol ChatServiceProtocol {
@@ -158,18 +157,6 @@ class ChatService: ChatServiceProtocol {
         }
         
         try await batch.commit()
-        
-        // Send push notifications to other participants
-        Task {
-            await sendChatNotification(
-                conversationId: conversationId,
-                senderId: senderId,
-                senderName: senderName,
-                messageText: text,
-                conversation: conversation
-            )
-        }
-        
         return messageRef.documentID
     }
     
@@ -601,43 +588,5 @@ class ChatService: ChatServiceProtocol {
         }
         
         return names.joined(separator: ", ")
-    }
-    
-    // MARK: - Push Notifications
-    
-    private func sendChatNotification(conversationId: String, senderId: String, senderName: String, messageText: String, conversation: DocumentSnapshot) async {
-        guard let conversationData = conversation.data(),
-              let participants = conversationData["participants"] as? [String] else {
-            print("Failed to get conversation participants for notification")
-            return
-        }
-        
-        // Filter out the sender
-        let recipientIds = participants.filter { $0 != senderId }
-        
-        if recipientIds.isEmpty {
-            print("No recipients to notify")
-            return
-        }
-        
-        // Call the Firebase function to send notifications
-        let functions = Functions.functions()
-        let sendNotification = functions.httpsCallable("sendChatNotificationCallable")
-        
-        do {
-            let result = try await sendNotification.call([
-                "conversationId": conversationId,
-                "messageText": messageText,
-                "recipientIds": recipientIds
-            ])
-            
-            if let data = result.data as? [String: Any],
-               let success = data["success"] as? Bool {
-                print("Chat notification sent: \(success)")
-            }
-        } catch {
-            print("Error sending chat notification: \(error.localizedDescription)")
-            // Don't throw - notification failure shouldn't stop message sending
-        }
     }
 }

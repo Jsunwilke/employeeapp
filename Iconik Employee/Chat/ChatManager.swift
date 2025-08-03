@@ -144,12 +144,12 @@ class ChatManager: ObservableObject {
         return conversationId
     }
     
-    func selectConversation(_ conversation: Conversation) async {
+    func selectConversation(_ conversation: Conversation, markAsRead: Bool = true) async {
         self.activeConversation = conversation
         await loadMessages(for: conversation)
         
-        // Mark messages as read
-        if let userId = currentUserId {
+        // Mark messages as read only if requested (i.e., user is actively viewing the conversation)
+        if markAsRead, let userId = currentUserId {
             Task {
                 try? await chatService.markMessagesAsRead(conversationId: conversation.id, userId: userId)
             }
@@ -258,16 +258,6 @@ class ChatManager: ObservableObject {
             } catch {
                 self.messagesLoading = false
                 self.errorMessage = "Failed to load messages"
-            }
-        }
-        
-        // Mark as read
-        Task {
-            if let userId = self.currentUserId {
-                try? await self.chatService.markMessagesAsRead(
-                    conversationId: conversation.id,
-                    userId: userId
-                )
             }
         }
     }
