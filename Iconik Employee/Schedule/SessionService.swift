@@ -136,6 +136,7 @@ class SessionService: ObservableObject {
         // Create new listener
         let listener = db.collection("sessions")
             .whereField("organizationID", isEqualTo: organizationID)
+            .whereField("isPublished", isEqualTo: true)
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error = error {
                     self?.handleError(error, operation: "Listening for sessions")
@@ -231,6 +232,7 @@ class SessionService: ObservableObject {
         if !cachedOrgID.isEmpty {
             return db.collection("sessions")
                 .whereField("organizationID", isEqualTo: cachedOrgID)
+                .whereField("isPublished", isEqualTo: true)
                 .whereField("date", isGreaterThanOrEqualTo: startDateString)
                 .whereField("date", isLessThan: endDateString)
                 .addSnapshotListener { [weak self] snapshot, error in
@@ -309,6 +311,7 @@ class SessionService: ObservableObject {
         if !cachedOrgID.isEmpty {
             return db.collection("sessions")
                 .whereField("organizationID", isEqualTo: cachedOrgID)
+                .whereField("isPublished", isEqualTo: true)
                 .whereField("employeeName", isEqualTo: employeeName)
                 .addSnapshotListener { snapshot, error in
                     if let error = error {
@@ -389,6 +392,7 @@ class SessionService: ObservableObject {
             
             self.db.collection("sessions")
                 .whereField("organizationID", isEqualTo: orgID)
+                .whereField("isPublished", isEqualTo: true)
                 .whereField("date", isGreaterThanOrEqualTo: startDateString)
                 .whereField("date", isLessThan: endDateString)
                 .getDocuments { snapshot, error in
@@ -528,6 +532,7 @@ class SessionService: ObservableObject {
         
         var query = db.collection("sessions")
             .whereField("organizationID", isEqualTo: organizationID)
+            .whereField("isPublished", isEqualTo: true)
             .order(by: "date", descending: true)
             .limit(to: pageSize)
         

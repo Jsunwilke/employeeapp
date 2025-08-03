@@ -1,4 +1,4 @@
-const { onDocumentWritten } = require('firebase-functions/v2/firestore');
+const { onDocumentWritten, onDocumentCreated } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onRequest, onCall } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
@@ -1442,15 +1442,46 @@ exports.detectSessionChanges = onDocumentWritten('sessions/{sessionId}', async (
         return;
     }
     
-    // Skip if this is a new session (handle separately)
+    // Handle new sessions
     if (!beforeData) {
-        logger.info(`New session ${sessionId} created - skipping change detection`);
+        logger.info(`New session ${sessionId} created`);
+        
+        // Check if session is published
+        if (!afterData.isPublished) {
+            logger.info(`New session ${sessionId} is unpublished - skipping notification`);
+            return;
+        }
+        
+        // Get assigned photographer IDs from the new session
+        const photographerIds = afterData.photographers?.map(p => p.id).filter(id => id) || [];
+        
+        if (photographerIds.length === 0) {
+            logger.info(`New session ${sessionId} has no assigned photographers`);
+            return;
+        }
+        
+        // Send new session notification
+        const notification = notificationService.formatNotification(NotificationType.SESSION_NEW, {
+            sessionId,
+            schoolName: afterData.schoolName,
+            date: afterData.date,
+            time: afterData.startTime
+        });
+        
+        const results = await notificationService.sendToUsers(photographerIds, notification);
+        
+        logger.info(`New session notifications sent for ${sessionId}: ${results.summary.sent} successful`);
         return;
     }
     
     try {
         // Check what changed
         const changes = [];
+        
+        // Published status change
+        if (beforeData.isPublished === false && afterData.isPublished === true) {
+            changes.push('published');
+        }
         
         // Time change
         if (beforeData.startTime !== afterData.startTime || beforeData.endTime !== afterData.endTime) {
@@ -1472,9 +1503,36 @@ exports.detectSessionChanges = onDocumentWritten('sessions/{sessionId}', async (
             changes.push('date changed');
         }
         
+        // Check for photographer-specific notes changes
+        const beforePhotographersMap = new Map();
+        const afterPhotographersMap = new Map();
+        
+        // Build maps of photographer notes
+        beforeData.photographers?.forEach(p => {
+            if (p.id) beforePhotographersMap.set(p.id, p.notes || '');
+        });
+        afterData.photographers?.forEach(p => {
+            if (p.id) afterPhotographersMap.set(p.id, p.notes || '');
+        });
+        
+        // Check for photographer notes changes
+        afterPhotographersMap.forEach((afterNotes, photographerId) => {
+            const beforeNotes = beforePhotographersMap.get(photographerId) || '';
+            if (beforeNotes !== afterNotes) {
+                changes.push('photographer notes updated');
+                logger.info(`Photographer ${photographerId} notes changed from "${beforeNotes}" to "${afterNotes}"`);
+            }
+        });
+        
         // Skip if no relevant changes
         if (changes.length === 0) {
             logger.info(`Session ${sessionId} updated but no notification-worthy changes`);
+            return;
+        }
+        
+        // Skip notifications if session is still unpublished
+        if (!afterData.isPublished) {
+            logger.info(`Session ${sessionId} is unpublished - skipping notification despite changes`);
             return;
         }
         
@@ -1500,5 +1558,70 @@ exports.detectSessionChanges = onDocumentWritten('sessions/{sessionId}', async (
     } catch (error) {
         logger.error(`Error detecting session changes for ${sessionId}:`, error);
         throw error;
+    }
+});
+
+// Function 12: Chat Message Notification - Firestore Trigger
+exports.onNewChatMessage = onDocumentCreated('messages/{conversationId}/messages/{messageId}', async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) {
+        logger.info('No data in chat message event');
+        return;
+    }
+    
+    const messageData = snapshot.data();
+    const conversationId = event.params.conversationId;
+    const messageId = event.params.messageId;
+    
+    logger.info(`New chat message in conversation ${conversationId}: ${messageId}`);
+    
+    try {
+        // Skip system messages
+        if (messageData.type === 'system') {
+            logger.info('Skipping notification for system message');
+            return;
+        }
+        
+        // Skip if no sender information
+        if (!messageData.senderId) {
+            logger.warn('Message missing senderId');
+            return;
+        }
+        
+        // Get conversation to find participants
+        const conversationDoc = await db.collection('conversations').doc(conversationId).get();
+        if (!conversationDoc.exists) {
+            logger.error(`Conversation ${conversationId} not found`);
+            return;
+        }
+        
+        const conversationData = conversationDoc.data();
+        const participants = conversationData.participants || [];
+        
+        // Filter out the sender
+        const recipientIds = participants.filter(id => id !== messageData.senderId);
+        
+        if (recipientIds.length === 0) {
+            logger.info('No recipients to notify (sender is only participant)');
+            return;
+        }
+        
+        logger.info(`Sending chat notifications to ${recipientIds.length} recipients`);
+        
+        // Format and send notifications
+        const notification = notificationService.formatNotification(NotificationType.CHAT_MESSAGE, {
+            conversationId,
+            messageText: messageData.text || '',
+            senderId: messageData.senderId,
+            senderName: messageData.senderName || 'Someone'
+        });
+        
+        const results = await notificationService.sendToUsers(recipientIds, notification);
+        
+        logger.info(`Chat notifications sent: ${results.summary.sent} successful, ${results.summary.failed} failed`);
+        
+    } catch (error) {
+        logger.error(`Error sending chat notifications for message ${messageId}:`, error);
+        // Don't throw - we don't want to retry notification sends
     }
 });

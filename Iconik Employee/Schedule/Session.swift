@@ -13,6 +13,7 @@ struct Session: Identifiable, Equatable, Hashable {
     let organizationID: String
     let createdAt: Date
     let updatedAt: Date
+    let isPublished: Bool
     
     // Raw fields from Firestore
     let date: String?
@@ -42,6 +43,7 @@ struct Session: Identifiable, Equatable, Hashable {
         self.schoolName = data["schoolName"] as? String ?? ""
         self.photographers = data["photographers"] as? [[String: Any]] ?? []
         self.organizationID = data["organizationID"] as? String ?? ""
+        self.isPublished = data["isPublished"] as? Bool ?? true // Default to true for backward compatibility
         
         // Extract employeeName from photographers array (use first photographer)
         if let firstPhotographer = self.photographers.first,
@@ -93,7 +95,8 @@ struct Session: Identifiable, Equatable, Hashable {
          location: String? = nil,
          organizationID: String,
          createdAt: Date = Date(),
-         updatedAt: Date = Date()) {
+         updatedAt: Date = Date(),
+         isPublished: Bool = true) {
         self.id = id
         self.employeeName = employeeName
         self.position = position
@@ -105,6 +108,7 @@ struct Session: Identifiable, Equatable, Hashable {
         self.organizationID = organizationID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.isPublished = isPublished
         
         // Set default values for raw Firestore fields
         self.date = nil
@@ -227,7 +231,8 @@ struct Session: Identifiable, Equatable, Hashable {
         lhs.organizationID == rhs.organizationID &&
         lhs.date == rhs.date &&
         lhs.startTime == rhs.startTime &&
-        lhs.endTime == rhs.endTime
+        lhs.endTime == rhs.endTime &&
+        lhs.isPublished == rhs.isPublished
     }
     
     func hash(into hasher: inout Hasher) {
@@ -243,5 +248,6 @@ struct Session: Identifiable, Equatable, Hashable {
         hasher.combine(date)
         hasher.combine(startTime)
         hasher.combine(endTime)
+        hasher.combine(isPublished)
     }
 }

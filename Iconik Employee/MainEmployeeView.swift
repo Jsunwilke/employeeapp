@@ -498,14 +498,7 @@ struct MainEmployeeView: View {
             }
             .onDisappear {
                 viewModel.saveEmployeeFeatureOrder()
-                viewModel.cleanup() // Remove real-time listener
-                flagListener?.remove() // Clean up flag listener
-                
-                // Clear flag state when view disappears
-                isFlagged = false
-                flagNote = ""
-                flaggedByName = ""
-                isBannerDismissed = false
+                // Keep listeners active to continue receiving real-time updates
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
