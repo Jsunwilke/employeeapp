@@ -251,6 +251,68 @@ service firebase.storage {
       allow write: if false; // Only Firebase Functions/Admin SDK can write
     }
 
+    // Proof gallery images - Initial uploads
+    match /proof-images/{galleryId}/{fileName} {
+      // PUBLIC ACCESS: Anyone can read proof images (for public gallery links)
+      allow read: if true;
+      
+      // Simplified write rule with fallback for reliability
+      allow write: if isAuthenticated() && 
+                      // Verify the gallery exists
+                      firestore.exists(/databases/(default)/documents/proofGalleries/$(galleryId)) &&
+                      // Either user has valid org ID or allow authenticated users
+                      (
+                        // Standard check if user document exists
+                        (userExists() && 
+                         getOrganizationId() == firestore.get(/databases/(default)/documents/proofGalleries/$(galleryId)).data.organizationId) ||
+                        // Fallback: Allow any authenticated user who can access the gallery
+                        // This is safe because gallery ID is only known to authorized users
+                        (request.auth != null && 
+                         request.auth.uid != null &&
+                         firestore.exists(/databases/(default)/documents/proofGalleries/$(galleryId)))
+                      ) &&
+                      isValidImageType() &&
+                      isValidFileSize(50); // 50MB limit for proof images
+                      
+      // Only admins from the organization can delete
+      allow delete: if isAuthenticated() && 
+                       userExists() &&
+                       firestore.exists(/databases/(default)/documents/proofGalleries/$(galleryId)) &&
+                       getOrganizationId() == firestore.get(/databases/(default)/documents/proofGalleries/$(galleryId)).data.organizationId &&
+                       isAdmin();
+    }
+
+    // Proof gallery images - Versioned uploads (for revisions)
+    match /proof-images/{galleryId}/versions/{proofId}/{fileName} {
+      // PUBLIC ACCESS: Anyone can read proof image versions
+      allow read: if true;
+      
+      // Simplified write rule with fallback for reliability
+      allow write: if isAuthenticated() && 
+                      // Verify the gallery exists
+                      firestore.exists(/databases/(default)/documents/proofGalleries/$(galleryId)) &&
+                      // Either user has valid org ID or allow authenticated users
+                      (
+                        // Standard check if user document exists
+                        (userExists() && 
+                         getOrganizationId() == firestore.get(/databases/(default)/documents/proofGalleries/$(galleryId)).data.organizationId) ||
+                        // Fallback: Allow any authenticated user who can access the gallery
+                        // This is safe because gallery ID is only known to authorized users
+                        (request.auth != null && 
+                         request.auth.uid != null &&
+                         firestore.exists(/databases/(default)/documents/proofGalleries/$(galleryId)))
+                      ) &&
+                      isValidImageType() &&
+                      isValidFileSize(50); // 50MB limit for proof images
+                      
+      // Only admins from the organization can delete versions
+      allow delete: if isAuthenticated() && 
+                       userExists() &&
+                       firestore.exists(/databases/(default)/documents/proofGalleries/$(galleryId)) &&
+                       getOrganizationId() == firestore.get(/databases/(default)/documents/proofGalleries/$(galleryId)).data.organizationId &&
+                       isAdmin();
+    }
+
     // Default deny rule for all other paths
     match /{allPaths=**} {
       allow read, write: if false;

@@ -123,9 +123,16 @@ service cloud.firestore {
       // Users can update their own profile
       allow update: if request.auth != null && 
                        request.auth.uid == userId &&
-                       // Prevent users from changing their own role or organizationID
-                       request.resource.data.role == resource.data.role &&
-                       request.resource.data.organizationID == resource.data.organizationID;
+                       (
+                         // Allow users to update only their FCM token
+                         (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmToken', 'fcmTokenUpdatedAt']) &&
+                          request.resource.data.role == resource.data.role &&
+                          request.resource.data.organizationID == resource.data.organizationID) ||
+                         // Regular profile updates (existing rule)
+                         (request.resource.data.role == resource.data.role &&
+                          request.resource.data.organizationID == resource.data.organizationID &&
+                          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['fcmToken', 'fcmTokenUpdatedAt']))
+                       );
       
       // Admins can update users in their organization
       allow update: if request.auth != null && 
@@ -206,6 +213,13 @@ service cloud.firestore {
                        // Prevent changing other session data
                        request.resource.data.organizationID == resource.data.organizationID;
       
+      // Allow cloud functions to update clock reminder fields
+      allow update: if request.auth == null &&
+                       // Only allow updating clock reminder tracking fields
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clockInReminderSent', 'clockInReminderSentAt']) &&
+                       // Prevent changing other session data
+                       request.resource.data.organizationID == resource.data.organizationID;
+      
       // Admins can delete sessions
       allow delete: if request.auth != null && 
                        isAdmin(request.auth.uid) &&
@@ -248,6 +262,46 @@ service cloud.firestore {
                        belongsToSameOrg(request.auth.uid, resource.data.organizationID);
     }
 
+    // Districts collection
+    match /districts/{districtId} {
+      // Validation function for district data
+      function isValidDistrict() {
+        return request.resource.data.keys().hasAll(['name', 'organizationID']) &&
+               request.resource.data.name is string &&
+               request.resource.data.name.size() > 0 &&
+               request.resource.data.name.size() <= 100 &&
+               request.resource.data.organizationID is string;
+      }
+      
+      // Users can read districts from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+      
+      // Admins/Managers can create districts
+      allow create: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationID) &&
+                       isValidDistrict() &&
+                       request.resource.data.schoolCount == 0;
+      
+      // Admins/Managers can update districts
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Prevent changing organizationID
+                       request.resource.data.organizationID == resource.data.organizationID &&
+                       // Validate name if changed
+                       (!request.resource.data.keys().hasAny(['name']) || 
+                        (request.resource.data.name is string && 
+                         request.resource.data.name.size() > 0 && 
+                         request.resource.data.name.size() <= 100));
+      
+      // Admins can delete districts
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+    }
+
     // Schools collection
     match /schools/{schoolId} {
       // Users can read schools from their organization
@@ -267,10 +321,24 @@ service cloud.firestore {
                        // Ensure locationPhotos is an array
                        request.resource.data.locationPhotos is list;
       
-      // Admins/Managers can update schools
+      // Admins/Managers can update schools (including district assignment and yearbook settings)
       allow update: if request.auth != null && 
                        isAdminOrManager(request.auth.uid) &&
-                       belongsToSameOrg(request.auth.uid, resource.data.organizationID);
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // If updating districtId, ensure it's either null or a valid string
+                       (!request.resource.data.keys().hasAny(['districtId']) || 
+                        request.resource.data.districtId == null || 
+                        request.resource.data.districtId is string) &&
+                       // Validate yearbook-related fields
+                       (!request.resource.data.keys().hasAny(['currentYearbookListId']) || 
+                        request.resource.data.currentYearbookListId == null || 
+                        request.resource.data.currentYearbookListId is string) &&
+                       (!request.resource.data.keys().hasAny(['yearbookEnabled']) || 
+                        request.resource.data.yearbookEnabled is bool) &&
+                       (!request.resource.data.keys().hasAny(['yearbookStartMonth']) || 
+                        (request.resource.data.yearbookStartMonth is number && 
+                         request.resource.data.yearbookStartMonth >= 1 && 
+                         request.resource.data.yearbookStartMonth <= 12));
       
       // Admins can delete schools (soft delete recommended)
       allow delete: if request.auth != null && 
@@ -288,8 +356,15 @@ service cloud.firestore {
       allow create: if request.auth != null && 
                        belongsToSameOrg(request.auth.uid, request.resource.data.organizationID);
       
-      // Any user in the organization can update sports jobs
+      // Users assigned to the job can update it
       allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       (resource.data.keys().hasAny(['photographer']) && 
+                        resource.data.photographer == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName);
+      
+      // Admins/Managers can update any sports job in their organization
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
                        belongsToSameOrg(request.auth.uid, resource.data.organizationID);
       
       // Admins can delete sports jobs
@@ -970,6 +1045,332 @@ service cloud.firestore {
       
       // Only admins can delete messages (for moderation)
       allow delete: if request.auth != null && isAdmin(request.auth.uid);
+    }
+
+    // ============================================================================
+    // PROOFING SYSTEM - GALLERIES, PROOFS, AND ACTIVITY
+    // ============================================================================
+    
+    // Proof Galleries collection
+    match /proofGalleries/{galleryId} {
+      // PUBLIC ACCESS: Anyone with the gallery ID can read (for public proofing links)
+      allow read: if true;
+      
+      // Only authenticated users from the organization can create galleries
+      allow create: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationId) &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['organizationId', 'schoolId', 'schoolName', 'name', 'status']) &&
+                       // Validate data types
+                       request.resource.data.organizationId is string &&
+                       request.resource.data.schoolId is string &&
+                       request.resource.data.schoolName is string &&
+                       request.resource.data.name is string &&
+                       request.resource.data.status == 'pending' &&
+                       // Validate optional fields
+                       (!request.resource.data.keys().hasAny(['password']) || 
+                        request.resource.data.password is string || request.resource.data.password == null) &&
+                       (!request.resource.data.keys().hasAny(['deadline']) || 
+                        request.resource.data.deadline is timestamp || request.resource.data.deadline == null) &&
+                       // Validate numeric fields
+                       request.resource.data.totalImages == 0 &&
+                       request.resource.data.approvedCount == 0 &&
+                       request.resource.data.deniedCount == 0;
+      
+      // Only organization members can update galleries
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationId) &&
+                       // Prevent changing organization
+                       request.resource.data.organizationId == resource.data.organizationId;
+      
+      // PUBLIC ACCESS: Allow updates from public users (for status updates)
+      allow update: if true &&
+                       // Only allow updating specific fields from public
+                       request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['status', 'approvedCount', 'deniedCount', 'updatedAt']) &&
+                       // Validate status transitions
+                       request.resource.data.status in ['pending', 'partial', 'approved', 'has_denials'];
+      
+      // Only admins can delete galleries
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationId);
+    }
+    
+    // Proofs collection (individual proof images)
+    match /proofs/{proofId} {
+      // PUBLIC ACCESS: Anyone can read proofs (filtered by gallery ID in app)
+      allow read: if true;
+      
+      // Only authenticated users from the organization can create proofs
+      allow create: if request.auth != null && 
+                       // Verify the gallery exists and user has access
+                       exists(/databases/$(database)/documents/proofGalleries/$(request.resource.data.galleryId)) &&
+                       belongsToSameOrg(request.auth.uid, 
+                         get(/databases/$(database)/documents/proofGalleries/$(request.resource.data.galleryId)).data.organizationId) &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['galleryId', 'filename', 'imageUrl', 'order', 'status']) &&
+                       // Validate data types
+                       request.resource.data.galleryId is string &&
+                       request.resource.data.filename is string &&
+                       request.resource.data.imageUrl is string &&
+                       request.resource.data.order is int &&
+                       request.resource.data.status == 'pending' &&
+                       // Validate optional fields
+                       (!request.resource.data.keys().hasAny(['thumbnailUrl']) || 
+                        request.resource.data.thumbnailUrl is string) &&
+                       (!request.resource.data.keys().hasAny(['denialNotes']) || 
+                        request.resource.data.denialNotes == null);
+      
+      // Combined update rule: Organization members for versioning OR public users for review
+      allow update: if 
+        // Case 1: Organization members updating versioning fields
+        (request.auth != null &&
+         exists(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)) &&
+         belongsToSameOrg(request.auth.uid, 
+           get(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)).data.organizationId) &&
+         // Prevent changing core fields
+         request.resource.data.galleryId == resource.data.galleryId &&
+         request.resource.data.filename == resource.data.filename &&
+         // Allow updating versioning fields
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['imageUrl', 'thumbnailUrl', 'status', 'denialNotes', 
+                    'currentVersion', 'versionCount', 'hasVersions', 
+                    'lastRevisionId', 'updatedAt']) &&
+         // Validate version fields
+         (!request.resource.data.keys().hasAny(['currentVersion']) || 
+          request.resource.data.currentVersion is int) &&
+         (!request.resource.data.keys().hasAny(['versionCount']) || 
+          request.resource.data.versionCount is int) &&
+         (!request.resource.data.keys().hasAny(['hasVersions']) || 
+          request.resource.data.hasVersions is bool)) ||
+        // Case 2: Public users updating status only
+        (// Only allow updating specific fields
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['status', 'denialNotes', 'reviewedAt', 'reviewedBy', 'updatedAt']) &&
+         // Validate status
+         request.resource.data.status in ['pending', 'approved', 'denied'] &&
+         // If denied, must have notes
+         (request.resource.data.status != 'denied' || 
+          (request.resource.data.denialNotes is string && 
+           request.resource.data.denialNotes.size() > 0)) &&
+         // Validate reviewer email if provided
+         (!request.resource.data.keys().hasAny(['reviewedBy']) || 
+          request.resource.data.reviewedBy is string));
+      
+      // Only admins from the organization can delete proofs
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       exists(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)) &&
+                       belongsToSameOrg(request.auth.uid, 
+                         get(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)).data.organizationId);
+    }
+    
+    // Proof Activity collection (tracking views and actions)
+    match /proofActivity/{activityId} {
+      // Only organization members can read activity logs
+      allow read: if request.auth != null && 
+                     exists(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)) &&
+                     belongsToSameOrg(request.auth.uid, 
+                       get(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)).data.organizationId);
+      
+      // PUBLIC ACCESS: Anyone can create activity logs
+      allow create: if true &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['galleryId', 'action', 'userEmail']) &&
+                       // Validate data types
+                       request.resource.data.galleryId is string &&
+                       request.resource.data.action in ['viewed', 'approved', 'denied', 'batch_replaced'] &&
+                       request.resource.data.userEmail is string &&
+                       // Validate optional fields
+                       (!request.resource.data.keys().hasAny(['proofId']) || 
+                        request.resource.data.proofId is string || request.resource.data.proofId == null) &&
+                       (!request.resource.data.keys().hasAny(['count']) || 
+                        request.resource.data.count is number);
+      
+      // No updates allowed (activity logs are immutable)
+      allow update: if false;
+      
+      // Only admins can delete activity logs
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       exists(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)) &&
+                       belongsToSameOrg(request.auth.uid, 
+                         get(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)).data.organizationId);
+    }
+    
+    // Proof Revisions collection (version history for proofs)
+    match /proofRevisions/{revisionId} {
+      // PUBLIC ACCESS: Allow reading revisions for gallery review OR organization members can read
+      allow read: if true || 
+                     (request.auth != null && 
+                      exists(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)) &&
+                      belongsToSameOrg(request.auth.uid, 
+                        get(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)).data.organizationId));
+      
+      // Only authenticated users from the organization can create revisions
+      allow create: if request.auth != null && 
+                       exists(/databases/$(database)/documents/proofGalleries/$(request.resource.data.galleryId)) &&
+                       belongsToSameOrg(request.auth.uid, 
+                         get(/databases/$(database)/documents/proofGalleries/$(request.resource.data.galleryId)).data.organizationId) &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['proofId', 'galleryId', 'originalImageUrl', 'newImageUrl', 'versionNumber']) &&
+                       // Validate data types
+                       request.resource.data.proofId is string &&
+                       request.resource.data.galleryId is string &&
+                       request.resource.data.originalImageUrl is string &&
+                       request.resource.data.newImageUrl is string &&
+                       request.resource.data.versionNumber is int &&
+                       request.resource.data.versionNumber > 0 &&
+                       // Validate optional fields
+                       (!request.resource.data.keys().hasAny(['denialNotes']) || 
+                        request.resource.data.denialNotes is string || request.resource.data.denialNotes == null) &&
+                       (!request.resource.data.keys().hasAny(['studioNotes']) || 
+                        request.resource.data.studioNotes is string || request.resource.data.studioNotes == null) &&
+                       (!request.resource.data.keys().hasAny(['replacedBy']) || 
+                        request.resource.data.replacedBy is string) &&
+                       (!request.resource.data.keys().hasAny(['previousVersion']) || 
+                        request.resource.data.previousVersion is int) &&
+                       (!request.resource.data.keys().hasAny(['isLatest']) || 
+                        request.resource.data.isLatest is bool) &&
+                       // Allow timestamp fields
+                       (!request.resource.data.keys().hasAny(['replacedAt']) || 
+                        request.resource.data.replacedAt is timestamp);
+      
+      // Only allow updating isLatest flag by organization members
+      allow update: if request.auth != null && 
+                       exists(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)) &&
+                       belongsToSameOrg(request.auth.uid, 
+                         get(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)).data.organizationId) &&
+                       // Only allow updating isLatest field
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isLatest']) &&
+                       request.resource.data.isLatest is bool;
+      
+      // Only admins can delete revisions
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       exists(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)) &&
+                       belongsToSameOrg(request.auth.uid, 
+                         get(/databases/$(database)/documents/proofGalleries/$(resource.data.galleryId)).data.organizationId);
+    }
+
+    // ============================================================================
+    // YEARBOOK SHOOT LISTS COLLECTION
+    // ============================================================================
+    match /yearbookShootLists/{listId} {
+      // Users can read yearbook lists from schools in their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationId);
+      
+      // Admins and photographers can create yearbook lists
+      allow create: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationId) &&
+                       (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'photographer') &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['organizationId', 'schoolId', 'schoolName', 'schoolYear']) &&
+                       // Validate data types
+                       request.resource.data.organizationId is string &&
+                       request.resource.data.schoolId is string &&
+                       request.resource.data.schoolName is string &&
+                       request.resource.data.schoolYear is string &&
+                       // Validate year format (e.g., "2024-2025")
+                       request.resource.data.schoolYear.matches('^[0-9]{4}-[0-9]{4}$') &&
+                       // Validate optional fields
+                       (!request.resource.data.keys().hasAny(['isActive']) || request.resource.data.isActive is bool) &&
+                       (!request.resource.data.keys().hasAny(['copiedFromId']) || 
+                        request.resource.data.copiedFromId is string || request.resource.data.copiedFromId == null) &&
+                       (!request.resource.data.keys().hasAny(['completedCount']) || 
+                        (request.resource.data.completedCount is number && request.resource.data.completedCount >= 0)) &&
+                       (!request.resource.data.keys().hasAny(['totalCount']) || 
+                        (request.resource.data.totalCount is number && request.resource.data.totalCount >= 0)) &&
+                       (!request.resource.data.keys().hasAny(['items']) || request.resource.data.items is list) &&
+                       (!request.resource.data.keys().hasAny(['startDate']) || request.resource.data.startDate is timestamp) &&
+                       (!request.resource.data.keys().hasAny(['endDate']) || request.resource.data.endDate is timestamp);
+      
+      // Admins and photographers can update yearbook lists
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationId) &&
+                       (isAdmin(request.auth.uid) || getUserRole(request.auth.uid) == 'photographer') &&
+                       // Prevent changing core identity fields
+                       request.resource.data.organizationId == resource.data.organizationId &&
+                       request.resource.data.schoolId == resource.data.schoolId &&
+                       request.resource.data.schoolYear == resource.data.schoolYear &&
+                       // Validate updated fields
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['items']) || 
+                        request.resource.data.items is list) &&
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['completedCount']) || 
+                        (request.resource.data.completedCount is number && request.resource.data.completedCount >= 0)) &&
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['totalCount']) || 
+                        (request.resource.data.totalCount is number && request.resource.data.totalCount >= 0));
+      
+      // Only admins can delete yearbook lists
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationId);
+    }
+
+    // ============================================================================
+    // YEARBOOK TEMPLATES COLLECTION
+    // ============================================================================
+    match /yearbookTemplates/{templateId} {
+      // Users can read yearbook templates from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationId);
+      
+      // Admins can create yearbook templates
+      allow create: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationId) &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['organizationId', 'name', 'categories']) &&
+                       // Validate data types
+                       request.resource.data.organizationId is string &&
+                       request.resource.data.name is string &&
+                       request.resource.data.categories is list &&
+                       // Validate optional fields
+                       (!request.resource.data.keys().hasAny(['description']) || request.resource.data.description is string) &&
+                       (!request.resource.data.keys().hasAny(['schoolType']) || 
+                        request.resource.data.schoolType in ['elementary', 'middle', 'high', 'k8', 'k12', 'other']) &&
+                       (!request.resource.data.keys().hasAny(['isDefault']) || request.resource.data.isDefault is bool) &&
+                       (!request.resource.data.keys().hasAny(['isActive']) || request.resource.data.isActive is bool);
+      
+      // Admins can update yearbook templates
+      allow update: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationId) &&
+                       // Prevent changing organizationId
+                       request.resource.data.organizationId == resource.data.organizationId;
+      
+      // Only admins can delete yearbook templates
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationId);
+    }
+
+    // ============================================================================
+    // NOTIFICATION SYSTEM - AUDIT AND LOGGING
+    // ============================================================================
+    
+    // Audit Logs collection (for flag notifications and other audit trails)
+    match /auditLogs/{document} {
+      // Only cloud functions can write audit logs
+      allow write: if false;
+      
+      // Users can read logs about themselves or that they created
+      allow read: if request.auth != null && 
+        (request.auth.uid == resource.data.targetUserId || 
+         request.auth.uid == resource.data.performedBy ||
+         isAdminOrManager(request.auth.uid));
+    }
+    
+    // Notification Logs collection (for notification delivery tracking)
+    match /notificationLogs/{document} {
+      // Only cloud functions can write notification logs
+      allow write: if false;
+      
+      // Only admins can read notification logs for now
+      // (expand this later when notification preferences UI is added)
+      allow read: if request.auth != null && isAdmin(request.auth.uid);
     }
 
     // Deny all other documents

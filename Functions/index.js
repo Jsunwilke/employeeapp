@@ -2,6 +2,7 @@ const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onRequest, onCall } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
+const { logger } = require('firebase-functions');
 
 // Initialize admin (only once)
 if (!admin.apps.length) {
@@ -9,6 +10,9 @@ if (!admin.apps.length) {
 }
 
 const db = admin.firestore();
+
+// Import notification service
+const { notificationService, NotificationType } = require('./notificationService');
 
 // Function 1: Update Player Search Index when sports jobs change
 exports.updatePlayerSearchIndex = onDocumentWritten('sportsJobs/{jobId}', async (event) => {
@@ -1019,5 +1023,482 @@ exports.searchDailyReports = onCall({
     } catch (error) {
         console.error('Error in searchDailyReports:', error);
         throw new Error(`Search failed: ${error.message}`);
+    }
+});
+
+// Function 5: Send Flag Notification (Callable)
+exports.sendFlagNotificationCallable = onCall({
+    cors: true,
+    enforceAppCheck: false, // Enable in production
+}, async (request) => {
+    try {
+        // Validate authentication
+        if (!request.auth) {
+            throw new Error('Authentication required');
+        }
+
+        const { targetUserID, flagNote, flaggedBy } = request.data;
+
+        // Validate required parameters
+        if (!targetUserID || !flagNote) {
+            throw new Error('Missing required parameters: targetUserID and flagNote');
+        }
+
+        // Security check: Verify the caller has permission to flag users
+        // This could check if the caller is a manager or has specific permissions
+        const callerDoc = await db.collection('users').doc(request.auth.uid).get();
+        if (!callerDoc.exists) {
+            throw new Error('Caller user not found');
+        }
+
+        const callerData = callerDoc.data();
+        // Add your permission logic here, for example:
+        // if (!callerData.isManager && !callerData.canFlagUsers) {
+        //     throw new Error('Insufficient permissions to flag users');
+        // }
+
+        // Format and send the notification
+        const notification = notificationService.formatNotification(NotificationType.FLAG, {
+            flagNote,
+            flaggedBy: flaggedBy || request.auth.uid
+        });
+
+        const result = await notificationService.sendToUser(targetUserID, notification);
+
+        // Log the flag action for audit purposes
+        await db.collection('auditLogs').add({
+            action: 'user_flagged',
+            targetUserId: targetUserID,
+            performedBy: request.auth.uid,
+            flagNote,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            notificationSent: result.success
+        });
+
+        return {
+            success: result.success,
+            message: result.success ? 'Notification sent successfully' : 'Failed to send notification',
+            error: result.error
+        };
+
+    } catch (error) {
+        logger.error('Error in sendFlagNotificationCallable:', error);
+        throw new Error(error.message);
+    }
+});
+
+// Function 6: Send Chat Notification (Callable)
+exports.sendChatNotificationCallable = onCall({
+    cors: true,
+    enforceAppCheck: false, // Enable in production
+}, async (request) => {
+    try {
+        // Validate authentication
+        if (!request.auth) {
+            throw new Error('Authentication required');
+        }
+
+        const { conversationId, messageText, recipientIds } = request.data;
+
+        // Validate required parameters
+        if (!conversationId || !messageText || !recipientIds || !Array.isArray(recipientIds)) {
+            throw new Error('Missing required parameters');
+        }
+
+        // Get sender information
+        const senderDoc = await db.collection('users').doc(request.auth.uid).get();
+        if (!senderDoc.exists) {
+            throw new Error('Sender user not found');
+        }
+
+        const senderData = senderDoc.data();
+        const senderName = `${senderData.firstName || ''} ${senderData.lastName || ''}`.trim() || 'Unknown';
+
+        // Filter out the sender from recipients
+        const filteredRecipients = recipientIds.filter(id => id !== request.auth.uid);
+
+        if (filteredRecipients.length === 0) {
+            return { success: true, message: 'No recipients to notify' };
+        }
+
+        // Format and send notifications
+        const notification = notificationService.formatNotification(NotificationType.CHAT_MESSAGE, {
+            conversationId,
+            messageText,
+            senderId: request.auth.uid,
+            senderName
+        });
+
+        const results = await notificationService.sendToUsers(filteredRecipients, notification);
+
+        return {
+            success: true,
+            results: results.summary,
+            message: `Notifications sent to ${results.summary.sent} users`
+        };
+
+    } catch (error) {
+        logger.error('Error in sendChatNotificationCallable:', error);
+        throw new Error(error.message);
+    }
+});
+
+// Function 7: Send Session Notification (Callable)
+exports.sendSessionNotificationCallable = onCall({
+    cors: true,
+    enforceAppCheck: false, // Enable in production
+}, async (request) => {
+    try {
+        // Validate authentication
+        if (!request.auth) {
+            throw new Error('Authentication required');
+        }
+
+        const { sessionId, notificationType, changeType, assignedUserIds } = request.data;
+
+        // Validate required parameters
+        if (!sessionId || !notificationType || !assignedUserIds || !Array.isArray(assignedUserIds)) {
+            throw new Error('Missing required parameters');
+        }
+
+        // Get session details
+        const sessionDoc = await db.collection('sessions').doc(sessionId).get();
+        if (!sessionDoc.exists) {
+            throw new Error('Session not found');
+        }
+
+        const sessionData = sessionDoc.data();
+
+        // Format notification based on type
+        let notification;
+        if (notificationType === 'new') {
+            notification = notificationService.formatNotification(NotificationType.SESSION_NEW, {
+                sessionId,
+                schoolName: sessionData.schoolName,
+                date: sessionData.date,
+                time: sessionData.startTime
+            });
+        } else if (notificationType === 'update') {
+            notification = notificationService.formatNotification(NotificationType.SESSION_UPDATE, {
+                sessionId,
+                changeType: changeType || 'updated',
+                schoolName: sessionData.schoolName
+            });
+        } else {
+            throw new Error('Invalid notification type');
+        }
+
+        // Send to assigned users
+        const results = await notificationService.sendToUsers(assignedUserIds, notification);
+
+        return {
+            success: true,
+            results: results.summary,
+            message: `Notifications sent to ${results.summary.sent} users`
+        };
+
+    } catch (error) {
+        logger.error('Error in sendSessionNotificationCallable:', error);
+        throw new Error(error.message);
+    }
+});
+
+// Function 8: Clock In Reminder - Scheduled Function
+exports.clockInReminder = onSchedule('*/5 * * * *', async (event) => {
+    logger.info('Running clock-in reminder check...');
+    
+    try {
+        const now = new Date();
+        const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+        
+        // Query sessions that:
+        // 1. Start within the next hour
+        // 2. Haven't been notified yet
+        // 3. Have assigned photographers
+        const sessionsSnapshot = await db.collection('sessions')
+            .where('startDate', '>=', now)
+            .where('startDate', '<=', oneHourFromNow)
+            .where('clockInReminderSent', '==', false)
+            .get();
+        
+        logger.info(`Found ${sessionsSnapshot.size} sessions needing clock-in reminders`);
+        
+        const notificationPromises = [];
+        
+        for (const sessionDoc of sessionsSnapshot.docs) {
+            const sessionData = sessionDoc.data();
+            const sessionId = sessionDoc.id;
+            
+            // Get assigned photographer IDs
+            const photographerIds = sessionData.photographers?.map(p => p.id).filter(id => id) || [];
+            
+            if (photographerIds.length === 0) {
+                logger.warn(`Session ${sessionId} has no assigned photographers`);
+                continue;
+            }
+            
+            // Calculate leave time for each photographer
+            for (const photographerId of photographerIds) {
+                // Get user's home address
+                const userDoc = await db.collection('users').doc(photographerId).get();
+                if (!userDoc.exists) continue;
+                
+                const userData = userDoc.data();
+                const homeAddress = userData.homeAddress || userData.coordinates;
+                
+                if (!homeAddress) {
+                    logger.warn(`User ${photographerId} has no home address set`);
+                    continue;
+                }
+                
+                // Calculate travel time (this is a simplified version - you may want to use a maps API)
+                // For now, we'll use a default 30 minutes before session start
+                const leaveTime = new Date(sessionData.startDate.toDate().getTime() - 30 * 60 * 1000);
+                
+                // Check if it's time to send the reminder (within 5 minutes of leave time)
+                const timeDiff = leaveTime.getTime() - now.getTime();
+                if (timeDiff > 0 && timeDiff <= 5 * 60 * 1000) {
+                    // Send reminder notification
+                    const notification = notificationService.formatNotification(NotificationType.CLOCK_REMINDER, {
+                        reminderType: 'clock_in',
+                        sessionId,
+                        schoolName: sessionData.schoolName
+                    });
+                    
+                    notificationPromises.push(
+                        notificationService.sendToUser(photographerId, notification)
+                            .then(result => {
+                                logger.info(`Clock-in reminder sent to user ${photographerId} for session ${sessionId}`);
+                                return result;
+                            })
+                            .catch(error => {
+                                logger.error(`Failed to send clock-in reminder to user ${photographerId}:`, error);
+                                return { success: false, error: error.message };
+                            })
+                    );
+                }
+            }
+            
+            // Mark session as notified
+            await sessionDoc.ref.update({
+                clockInReminderSent: true,
+                clockInReminderSentAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        }
+        
+        // Wait for all notifications to complete
+        const results = await Promise.all(notificationPromises);
+        const successCount = results.filter(r => r.success).length;
+        
+        logger.info(`Clock-in reminder check completed. Sent ${successCount} notifications.`);
+        
+    } catch (error) {
+        logger.error('Error in clockInReminder:', error);
+        throw error;
+    }
+});
+
+// Function 9: Clock Out Reminder - Scheduled Function (8 PM daily)
+exports.clockOutReminder = onSchedule('0 20 * * *', async (event) => {
+    logger.info('Running clock-out reminder check at 8 PM...');
+    
+    try {
+        const today = formatDateUTC(new Date());
+        
+        // Get all organizations to check
+        const orgsSnapshot = await db.collection('organizations').get();
+        
+        for (const orgDoc of orgsSnapshot.docs) {
+            const orgId = orgDoc.id;
+            
+            // Query time entries that are still clocked in today
+            const clockedInEntries = await db.collection('timeEntries')
+                .where('organizationID', '==', orgId)
+                .where('date', '==', today)
+                .where('status', '==', 'clocked-in')
+                .get();
+            
+            logger.info(`Found ${clockedInEntries.size} users still clocked in for org ${orgId}`);
+            
+            // Group by user to avoid multiple notifications
+            const userIds = new Set();
+            clockedInEntries.docs.forEach(doc => {
+                userIds.add(doc.data().userId);
+            });
+            
+            // Send notifications
+            for (const userId of userIds) {
+                const notification = notificationService.formatNotification(NotificationType.CLOCK_REMINDER, {
+                    reminderType: 'clock_out'
+                });
+                
+                try {
+                    await notificationService.sendToUser(userId, notification);
+                    logger.info(`Clock-out reminder sent to user ${userId}`);
+                } catch (error) {
+                    logger.error(`Failed to send clock-out reminder to user ${userId}:`, error);
+                }
+            }
+        }
+        
+        logger.info('Clock-out reminder check completed.');
+        
+    } catch (error) {
+        logger.error('Error in clockOutReminder:', error);
+        throw error;
+    }
+});
+
+// Function 10: Daily Report Reminder - Scheduled Function (7:30 PM daily)
+exports.dailyReportReminder = onSchedule('30 19 * * *', async (event) => {
+    logger.info('Running daily report reminder check at 7:30 PM...');
+    
+    try {
+        const today = formatDateUTC(new Date());
+        
+        // Get all organizations
+        const orgsSnapshot = await db.collection('organizations').get();
+        
+        for (const orgDoc of orgsSnapshot.docs) {
+            const orgId = orgDoc.id;
+            
+            // Get all users who had sessions today
+            const sessionsToday = await db.collection('sessions')
+                .where('organizationID', '==', orgId)
+                .where('date', '==', today)
+                .get();
+            
+            // Extract unique user IDs from sessions
+            const usersWithSessions = new Set();
+            sessionsToday.docs.forEach(doc => {
+                const photographers = doc.data().photographers || [];
+                photographers.forEach(p => {
+                    if (p.id) usersWithSessions.add(p.id);
+                });
+            });
+            
+            if (usersWithSessions.size === 0) {
+                logger.info(`No users with sessions today for org ${orgId}`);
+                continue;
+            }
+            
+            // Check which users have already submitted reports
+            const reportsToday = await db.collection('dailyJobReports')
+                .where('organizationID', '==', orgId)
+                .where('date', '==', today)
+                .get();
+            
+            const usersWithReports = new Set();
+            reportsToday.docs.forEach(doc => {
+                usersWithReports.add(doc.data().userId);
+            });
+            
+            // Find users who need reminders
+            const usersNeedingReminder = [...usersWithSessions].filter(
+                userId => !usersWithReports.has(userId)
+            );
+            
+            logger.info(`Found ${usersNeedingReminder.length} users needing report reminders in org ${orgId}`);
+            
+            // Send reminders
+            for (const userId of usersNeedingReminder) {
+                // Count their sessions for today
+                const userSessionsCount = sessionsToday.docs.filter(doc => {
+                    const photographers = doc.data().photographers || [];
+                    return photographers.some(p => p.id === userId);
+                }).length;
+                
+                const notification = notificationService.formatNotification(NotificationType.REPORT_REMINDER, {
+                    date: today,
+                    sessionsCount: userSessionsCount
+                });
+                
+                try {
+                    await notificationService.sendToUser(userId, notification);
+                    logger.info(`Report reminder sent to user ${userId}`);
+                } catch (error) {
+                    logger.error(`Failed to send report reminder to user ${userId}:`, error);
+                }
+            }
+        }
+        
+        logger.info('Daily report reminder check completed.');
+        
+    } catch (error) {
+        logger.error('Error in dailyReportReminder:', error);
+        throw error;
+    }
+});
+
+// Function 11: Session Change Detection - Firestore Trigger
+exports.detectSessionChanges = onDocumentWritten('sessions/{sessionId}', async (event) => {
+    const sessionId = event.params.sessionId;
+    const beforeData = event.data.before?.data();
+    const afterData = event.data.after?.data();
+    
+    // Skip if session was deleted
+    if (!afterData) {
+        logger.info(`Session ${sessionId} was deleted`);
+        return;
+    }
+    
+    // Skip if this is a new session (handle separately)
+    if (!beforeData) {
+        logger.info(`New session ${sessionId} created - skipping change detection`);
+        return;
+    }
+    
+    try {
+        // Check what changed
+        const changes = [];
+        
+        // Time change
+        if (beforeData.startTime !== afterData.startTime || beforeData.endTime !== afterData.endTime) {
+            changes.push('time changed');
+        }
+        
+        // Location change
+        if (beforeData.location !== afterData.location || beforeData.schoolName !== afterData.schoolName) {
+            changes.push('location changed');
+        }
+        
+        // Notes change
+        if (beforeData.notes !== afterData.notes) {
+            changes.push('notes updated');
+        }
+        
+        // Date change
+        if (beforeData.date !== afterData.date) {
+            changes.push('date changed');
+        }
+        
+        // Skip if no relevant changes
+        if (changes.length === 0) {
+            logger.info(`Session ${sessionId} updated but no notification-worthy changes`);
+            return;
+        }
+        
+        // Get assigned photographer IDs
+        const photographerIds = afterData.photographers?.map(p => p.id).filter(id => id) || [];
+        
+        if (photographerIds.length === 0) {
+            logger.info(`Session ${sessionId} has no assigned photographers`);
+            return;
+        }
+        
+        // Send update notification
+        const notification = notificationService.formatNotification(NotificationType.SESSION_UPDATE, {
+            sessionId,
+            changeType: changes.join(', '),
+            schoolName: afterData.schoolName
+        });
+        
+        const results = await notificationService.sendToUsers(photographerIds, notification);
+        
+        logger.info(`Session change notifications sent for ${sessionId}: ${results.summary.sent} successful`);
+        
+    } catch (error) {
+        logger.error(`Error detecting session changes for ${sessionId}:`, error);
+        throw error;
     }
 });
