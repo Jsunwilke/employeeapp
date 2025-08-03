@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key></key>
-	<string></string>
 	<key>CAPTURA_ACCOUNT_ID</key>
 	<string>$(CAPTURA_ACCOUNT_ID)</string>
 	<key>CAPTURA_CLIENT_ID</key>
@@ -31,8 +29,6 @@
 	</array>
 	<key>GIDClientID</key>
 	<string>157275128489-3b3iepc5apq3pp1plmilqq2thh6l56n0.apps.googleusercontent.com</string>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>
@@ -80,6 +76,9 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
+		<string>remote-notification</string>
+		<string>fetch</string>
+		<string>processing</string>
 	</array>
 </dict>
 </plist>

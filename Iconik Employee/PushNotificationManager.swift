@@ -12,6 +12,10 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case flag = "flag"
         case jobBox = "jobbox"
         case chatMessage = "chat_message"
+        case sessionNew = "session_new"
+        case sessionUpdate = "session_update"
+        case clockReminder = "clock_reminder"
+        case reportReminder = "report_reminder"
         case unknown = "unknown"
     }
     
@@ -106,6 +110,18 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case .chatMessage:
             // Process chat notification
             handleChatNotification(userInfo: userInfo)
+        case .sessionNew:
+            // Process new session notification
+            handleSessionNotification(userInfo: userInfo, isNew: true)
+        case .sessionUpdate:
+            // Process session update notification
+            handleSessionNotification(userInfo: userInfo, isNew: false)
+        case .clockReminder:
+            // Process clock reminder notification
+            handleClockReminderNotification(userInfo: userInfo)
+        case .reportReminder:
+            // Process report reminder notification
+            handleReportReminderNotification(userInfo: userInfo)
         case .unknown:
             print("Received unknown notification type: \(type)")
         }
@@ -147,5 +163,59 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                                  userInfo: userInfo)
         
         // TODO: Navigate to the specific conversation when app opens from notification
+    }
+    
+    /// Handle session notifications (new or updated)
+    private func handleSessionNotification(userInfo: [AnyHashable: Any], isNew: Bool) {
+        guard let sessionId = userInfo["sessionId"] as? String,
+              let schoolName = userInfo["schoolName"] as? String else {
+            print("Missing required session notification data")
+            return
+        }
+        
+        let changeType = userInfo["changeType"] as? String
+        
+        print("Received session \(isNew ? "new" : "update") notification: Session: \(sessionId), School: \(schoolName), Changes: \(changeType ?? "N/A")")
+        
+        // Post a notification that Views can listen for
+        notificationCenter.post(name: Notification.Name(isNew ? "didReceiveNewSessionNotification" : "didReceiveSessionUpdateNotification"),
+                                 object: nil,
+                                 userInfo: userInfo)
+    }
+    
+    /// Handle clock reminder notifications
+    private func handleClockReminderNotification(userInfo: [AnyHashable: Any]) {
+        guard let reminderType = userInfo["reminderType"] as? String else {
+            print("Missing reminder type in clock notification")
+            return
+        }
+        
+        print("Received clock reminder notification: Type: \(reminderType)")
+        
+        if reminderType == "clock_in" {
+            let sessionId = userInfo["sessionId"] as? String
+            let schoolName = userInfo["schoolName"] as? String ?? "your session"
+            print("Clock-in reminder for session at \(schoolName)")
+        } else if reminderType == "clock_out" {
+            print("Clock-out reminder received")
+        }
+        
+        // Post a notification that Views can listen for
+        notificationCenter.post(name: Notification.Name("didReceiveClockReminderNotification"),
+                                 object: nil,
+                                 userInfo: userInfo)
+    }
+    
+    /// Handle daily report reminder notifications
+    private func handleReportReminderNotification(userInfo: [AnyHashable: Any]) {
+        let date = userInfo["date"] as? String ?? "today"
+        let sessionsCount = userInfo["sessionsCount"] as? Int ?? 0
+        
+        print("Received report reminder notification: Date: \(date), Sessions: \(sessionsCount)")
+        
+        // Post a notification that Views can listen for
+        notificationCenter.post(name: Notification.Name("didReceiveReportReminderNotification"),
+                                 object: nil,
+                                 userInfo: userInfo)
     }
 }

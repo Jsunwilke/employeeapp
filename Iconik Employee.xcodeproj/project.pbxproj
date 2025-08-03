@@ -488,6 +488,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Iconik-Employee-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NFCReaderUsageDescription = "This app uses NFC to scan SD cards and job boxes for tracking purposes.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs access to your camera to take photos for daily job reports.";
@@ -530,6 +531,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Iconik-Employee-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NFCReaderUsageDescription = "This app uses NFC to scan SD cards and job boxes for tracking purposes.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs access to your camera to take photos for daily job reports.";
