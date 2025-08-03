@@ -17,6 +17,7 @@ struct FlagUserView: View {
     
     // The current user's organization, from AppStorage.
     @AppStorage("userOrganizationID") var storedUserOrganizationID: String = ""
+    @AppStorage("userRole") private var storedUserRole: String = "employee"
     
     // List of potential users to flag.
     @State private var photographers: [Photographer] = []
@@ -29,12 +30,30 @@ struct FlagUserView: View {
     @State private var errorMessage: String = ""
     @State private var successMessage: String = ""
     
+    // Check if user has permission to flag
+    var hasPermission: Bool {
+        return storedUserRole == "admin" || storedUserRole == "manager"
+    }
+    
     var body: some View {
         VStack(spacing: 20) {
             Text("Flag a Photographer")
                 .font(.headline)
             
-            if photographers.isEmpty {
+            if !hasPermission {
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 50))
+                        .foregroundColor(.red)
+                    Text("Access Denied")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    Text("Only administrators and managers can flag users.")
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+            } else if photographers.isEmpty {
                 Text("Loading users...")
                     .onAppear(perform: loadPhotographers)
             } else {
@@ -119,6 +138,12 @@ struct FlagUserView: View {
     
     /// Flag the selected user by setting isFlagged to true and calling the callable function.
     func flagSelectedUser() {
+        // Check permission first
+        guard hasPermission else {
+            errorMessage = "You don't have permission to flag users."
+            return
+        }
+        
         guard let target = selectedPhotographer else {
             errorMessage = "Please select a user to flag."
             return

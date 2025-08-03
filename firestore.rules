@@ -141,6 +141,20 @@ service cloud.firestore {
                        // Prevent changing organizationID
                        request.resource.data.organizationID == resource.data.organizationID;
       
+      // Admins and Managers can flag/unflag users in their organization
+      allow update: if request.auth != null && 
+                       isAdminOrManager(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationID) &&
+                       // Only allow updating flag-related fields
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isFlagged', 'flagNote', 'flaggedBy']) &&
+                       // Prevent changing core fields
+                       request.resource.data.organizationID == resource.data.organizationID &&
+                       request.resource.data.role == resource.data.role &&
+                       // Validate flag fields
+                       request.resource.data.isFlagged is bool &&
+                       (request.resource.data.flagNote is string || !request.resource.data.keys().hasAny(['flagNote'])) &&
+                       (request.resource.data.flaggedBy is string || !request.resource.data.keys().hasAny(['flaggedBy']));
+      
       // **INVITATION FLOW: Allow activating inactive invitations (legacy support)**
       allow update: if request.auth != null &&
                        resource.data.isActive == false &&

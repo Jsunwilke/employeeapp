@@ -100,9 +100,9 @@ struct BottomTabBar: View {
             
             Spacer(minLength: 10) // Add space from right edge
         }
+        .padding(.top, 4) // Small top padding to push icons down slightly
         .padding(.horizontal, 4) // Reduced from 8 to fit 7 items
-        .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.bottom, 23) // Positive padding to add space at bottom
         .background(
             Color(.systemBackground)
                 .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: -5)
@@ -145,7 +145,7 @@ struct TabBarButton: View {
     
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            VStack(spacing: 2) { // Reduced spacing
                 ZStack(alignment: isScanButton ? .center : .topTrailing) {
                     // Background for scan button
                     if isScanButton {
@@ -190,7 +190,7 @@ struct TabBarButton: View {
                     Text(item.title)
                         .font(.system(size: 10)) // Smaller than caption2
                         .foregroundColor(isSelected ? accentColor : .gray)
-                        .lineLimit(2)
+                        .lineLimit(1)
                         .multilineTextAlignment(.center)
                         .minimumScaleFactor(0.8) // Allow text to shrink if needed
                         .scaleEffect(isSelected ? 1.0 : 0.9)
@@ -203,12 +203,8 @@ struct TabBarButton: View {
                         .fill(accentColor)
                         .frame(width: 20, height: 3)
                         .matchedGeometryEffect(id: "tabSelection", in: namespace)
-                } else {
-                    Color.clear
-                        .frame(width: 20, height: 3)
                 }
-            }
-            .padding(.vertical, 4)
+            } // Removed vertical padding
         }
         .buttonStyle(TabButtonStyle(isPressed: $isPressed))
         .accessibilityLabel(item.title)
