@@ -55,6 +55,8 @@ struct ShiftDetailView: View {
     @State private var isShowingMessageComposer = false
     @State private var messageBody: String = ""
     @State private var isLoadingContacts = false
+    @State private var showEditSession = false
+    @AppStorage("userRole") private var userRole: String = "employee"
     @State private var employeeProfile: CoworkerProfile? = nil
     @State private var locationPhotos: [LocationPhoto] = []
     @State private var weatherData: WeatherData?
@@ -414,6 +416,20 @@ struct ShiftDetailView: View {
         }
         .navigationTitle("Shift Details")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if userRole == "admin" || userRole == "manager" {
+                    Button(action: {
+                        showEditSession = true
+                    }) {
+                        Text("Edit")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showEditSession) {
+            EditSessionView(session: session)
+        }
         .onAppear {
             loadInitialData()
         }

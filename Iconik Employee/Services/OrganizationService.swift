@@ -9,6 +9,23 @@ struct SessionTypeDefinition: Identifiable {
     let color: String  // Hex color string
 }
 
+// Organization model
+struct Organization: Codable {
+    let id: String
+    let name: String
+    let sessionTypes: [SessionType]?
+    let sessionOrderColors: [String]?
+    let enableSessionPublishing: Bool?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case sessionTypes
+        case sessionOrderColors
+        case enableSessionPublishing
+    }
+}
+
 class OrganizationService: ObservableObject {
     static let shared = OrganizationService()
     private let db = Firestore.firestore()
@@ -87,6 +104,71 @@ class OrganizationService: ObservableObject {
         }
         print("❌ Not found: '\(idOrName)'")
         return nil
+    }
+    
+    // Get organization by ID
+    func getOrganization(organizationID: String) async throws -> Organization? {
+        let doc = try await db.collection("organizations").document(organizationID).getDocument()
+        
+        guard doc.exists, var data = doc.data() else {
+            return nil
+        }
+        
+        data["id"] = doc.documentID
+        
+        // Parse session types if available
+        var sessionTypes: [SessionType]? = nil
+        if let sessionTypesData = data["sessionTypes"] as? [[String: Any]] {
+            sessionTypes = sessionTypesData.compactMap { typeData in
+                guard let id = typeData["id"] as? String,
+                      let name = typeData["name"] as? String,
+                      let color = typeData["color"] as? String else {
+                    return nil
+                }
+                let order = typeData["order"] as? Int ?? 0
+                return SessionType(id: id, name: name, color: color, order: order)
+            }
+        }
+        
+        return Organization(
+            id: doc.documentID,
+            name: data["name"] as? String ?? "",
+            sessionTypes: sessionTypes,
+            sessionOrderColors: data["sessionOrderColors"] as? [String],
+            enableSessionPublishing: data["enableSessionPublishing"] as? Bool
+        )
+    }
+    
+    // Get organization session types
+    func getOrganizationSessionTypes(organization: Organization) -> [SessionType] {
+        var customTypes = organization.sessionTypes ?? []
+        
+        // Add order field to types that don't have it
+        customTypes = customTypes.enumerated().map { index, type in
+            var updatedType = type
+            if updatedType.order == 0 {
+                updatedType.order = type.id == "other" ? 9999 : index + 1
+            }
+            return updatedType
+        }
+        
+        // Always ensure "Other" is available
+        let hasOther = customTypes.contains { $0.id == "other" }
+        if !hasOther {
+            customTypes.append(SessionType(
+                id: "other",
+                name: "Other",
+                color: "#000000",
+                order: 9999
+            ))
+        }
+        
+        // Sort by order, ensuring "Other" is always last
+        return customTypes.sorted { lhs, rhs in
+            if lhs.id == "other" { return false }
+            if rhs.id == "other" { return true }
+            return lhs.order < rhs.order
+        }
     }
     
     // Stop listening
