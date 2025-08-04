@@ -815,6 +815,91 @@ class SessionService: ObservableObject {
         }
     }
     
+    // Fetch a single session by ID
+    func fetchSession(by sessionId: String, completion: @escaping (Session?) -> Void) {
+        guard !sessionId.isEmpty else {
+            print("⚠️ fetchSession called with empty sessionId")
+            completion(nil)
+            return
+        }
+        
+        print("🔍 Fetching session with ID: \(sessionId)")
+        
+        db.collection("sessions").document(sessionId).getDocument { snapshot, error in
+            if let error = error {
+                print("❌ Error fetching session \(sessionId): \(error.localizedDescription)")
+                completion(nil)
+                return
+            }
+            
+            guard let snapshot = snapshot else {
+                print("❌ No snapshot returned for session \(sessionId)")
+                completion(nil)
+                return
+            }
+            
+            guard snapshot.exists else {
+                print("❌ Session document \(sessionId) does not exist in Firestore")
+                completion(nil)
+                return
+            }
+            
+            guard let data = snapshot.data() else {
+                print("❌ Session \(sessionId) exists but has no data")
+                completion(nil)
+                return
+            }
+            
+            print("✅ Found session \(sessionId) with data keys: \(data.keys.sorted())")
+            
+            // Log the organization ID to check for mismatches
+            if let sessionOrgId = data["organizationID"] as? String {
+                print("📍 Session organizationID: '\(sessionOrgId)'")
+            }
+            
+            let session = Session(id: sessionId, data: data)
+            print("✅ Created session object: \(session.schoolName) - \(session.sessionType?.joined(separator: ", ") ?? "no types")")
+            completion(session)
+        }
+    }
+    
+    // Get session display name for a session ID
+    func getSessionDisplayName(for sessionId: String, completion: @escaping (String) -> Void) {
+        fetchSession(by: sessionId) { session in
+            if let session = session {
+                // Create a meaningful display name from session data
+                var displayName = session.schoolName
+                
+                // Add all session types
+                if let sessionTypes = session.sessionType, !sessionTypes.isEmpty {
+                    let typesString = sessionTypes.joined(separator: ", ")
+                    displayName += " - \(typesString)"
+                }
+                
+                // Add formatted date if available
+                if let dateString = session.date {
+                    // Convert yyyy-MM-dd to more readable format
+                    let inputFormatter = DateFormatter()
+                    inputFormatter.dateFormat = "yyyy-MM-dd"
+                    
+                    if let date = inputFormatter.date(from: dateString) {
+                        let outputFormatter = DateFormatter()
+                        outputFormatter.dateFormat = "MMM d"  // e.g., "Aug 4"
+                        let formattedDate = outputFormatter.string(from: date)
+                        displayName += " (\(formattedDate))"
+                    } else {
+                        displayName += " (\(dateString))"
+                    }
+                }
+                
+                completion(displayName)
+            } else {
+                // Fallback to session ID if session not found
+                completion(sessionId)
+            }
+        }
+    }
+    
     // MARK: - Publishing Methods
     
     // Publish a single session

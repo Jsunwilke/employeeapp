@@ -27,8 +27,8 @@ class EntryLockManager {
     private let db = Firestore.firestore()
     private var isOnline = true
     
-    // Lock expiration time in seconds (reduced to 60 seconds for faster cleanup)
-    private let lockExpirationTime: TimeInterval = 60
+    // Lock expiration time in seconds (5 minutes to prevent premature cleanup)
+    private let lockExpirationTime: TimeInterval = 300
     
     // Initialize and listen for network status changes
     private init() {
@@ -404,24 +404,32 @@ class EntryLockManager {
                 
                 if let snapshot = snapshot, snapshot.exists, let data = snapshot.data() {
                     // Check if the lock has expired
-                    let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date(timeIntervalSince1970: 0)
-                    let timeSinceCreation = Date().timeIntervalSince(timestamp)
-                    
-                    if timeSinceCreation > self.lockExpirationTime {
-                        // Lock has expired
-                        print("Lock has expired for \(entryID)")
-                        completion(false, nil)
+                    // Handle nil timestamp (serverTimestamp not yet resolved)
+                    if let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() {
+                        let timeSinceCreation = Date().timeIntervalSince(timestamp)
                         
-                        // Optionally, remove the expired lock (non-blocking)
-                        self.db.collection("sportsJobs").document(shootID)
-                            .collection("locks").document(lockID)
-                            .delete { error in
-                                if let error = error {
-                                    print("Error removing expired lock: \(error.localizedDescription)")
-                                }
+                        if timeSinceCreation > self.lockExpirationTime {
+                            // Lock has expired
+                            print("Lock has expired for \(entryID)")
+                            completion(false, nil)
+                            
+                            // Only remove if significantly expired (2x timeout) to avoid race conditions
+                            if timeSinceCreation > (self.lockExpirationTime * 2) {
+                                self.db.collection("sportsJobs").document(shootID)
+                                    .collection("locks").document(lockID)
+                                    .delete { error in
+                                        if let error = error {
+                                            print("Error removing expired lock: \(error.localizedDescription)")
+                                        }
+                                    }
                             }
+                        } else {
+                            // Entry is locked and not expired
+                            let editorName = data["editorName"] as? String
+                            completion(true, editorName)
+                        }
                     } else {
-                        // Entry is locked and not expired
+                        // No timestamp yet - treat as locked (new lock)
                         let editorName = data["editorName"] as? String
                         completion(true, editorName)
                     }
@@ -471,26 +479,37 @@ class EntryLockManager {
                         let data = doc.data()
                         
                         // Check if the lock has expired
-                        let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date(timeIntervalSince1970: 0)
-                        let timeSinceCreation = Date().timeIntervalSince(timestamp)
+                        // Handle serverTimestamp properly - it might be nil for newly created locks
+                        let timestamp = (data["timestamp"] as? Timestamp)?.dateValue()
                         
                         if let entryID = data["entryID"] as? String,
                            let editorName = data["editorName"] as? String {
                             
-                            if timeSinceCreation > self.lockExpirationTime {
-                                print("Lock for entry \(entryID) by \(editorName) is expired (\(Int(timeSinceCreation))s old) - removing")
-                                // Delete expired lock immediately
-                                doc.reference.delete { error in
-                                    if let error = error {
-                                        print("Error deleting expired lock: \(error.localizedDescription)")
-                                    } else {
-                                        print("Successfully deleted expired lock for \(entryID)")
+                            // If timestamp is nil, this is a newly created lock - don't expire it
+                            if let timestamp = timestamp {
+                                let timeSinceCreation = Date().timeIntervalSince(timestamp)
+                                
+                                // Add grace period: only expire locks that are 2x the expiration time
+                                // This prevents race conditions with newly created locks
+                                if timeSinceCreation > (self.lockExpirationTime * 2) {
+                                    print("Lock for entry \(entryID) by \(editorName) is expired (\(Int(timeSinceCreation))s old) - removing")
+                                    // Delete expired lock
+                                    doc.reference.delete { error in
+                                        if let error = error {
+                                            print("Error deleting expired lock: \(error.localizedDescription)")
+                                        } else {
+                                            print("Successfully deleted expired lock for \(entryID)")
+                                        }
                                     }
+                                } else {
+                                    // Lock is valid
+                                    locks[entryID] = editorName
+                                    print("Lock for entry \(entryID) by \(editorName) (age: \(Int(timeSinceCreation))s)")
                                 }
                             } else {
-                                // Only include non-expired locks
+                                // No timestamp yet (serverTimestamp pending) - treat as valid lock
                                 locks[entryID] = editorName
-                                print("Lock for entry \(entryID) by \(editorName)")
+                                print("Lock for entry \(entryID) by \(editorName) (new lock)")
                             }
                         }
                     }

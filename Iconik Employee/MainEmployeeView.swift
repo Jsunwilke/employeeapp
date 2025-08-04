@@ -47,7 +47,8 @@ class MainEmployeeViewModel: ObservableObject {
         FeatureItem(id: "mileageReports", title: "Mileage Reports", systemImage: "car.fill", description: "Track your mileage"),
         FeatureItem(id: "schedule", title: "Schedule", systemImage: "calendar", description: "View your upcoming shifts"),
         FeatureItem(id: "locationPhotos", title: "Location Photos", systemImage: "photo.on.rectangle", description: "Manage photos for locations"),
-        FeatureItem(id: "sportsShoot", title: "Sports Shoots", systemImage: "sportscourt", description: "Manage sports shoot rosters and images")
+        FeatureItem(id: "sportsShoot", title: "Sports Shoots", systemImage: "sportscourt", description: "Manage sports shoot rosters and images"),
+        FeatureItem(id: "yearbookChecklists", title: "Yearbook Checklists", systemImage: "list.clipboard", description: "Track yearbook photo requirements")
     ]
     
     private let employeeOrderKey = "employeeFeatureOrder"
@@ -797,6 +798,13 @@ struct MainEmployeeView: View {
                         selection: $selectedFeatureID
                     ) { EmptyView() }
                     
+                    // Yearbook Checklists navigation link
+                    NavigationLink(
+                        destination: YearbookShootListsView(),
+                        tag: "yearbookChecklists",
+                        selection: $selectedFeatureID
+                    ) { EmptyView() }
+                    
                     // Chat navigation link
                     NavigationLink(
                         destination: ConversationListView(),
@@ -898,6 +906,8 @@ struct MainEmployeeView: View {
             DailyJobReportView()
         case "sportsShoot":
             SportsShootListView()
+        case "yearbookChecklists":
+            YearbookShootListsView()
         case "customDailyReports":
             CustomDailyReportsView()
         case "myDailyJobReports":
@@ -1215,6 +1225,7 @@ struct MainEmployeeView: View {
         case "schedule": return .red
         case "locationPhotos": return .pink
         case "sportsShoot": return .indigo
+        case "yearbookChecklists": return .purple
         case "chat": return .blue
         case "scan": return .orange
         case "flagUser": return .red

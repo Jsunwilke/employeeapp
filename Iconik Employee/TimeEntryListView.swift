@@ -368,10 +368,19 @@ struct TimeEntryRow: View {
                     Image(systemName: "calendar")
                         .foregroundColor(.blue)
                         .font(.caption2)
-                    Text("Session: \(sessionId)")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
+                    if let sessionName = entry.sessionName, sessionName != sessionId {
+                        // Show the session name if it's different from the ID
+                        Text(sessionName)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    } else {
+                        // Show just "Session" if we couldn't find the session details
+                        Text("Session")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             

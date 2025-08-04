@@ -84,18 +84,40 @@ class TimeTrackingService: ObservableObject {
             
             if let sessionId = sessionId {
                 timeEntryData["sessionId"] = sessionId
-            }
-            if let notes = notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                timeEntryData["notes"] = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            
-            self?.db.collection("timeEntries").addDocument(data: timeEntryData) { [weak self] error in
-                DispatchQueue.main.async {
-                    if let error = error {
-                        completion(false, "Failed to clock in: \(error.localizedDescription)")
-                    } else {
-                        self?.checkCurrentStatus()
-                        completion(true, nil)
+                
+                // Fetch session name and then create the time entry
+                SessionService.shared.getSessionDisplayName(for: sessionId) { sessionName in
+                    timeEntryData["sessionName"] = sessionName
+                    
+                    if let notes = notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        timeEntryData["notes"] = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                    
+                    self?.db.collection("timeEntries").addDocument(data: timeEntryData) { [weak self] error in
+                        DispatchQueue.main.async {
+                            if let error = error {
+                                completion(false, "Failed to clock in: \(error.localizedDescription)")
+                            } else {
+                                self?.checkCurrentStatus()
+                                completion(true, nil)
+                            }
+                        }
+                    }
+                }
+            } else {
+                // No session ID, proceed without it
+                if let notes = notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    timeEntryData["notes"] = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                
+                self?.db.collection("timeEntries").addDocument(data: timeEntryData) { [weak self] error in
+                    DispatchQueue.main.async {
+                        if let error = error {
+                            completion(false, "Failed to clock in: \(error.localizedDescription)")
+                        } else {
+                            self?.checkCurrentStatus()
+                            completion(true, nil)
+                        }
                     }
                 }
             }
@@ -193,6 +215,108 @@ class TimeTrackingService: ObservableObject {
         let minutes = (Int(elapsedTime) % 3600) / 60
         let seconds = Int(elapsedTime) % 60
         return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+    }
+    
+    // MARK: - Migration Functions
+    
+    // Update existing time entries with session names
+    func updateExistingEntriesWithSessionNames() {
+        guard let userId = currentUserId,
+              let orgId = currentOrgId else { 
+            print("⚠️ Cannot update session names: missing userId or orgId")
+            return 
+        }
+        
+        print("🔄 Starting migration to add session names to time entries for user: \(userId), org: \(orgId)")
+        
+        // Fetch time entries that have sessionId but no sessionName
+        db.collection("timeEntries")
+            .whereField("userId", isEqualTo: userId)
+            .whereField("organizationID", isEqualTo: orgId)
+            .whereField("sessionId", isNotEqualTo: NSNull())
+            .getDocuments { [weak self] snapshot, error in
+                guard let documents = snapshot?.documents else {
+                    print("❌ Error fetching time entries for migration: \(error?.localizedDescription ?? "Unknown error")")
+                    return
+                }
+                
+                print("📊 Found \(documents.count) time entries to check")
+                var entriesNeedingUpdate = 0
+                
+                // Process each document
+                for document in documents {
+                    let data = document.data()
+                    
+                    // Check if it already has a sessionName
+                    if data["sessionName"] != nil {
+                        print("✓ Entry \(document.documentID) already has sessionName")
+                        continue
+                    }
+                    
+                    // Get sessionId and fetch the session name
+                    if let sessionId = data["sessionId"] as? String {
+                        entriesNeedingUpdate += 1
+                        print("🔍 Entry \(document.documentID) needs update - sessionId: '\(sessionId)' (length: \(sessionId.count))")
+                        
+                        // Run diagnostic on first entry only
+                        if entriesNeedingUpdate == 1 {
+                            self?.checkSessionAvailability(for: sessionId)
+                        }
+                        
+                        SessionService.shared.getSessionDisplayName(for: sessionId) { sessionName in
+                            print("📝 Got session name '\(sessionName)' for sessionId: \(sessionId)")
+                            
+                            // Update the document with session name
+                            self?.db.collection("timeEntries").document(document.documentID)
+                                .updateData(["sessionName": sessionName]) { error in
+                                    if let error = error {
+                                        print("❌ Error updating session name for entry \(document.documentID): \(error.localizedDescription)")
+                                    } else {
+                                        print("✅ Successfully updated session name for entry \(document.documentID) to: \(sessionName)")
+                                    }
+                                }
+                        }
+                    }
+                }
+                
+                print("📊 Migration summary: \(entriesNeedingUpdate) entries need session name updates")
+            }
+    }
+    
+    // Diagnostic function to check session availability
+    func checkSessionAvailability(for sessionId: String) {
+        print("\n🔍 DIAGNOSTIC: Checking session availability for ID: '\(sessionId)'")
+        
+        // First, try to fetch from sessions collection
+        db.collection("sessions").document(sessionId).getDocument { snapshot, error in
+            if let error = error {
+                print("❌ Error accessing sessions collection: \(error.localizedDescription)")
+            } else if let snapshot = snapshot {
+                if snapshot.exists {
+                    print("✅ Session EXISTS in 'sessions' collection")
+                    if let data = snapshot.data() {
+                        print("   - Organization ID: \(data["organizationID"] ?? "none")")
+                        print("   - School Name: \(data["schoolName"] ?? "none")")
+                        print("   - Date: \(data["date"] ?? "none")")
+                    }
+                } else {
+                    print("❌ Session NOT FOUND in 'sessions' collection")
+                    
+                    // Try to find sessions with similar IDs
+                    print("🔍 Searching for similar session IDs...")
+                    self.db.collection("sessions")
+                        .limit(to: 10)
+                        .getDocuments { snapshot, error in
+                            if let documents = snapshot?.documents {
+                                print("   Sample session IDs in database:")
+                                for doc in documents.prefix(5) {
+                                    print("   - \(doc.documentID)")
+                                }
+                            }
+                        }
+                }
+            }
+        }
     }
     
     // MARK: - Helper Functions
@@ -354,18 +478,40 @@ class TimeTrackingService: ObservableObject {
             
             if let sessionId = sessionId {
                 timeEntryData["sessionId"] = sessionId
-            }
-            if let notes = notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                timeEntryData["notes"] = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            
-            // Save to Firestore
-            self.db.collection("timeEntries").addDocument(data: timeEntryData) { error in
-                DispatchQueue.main.async {
-                    if let error = error {
-                        completion(false, "Failed to create time entry: \(error.localizedDescription)")
-                    } else {
-                        completion(true, nil)
+                
+                // Fetch session name and then create the time entry
+                SessionService.shared.getSessionDisplayName(for: sessionId) { sessionName in
+                    timeEntryData["sessionName"] = sessionName
+                    
+                    if let notes = notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        timeEntryData["notes"] = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                    
+                    // Save to Firestore
+                    self.db.collection("timeEntries").addDocument(data: timeEntryData) { error in
+                        DispatchQueue.main.async {
+                            if let error = error {
+                                completion(false, "Failed to create time entry: \(error.localizedDescription)")
+                            } else {
+                                completion(true, nil)
+                            }
+                        }
+                    }
+                }
+            } else {
+                // No session ID, proceed without it
+                if let notes = notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    timeEntryData["notes"] = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                
+                // Save to Firestore
+                self.db.collection("timeEntries").addDocument(data: timeEntryData) { error in
+                    DispatchQueue.main.async {
+                        if let error = error {
+                            completion(false, "Failed to create time entry: \(error.localizedDescription)")
+                        } else {
+                            completion(true, nil)
+                        }
                     }
                 }
             }
