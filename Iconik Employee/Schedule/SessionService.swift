@@ -418,32 +418,336 @@ class SessionService: ObservableObject {
     
     // MARK: - Session Management
     
-    // Create a new session
-    func createSession(_ session: Session, completion: @escaping (Bool, String?) -> Void) {
-        var sessionData = session.toDictionary
-        sessionData["createdAt"] = Timestamp(date: Date())
-        sessionData["updatedAt"] = Timestamp(date: Date())
+    // Validate session input
+    func validateSessionInput(formData: SessionFormData) -> [String: String] {
+        var errors: [String: String] = [:]
         
-        db.collection("sessions").document(session.id).setData(sessionData) { error in
-            if let error = error {
-                completion(false, error.localizedDescription)
-            } else {
-                completion(true, nil)
+        if formData.schoolId.isEmpty {
+            errors["schoolId"] = "School is required"
+        }
+        
+        if formData.date.isEmpty {
+            errors["date"] = "Date is required"
+        }
+        
+        if formData.startTime.isEmpty {
+            errors["startTime"] = "Start time is required"
+        }
+        
+        if formData.endTime.isEmpty {
+            errors["endTime"] = "End time is required"
+        }
+        
+        if formData.sessionTypes.isEmpty {
+            errors["sessionTypes"] = "At least one session type is required"
+        }
+        
+        if formData.sessionTypes.contains("other") && formData.customSessionType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            errors["customSessionType"] = "Please specify a custom session type"
+        }
+        
+        // Validate time range
+        if !formData.startTime.isEmpty && !formData.endTime.isEmpty {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            
+            if let start = formatter.date(from: formData.startTime),
+               let end = formatter.date(from: formData.endTime),
+               end <= start {
+                errors["endTime"] = "End time must be after start time"
             }
         }
+        
+        return errors
+    }
+    
+    // Calculate session color based on order within the day
+    func calculateSessionColor(organizationID: String, date: String, startTime: String, isTimeOff: Bool = false) async throws -> String {
+        // Time off sessions always get gray
+        if isTimeOff {
+            return "#666"
+        }
+        
+        // Get existing sessions for the same date
+        let query = db.collection("sessions")
+            .whereField("organizationID", isEqualTo: organizationID)
+            .whereField("date", isEqualTo: date)
+        
+        let snapshot = try await query.getDocuments()
+        
+        // Filter out time-off sessions and convert to array
+        var existingSessions = snapshot.documents
+            .compactMap { doc -> (id: String, startTime: String, schoolId: String)? in
+                let data = doc.data()
+                guard let isTimeOff = data["isTimeOff"] as? Bool, !isTimeOff,
+                      let startTime = data["startTime"] as? String,
+                      let schoolId = data["schoolId"] as? String else { return nil }
+                return (id: doc.documentID, startTime: startTime, schoolId: schoolId)
+            }
+        
+        // Add the new session temporarily for color calculation
+        existingSessions.append((id: "temp", startTime: startTime, schoolId: ""))
+        
+        // Sort by start time, then by school ID for consistency
+        existingSessions.sort { lhs, rhs in
+            if lhs.startTime != rhs.startTime {
+                return lhs.startTime < rhs.startTime
+            }
+            return lhs.schoolId < rhs.schoolId
+        }
+        
+        // Find the index of our new session
+        let orderIndex = existingSessions.firstIndex { $0.id == "temp" } ?? 0
+        
+        // Get organization colors or use defaults
+        let organization = try await OrganizationService.shared.getOrganization(organizationID: organizationID)
+        let customColors = organization?.sessionOrderColors
+        let defaultColors = [
+            "#3b82f6", "#10b981", "#8b5cf6", "#f59e0b",
+            "#ef4444", "#06b6d4", "#8b5a3c", "#6b7280"
+        ]
+        let colors = (customColors?.count ?? 0) >= 8 ? customColors! : defaultColors
+        
+        return colors[min(orderIndex, colors.count - 1)]
+    }
+    
+    // Create a new session
+    func createSession(organizationID: String, formData: SessionFormData, currentUser: FirebaseAuth.User, teamMembers: [TeamMember], schools: [School]) async throws -> String {
+        // Get organization settings
+        let organization = try await OrganizationService.shared.getOrganization(organizationID: organizationID)
+        let enablePublishing = organization?.enableSessionPublishing ?? false
+        
+        // Calculate session color
+        let sessionColor = try await calculateSessionColor(
+            organizationID: organizationID,
+            date: formData.date,
+            startTime: formData.startTime,
+            isTimeOff: formData.isTimeOff
+        )
+        
+        // Get photographer details
+        let selectedPhotographers: [SessionPhotographer] = formData.photographerIds.compactMap { photographerId in
+            guard let member = teamMembers.first(where: { $0.id == photographerId }) else { return nil }
+            return SessionPhotographer(
+                id: member.id,
+                name: member.fullName,
+                email: member.email,
+                notes: formData.photographerNotes[member.id] ?? ""
+            )
+        }
+        
+        // Get school name
+        let schoolName = schools.first { $0.id == formData.schoolId }?.value ?? ""
+        
+        // Prepare session data
+        var sessionData: [String: Any] = [
+            "organizationID": organizationID,
+            "schoolId": formData.schoolId,
+            "schoolName": schoolName,
+            "date": formData.date,
+            "startTime": formData.startTime,
+            "endTime": formData.endTime,
+            "sessionTypes": formData.sessionTypes,
+            "notes": formData.notes,
+            "status": formData.status,
+            "sessionColor": sessionColor,
+            "createdAt": FieldValue.serverTimestamp(),
+            "createdBy": [
+                "id": currentUser.uid,
+                "name": currentUser.displayName ?? "\(currentUser.firstName ?? "") \(currentUser.lastName ?? "")",
+                "email": currentUser.email ?? ""
+            ]
+        ]
+        
+        // Add photographers array
+        sessionData["photographers"] = selectedPhotographers.map { photographer in
+            [
+                "id": photographer.id,
+                "name": photographer.name,
+                "email": photographer.email,
+                "notes": photographer.notes
+            ]
+        }
+        
+        // Add optional fields
+        if formData.sessionTypes.contains("other") {
+            sessionData["customSessionType"] = formData.customSessionType.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        if formData.isTimeOff {
+            sessionData["isTimeOff"] = true
+        }
+        
+        if enablePublishing {
+            sessionData["isPublished"] = false
+        } else {
+            sessionData["isPublished"] = true
+        }
+        
+        // Create the session
+        let docRef = try await db.collection("sessions").addDocument(data: sessionData)
+        
+        // Recalculate colors for all sessions on this date
+        try await recalculateSessionColorsForDate(
+            organizationID: organizationID,
+            date: formData.date,
+            organization: organization
+        )
+        
+        return docRef.documentID
     }
     
     // Update an existing session
-    func updateSession(_ session: Session, completion: @escaping (Bool, String?) -> Void) {
-        var sessionData = session.toDictionary
-        sessionData["updatedAt"] = Timestamp(date: Date())
+    func updateSession(sessionId: String, formData: SessionFormData, teamMembers: [TeamMember], schools: [School]) async throws {
+        // Get current session data
+        let doc = try await db.collection("sessions").document(sessionId).getDocument()
+        guard let currentData = doc.data() else {
+            throw SessionError.notFound
+        }
         
-        db.collection("sessions").document(session.id).updateData(sessionData) { error in
-            if let error = error {
-                completion(false, error.localizedDescription)
-            } else {
-                completion(true, nil)
+        let currentDate = currentData["date"] as? String ?? ""
+        let currentStartTime = currentData["startTime"] as? String ?? ""
+        let organizationID = currentData["organizationID"] as? String ?? ""
+        
+        // Check if date or time changed (affects color ordering)
+        let affectsOrdering = formData.date != currentDate || formData.startTime != currentStartTime
+        
+        // Get photographer details
+        let selectedPhotographers: [[String: Any]] = formData.photographerIds.compactMap { photographerId in
+            guard let member = teamMembers.first(where: { $0.id == photographerId }) else { return nil }
+            return [
+                "id": member.id,
+                "name": member.fullName,
+                "email": member.email,
+                "notes": formData.photographerNotes[member.id] ?? ""
+            ]
+        }
+        
+        // Get school name
+        let schoolName = schools.first { $0.id == formData.schoolId }?.value ?? ""
+        
+        // Prepare update data
+        var updateData: [String: Any] = [
+            "schoolId": formData.schoolId,
+            "schoolName": schoolName,
+            "date": formData.date,
+            "startTime": formData.startTime,
+            "endTime": formData.endTime,
+            "sessionTypes": formData.sessionTypes,
+            "photographers": selectedPhotographers,
+            "notes": formData.notes,
+            "status": formData.status,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        
+        // Handle custom session type
+        if formData.sessionTypes.contains("other") {
+            updateData["customSessionType"] = formData.customSessionType.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            updateData["customSessionType"] = FieldValue.delete()
+        }
+        
+        // Update the session
+        try await db.collection("sessions").document(sessionId).updateData(updateData)
+        
+        // Recalculate colors if ordering changed
+        if affectsOrdering {
+            // Recalculate for old date if date changed
+            if currentDate != formData.date {
+                try await recalculateSessionColorsForDate(
+                    organizationID: organizationID,
+                    date: currentDate
+                )
             }
+            
+            // Recalculate for new date
+            try await recalculateSessionColorsForDate(
+                organizationID: organizationID,
+                date: formData.date
+            )
+        }
+    }
+    
+    // Recalculate colors for all sessions on a specific date
+    private func recalculateSessionColorsForDate(organizationID: String, date: String, organization: Organization? = nil) async throws {
+        // Get organization if not provided
+        let org: Organization?
+        if let organization = organization {
+            org = organization
+        } else {
+            org = try await OrganizationService.shared.getOrganization(organizationID: organizationID)
+        }
+        
+        // Get all sessions for this date
+        let query = db.collection("sessions")
+            .whereField("organizationID", isEqualTo: organizationID)
+            .whereField("date", isEqualTo: date)
+        
+        let snapshot = try await query.getDocuments()
+        
+        let allSessions = snapshot.documents.map { doc -> (id: String, data: [String: Any]) in
+            (id: doc.documentID, data: doc.data())
+        }
+        
+        // Separate time off from regular sessions
+        let regularSessions = allSessions.filter { session in
+            !(session.data["isTimeOff"] as? Bool ?? false)
+        }
+        let timeOffSessions = allSessions.filter { session in
+            session.data["isTimeOff"] as? Bool ?? false
+        }
+        
+        // Sort regular sessions by start time, then school ID
+        let sortedRegularSessions = regularSessions.sorted { lhs, rhs in
+            let lhsStart = lhs.data["startTime"] as? String ?? ""
+            let rhsStart = rhs.data["startTime"] as? String ?? ""
+            if lhsStart != rhsStart {
+                return lhsStart < rhsStart
+            }
+            let lhsSchool = lhs.data["schoolId"] as? String ?? ""
+            let rhsSchool = rhs.data["schoolId"] as? String ?? ""
+            return lhsSchool < rhsSchool
+        }
+        
+        // Get color array
+        let customColors = org?.sessionOrderColors
+        let defaultColors = [
+            "#3b82f6", "#10b981", "#8b5cf6", "#f59e0b",
+            "#ef4444", "#06b6d4", "#8b5a3c", "#6b7280"
+        ]
+        let colors = (customColors?.count ?? 0) >= 8 ? customColors! : defaultColors
+        
+        // Batch update colors
+        let batch = db.batch()
+        var hasUpdates = false
+        
+        // Update regular sessions
+        for (index, session) in sortedRegularSessions.enumerated() {
+            let expectedColor = colors[min(index, colors.count - 1)]
+            let currentColor = session.data["sessionColor"] as? String
+            
+            if currentColor != expectedColor {
+                let docRef = db.collection("sessions").document(session.id)
+                batch.updateData(["sessionColor": expectedColor], forDocument: docRef)
+                hasUpdates = true
+            }
+        }
+        
+        // Update time off sessions
+        for session in timeOffSessions {
+            let expectedColor = "#666"
+            let currentColor = session.data["sessionColor"] as? String
+            
+            if currentColor != expectedColor {
+                let docRef = db.collection("sessions").document(session.id)
+                batch.updateData(["sessionColor": expectedColor], forDocument: docRef)
+                hasUpdates = true
+            }
+        }
+        
+        // Commit batch if there are updates
+        if hasUpdates {
+            try await batch.commit()
         }
     }
     

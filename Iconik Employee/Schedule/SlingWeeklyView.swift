@@ -28,6 +28,7 @@ struct SlingWeeklyView: View {
     @State private var showingTimeOffDetail = false
     
     @State private var scheduleMode: ScheduleMode = .myShifts
+    @State private var showCreateSession = false
     
     // Weather service and data
     private let weatherService = WeatherService()
@@ -40,6 +41,7 @@ struct SlingWeeklyView: View {
     // User's first and last name from AppStorage (used in filtering "My Shifts")
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
     @AppStorage("userLastName") var storedUserLastName: String = ""
+    @AppStorage("userRole") private var userRole: String = "employee"
     
     // User manager for getting current user ID
     private let userManager = UserManager.shared
@@ -171,6 +173,20 @@ struct SlingWeeklyView: View {
         .background(Color(.systemGroupedBackground)) // Add background color to the entire view
         .navigationTitle("Schedule")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if userRole == "admin" || userRole == "manager" {
+                    Button(action: {
+                        showCreateSession = true
+                    }) {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showCreateSession) {
+            CreateSessionView()
+        }
         .onAppear {
             // Initialize organization ID cache to prevent dummy listeners
             UserManager.shared.initializeOrganizationID()
