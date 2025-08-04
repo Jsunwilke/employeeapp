@@ -39,8 +39,13 @@ class SessionService: ObservableObject {
     
     // Listen for sessions in real-time for current user's organization
     func listenForSessions(completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
+        return listenForSessions(includeUnpublished: false, completion: completion)
+    }
+    
+    // Listen for sessions with option to include unpublished (for admin/manager)
+    func listenForSessions(includeUnpublished: Bool, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
         #if DEBUG
-        print("🔄 SessionService: listenForSessions called")
+        print("🔄 SessionService: listenForSessions called (includeUnpublished: \(includeUnpublished))")
         #endif
         
         // Use cached organization ID if available, otherwise get it
@@ -53,7 +58,7 @@ class SessionService: ObservableObject {
             #if DEBUG
             print("🔄 SessionService: Using cached org ID")
             #endif
-            return listenForSessionsWithOrganizationID(cachedOrgID, completion: completion)
+            return listenForSessionsWithOrganizationID(cachedOrgID, includeUnpublished: includeUnpublished, completion: completion)
         } else {
             #if DEBUG
             print("🔄 SessionService: No cached org ID, fetching async")
@@ -76,7 +81,7 @@ class SessionService: ObservableObject {
                 }
                 
                 // Now set up the real listener with the organization ID
-                realListener = self.listenForSessionsWithOrganizationID(orgID, completion: completion)
+                realListener = self.listenForSessionsWithOrganizationID(orgID, includeUnpublished: includeUnpublished, completion: completion)
             }
             
             // Return a wrapper that will remove the real listener when called
@@ -87,8 +92,8 @@ class SessionService: ObservableObject {
     }
     
     // Helper method to listen for sessions with a specific organization ID
-    private func listenForSessionsWithOrganizationID(_ organizationID: String, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
-        let listenerKey = "sessions-org-\(organizationID)"
+    private func listenForSessionsWithOrganizationID(_ organizationID: String, includeUnpublished: Bool = false, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
+        let listenerKey = "sessions-org-\(organizationID)-unpub-\(includeUnpublished)"
         
         // Check if we already have an active listener for this query
         var existingListener: ListenerRegistration?
@@ -134,11 +139,31 @@ class SessionService: ObservableObject {
         }
         
         // Create new listener
-        let listener = db.collection("sessions")
+        print("📅 SessionService: Creating listener for org '\(organizationID)' (includeUnpublished: \(includeUnpublished))")
+        
+        // Create base query
+        var query = db.collection("sessions")
             .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("isPublished", isEqualTo: true)
-            .addSnapshotListener { [weak self] snapshot, error in
+        
+        // Only add isPublished filter for non-admin/manager users
+        if !includeUnpublished {
+            query = query.whereField("isPublished", isEqualTo: true)
+            print("📅 SessionService: Filtering for published sessions only")
+        } else {
+            print("📅 SessionService: Including ALL sessions (no isPublished filter)")
+        }
+        
+        let listener = query.addSnapshotListener { [weak self] snapshot, error in
                 if let error = error {
+                    print("🔥 SessionService Error: \(error)")
+                    print("🔥 Error code: \((error as NSError).code)")
+                    print("🔥 Error domain: \((error as NSError).domain)")
+                    
+                    // Check if it's a missing index error
+                    if error.localizedDescription.contains("index") {
+                        print("🔥 MISSING INDEX ERROR - Create composite index for: organizationID + isPublished")
+                    }
+                    
                     self?.handleError(error, operation: "Listening for sessions")
                     // Return cached data on error if available
                     if let self = self, !self.sessionsCache.isEmpty {
@@ -159,8 +184,18 @@ class SessionService: ObservableObject {
                     return
                 }
                 
+                print("📅 Query returned \(documents.count) documents")
+                
                 let sessions = documents.map { document in
-                    Session(id: document.documentID, data: document.data())
+                    let data = document.data()
+                    print("🔄 Listener update - Session ID: \(document.documentID), isPublished: \(data["isPublished"] ?? "nil")")
+                    return Session(id: document.documentID, data: data)
+                }
+                
+                // Debug: Log session details
+                print("📅 SessionService listener: Processing \(sessions.count) sessions")
+                for session in sessions {
+                    print("📅 Session: \(session.schoolName) - ID: \(session.id) - isPublished: \(session.isPublished)")
                 }
                 
                 // Update cache
@@ -214,13 +249,20 @@ class SessionService: ObservableObject {
                 
                 let session = Session(id: document.documentID, data: data)
                 
-                print("📅 Updated session \(session.schoolName)")
+                print("📅 Updated session \(session.schoolName) - ID: \(session.id)")
+                print("📅 Session isPublished: \(session.isPublished)")
+                print("📅 Raw data isPublished: \(data["isPublished"] ?? "nil")")
                 completion(session)
             }
     }
     
     // Listen for sessions within a date range for current user's organization
     func listenForSessions(from startDate: Date, to endDate: Date, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
+        return listenForSessions(from: startDate, to: endDate, includeUnpublished: false, completion: completion)
+    }
+    
+    // Listen for sessions within a date range with option to include unpublished
+    func listenForSessions(from startDate: Date, to endDate: Date, includeUnpublished: Bool, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
         // Convert dates to string format for Firestore filtering
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
@@ -230,12 +272,17 @@ class SessionService: ObservableObject {
         let cachedOrgID = UserManager.shared.getCachedOrganizationID()
         
         if !cachedOrgID.isEmpty {
-            return db.collection("sessions")
+            var query = db.collection("sessions")
                 .whereField("organizationID", isEqualTo: cachedOrgID)
-                .whereField("isPublished", isEqualTo: true)
                 .whereField("date", isGreaterThanOrEqualTo: startDateString)
                 .whereField("date", isLessThan: endDateString)
-                .addSnapshotListener { [weak self] snapshot, error in
+            
+            // Only filter by isPublished if we don't want unpublished sessions
+            if !includeUnpublished {
+                query = query.whereField("isPublished", isEqualTo: true)
+            }
+            
+            return query.addSnapshotListener { [weak self] snapshot, error in
                     if let error = error {
                         self?.handleError(error, operation: "Listening for sessions in date range")
                         completion([])
@@ -272,11 +319,17 @@ class SessionService: ObservableObject {
                     return
                 }
                 
-                realListener = self.db.collection("sessions")
+                var query = self.db.collection("sessions")
                     .whereField("organizationID", isEqualTo: orgID)
                     .whereField("date", isGreaterThanOrEqualTo: startDateString)
                     .whereField("date", isLessThan: endDateString)
-                    .addSnapshotListener { snapshot, error in
+                
+                // Only filter by isPublished if we don't want unpublished sessions
+                if !includeUnpublished {
+                    query = query.whereField("isPublished", isEqualTo: true)
+                }
+                
+                realListener = query.addSnapshotListener { snapshot, error in
                         if let error = error {
                             print("Error listening for sessions in date range: \(error.localizedDescription)")
                             completion([])
@@ -760,6 +813,111 @@ class SessionService: ObservableObject {
                 completion(true, nil)
             }
         }
+    }
+    
+    // MARK: - Publishing Methods
+    
+    // Publish a single session
+    func publishSession(sessionId: String) async throws {
+        print("🚀 Publishing session: \(sessionId)")
+        
+        // First, get the current session data to log
+        let document = try await db.collection("sessions").document(sessionId).getDocument()
+        if let data = document.data() {
+            let currentIsPublished = data["isPublished"] as? Bool ?? true
+            print("🚀 Current isPublished value: \(currentIsPublished)")
+        }
+        
+        // Update the session
+        try await db.collection("sessions").document(sessionId).updateData([
+            "isPublished": true,
+            "publishedAt": FieldValue.serverTimestamp()
+        ])
+        
+        print("✅ Session published successfully: \(sessionId)")
+        
+        // Verify the update
+        let updatedDoc = try await db.collection("sessions").document(sessionId).getDocument()
+        if let data = updatedDoc.data() {
+            let newIsPublished = data["isPublished"] as? Bool ?? true
+            print("✅ Verified isPublished value after update: \(newIsPublished)")
+        }
+    }
+    
+    // Temporarily create an unpublished test session for debugging
+    func createTestUnpublishedSession(organizationID: String) async throws -> String {
+        let testSessionData: [String: Any] = [
+            "organizationID": organizationID,
+            "schoolId": "test-school",
+            "schoolName": "Test School - Unpublished Session",
+            "date": "2025-08-04",
+            "startTime": "09:00",
+            "endTime": "12:00",
+            "sessionTypes": ["Photography"],
+            "notes": "This is a test unpublished session for admin visibility testing",
+            "status": "scheduled",
+            "sessionColor": "#FF6B6B",
+            "isPublished": false, // Explicitly set to false
+            "createdAt": FieldValue.serverTimestamp(),
+            "createdBy": [
+                "id": "test-admin",
+                "name": "Test Admin",
+                "email": "admin@test.com"
+            ],
+            "photographers": [
+                [
+                    "id": "test-photographer",
+                    "name": "Test Photographer",
+                    "email": "photographer@test.com",
+                    "notes": "Test photographer for unpublished session"
+                ]
+            ]
+        ]
+        
+        let docRef = try await db.collection("sessions").addDocument(data: testSessionData)
+        print("🧪 Created test unpublished session with ID: \(docRef.documentID)")
+        return docRef.documentID
+    }
+    
+    // Publish all unpublished sessions for a specific date
+    func publishSessionsForDate(organizationID: String, date: String) async throws {
+        // Get all unpublished sessions for the date
+        let query = db.collection("sessions")
+            .whereField("organizationID", isEqualTo: organizationID)
+            .whereField("date", isEqualTo: date)
+            .whereField("isPublished", isEqualTo: false)
+        
+        let snapshot = try await query.getDocuments()
+        
+        // Batch update all sessions
+        let batch = db.batch()
+        var hasUpdates = false
+        
+        for document in snapshot.documents {
+            let docRef = db.collection("sessions").document(document.documentID)
+            batch.updateData([
+                "isPublished": true,
+                "publishedAt": FieldValue.serverTimestamp()
+            ], forDocument: docRef)
+            hasUpdates = true
+        }
+        
+        // Commit batch if there are updates
+        if hasUpdates {
+            try await batch.commit()
+        }
+    }
+    
+    // Check if there are unpublished sessions for a date
+    func hasUnpublishedSessionsForDate(organizationID: String, date: String) async throws -> Bool {
+        let query = db.collection("sessions")
+            .whereField("organizationID", isEqualTo: organizationID)
+            .whereField("date", isEqualTo: date)
+            .whereField("isPublished", isEqualTo: false)
+            .limit(to: 1)
+        
+        let snapshot = try await query.getDocuments()
+        return !snapshot.documents.isEmpty
     }
     
     // MARK: - Helper Methods

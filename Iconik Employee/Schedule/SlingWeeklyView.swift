@@ -29,6 +29,10 @@ struct SlingWeeklyView: View {
     
     @State private var scheduleMode: ScheduleMode = .myShifts
     @State private var showCreateSession = false
+    @State private var isPublishingDay = false
+    @State private var publishError: String?
+    @State private var showPublishError = false
+    @State private var showPublishSuccess = false
     
     // Weather service and data
     private let weatherService = WeatherService()
@@ -42,6 +46,7 @@ struct SlingWeeklyView: View {
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
     @AppStorage("userLastName") var storedUserLastName: String = ""
     @AppStorage("userRole") private var userRole: String = "employee"
+    @AppStorage("userOrganizationID") private var organizationID: String = ""
     
     // User manager for getting current user ID
     private let userManager = UserManager.shared
@@ -176,10 +181,52 @@ struct SlingWeeklyView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if userRole == "admin" || userRole == "manager" {
-                    Button(action: {
-                        showCreateSession = true
-                    }) {
-                        Image(systemName: "plus")
+                    HStack {
+                        // Debug buttons
+                        #if DEBUG
+                        // Enable session publishing for organization
+                        if !organizationService.organizationHasPublishing {
+                            Button(action: {
+                                Task {
+                                    do {
+                                        let orgID = userManager.getCachedOrganizationID()
+                                        if !orgID.isEmpty {
+                                            try await organizationService.enableSessionPublishing(organizationID: orgID)
+                                        }
+                                    } catch {
+                                        print("❌ Failed to enable session publishing: \(error)")
+                                    }
+                                }
+                            }) {
+                                Image(systemName: "lock.open")
+                                    .foregroundColor(.green)
+                            }
+                        }
+                        
+                        // Create test unpublished session
+                        Button(action: {
+                            Task {
+                                do {
+                                    let orgID = userManager.getCachedOrganizationID()
+                                    if !orgID.isEmpty {
+                                        let sessionID = try await sessionService.createTestUnpublishedSession(organizationID: orgID)
+                                        print("✅ Created test unpublished session: \(sessionID)")
+                                    }
+                                } catch {
+                                    print("❌ Failed to create test session: \(error)")
+                                }
+                            }
+                        }) {
+                            Image(systemName: "testtube.2")
+                                .foregroundColor(.orange)
+                        }
+                        #endif
+                        
+                        Button(action: {
+                            showCreateSession = true
+                        }) {
+                            Image(systemName: "plus")
+                        }
                     }
                 }
             }
@@ -199,6 +246,11 @@ struct SlingWeeklyView: View {
             // Only load sessions if we don't have any or no active listener
             if sessions.isEmpty || sessionListener == nil {
                 loadSessions()
+            }
+            
+            // Debug: Check for unpublished sessions
+            if userRole == "admin" || userRole == "manager" {
+                debugCheckUnpublishedSessions()
             }
             
             if selectedDay == nil {
@@ -419,38 +471,68 @@ struct SlingWeeklyView: View {
         let daySessions = getSessionsForDay(date)
         let dayTimeOff = getTimeOffForDay(date)
         let totalEvents = daySessions.count + dayTimeOff.count
+        let hasUnpublishedSessions = daySessions.contains { !$0.isPublished }
+        let shouldShowPublishButton = (userRole == "admin" || userRole == "manager") && 
+                                     hasUnpublishedSessions && 
+                                     organizationService.organizationHasPublishing
         
-        return HStack {
-            Text(formatFullDate(date))
-                .font(.headline)
-                .foregroundColor(.primary)
-            
-            Spacer()
-            
-            VStack(alignment: .trailing, spacing: 2) {
-                if totalEvents > 0 {
-                    Text("\(totalEvents) event\(totalEvents != 1 ? "s" : "")")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    
-                    HStack(spacing: 8) {
-                        if daySessions.count > 0 {
-                            Text("\(daySessions.count) shift\(daySessions.count != 1 ? "s" : "")")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
+        return VStack(spacing: 8) {
+            HStack {
+                Text(formatFullDate(date))
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                VStack(alignment: .trailing, spacing: 2) {
+                    if totalEvents > 0 {
+                        Text("\(totalEvents) event\(totalEvents != 1 ? "s" : "")")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                         
-                        if dayTimeOff.count > 0 {
-                            Text("\(dayTimeOff.count) time off")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            if daySessions.count > 0 {
+                                Text("\(daySessions.count) shift\(daySessions.count != 1 ? "s" : "")")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            if dayTimeOff.count > 0 {
+                                Text("\(dayTimeOff.count) time off")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
+                    } else {
+                        Text("No events")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
-                } else {
-                    Text("No events")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
                 }
+            }
+            
+            if shouldShowPublishButton {
+                Button(action: {
+                    publishDaySessions(date: date)
+                }) {
+                    HStack {
+                        if isPublishingDay {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "paperplane.fill")
+                        }
+                        Text("Publish All Sessions")
+                            .font(.subheadline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+                .disabled(isPublishingDay)
             }
         }
     }
@@ -763,9 +845,13 @@ struct SlingWeeklyView: View {
             return colorMap[session.position] ?? .blue
         }
         
-        // Background color based on color scheme
+        // Background color based on color scheme and publish status
         private var cardBackground: Color {
-            colorScheme == .dark ? Color(.systemGray6) : Color.white
+            if !session.isPublished {
+                // Unpublished sessions have amber/yellow tint
+                return colorScheme == .dark ? Color.orange.opacity(0.15) : Color.yellow.opacity(0.1)
+            }
+            return colorScheme == .dark ? Color(.systemGray6) : Color.white
         }
         
         // Shadow based on color scheme
@@ -790,8 +876,24 @@ struct SlingWeeklyView: View {
                     Spacer()
                     
                     // Session type badges
-                    if let sessionTypeIds = session.sessionType {
-                        HStack(spacing: 4) {
+                    HStack(spacing: 4) {
+                        // Unpublished badge
+                        if !session.isPublished {
+                            HStack(spacing: 4) {
+                                Image(systemName: "pencil.circle.fill")
+                                    .font(.caption2)
+                                Text("DRAFT")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.orange.opacity(0.2))
+                            .foregroundColor(.orange)
+                            .cornerRadius(12)
+                        }
+                        
+                        if let sessionTypeIds = session.sessionType {
                             ForEach(sessionTypeIds, id: \.self) { typeId in
                                 let _ = print("🏷️ Looking for sessionType '\(typeId)' in \(organizationService.sessionTypes.count) types")
                                 if let sessionType = organizationService.getSessionType(by: typeId) {
@@ -903,9 +1005,17 @@ struct SlingWeeklyView: View {
             }
             .padding(16)
             .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(cardBackground)
-                    .shadow(color: cardShadow, radius: 4, x: 0, y: 2)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(cardBackground)
+                        .shadow(color: cardShadow, radius: 4, x: 0, y: 2)
+                    
+                    // Add border for unpublished sessions
+                    if !session.isPublished {
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.orange.opacity(0.5), lineWidth: 2)
+                    }
+                }
             )
             .padding(.bottom, 2) // Add padding to separate cards better
         }
@@ -1192,9 +1302,24 @@ struct SlingWeeklyView: View {
         // Otherwise reuse the existing listener to avoid duplicate reads
         if sessionListener == nil {
             // Start listening for sessions
-            sessionListener = sessionService.listenForSessions { sessions in
+            // Include unpublished sessions for admin/manager users
+            // If organization doesn't have publishing enabled, still show all sessions to admin/manager
+            let includeUnpublished = (userRole == "admin" || userRole == "manager")
+            print("🔍 SlingWeeklyView: Loading sessions with:")
+            print("   - User role: \(userRole)")
+            print("   - Organization has publishing: \(organizationService.organizationHasPublishing)")
+            print("   - Include unpublished: \(includeUnpublished)")
+            
+            sessionListener = sessionService.listenForSessions(includeUnpublished: includeUnpublished) { sessions in
                 DispatchQueue.main.async {
-                    print("📊 SlingWeeklyView: Received \(sessions.count) sessions")
+                    print("📊 SlingWeeklyView: Received \(sessions.count) sessions (includeUnpublished: \(includeUnpublished))")
+                    
+                    // Debug: Count published vs unpublished
+                    let publishedCount = sessions.filter { $0.isPublished }.count
+                    let unpublishedCount = sessions.filter { !$0.isPublished }.count
+                    print("   - Published: \(publishedCount)")
+                    print("   - Unpublished: \(unpublishedCount)")
+                    
                     self.sessions = sessions
                     self.updateDisplayedSessions()
                     self.loadWeatherForVisibleSessions()
@@ -1415,6 +1540,61 @@ struct SlingWeeklyView: View {
         formatter.dateFormat = "MMM d"
         
         return "\(formatter.string(from: first)) - \(formatter.string(from: last))"
+    }
+    
+    // MARK: - Debug Functions
+    
+    private func debugCheckUnpublishedSessions() {
+        Task {
+            do {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy-MM-dd"
+                let today = formatter.string(from: Date())
+                
+                let hasUnpublished = try await sessionService.hasUnpublishedSessionsForDate(
+                    organizationID: organizationID,
+                    date: today
+                )
+                
+                print("🔍 DEBUG: Organization \(organizationID) has unpublished sessions for \(today): \(hasUnpublished)")
+            } catch {
+                print("🔍 DEBUG ERROR: Failed to check unpublished sessions: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - Publishing
+    
+    private func publishDaySessions(date: Date) {
+        isPublishingDay = true
+        publishError = nil
+        
+        // Format date for the query
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let dateString = formatter.string(from: date)
+        
+        Task {
+            do {
+                try await sessionService.publishSessionsForDate(organizationID: organizationID, date: dateString)
+                
+                await MainActor.run {
+                    isPublishingDay = false
+                    showPublishSuccess = true
+                    
+                    // Hide success message after 2 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        showPublishSuccess = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isPublishingDay = false
+                    publishError = error.localizedDescription
+                    showPublishError = true
+                }
+            }
+        }
     }
     
     // MARK: - Formatting
