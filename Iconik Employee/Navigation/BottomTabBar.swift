@@ -100,7 +100,7 @@ struct BottomTabBar: View {
             
             Spacer(minLength: 10) // Add space from right edge
         }
-        .padding(.top, 4) // Small top padding to push icons down slightly
+        .padding(.top, 7) // Increased by 3 to push icons down more
         .padding(.horizontal, 4) // Reduced from 8 to fit 7 items
         .padding(.bottom, 23) // Positive padding to add space at bottom
         .background(
