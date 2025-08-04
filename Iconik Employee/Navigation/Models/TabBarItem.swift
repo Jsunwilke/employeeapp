@@ -52,12 +52,31 @@ struct TabBarItem: Identifiable, Codable, Equatable {
     // Create from FeatureItem
     init(from feature: FeatureItem, order: Int, isQuickAccess: Bool = false) {
         self.id = feature.id
-        self.title = feature.title
+        self.title = Self.shortTitle(for: feature.id) ?? feature.title
         self.systemImage = feature.systemImage
         self.description = feature.description
         self.order = order
         self.isQuickAccess = isQuickAccess
         self.badgeType = .none
+    }
+    
+    // Mapping of feature IDs to short tab bar titles
+    static func shortTitle(for featureId: String) -> String? {
+        let shortTitles: [String: String] = [
+            "timeTracking": "Time",
+            "chat": "Chat",
+            "scan": "Scan",
+            "photoshootNotes": "Notes",
+            "dailyJobReport": "Reports",
+            "customDailyReports": "Custom",
+            "myDailyJobReports": "My Reports",
+            "mileageReports": "Mileage",
+            "schedule": "Schedule",
+            "locationPhotos": "Photos",
+            "sportsShoot": "Sports",
+            "timeOffRequests": "Time Off"
+        ]
+        return shortTitles[featureId]
     }
     
     // Direct initializer
@@ -105,8 +124,26 @@ class TabBarManager: ObservableObject {
            let savedConfig = try? JSONDecoder().decode(TabBarConfiguration.self, from: savedData) {
             self.configuration = savedConfig
             ensureScanIsAlwaysQuickAccess()
+            updateTitlesToShortVersions() // Update existing titles to short versions
         } else {
             self.configuration = TabBarConfiguration.defaultConfiguration
+        }
+    }
+    
+    private func updateTitlesToShortVersions() {
+        // Update all existing items to use short titles
+        configuration.items = configuration.items.map { item in
+            if let shortTitle = TabBarItem.shortTitle(for: item.id) {
+                return TabBarItem(
+                    id: item.id,
+                    title: shortTitle,
+                    systemImage: item.systemImage,
+                    description: item.description,
+                    order: item.order,
+                    isQuickAccess: item.isQuickAccess
+                )
+            }
+            return item
         }
     }
     
