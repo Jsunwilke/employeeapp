@@ -33,6 +33,7 @@ class OrganizationService: ObservableObject {
     @Published var sessionTypes: [SessionTypeDefinition] = []
     @Published var organizationAddress: String = ""
     @Published var organizationCoordinates: String = ""  // Format: "lat,lng"
+    @Published var organizationHasPublishing: Bool = false
     private var organizationListener: ListenerRegistration?
     
     private init() {}
@@ -85,6 +86,14 @@ class OrganizationService: ObservableObject {
                           let lng = location["longitude"] as? Double {
                     self?.organizationCoordinates = "\(lat),\(lng)"
                     print("📍 Organization coordinates: \(lat),\(lng)")
+                }
+                
+                // Parse publishing setting
+                if let enablePublishing = data["enableSessionPublishing"] as? Bool {
+                    self?.organizationHasPublishing = enablePublishing
+                    print("📝 Organization has publishing: \(enablePublishing)")
+                } else {
+                    self?.organizationHasPublishing = false
                 }
             }
     }
@@ -169,6 +178,14 @@ class OrganizationService: ObservableObject {
             if rhs.id == "other" { return true }
             return lhs.order < rhs.order
         }
+    }
+    
+    // Enable session publishing for organization
+    func enableSessionPublishing(organizationID: String) async throws {
+        try await db.collection("organizations").document(organizationID).updateData([
+            "enableSessionPublishing": true
+        ])
+        print("✅ Enabled session publishing for organization: \(organizationID)")
     }
     
     // Stop listening

@@ -43,7 +43,25 @@ struct Session: Identifiable, Equatable, Hashable {
         self.schoolName = data["schoolName"] as? String ?? ""
         self.photographers = data["photographers"] as? [[String: Any]] ?? []
         self.organizationID = data["organizationID"] as? String ?? ""
-        self.isPublished = data["isPublished"] as? Bool ?? true // Default to true for backward compatibility
+        
+        // Log the raw isPublished value for debugging
+        let rawIsPublished = data["isPublished"]
+        print("📦 Session '\(id)' isPublished raw value: \(rawIsPublished ?? "nil") (type: \(type(of: rawIsPublished)))")
+        
+        // Parse isPublished with detailed logging
+        if let boolValue = data["isPublished"] as? Bool {
+            self.isPublished = boolValue
+            print("✅ Session '\(id)' isPublished parsed as Bool: \(boolValue)")
+        } else if let intValue = data["isPublished"] as? Int {
+            self.isPublished = intValue != 0
+            print("⚠️ Session '\(id)' isPublished was Int (\(intValue)), converted to Bool: \(intValue != 0)")
+        } else if let stringValue = data["isPublished"] as? String {
+            self.isPublished = stringValue.lowercased() == "true" || stringValue == "1"
+            print("⚠️ Session '\(id)' isPublished was String ('\(stringValue)'), converted to Bool: \(self.isPublished)")
+        } else {
+            self.isPublished = true // Default to true for backward compatibility
+            print("⚠️ Session '\(id)' isPublished was nil or unknown type, defaulting to: true")
+        }
         
         // Extract employeeName from photographers array (use first photographer)
         if let firstPhotographer = self.photographers.first,

@@ -38,6 +38,7 @@ struct LocationPhoto: Identifiable, Hashable {
 // MARK: - Main View
 
 struct ShiftDetailView: View {
+    @Environment(\.presentationMode) var presentationMode
     @State private var session: Session
     @State private var allSessions: [Session]
     let currentUserID: String?
@@ -58,6 +59,8 @@ struct ShiftDetailView: View {
     @State private var showEditSession = false
     @AppStorage("userRole") private var userRole: String = "employee"
     @State private var employeeProfile: CoworkerProfile? = nil
+    @State private var isPublishing = false
+    @ObservedObject private var organizationService = OrganizationService.shared
     @State private var locationPhotos: [LocationPhoto] = []
     @State private var weatherData: WeatherData?
     @State private var weatherErrorMessage: String?
@@ -66,6 +69,8 @@ struct ShiftDetailView: View {
     @State private var userHomeAddress: String = ""
     @State private var schoolAddress: String = ""
     @State private var errorMessage: String = ""
+    @State private var showSuccessMessage: Bool = false
+    @State private var successMessage: String = ""
     @State private var showingMapsOptions = false
     @State private var showingShareSheet = false
     @State private var showingAddToCalendar = false
@@ -417,8 +422,23 @@ struct ShiftDetailView: View {
         .navigationTitle("Shift Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if userRole == "admin" || userRole == "manager" {
+                    // Show publish button if organization has publishing enabled and session is unpublished
+                    if organizationService.organizationHasPublishing && session.isPublished == false {
+                        Button(action: {
+                            publishSession()
+                        }) {
+                            if isPublishing {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else {
+                                Text("Publish")
+                            }
+                        }
+                        .disabled(isPublishing)
+                    }
+                    
                     Button(action: {
                         showEditSession = true
                     }) {
@@ -447,6 +467,11 @@ struct ShiftDetailView: View {
                   dismissButton: .default(Text("OK")) {
                       errorMessage = ""
                   })
+        }
+        .alert(isPresented: $showSuccessMessage) {
+            Alert(title: Text("Success"),
+                  message: Text(successMessage),
+                  dismissButton: .default(Text("OK")))
         }
         .actionSheet(isPresented: $showingMapsOptions) {
             ActionSheet(
@@ -2261,6 +2286,38 @@ struct ShiftDetailView: View {
             return String(first.prefix(1)).uppercased()
         } else {
             return "?"
+        }
+    }
+    
+    // MARK: - Publishing
+    
+    private func publishSession() {
+        isPublishing = true
+        
+        Task {
+            do {
+                try await sessionService.publishSession(sessionId: session.id)
+                
+                // Wait a moment for the real-time listeners to update
+                try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                
+                await MainActor.run {
+                    isPublishing = false
+                    // Show success feedback
+                    self.showSuccessMessage = true
+                    self.successMessage = "Session published successfully!"
+                    
+                    // Dismiss after a short delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        self.presentationMode.wrappedValue.dismiss()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to publish session: \(error.localizedDescription)"
+                    isPublishing = false
+                }
+            }
         }
     }
     
