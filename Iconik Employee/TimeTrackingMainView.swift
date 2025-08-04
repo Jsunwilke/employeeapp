@@ -26,6 +26,10 @@ struct TimeTrackingMainView: View {
         .padding(.bottom, 8)
         .navigationTitle("Time Tracking")
         .navigationBarTitleDisplayMode(.inline) // Make title more compact
+        .onAppear {
+            // Update existing entries with session names if needed
+            timeTrackingService.updateExistingEntriesWithSessionNames()
+        }
             .sheet(isPresented: $showingSessionSelection) {
                 SessionSelectionView(
                     timeTrackingService: timeTrackingService,
@@ -152,8 +156,17 @@ struct TimeTrackingMainView: View {
                     Image(systemName: "calendar")
                         .foregroundColor(.blue)
                         .font(.caption)
-                    Text("Session: \(sessionId)")
-                        .font(.caption)
+                    if let sessionName = entry.sessionName, sessionName != sessionId {
+                        // Show the session name if it's different from the ID
+                        Text(sessionName)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    } else {
+                        // Show just "Session" if we couldn't find the session details
+                        Text("Session")
+                            .font(.caption)
+                    }
                 }
             }
             

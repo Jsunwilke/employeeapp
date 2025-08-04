@@ -75,6 +75,7 @@ struct ShiftDetailView: View {
     @State private var showingShareSheet = false
     @State private var showingAddToCalendar = false
     @State private var scrollOffset: CGFloat = 0
+    @State private var showingYearbookChecklist = false
     
     // Job box state
     @State private var jobBoxes: [JobBox] = []
@@ -421,8 +422,8 @@ struct ShiftDetailView: View {
         }
         .navigationTitle("Shift Details")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
+        .navigationBarItems(trailing: 
+            HStack {
                 if userRole == "admin" || userRole == "manager" {
                     // Show publish button if organization has publishing enabled and session is unpublished
                     if organizationService.organizationHasPublishing && session.isPublished == false {
@@ -446,7 +447,7 @@ struct ShiftDetailView: View {
                     }
                 }
             }
-        }
+        )
         .sheet(isPresented: $showEditSession) {
             EditSessionView(session: session)
         }
@@ -497,6 +498,31 @@ struct ShiftDetailView: View {
         }) {
             if let photo = selectedPhoto {
                 PhotoDetailView(imageURL: photo.url, label: photo.label)
+            }
+        }
+        .sheet(isPresented: $showingYearbookChecklist) {
+            if let schoolId = session.schoolId {
+                NavigationView {
+                    YearbookChecklistViewForSession(
+                        schoolId: schoolId,
+                        schoolName: session.schoolName,
+                        sessionContext: YearbookSessionContext(
+                            sessionId: session.id ?? "",
+                            photographerId: currentUserID ?? "",
+                            photographerName: currentUserPhotographerInfo?.name ?? "Unknown",
+                            sessionDate: session.startDate ?? Date()
+                        )
+                    )
+                }
+            } else {
+                VStack {
+                    Text("No school information available")
+                        .foregroundColor(.secondary)
+                    Button("Close") {
+                        showingYearbookChecklist = false
+                    }
+                    .padding()
+                }
             }
         }
         .overlay(
@@ -580,7 +606,7 @@ struct ShiftDetailView: View {
     
     // Action Buttons Row
     private var actionButtonsRow: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             // Directions Button
             if let _ = session.location, !session.location!.isEmpty {
                 ActionButton(
@@ -601,14 +627,20 @@ struct ShiftDetailView: View {
                 }
             )
             
-            // Share Button
-            ActionButton(
-                title: "Share",
-                systemImage: "square.and.arrow.up",
-                action: {
-                    shareShift()
-                }
-            )
+            // Yearbook Button
+            if session.schoolId != nil {
+                ActionButton(
+                    title: "Yearbook",
+                    systemImage: "list.clipboard",
+                    action: {
+                        print("📚 Yearbook button tapped")
+                        print("📚 Session schoolId: '\(session.schoolId ?? "nil")'")
+                        print("📚 Session schoolName: '\(session.schoolName)'")
+                        print("📚 Session ID: '\(session.id ?? "nil")'")
+                        showingYearbookChecklist = true
+                    }
+                )
+            }
         }
         .frame(maxWidth: .infinity)
         .background(Color(.secondarySystemBackground))
@@ -2130,54 +2162,6 @@ struct ShiftDetailView: View {
         }
     }
     
-    private func shareShift() {
-        guard let start = session.startDate, let end = session.endDate else { return }
-        
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .short
-        
-        var textToShare = "Shift: \(session.position)\n"
-        textToShare += "Date: \(dateFormatter.string(from: start)) - \(dateFormatter.string(from: end))\n"
-        textToShare += "Location: \(session.schoolName)"
-        
-        if let location = session.location, !location.isEmpty {
-            textToShare += "\nAddress: \(location)"
-        }
-        
-        // Add weather info if available
-        if let weather = weatherData {
-            textToShare += "\nWeather: \(weather.condition ?? "Unknown"), \(weather.temperatureString)"
-        }
-        
-        // Add job box status if available
-        if latestJobBoxStatus != .unknown {
-            textToShare += "\nJob Box Status: \(latestJobBoxStatus.rawValue)"
-            if !latestJobBoxScannedBy.isEmpty {
-                textToShare += " (Last handled by: \(latestJobBoxScannedBy))"
-                if let timestamp = latestJobBoxTimestamp {
-                    textToShare += " at \(formatTimestamp(timestamp))"
-                }
-            }
-        }
-        
-        // Add travel planning information if available
-        if let leaveTime = travelPlan.suggestedLeaveTime, let wakeupTime = travelPlan.suggestedWakeupTime {
-            textToShare += "\n\nSuggested wake-up: \(shortTimeFormatter.string(from: wakeupTime))"
-            textToShare += "\nSuggested departure: \(shortTimeFormatter.string(from: leaveTime))"
-        }
-        
-        let activityVC = UIActivityViewController(
-            activityItems: [textToShare],
-            applicationActivities: nil
-        )
-        
-        // Find the current UIWindow and present from it
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootVC = windowScene.windows.first?.rootViewController {
-            rootVC.present(activityVC, animated: true)
-        }
-    }
     
     func otherEmployeesSameJob() -> [String] {
         guard let shiftStart = session.startDate else { return [] }

@@ -166,20 +166,12 @@ struct Session: Identifiable, Equatable, Hashable {
     
     /// Check if a user ID is assigned as a photographer for this session
     func isUserAssigned(userID: String) -> Bool {
-        print("🔍 Checking if user \(userID) is assigned to session \(schoolName)")
-        print("🔍 Photographers array: \(photographers)")
-        
-        for (index, photographer) in photographers.enumerated() {
+        for photographer in photographers {
             let photographerID = photographer["id"] as? String
-            print("🔍 Photographer \(index): id = '\(photographerID ?? "nil")', type = \(type(of: photographer["id"]))")
-            
             if photographerID == userID {
-                print("✅ Found match for user \(userID)")
                 return true
             }
         }
-        
-        print("❌ No match found for user \(userID)")
         return false
     }
     

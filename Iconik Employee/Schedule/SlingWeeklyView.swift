@@ -1358,13 +1358,7 @@ struct SlingWeeklyView: View {
             
             let originalCount = filtered.count
             filtered = filtered.filter { session in
-                let isAssigned = session.isUserAssigned(userID: currentUserID)
-                if !isAssigned {
-                    print("📊 Session \(session.schoolName) user '\(currentUserID)' not assigned")
-                } else {
-                    print("📊 ✅ Session \(session.schoolName) matches user '\(currentUserID)'")
-                }
-                return isAssigned
+                session.isUserAssigned(userID: currentUserID)
             }
             print("📊 After filtering: \(filtered.count) sessions (was \(originalCount))")
         }

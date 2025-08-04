@@ -289,12 +289,13 @@ struct TimeEntry: Identifiable, Codable {
     let date: String
     let status: String
     let sessionId: String?
+    let sessionName: String?
     let notes: String?
     let createdAt: Date?
     let updatedAt: Date?
     
     // Direct initializer for creating TimeEntry instances
-    init(id: String, userId: String, organizationID: String, clockInTime: Date? = nil, clockOutTime: Date? = nil, date: String, status: String, sessionId: String? = nil, notes: String? = nil, createdAt: Date? = nil, updatedAt: Date? = nil) {
+    init(id: String, userId: String, organizationID: String, clockInTime: Date? = nil, clockOutTime: Date? = nil, date: String, status: String, sessionId: String? = nil, sessionName: String? = nil, notes: String? = nil, createdAt: Date? = nil, updatedAt: Date? = nil) {
         self.id = id
         self.userId = userId
         self.organizationID = organizationID
@@ -303,6 +304,7 @@ struct TimeEntry: Identifiable, Codable {
         self.date = date
         self.status = status
         self.sessionId = sessionId
+        self.sessionName = sessionName
         self.notes = notes
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -317,6 +319,7 @@ struct TimeEntry: Identifiable, Codable {
         self.date = data["date"] as? String ?? ""
         self.status = data["status"] as? String ?? ""
         self.sessionId = data["sessionId"] as? String
+        self.sessionName = data["sessionName"] as? String
         self.notes = data["notes"] as? String
         
         // Convert Firestore timestamps to Date objects
@@ -354,6 +357,7 @@ struct TimeEntry: Identifiable, Codable {
         self.date = data["date"] as? String ?? ""
         self.status = data["status"] as? String ?? ""
         self.sessionId = data["sessionId"] as? String
+        self.sessionName = data["sessionName"] as? String
         self.notes = data["notes"] as? String
         
         // Convert Firestore timestamps to Date objects
