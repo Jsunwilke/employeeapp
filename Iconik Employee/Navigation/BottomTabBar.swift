@@ -44,8 +44,9 @@ struct BottomTabBar: View {
                 // iPhone layout: Current behavior with scan in center
                 HStack(spacing: 0) {
                     let items = tabBarManager.getQuickAccessItemsExcludingScan()
-                    let leftItems = Array(items.prefix(3))
-                    let rightItems = Array(items.dropFirst(3).prefix(3))
+                    let midPoint = (items.count + 1) / 2  // Split evenly, with extra item on left for odd counts
+                    let leftItems = Array(items.prefix(midPoint))
+                    let rightItems = Array(items.dropFirst(midPoint))
                     
                     Spacer(minLength: 10) // Add space from left edge
                     
