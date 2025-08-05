@@ -15,8 +15,10 @@ class MileageReportsViewModel: ObservableObject {
     var userId: String?
     
     let calendar = Calendar.current
-    let currentPeriodStart: Date
-    let currentPeriodEnd: Date
+    var currentPeriodStart: Date = Date()
+    var currentPeriodEnd: Date = Date()
+    
+    private let payPeriodService = PayPeriodService.shared
     
     // Local wrapper model to hold Firestore data
     struct MileageRecordWrapper: Identifiable {
@@ -34,51 +36,94 @@ class MileageReportsViewModel: ObservableObject {
             self.userId = currentUser.uid
         }
         
-        // Calculate the current pay period based on a reference date (2/25/2024).
+        // Load pay period settings and calculate current period
+        payPeriodService.loadPayPeriodSettings { [weak self] success in
+            guard let self = self else { return }
+            
+            if let (start, end) = self.payPeriodService.getCurrentPayPeriod() {
+                self.currentPeriodStart = start
+                self.currentPeriodEnd = end
+                
+                // Log the calculated period for debugging
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateStyle = .medium
+                dateFormatter.timeStyle = .short
+                print("📅 MileageReportsViewModel: Current period from PayPeriodService: \(dateFormatter.string(from: start)) to \(dateFormatter.string(from: end))")
+            } else {
+                // Fallback to default calculation if service fails
+                print("⚠️ MileageReportsViewModel: Failed to get pay period from service, using fallback")
+                self.setDefaultPayPeriod()
+            }
+        }
+    }
+    
+    private func setDefaultPayPeriod() {
+        // Fallback calculation using the old reference date
         let payPeriodFormatter = DateFormatter()
         payPeriodFormatter.dateFormat = "M/d/yyyy"
         payPeriodFormatter.locale = Locale(identifier: "en_US_POSIX")
         guard let referenceDate = payPeriodFormatter.date(from: "2/25/2024") else {
-            fatalError("Invalid reference date format.")
+            return
         }
         
-        // Make sure reference date is start of day
         let referenceStartOfDay = calendar.startOfDay(for: referenceDate)
-        
         let today = Date()
         let daysSinceReference = calendar.dateComponents([.day], from: referenceStartOfDay, to: today).day ?? 0
         let periodLength = 14
         let periodsElapsed = daysSinceReference / periodLength
         
-        guard let currentStart = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay) else {
-            fatalError("Error calculating current pay period start date.")
+        if let currentStart = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay),
+           let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: currentStart),
+           let currentEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) {
+            self.currentPeriodStart = currentStart
+            self.currentPeriodEnd = currentEnd
         }
-        
-        // Calculate end date and set it to end of day (23:59:59)
-        guard let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: currentStart),
-              let currentEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) else {
-            fatalError("Error calculating current pay period end date.")
-        }
-        
-        self.currentPeriodStart = currentStart
-        self.currentPeriodEnd = currentEnd
-        
-        // Log the calculated period for debugging (commented out to reduce console spam)
-        // let dateFormatter = DateFormatter()
-        // dateFormatter.dateStyle = .medium
-        // dateFormatter.timeStyle = .medium
-        // print("Current period calculated as: \(dateFormatter.string(from: currentStart)) to \(dateFormatter.string(from: currentEnd))")
     }
     
     /// Loads mileage records for the given pay period. If none provided, uses the current period.
     func loadRecords(forPayPeriodStart payPeriodStart: Date? = nil) {
-        let periodStart = payPeriodStart ?? currentPeriodStart
-        
-        // Calculate end date and set it to end of day (23:59:59)
-        guard let tempEnd = calendar.date(byAdding: .day, value: 13, to: periodStart),
-              let periodEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) else {
-            print("Error calculating period end date")
+        // If we're using the current period and it hasn't been set yet, wait for it
+        if payPeriodStart == nil && currentPeriodStart == currentPeriodEnd {
+            // Load pay period settings first
+            payPeriodService.loadPayPeriodSettings { [weak self] success in
+                guard let self = self else { return }
+                
+                if let (start, end) = self.payPeriodService.getCurrentPayPeriod() {
+                    self.currentPeriodStart = start
+                    self.currentPeriodEnd = end
+                } else {
+                    self.setDefaultPayPeriod()
+                }
+                
+                // Now load records with the updated period
+                self.loadRecordsInternal(forPayPeriodStart: nil)
+            }
             return
+        }
+        
+        loadRecordsInternal(forPayPeriodStart: payPeriodStart)
+    }
+    
+    private func loadRecordsInternal(forPayPeriodStart payPeriodStart: Date? = nil) {
+        let periodStart = payPeriodStart ?? currentPeriodStart
+        let periodEnd: Date
+        
+        if let customStart = payPeriodStart {
+            // Calculate end date for custom period using PayPeriodService
+            if let settings = payPeriodService.payPeriodSettings,
+               let (_, end) = payPeriodService.getPayPeriod(for: customStart, settings: settings) {
+                periodEnd = end
+            } else {
+                // Fallback to 14-day period
+                if let tempEnd = calendar.date(byAdding: .day, value: 13, to: customStart),
+                   let customEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) {
+                    periodEnd = customEnd
+                } else {
+                    periodEnd = currentPeriodEnd
+                }
+            }
+        } else {
+            periodEnd = currentPeriodEnd
         }
         
         // Log the date range we're querying (commented out to reduce console spam)
