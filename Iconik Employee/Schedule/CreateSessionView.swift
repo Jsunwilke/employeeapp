@@ -22,68 +22,64 @@ struct CreateSessionView: View {
     
     var body: some View {
         NavigationView {
-            if !canCreateSessions {
-                VStack(spacing: 20) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 50))
-                        .foregroundColor(.orange)
-                    
-                    Text("Access Denied")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    
-                    Text("Only administrators and managers can create sessions.")
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.secondary)
-                }
-                .padding()
-                .navigationTitle("Create Session")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") {
-                            dismiss()
-                        }
-                    }
-                }
-            } else {
-                ZStack {
-                    SessionFormView(
-                        formData: $formData,
-                        schools: schoolService.schools,
-                        teamMembers: teamService.teamMembers,
-                        sessionTypes: organizationService.getOrganizationSessionTypes(
-                            organization: Organization(
-                                id: organizationID,
-                                name: "",
-                                sessionTypes: organizationService.sessionTypes.map { SessionType(id: $0.id, name: $0.name, color: $0.color, order: 0) },
-                                sessionOrderColors: nil,
-                                enableSessionPublishing: nil
-                            )
-                        ),
-                        isEditing: false
-                    )
-                    .disabled(isLoading)
-                    
-                    if isLoading {
-                        Color.black.opacity(0.3)
-                            .ignoresSafeArea()
+            Group {
+                if !canCreateSessions {
+                    VStack(spacing: 20) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 50))
+                            .foregroundColor(.orange)
                         
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.2)
+                        Text("Access Denied")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                        
+                        Text("Only administrators and managers can create sessions.")
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding()
+                } else {
+                    ZStack {
+                        SessionFormView(
+                            formData: $formData,
+                            schools: schoolService.schools,
+                            teamMembers: teamService.teamMembers,
+                            sessionTypes: organizationService.getOrganizationSessionTypes(
+                                organization: Organization(
+                                    id: organizationID,
+                                    name: "",
+                                    sessionTypes: organizationService.sessionTypes.map { SessionType(id: $0.id, name: $0.name, color: $0.color, order: 0) },
+                                    sessionOrderColors: nil,
+                                    enableSessionPublishing: nil,
+                                    payPeriodSettings: nil
+                                )
+                            ),
+                            isEditing: false
+                        )
+                        .disabled(isLoading)
+                        
+                        if isLoading {
+                            Color.black.opacity(0.3)
+                                .ignoresSafeArea()
+                            
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.2)
+                        }
                     }
                 }
-                .navigationTitle("Create Session")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") {
-                            dismiss()
-                        }
-                        .disabled(isLoading)
+            }
+            .navigationTitle("Create Session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
                     }
-                    
+                    .disabled(isLoading)
+                }
+                
+                if canCreateSessions {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Create") {
                             createSession()
@@ -92,11 +88,11 @@ struct CreateSessionView: View {
                         .disabled(isLoading)
                     }
                 }
-                .alert("Error", isPresented: $showError) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text(errorMessage)
-                }
+            }
+            .alert("Error", isPresented: $showError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage)
             }
         }
         .onAppear {

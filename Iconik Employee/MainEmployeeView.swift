@@ -448,9 +448,6 @@ struct MainEmployeeView: View {
     @State private var showSettings = false
     @State private var showThemePicker = false
     
-    // Local edit mode for reordering
-    @State private var localEditMode: EditMode = .inactive
-    
     // Track initialization state to prevent duplicate loads
     @State private var hasInitializedData = false
     
@@ -520,7 +517,7 @@ struct MainEmployeeView: View {
         }
     }
     
-    // MARK: - Home View (Schedule and Features List)
+    // MARK: - Home View (Dashboard)
     
     private var homeView: some View {
         ZStack {
@@ -531,185 +528,84 @@ struct MainEmployeeView: View {
                     backgroundGradient.ignoresSafeArea()
                 }
                 
-            VStack(spacing: 0) {
-                List {
-                    // Flag notification section
-                    if isFlagged && !flagNote.isEmpty {
-                        Section {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Image(systemName: "flag.fill").foregroundColor(.red)
-                                    if flaggedByName.isEmpty {
-                                        Text("Flag Note").font(.headline)
-                                    } else {
-                                        Text("Flag Note from \(flaggedByName)").font(.headline)
-                                    }
-                                    Spacer()
-                                }
-                                Text(flagNote)
-                                    .font(.body)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        .listRowBackground(Color.red.opacity(0.2))
-                    }
-                    
-                        // Upcoming schedule section
-                        Section(header: Text("Your Schedule (Next 2 Days)")) {
-                            if viewModel.isLoadingSchedule {
-                                HStack {
-                                    Spacer()
-                                    ProgressView()
-                                    Spacer()
-                                }
-                            } else if viewModel.upcomingShifts.isEmpty {
-                                Text("No upcoming shifts in the next 2 days")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                ForEach(viewModel.upcomingShifts) { session in
-                                    // Make each session row clickable
-                                    Button(action: {
-                                        selectedSession = session
-                                    }) {
-                                        CompactSessionRow(
-                                            session: session,
-                                            weatherData: viewModel.getWeatherForSession(session),
-                                            currentUserID: UserManager.shared.getCurrentUserID()
-                                        )
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                }
-                            }
-                            
-                            Button("Refresh Schedule") {
-                                loadSchedule()
-                            }
-                        }
-                        
-                    // Employee Features Section (re-orderable)
-                    Section(header: Text("All Features")) {
-                            ForEach(viewModel.employeeFeatures) { feature in
-                                if localEditMode == .active {
-                                    // Simple row in edit mode
+            ScrollView {
+                VStack(spacing: 16) {
+                    // Dashboard content
+                    VStack(spacing: 16) {
+                        // Flag notification section
+                        if isFlagged && !flagNote.isEmpty {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 8) {
                                     HStack {
-                                        Image(systemName: feature.systemImage)
-                                            .foregroundColor(.white)
-                                            .frame(width: 30, height: 30)
-                                            .background(Circle().fill(featureColorFor(feature.id)))
-                                        
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(feature.title)
-                                                .font(.headline)
-                                            Text(feature.description)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                                .lineLimit(1)
+                                        Image(systemName: "flag.fill").foregroundColor(.red)
+                                        if flaggedByName.isEmpty {
+                                            Text("Flag Note").font(.headline)
+                                        } else {
+                                            Text("Flag Note from \(flaggedByName)").font(.headline)
                                         }
-                                        .padding(.leading, 8)
-                                        
                                         Spacer()
-                                        
-                                        Image(systemName: "line.3.horizontal")
-                                            .foregroundColor(.gray)
                                     }
-                                    .padding(.vertical, 4)
-                                } else {
-                                    // Use Button instead of NavigationLink directly
-                                    Button(action: {
-                                        selectedFeatureID = feature.id
-                                    }) {
-                                        HStack {
-                                            Image(systemName: feature.systemImage)
-                                                .foregroundColor(.white)
-                                                .frame(width: 30, height: 30)
-                                                .background(Circle().fill(featureColorFor(feature.id)))
-                                            
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(feature.title)
-                                                    .font(.headline)
-                                                Text(feature.description)
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                                    .lineLimit(1)
-                                            }
-                                            .padding(.leading, 8)
-                                            
-                                            Spacer()
-                                            
-                                            Image(systemName: "chevron.right")
-                                                .foregroundColor(.gray)
-                                                .font(.caption)
-                                        }
-                                        .padding(.vertical, 4)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                    .contentShape(Rectangle())
-                                    .listRowBackground(isFlagged ? Color.red.opacity(0.1) : Color(UIColor.secondarySystemGroupedBackground))
-                                    .contextMenu {
-                                        Button(action: {
-                                            withAnimation {
-                                                localEditMode = .active
-                                            }
-                                        }) {
-                                            Label("Rearrange Features", systemImage: "arrow.up.arrow.down")
-                                        }
-                                    }
-                                    .onLongPressGesture {
-                                        withAnimation {
-                                            localEditMode = .active
-                                        }
-                                    }
+                                    Text(flagNote)
+                                        .font(.body)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
+                                .padding()
+                                .background(Color.red.opacity(0.2))
+                                .cornerRadius(12)
                             }
-                            .onMove(perform: viewModel.moveEmployeeFeatures)
+                            .padding(.horizontal)
                         }
+                    
+                        // Dashboard Widgets
+                        VStack(spacing: 16) {
+                            // Hours Widget
+                            HoursWidget(timeTrackingService: timeTrackingService)
+                            
+                            // Mileage Widget
+                            MileageWidget(userName: storedUserFirstName)
+                            
+                            // Upcoming Shifts Widget
+                            UpcomingShiftsWidget(
+                                sessions: viewModel.upcomingShifts,
+                                isLoading: viewModel.isLoadingSchedule,
+                                weatherDataBySession: viewModel.weatherDataBySession,
+                                onRefresh: { loadSchedule() },
+                                onSessionTap: { session in
+                                    selectedSession = session
+                                }
+                            )
+                        }
+                        .padding(.horizontal)
                         
-                        // Manager Features Section (fixed order) if user is a manager or admin
-                        if storedUserRole == "manager" || storedUserRole == "admin" {
-                            Section(header: Text("Management Features")) {
-                                ForEach(managerFeatures) { feature in
-                                    Button(action: {
-                                        selectedFeatureID = feature.id
-                                    }) {
-                                        HStack {
-                                            Image(systemName: feature.systemImage)
-                                                .foregroundColor(.white)
-                                                .frame(width: 30, height: 30)
-                                                .background(Circle().fill(featureColorFor(feature.id)))
-                                            
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(feature.title)
-                                                    .font(.headline)
-                                                Text(feature.description)
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                                    .lineLimit(1)
-                                            }
-                                            .padding(.leading, 8)
-                                            
-                                            Spacer()
-                                            
-                                            Image(systemName: "chevron.right")
-                                                .foregroundColor(.gray)
-                                                .font(.caption)
-                                        }
-                                        .padding(.vertical, 4)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                    .listRowBackground(isFlagged ? Color.red.opacity(0.1) : Color(UIColor.secondarySystemGroupedBackground))
-                                }
+                        // All Features Button
+                        NavigationLink(destination: AllFeaturesView(
+                            viewModel: viewModel,
+                            selectedFeatureID: $selectedFeatureID,
+                            userRole: storedUserRole
+                        )) {
+                            HStack {
+                                Image(systemName: "square.grid.2x2")
+                                    .font(.title2)
+                                Text("All Features")
+                                    .font(.headline)
+                                Spacer()
+                                Image(systemName: "chevron.right")
                             }
+                            .foregroundColor(.primary)
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .cornerRadius(12)
+                            .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
                         }
+                        .padding(.horizontal)
+                        .padding(.top, 8)
                     }
-                    .listStyle(InsetGroupedListStyle())
-                    .scrollContentBackground(isFlagged ? .hidden : .automatic)
-                    .background(isFlagged ? Color.red.opacity(0.05) : Color.clear)
-                    .refreshable {
-                        loadSchedule()
-                    }
+                    .padding(.bottom, 100) // Space for tab bar
                 }
+                .refreshable {
+                    loadSchedule()
+                }
+            }
                 
                 // Navigation links for sheets
                 NavigationLink(destination: SettingsView(), isActive: $showSettings) {
@@ -973,15 +869,9 @@ struct MainEmployeeView: View {
             }
         }
         
-        // Right toolbar: edit/done button or profile info
+        // Right toolbar: profile info
         ToolbarItem(placement: .navigationBarTrailing) {
-            if localEditMode == .active {
-                Button("Done") {
-                    withAnimation { localEditMode = .inactive }
-                    viewModel.saveEmployeeFeatureOrder()
-                }
-            } else {
-                HStack(spacing: 10) {
+            HStack(spacing: 10) {
                     Text(storedUserFirstName)
                         .font(.headline)
                         .foregroundColor(.primary)
@@ -1032,7 +922,6 @@ struct MainEmployeeView: View {
                 }
             }
         }
-    }
     
     // MARK: - On Appear Actions
     

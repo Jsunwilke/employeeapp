@@ -9,6 +9,13 @@ struct SessionTypeDefinition: Identifiable {
     let color: String  // Hex color string
 }
 
+// Pay Period Settings model
+struct PayPeriodSettings: Codable {
+    let startDate: String
+    let type: String // "bi-weekly", "weekly", "monthly"
+    let isActive: Bool
+}
+
 // Organization model
 struct Organization: Codable {
     let id: String
@@ -16,6 +23,7 @@ struct Organization: Codable {
     let sessionTypes: [SessionType]?
     let sessionOrderColors: [String]?
     let enableSessionPublishing: Bool?
+    let payPeriodSettings: PayPeriodSettings?
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -23,6 +31,7 @@ struct Organization: Codable {
         case sessionTypes
         case sessionOrderColors
         case enableSessionPublishing
+        case payPeriodSettings
     }
 }
 
@@ -120,6 +129,7 @@ class OrganizationService: ObservableObject {
         let doc = try await db.collection("organizations").document(organizationID).getDocument()
         
         guard doc.exists, var data = doc.data() else {
+            print("❌ OrganizationService: Document doesn't exist or has no data for org \(organizationID)")
             return nil
         }
         
@@ -139,12 +149,42 @@ class OrganizationService: ObservableObject {
             }
         }
         
+        // Parse pay period settings if available
+        var payPeriodSettings: PayPeriodSettings? = nil
+        if let payPeriodData = data["payPeriodSettings"] as? [String: Any] {
+            // Get startDate from nested config object
+            let startDate = (payPeriodData["config"] as? [String: Any])?["startDate"] as? String
+            let type = payPeriodData["type"] as? String
+            
+            // Handle isActive as either Bool or Int
+            let isActive: Bool
+            if let boolValue = payPeriodData["isActive"] as? Bool {
+                isActive = boolValue
+            } else if let intValue = payPeriodData["isActive"] as? Int {
+                isActive = intValue == 1
+            } else if let intValue = payPeriodData["isActive"] as? NSNumber {
+                isActive = intValue.boolValue
+            } else {
+                isActive = false
+            }
+            
+            if let startDate = startDate,
+               let type = type {
+                payPeriodSettings = PayPeriodSettings(
+                    startDate: startDate,
+                    type: type,
+                    isActive: isActive
+                )
+            }
+        }
+        
         return Organization(
             id: doc.documentID,
             name: data["name"] as? String ?? "",
             sessionTypes: sessionTypes,
             sessionOrderColors: data["sessionOrderColors"] as? [String],
-            enableSessionPublishing: data["enableSessionPublishing"] as? Bool
+            enableSessionPublishing: data["enableSessionPublishing"] as? Bool,
+            payPeriodSettings: payPeriodSettings
         )
     }
     
