@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Tab Bar Item Model
 struct TabBarItem: Identifiable, Codable, Equatable {
@@ -192,14 +193,39 @@ class TabBarManager: ObservableObject {
     }
     
     func getQuickAccessItemsExcludingScan() -> [TabBarItem] {
+        let maxItems = getMaxItemsForDevice()
         return configuration.items
             .filter { $0.isQuickAccess && $0.id != "scan" }
             .sorted { $0.order < $1.order }
-            .prefix(6) // 6 customizable items plus fixed scan = 7 total
+            .prefix(maxItems)
             .map { $0 }
     }
     
+    func getQuickAccessItemsForDevice() -> [TabBarItem] {
+        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
+        
+        if isIPad {
+            // iPad: Return up to 10 items, excluding scan
+            return configuration.items
+                .filter { $0.isQuickAccess && $0.id != "scan" }
+                .sorted { $0.order < $1.order }
+                .prefix(10)
+                .map { $0 }
+        } else {
+            // iPhone: Return current behavior with scan
+            return getQuickAccessItems()
+        }
+    }
+    
+    func getMaxItemsForDevice() -> Int {
+        return UIDevice.current.userInterfaceIdiom == .pad ? 10 : 6
+    }
+    
     func getScanItem() -> TabBarItem? {
+        // Don't return scan item on iPad since they don't have NFC
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            return nil
+        }
         return configuration.items.first { $0.id == "scan" }
     }
 }

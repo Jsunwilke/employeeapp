@@ -10,95 +10,125 @@ struct BottomTabBar: View {
     @Namespace private var tabBarNamespace
     
     var body: some View {
-        HStack(spacing: 0) {
-            let items = tabBarManager.getQuickAccessItemsExcludingScan()
-            let leftItems = Array(items.prefix(3))
-            let rightItems = Array(items.dropFirst(3).prefix(3))
+        Group {
+            let isIPad = UIDevice.current.userInterfaceIdiom == .pad
             
-            Spacer(minLength: 10) // Add space from left edge
-            
-            // Left side items grouped together
-            HStack(spacing: 0) {
-                ForEach(leftItems) { item in
-                    TabBarButton(
-                        item: updatedItem(item),
-                        isSelected: selectedTab == item.id,
-                        showLabel: tabBarManager.configuration.showLabels,
-                        namespace: tabBarNamespace,
-                        isScanButton: false,
-                        action: {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                selectedTab = item.id
-                                animateSelection = true
+            if isIPad {
+                // iPad layout: Even spacing, no scan button, up to 10 items
+                HStack(spacing: 0) {
+                    let items = tabBarManager.getQuickAccessItemsExcludingScan()
+                    
+                    ForEach(items) { item in
+                        TabBarButton(
+                            item: updatedItem(item),
+                            isSelected: selectedTab == item.id,
+                            showLabel: tabBarManager.configuration.showLabels,
+                            namespace: tabBarNamespace,
+                            isScanButton: false,
+                            isIPad: true,
+                            action: {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    selectedTab = item.id
+                                    animateSelection = true
+                                }
+                                
+                                // Haptic feedback
+                                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                                impactFeedback.impactOccurred()
                             }
-                            
-                            // Haptic feedback
-                            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-                            impactFeedback.impactOccurred()
-                        }
-                    )
-                    .frame(width: 50) // Fixed width for regular buttons
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
                 }
-            }
-            
-            Spacer(minLength: 20) // Space between left group and scan
-            
-            // Center scan button (always present)
-            let scanItem = tabBarManager.getScanItem() ?? TabBarItem(
-                id: "scan",
-                title: "Scan",
-                systemImage: "wave.3.right.circle.fill",
-                description: "Scan SD cards and job boxes",
-                order: 999,
-                isQuickAccess: true
-            )
-            
-            TabBarButton(
-                item: updatedItem(scanItem),
-                isSelected: selectedTab == scanItem.id,
-                showLabel: tabBarManager.configuration.showLabels,
-                namespace: tabBarNamespace,
-                isScanButton: true,
-                action: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        selectedTab = scanItem.id
-                        animateSelection = true
+            } else {
+                // iPhone layout: Current behavior with scan in center
+                HStack(spacing: 0) {
+                    let items = tabBarManager.getQuickAccessItemsExcludingScan()
+                    let leftItems = Array(items.prefix(3))
+                    let rightItems = Array(items.dropFirst(3).prefix(3))
+                    
+                    Spacer(minLength: 10) // Add space from left edge
+                    
+                    // Left side items grouped together
+                    HStack(spacing: 0) {
+                        ForEach(leftItems) { item in
+                            TabBarButton(
+                                item: updatedItem(item),
+                                isSelected: selectedTab == item.id,
+                                showLabel: tabBarManager.configuration.showLabels,
+                                namespace: tabBarNamespace,
+                                isScanButton: false,
+                                isIPad: false,
+                                action: {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                        selectedTab = item.id
+                                        animateSelection = true
+                                    }
+                                    
+                                    // Haptic feedback
+                                    let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                                    impactFeedback.impactOccurred()
+                                }
+                            )
+                            .frame(width: 50) // Fixed width for regular buttons
+                        }
                     }
                     
-                    // Haptic feedback
-                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                    impactFeedback.impactOccurred()
-                }
-            )
-            .frame(width: 70) // Slightly wider for scan button
-            
-            Spacer(minLength: 20) // Space between scan and right group
-            
-            // Right side items grouped together
-            HStack(spacing: 0) {
-                ForEach(rightItems) { item in
-                    TabBarButton(
-                        item: updatedItem(item),
-                        isSelected: selectedTab == item.id,
-                        showLabel: tabBarManager.configuration.showLabels,
-                        namespace: tabBarNamespace,
-                        isScanButton: false,
-                        action: {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                selectedTab = item.id
-                                animateSelection = true
+                    Spacer(minLength: 20) // Space between left group and scan
+                    
+                    // Center scan button (always present on iPhone)
+                    if let scanItem = tabBarManager.getScanItem() {
+                        TabBarButton(
+                            item: updatedItem(scanItem),
+                            isSelected: selectedTab == scanItem.id,
+                            showLabel: tabBarManager.configuration.showLabels,
+                            namespace: tabBarNamespace,
+                            isScanButton: true,
+                            isIPad: false,
+                            action: {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    selectedTab = scanItem.id
+                                    animateSelection = true
+                                }
+                                
+                                // Haptic feedback
+                                let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                                impactFeedback.impactOccurred()
                             }
-                            
-                            // Haptic feedback
-                            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-                            impactFeedback.impactOccurred()
+                        )
+                        .frame(width: 70) // Slightly wider for scan button
+                    }
+                    
+                    Spacer(minLength: 20) // Space between scan and right group
+                    
+                    // Right side items grouped together
+                    HStack(spacing: 0) {
+                        ForEach(rightItems) { item in
+                            TabBarButton(
+                                item: updatedItem(item),
+                                isSelected: selectedTab == item.id,
+                                showLabel: tabBarManager.configuration.showLabels,
+                                namespace: tabBarNamespace,
+                                isScanButton: false,
+                                isIPad: false,
+                                action: {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                        selectedTab = item.id
+                                        animateSelection = true
+                                    }
+                                    
+                                    // Haptic feedback
+                                    let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                                    impactFeedback.impactOccurred()
+                                }
+                            )
+                            .frame(width: 50) // Fixed width for regular buttons
                         }
-                    )
-                    .frame(width: 50) // Fixed width for regular buttons
+                    }
+                    
+                    Spacer(minLength: 10) // Add space from right edge
                 }
             }
-            
-            Spacer(minLength: 10) // Add space from right edge
         }
         .padding(.top, 7) // Increased by 3 to push icons down more
         .padding(.horizontal, 4) // Reduced from 8 to fit 7 items
@@ -139,6 +169,7 @@ struct TabBarButton: View {
     let showLabel: Bool
     let namespace: Namespace.ID
     var isScanButton: Bool = false
+    var isIPad: Bool = false
     let action: () -> Void
     
     @State private var isPressed = false
@@ -158,7 +189,7 @@ struct TabBarButton: View {
                     
                     // Icon
                     Image(systemName: item.systemImage)
-                        .font(.system(size: isScanButton ? 60 : 24))
+                        .font(.system(size: isScanButton ? 60 : (isIPad ? 30 : 24)))
                         .foregroundColor(isScanButton && isSelected ? .white : (isSelected ? accentColor : .gray))
                         .scaleEffect(isPressed ? 0.85 : (isSelected && !isScanButton ? 1.1 : 1.0))
                         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSelected)
@@ -183,12 +214,12 @@ struct TabBarButton: View {
                             .transition(.scale.combined(with: .opacity))
                     }
                 }
-                .frame(width: isScanButton ? 50 : 44, height: isScanButton ? 50 : 32)
+                .frame(width: isScanButton ? 50 : (isIPad ? 60 : 44), height: isScanButton ? 50 : (isIPad ? 45 : 32))
                 
                 // Label
                 if showLabel && !isScanButton { // Hide label for scan button to save space
                     Text(item.title)
-                        .font(.system(size: 10)) // Smaller than caption2
+                        .font(.system(size: isIPad ? 12 : 10))
                         .foregroundColor(isSelected ? accentColor : .gray)
                         .lineLimit(1)
                         .multilineTextAlignment(.center)
@@ -251,19 +282,24 @@ struct TabBarConfigurationView: View {
         VStack(spacing: 0) {
                 // Header with instructions and count
                 VStack(spacing: 8) {
-                    Text("Select up to 6 features for quick access")
+                    let isIPad = UIDevice.current.userInterfaceIdiom == .pad
+                    let maxItems = tabBarManager.getMaxItemsForDevice()
+                    
+                    Text("Select up to \(maxItems) features for quick access")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     
-                    Text("Scan is always included")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .italic()
+                    if !isIPad {
+                        Text("Scan is always included")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .italic()
+                    }
                     
-                    Text("\(selectedFeatures.count) of 6 selected")
+                    Text("\(selectedFeatures.count) of \(maxItems) selected")
                         .font(.caption)
-                        .foregroundColor(selectedFeatures.count >= 6 ? .red : .secondary)
-                        .fontWeight(selectedFeatures.count >= 6 ? .semibold : .regular)
+                        .foregroundColor(selectedFeatures.count >= maxItems ? .red : .secondary)
+                        .fontWeight(selectedFeatures.count >= maxItems ? .semibold : .regular)
                 }
                 .padding()
                 
@@ -324,15 +360,16 @@ struct TabBarConfigurationView: View {
                                 
                                 Spacer()
                                 
+                                let maxItems = tabBarManager.getMaxItemsForDevice()
                                 Button(action: {
                                     addFeature(feature)
                                 }) {
                                     Image(systemName: "plus.circle.fill")
-                                        .foregroundColor(selectedFeatures.count >= 6 ? .gray : .green)
+                                        .foregroundColor(selectedFeatures.count >= maxItems ? .gray : .green)
                                         .font(.title2)
                                 }
                                 .buttonStyle(PlainButtonStyle())
-                                .disabled(selectedFeatures.count >= 6)
+                                .disabled(selectedFeatures.count >= maxItems)
                             }
                             .padding(.vertical, 4)
                         }
@@ -374,7 +411,8 @@ struct TabBarConfigurationView: View {
     }
     
     private func addFeature(_ feature: FeatureItem) {
-        guard selectedFeatures.count < 6 else { return }
+        let maxItems = tabBarManager.getMaxItemsForDevice()
+        guard selectedFeatures.count < maxItems else { return }
         
         let tabItem = TabBarItem(
             from: feature,

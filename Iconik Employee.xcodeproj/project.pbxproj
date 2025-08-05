@@ -481,7 +481,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 43;
+				CURRENT_PROJECT_VERSION = 44;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				DEVELOPMENT_TEAM = H42FQ49589;
 				ENABLE_PREVIEWS = YES;
@@ -524,7 +524,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 43;
+				CURRENT_PROJECT_VERSION = 44;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				DEVELOPMENT_TEAM = H42FQ49589;
 				ENABLE_PREVIEWS = YES;
