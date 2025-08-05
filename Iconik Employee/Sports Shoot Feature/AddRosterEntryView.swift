@@ -182,16 +182,21 @@ struct AddRosterEntryView: View {
     private func saveRosterEntry() {
         isLoading = true
         
+        let trimmedLastName = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasLastName = !trimmedLastName.isEmpty
+        
         let entry = RosterEntry(
             id: existingEntry?.id ?? UUID().uuidString,
-            lastName: lastName.trimmingCharacters(in: .whitespacesAndNewlines),
+            lastName: trimmedLastName,
             firstName: firstName.trimmingCharacters(in: .whitespacesAndNewlines),
             teacher: teacher.trimmingCharacters(in: .whitespacesAndNewlines),
             group: group.trimmingCharacters(in: .whitespacesAndNewlines),
             email: email.trimmingCharacters(in: .whitespacesAndNewlines),
             phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
             imageNumbers: imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines),
-            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            wasBlank: existingEntry?.wasBlank ?? true,  // New entries always have wasBlank = true
+            isFilledBlank: hasLastName  // Set to true if lastName is not empty
         )
         
         if isEditing {

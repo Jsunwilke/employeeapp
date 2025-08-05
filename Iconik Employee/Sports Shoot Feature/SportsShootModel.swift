@@ -13,6 +13,8 @@ struct RosterEntry: Identifiable, Codable, Hashable {
     var phone: String
     var imageNumbers: String
     var notes: String
+    var wasBlank: Bool       // Track if entry was created as blank
+    var isFilledBlank: Bool // Track if blank entry was filled with a name
     
     init(id: String = UUID().uuidString,
          lastName: String = "",
@@ -22,7 +24,9 @@ struct RosterEntry: Identifiable, Codable, Hashable {
          email: String = "",
          phone: String = "",
          imageNumbers: String = "",
-         notes: String = "") {
+         notes: String = "",
+         wasBlank: Bool = true,
+         isFilledBlank: Bool = false) {
         self.id = id
         self.lastName = lastName
         self.firstName = firstName
@@ -32,6 +36,9 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         self.phone = phone
         self.imageNumbers = imageNumbers
         self.notes = notes
+        self.wasBlank = wasBlank
+        // If creating with a lastName, mark as filled
+        self.isFilledBlank = isFilledBlank || !lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     
     // Create from a dictionary - handle field mapping
@@ -49,6 +56,8 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         self.phone = dictionary["phone"] as? String ?? ""
         self.imageNumbers = dictionary["imageNumbers"] as? String ?? ""
         self.notes = dictionary["notes"] as? String ?? ""
+        self.wasBlank = dictionary["wasBlank"] as? Bool ?? true
+        self.isFilledBlank = dictionary["isFilledBlank"] as? Bool ?? false
     }
     
     // Convert to dictionary for Firestore
@@ -62,7 +71,9 @@ struct RosterEntry: Identifiable, Codable, Hashable {
             "email": email,
             "phone": phone,
             "imageNumbers": imageNumbers,
-            "notes": notes
+            "notes": notes,
+            "wasBlank": wasBlank,
+            "isFilledBlank": isFilledBlank
         ]
     }
 }
@@ -841,16 +852,19 @@ class SportsShootService {
             fields.append(currentField) // Add the last field
             
             // Create entry with mapped fields
+            let lastName = nameIndex >= 0 && nameIndex < fields.count ? fields[nameIndex] : ""
             let entry = RosterEntry(
                 id: UUID().uuidString,
-                lastName: nameIndex >= 0 && nameIndex < fields.count ? fields[nameIndex] : "",
+                lastName: lastName,
                 firstName: subjectIDIndex >= 0 && subjectIDIndex < fields.count ? fields[subjectIDIndex] : "",
                 teacher: specialIndex >= 0 && specialIndex < fields.count ? fields[specialIndex] : "",
                 group: sportTeamIndex >= 0 && sportTeamIndex < fields.count ? fields[sportTeamIndex] : "",
                 email: emailIndex >= 0 && emailIndex < fields.count ? fields[emailIndex] : "",
                 phone: phoneIndex >= 0 && phoneIndex < fields.count ? fields[phoneIndex] : "",
                 imageNumbers: imagesIndex >= 0 && imagesIndex < fields.count ? fields[imagesIndex] : "",
-                notes: ""
+                notes: "",
+                wasBlank: true,  // All imported entries are considered new/blank
+                isFilledBlank: !lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty  // Filled if has lastName
             )
             
             roster.append(entry)

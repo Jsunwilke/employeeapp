@@ -28,6 +28,36 @@ db.collection("sessions")
 
 **Purpose:** This index supports date range queries with published status filtering.
 
+## Class Group Jobs Collection
+
+### Index 1: Organization + Session Date
+**Fields:**
+- `organizationId` (Ascending)
+- `sessionDate` (Descending)
+
+**Purpose:** This index is required for listing class group jobs by organization sorted by session date.
+
+**Query Example:**
+```
+db.collection("classGroupJobs")
+  .whereField("organizationId", isEqualTo: "org123")
+  .order(by: "sessionDate", descending: true)
+```
+
+### Index 2: Organization + School
+**Fields:**
+- `organizationId` (Ascending)
+- `schoolId` (Ascending)
+
+**Purpose:** This index supports filtering class group jobs by organization and school.
+
+**Query Example:**
+```
+db.collection("classGroupJobs")
+  .whereField("organizationId", isEqualTo: "org123")
+  .whereField("schoolId", isEqualTo: "school456")
+```
+
 ## Creating Indexes
 
 1. Go to the Firebase Console
