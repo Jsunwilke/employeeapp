@@ -1362,6 +1362,54 @@ service cloud.firestore {
     }
 
     // ============================================================================
+    // CLASS GROUP JOBS COLLECTION
+    // ============================================================================
+    match /classGroupJobs/{jobId} {
+      // Users can read class group jobs from their organization
+      allow read: if request.auth != null && 
+                     belongsToSameOrg(request.auth.uid, resource.data.organizationId);
+      
+      // Users can create class group jobs for their organization
+      allow create: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, request.resource.data.organizationId) &&
+                       // Validate required fields
+                       request.resource.data.keys().hasAll(['organizationId', 'sessionId', 'sessionDate', 'schoolId', 'schoolName', 'classGroups']) &&
+                       // Validate data types
+                       request.resource.data.organizationId is string &&
+                       request.resource.data.sessionId is string &&
+                       request.resource.data.sessionDate is timestamp &&
+                       request.resource.data.schoolId is string &&
+                       request.resource.data.schoolName is string &&
+                       request.resource.data.classGroups is list &&
+                       // Validate creator fields
+                       request.resource.data.createdBy == request.auth.uid &&
+                       request.resource.data.lastModifiedBy == request.auth.uid &&
+                       // Validate timestamps
+                       (!request.resource.data.keys().hasAny(['createdAt']) || request.resource.data.createdAt is timestamp) &&
+                       (!request.resource.data.keys().hasAny(['updatedAt']) || request.resource.data.updatedAt is timestamp);
+      
+      // Users can update class group jobs in their organization
+      allow update: if request.auth != null && 
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationId) &&
+                       // Prevent changing core identity fields
+                       request.resource.data.organizationId == resource.data.organizationId &&
+                       request.resource.data.sessionId == resource.data.sessionId &&
+                       request.resource.data.schoolId == resource.data.schoolId &&
+                       // Update lastModifiedBy
+                       request.resource.data.lastModifiedBy == request.auth.uid &&
+                       // Validate classGroups array
+                       request.resource.data.classGroups is list &&
+                       // Validate timestamps
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['updatedAt']) || 
+                        request.resource.data.updatedAt is timestamp);
+      
+      // Admins can delete class group jobs
+      allow delete: if request.auth != null && 
+                       isAdmin(request.auth.uid) &&
+                       belongsToSameOrg(request.auth.uid, resource.data.organizationId);
+    }
+
+    // ============================================================================
     // NOTIFICATION SYSTEM - AUDIT AND LOGGING
     // ============================================================================
     
@@ -1385,6 +1433,80 @@ service cloud.firestore {
       // Only admins can read notification logs for now
       // (expand this later when notification preferences UI is added)
       allow read: if request.auth != null && isAdmin(request.auth.uid);
+    }
+
+    // ============================================================================
+    // CAPTURA STATS COLLECTIONS
+    // ============================================================================
+    
+    // Captura Order Batches - Stores detailed order data in batches
+    match /capturaOrderBatches/{dateStr} {
+      // Admins can read order batches from their organization
+      allow read: if request.auth != null && 
+                     isAdmin(request.auth.uid);
+      
+      // Only Cloud Functions can write order batches
+      allow write: if false;
+      
+      // Batches subcollection
+      match /batches/{batchId} {
+        // Admins can read batch data
+        allow read: if request.auth != null && 
+                       isAdmin(request.auth.uid);
+        
+        // Only Cloud Functions can write batch data
+        allow write: if false;
+      }
+      
+      // Summary subcollection
+      match /summary/{summaryType} {
+        // Admins can read summary data
+        allow read: if request.auth != null && 
+                       isAdmin(request.auth.uid);
+        
+        // Only Cloud Functions can write summary data
+        allow write: if false;
+      }
+    }
+    
+    // Captura Order Stats - Pre-calculated statistics
+    match /capturaOrderStats/{statType} {
+      // Admins can read stats
+      allow read: if request.auth != null && 
+                     isAdmin(request.auth.uid);
+      
+      // Only Cloud Functions can write stats
+      allow write: if false;
+      
+      // Yearly stats subcollection
+      match /{year}/{document=**} {
+        // Admins can read yearly stats
+        allow read: if request.auth != null && 
+                       isAdmin(request.auth.uid);
+        
+        // Only Cloud Functions can write
+        allow write: if false;
+      }
+    }
+    
+    // Captura Order Sync Status - Track sync operations
+    match /capturaOrderSyncStatus/{statusDoc} {
+      // Admins can read sync status
+      allow read: if request.auth != null && 
+                     isAdmin(request.auth.uid);
+      
+      // Only Cloud Functions can write sync status
+      allow write: if false;
+      
+      // Sync history logs
+      match /logs/{logId} {
+        // Admins can read sync logs
+        allow read: if request.auth != null && 
+                       isAdmin(request.auth.uid);
+        
+        // Only Cloud Functions can write logs
+        allow write: if false;
+      }
     }
 
     // Deny all other documents
