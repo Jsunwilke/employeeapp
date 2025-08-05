@@ -1373,13 +1373,16 @@ service cloud.firestore {
       allow create: if request.auth != null && 
                        belongsToSameOrg(request.auth.uid, request.resource.data.organizationId) &&
                        // Validate required fields
-                       request.resource.data.keys().hasAll(['organizationId', 'sessionId', 'sessionDate', 'schoolId', 'schoolName', 'classGroups']) &&
+                       request.resource.data.keys().hasAll(['organizationId', 'sessionId', 'sessionDate', 'schoolId', 'schoolName', 'jobType', 'classGroups']) &&
                        // Validate data types
                        request.resource.data.organizationId is string &&
                        request.resource.data.sessionId is string &&
                        request.resource.data.sessionDate is timestamp &&
                        request.resource.data.schoolId is string &&
                        request.resource.data.schoolName is string &&
+                       request.resource.data.jobType is string &&
+                       // Validate jobType value
+                       request.resource.data.jobType in ['classGroups', 'classCandids'] &&
                        request.resource.data.classGroups is list &&
                        // Validate creator fields
                        request.resource.data.createdBy == request.auth.uid &&

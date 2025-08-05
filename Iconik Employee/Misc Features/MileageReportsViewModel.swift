@@ -63,11 +63,11 @@ class MileageReportsViewModel: ObservableObject {
         self.currentPeriodStart = currentStart
         self.currentPeriodEnd = currentEnd
         
-        // Log the calculated period for debugging
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .medium
-        print("Current period calculated as: \(dateFormatter.string(from: currentStart)) to \(dateFormatter.string(from: currentEnd))")
+        // Log the calculated period for debugging (commented out to reduce console spam)
+        // let dateFormatter = DateFormatter()
+        // dateFormatter.dateStyle = .medium
+        // dateFormatter.timeStyle = .medium
+        // print("Current period calculated as: \(dateFormatter.string(from: currentStart)) to \(dateFormatter.string(from: currentEnd))")
     }
     
     /// Loads mileage records for the given pay period. If none provided, uses the current period.
@@ -81,11 +81,11 @@ class MileageReportsViewModel: ObservableObject {
             return
         }
         
-        // Log the date range we're querying
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .medium
-        print("Loading mileage records from \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
+        // Log the date range we're querying (commented out to reduce console spam)
+        // let dateFormatter = DateFormatter()
+        // dateFormatter.dateStyle = .medium
+        // dateFormatter.timeStyle = .medium
+        // print("Loading mileage records from \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
         
         let db = Firestore.firestore()
         
@@ -94,12 +94,12 @@ class MileageReportsViewModel: ObservableObject {
         let query: Query
         
         if let userId = userId {
-            print("Querying mileage reports by userId: \(userId)")
+            // print("Querying mileage reports by userId: \(userId)")
             query = baseCollection.whereField("userId", isEqualTo: userId)
                 .whereField("date", isGreaterThanOrEqualTo: periodStart)
                 .whereField("date", isLessThanOrEqualTo: periodEnd)
         } else {
-            print("Querying mileage reports by yourName: \(userName)")
+            // print("Querying mileage reports by yourName: \(userName)")
             query = baseCollection.whereField("yourName", isEqualTo: userName)
                 .whereField("date", isGreaterThanOrEqualTo: periodStart)
                 .whereField("date", isLessThanOrEqualTo: periodEnd)
@@ -131,8 +131,10 @@ class MileageReportsViewModel: ObservableObject {
                         }
                         let date = timestamp.dateValue()
                         
-                        // Log each report date for debugging
-                        print("Report date: \(dateFormatter.string(from: date))")
+                        // Log each report date for debugging (commented out to reduce console spam)
+                        // let dateFormatter = DateFormatter()
+                        // dateFormatter.dateStyle = .medium
+                        // print("Report date: \(dateFormatter.string(from: date))")
                         
                         let mileage = data["totalMileage"] as? Double ?? 0.0
                         
@@ -197,12 +199,12 @@ class MileageReportsViewModel: ObservableObject {
         let query: Query
         
         if let userId = userId {
-            print("Querying mileage reports by userId: \(userId)")
+            // print("Querying mileage reports by userId: \(userId)")
             query = baseCollection.whereField("userId", isEqualTo: userId)
                 .whereField("date", isGreaterThanOrEqualTo: yearStart)
                 .whereField("date", isLessThanOrEqualTo: yearEnd)
         } else {
-            print("Querying mileage reports by yourName: \(userName)")
+            // print("Querying mileage reports by yourName: \(userName)")
             query = baseCollection.whereField("yourName", isEqualTo: userName)
                 .whereField("date", isGreaterThanOrEqualTo: yearStart)
                 .whereField("date", isLessThanOrEqualTo: yearEnd)

@@ -48,7 +48,8 @@ class MainEmployeeViewModel: ObservableObject {
         FeatureItem(id: "schedule", title: "Schedule", systemImage: "calendar", description: "View your upcoming shifts"),
         FeatureItem(id: "locationPhotos", title: "Location Photos", systemImage: "photo.on.rectangle", description: "Manage photos for locations"),
         FeatureItem(id: "sportsShoot", title: "Sports Shoots", systemImage: "sportscourt", description: "Manage sports shoot rosters and images"),
-        FeatureItem(id: "yearbookChecklists", title: "Yearbook Checklists", systemImage: "list.clipboard", description: "Track yearbook photo requirements")
+        FeatureItem(id: "yearbookChecklists", title: "Yearbook Checklists", systemImage: "list.clipboard", description: "Track yearbook photo requirements"),
+        FeatureItem(id: "classGroups", title: "Class Groups", systemImage: "person.3", description: "Track class photos by grade and teacher")
     ]
     
     private let employeeOrderKey = "employeeFeatureOrder"
@@ -805,6 +806,13 @@ struct MainEmployeeView: View {
                         selection: $selectedFeatureID
                     ) { EmptyView() }
                     
+                    // Class Groups navigation link
+                    NavigationLink(
+                        destination: ClassGroupJobsListView(),
+                        tag: "classGroups",
+                        selection: $selectedFeatureID
+                    ) { EmptyView() }
+                    
                     // Chat navigation link
                     NavigationLink(
                         destination: ConversationListView(),
@@ -908,6 +916,8 @@ struct MainEmployeeView: View {
             SportsShootListView()
         case "yearbookChecklists":
             YearbookShootListsView()
+        case "classGroups":
+            ClassGroupJobsListView()
         case "customDailyReports":
             CustomDailyReportsView()
         case "myDailyJobReports":

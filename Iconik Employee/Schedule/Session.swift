@@ -24,6 +24,8 @@ struct Session: Identifiable, Equatable, Hashable {
     let schoolId: String?
     let sessionColor: String?  // Hex color string
     let photographers: [[String: Any]]
+    let hasClassGroupJob: Bool
+    let hasClassCandids: Bool
     
     init(id: String, data: [String: Any]) {
         self.id = id
@@ -43,6 +45,8 @@ struct Session: Identifiable, Equatable, Hashable {
         self.schoolName = data["schoolName"] as? String ?? ""
         self.photographers = data["photographers"] as? [[String: Any]] ?? []
         self.organizationID = data["organizationID"] as? String ?? ""
+        self.hasClassGroupJob = data["hasClassGroupJob"] as? Bool ?? false
+        self.hasClassCandids = data["hasClassCandids"] as? Bool ?? false
         
         // Log the raw isPublished value for debugging
         let rawIsPublished = data["isPublished"]
@@ -114,7 +118,9 @@ struct Session: Identifiable, Equatable, Hashable {
          organizationID: String,
          createdAt: Date = Date(),
          updatedAt: Date = Date(),
-         isPublished: Bool = true) {
+         isPublished: Bool = true,
+         hasClassGroupJob: Bool = false,
+         hasClassCandids: Bool = false) {
         self.id = id
         self.employeeName = employeeName
         self.position = position
@@ -137,6 +143,8 @@ struct Session: Identifiable, Equatable, Hashable {
         self.schoolId = nil
         self.sessionColor = nil
         self.photographers = []
+        self.hasClassGroupJob = hasClassGroupJob
+        self.hasClassCandids = hasClassCandids
     }
     
     // Helper method to parse date + time strings into Date objects
