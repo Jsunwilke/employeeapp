@@ -34,6 +34,9 @@ class MileageReportsViewModel: ObservableObject {
         // Get the current user's ID for more reliable filtering
         if let currentUser = Auth.auth().currentUser {
             self.userId = currentUser.uid
+            print("🚗 MileageReportsViewModel: Initialized with userId: \(currentUser.uid), userName: \(userName)")
+        } else {
+            print("⚠️ MileageReportsViewModel: No authenticated user, using userName: \(userName)")
         }
         
         // Load pay period settings and calculate current period
@@ -126,11 +129,11 @@ class MileageReportsViewModel: ObservableObject {
             periodEnd = currentPeriodEnd
         }
         
-        // Log the date range we're querying (commented out to reduce console spam)
-        // let dateFormatter = DateFormatter()
-        // dateFormatter.dateStyle = .medium
-        // dateFormatter.timeStyle = .medium
-        // print("Loading mileage records from \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
+        // Log the date range we're querying
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .medium
+        dateFormatter.timeStyle = .medium
+        print("🚗 Loading mileage records from \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
         
         let db = Firestore.firestore()
         
@@ -139,12 +142,12 @@ class MileageReportsViewModel: ObservableObject {
         let query: Query
         
         if let userId = userId {
-            // print("Querying mileage reports by userId: \(userId)")
+            print("🚗 Querying mileage reports by userId: \(userId)")
             query = baseCollection.whereField("userId", isEqualTo: userId)
                 .whereField("date", isGreaterThanOrEqualTo: periodStart)
                 .whereField("date", isLessThanOrEqualTo: periodEnd)
         } else {
-            // print("Querying mileage reports by yourName: \(userName)")
+            print("🚗 Querying mileage reports by yourName: \(userName)")
             query = baseCollection.whereField("yourName", isEqualTo: userName)
                 .whereField("date", isGreaterThanOrEqualTo: periodStart)
                 .whereField("date", isLessThanOrEqualTo: periodEnd)
@@ -194,24 +197,42 @@ class MileageReportsViewModel: ObservableObject {
                         )
                     }
                     
-                    self?.calculateMileage(forPeriodStart: periodStart, periodEnd: periodEnd)
+                    // Since we already filtered by date in the query, just sum all records
+                    self?.currentPeriodMileage = self?.records.reduce(0) { $0 + $1.totalMileage } ?? 0
+                    print("🚗 Pay period mileage: \(self?.currentPeriodMileage ?? 0) miles from \(self?.records.count ?? 0) records")
+                    
+                    // Also load month and year totals
+                    self?.loadYearAndMonthMileage()
                 }
             }
     }
     
     /// Calculate the mileage total for the selected period.
     func calculateMileage(forPeriodStart periodStart: Date, periodEnd: Date) {
-        let currentRecords = records.filter { $0.date >= periodStart && $0.date <= periodEnd }
+        print("🚗 Calculating mileage for period...")
+        print("   - Period start: \(periodStart)")
+        print("   - Period end: \(periodEnd)")
+        print("   - Total records available: \(records.count)")
+        
+        let currentRecords = records.filter { record in
+            let inRange = record.date >= periodStart && record.date <= periodEnd
+            if !inRange {
+                print("   - Record date \(record.date) is outside range")
+            }
+            return inRange
+        }
+        
         currentPeriodMileage = currentRecords.reduce(0) { $0 + $1.totalMileage }
         
         // Log the calculation for debugging
-        print("Calculated mileage for period: \(currentPeriodMileage) miles from \(currentRecords.count) records")
+        print("🚗 Calculated mileage for period: \(currentPeriodMileage) miles from \(currentRecords.count) records")
     }
     
     /// Loads records for the current calendar year and calculates:
     ///   - total mileage for the current month
     ///   - total mileage for the year
     func loadYearAndMonthMileage() {
+        print("🚗 Loading year and month mileage totals...")
         let db = Firestore.firestore()
         
         let currentYear = calendar.component(.year, from: Date())
@@ -290,8 +311,9 @@ class MileageReportsViewModel: ObservableObject {
                     }
                     self?.monthMileage = monthRecords.reduce(0) { $0 + $1.mileage }
                     
-                    print("Calculated year mileage: \(self?.yearMileage ?? 0) miles")
-                    print("Calculated month mileage: \(self?.monthMileage ?? 0) miles")
+                    print("🚗 Calculated year mileage: \(self?.yearMileage ?? 0) miles from \(allRecords.count) total records")
+                    print("🚗 Calculated month mileage: \(self?.monthMileage ?? 0) miles from \(monthRecords.count) month records")
+                    print("🚗 Current year: \(currentYear), Current month: \(currentMonth)")
                 }
             }
     }
