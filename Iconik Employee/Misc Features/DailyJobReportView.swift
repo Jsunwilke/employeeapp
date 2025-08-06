@@ -6,6 +6,17 @@ import FirebaseStorage
 import CoreLocation
 import MapKit
 
+// Photographer struct to handle duplicate names
+struct PhotographerOption: Identifiable {
+    let id: String  // User document ID
+    let firstName: String
+    let lastName: String
+    
+    var displayName: String {
+        "\(firstName) \(lastName)"
+    }
+}
+
 struct DailyJobReportView: View {
     // ------------------------------------------------------------------
     // Photoshoot Notes / Multi-Note logic
@@ -25,13 +36,13 @@ struct DailyJobReportView: View {
     // ------------------------------------------------------------------
     // Photographer & School data
     // ------------------------------------------------------------------
-    @State private var orgPhotographerNames: [String] = []
+    @State private var photographers: [PhotographerOption] = []
     @State private var schoolOptions: [SchoolItem] = []
     
     // ------------------------------------------------------------------
     // Selected fields
     // ------------------------------------------------------------------
-    @State private var selectedPhotographer: String = ""
+    @State private var selectedPhotographerId: String = ""
     // Dynamic list for multiple school selections
     @State private var selectedSchools: [SchoolItem?] = [nil] // Start with one dropdown
     
@@ -124,6 +135,7 @@ struct DailyJobReportView: View {
     @State private var errorMessage: String = ""
     @State private var isSubmitting: Bool = false
     @State private var calculatedMileage: Double = 0.0
+    @State private var showPermissionError: Bool = false
     
     // ------------------------------------------------------------------
     // NEW: Success Alert
@@ -139,6 +151,11 @@ struct DailyJobReportView: View {
     // Arrays for the radio questions
     let yesNoNaOptions = ["Yes", "No", "NA"]
     let yesNoOptions   = ["Yes", "No"]
+    
+    // Helper to get selected photographer's name
+    private var selectedPhotographerName: String {
+        photographers.first(where: { $0.id == selectedPhotographerId })?.displayName ?? ""
+    }
     
     // Full ICS URL from Sling
     private let sessionService = SessionService.shared
@@ -233,6 +250,11 @@ struct DailyJobReportView: View {
                     presentationMode.wrappedValue.dismiss()
                 }
             )
+        }
+        .alert("Permission Error", isPresented: $showPermissionError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Unable to access daily job reports. Please contact your administrator.")
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -465,7 +487,7 @@ struct DailyJobReportView: View {
                 .background(inputFieldBackground)
                 .cornerRadius(8)
             
-            if orgPhotographerNames.isEmpty {
+            if photographers.isEmpty {
                 HStack {
                     Text("Loading photographers...")
                     Spacer()
@@ -480,9 +502,9 @@ struct DailyJobReportView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     
-                    Picker("", selection: $selectedPhotographer) {
-                        ForEach(orgPhotographerNames, id: \.self) { name in
-                            Text(name).tag(name)
+                    Picker("", selection: $selectedPhotographerId) {
+                        ForEach(photographers) { photographer in
+                            Text(photographer.displayName).tag(photographer.id)
                         }
                     }
                     .pickerStyle(.menu)
@@ -947,7 +969,7 @@ struct DailyJobReportView: View {
     private func isSectionCompleted(_ section: FormSection) -> Bool {
         switch section {
         case .basicInfo:
-            return !selectedPhotographer.isEmpty && reportDate != nil
+            return !selectedPhotographerId.isEmpty && reportDate != nil
             
         case .photoshootNote:
             // This section is optional, marked complete if a note is selected
@@ -1002,7 +1024,7 @@ struct DailyJobReportView: View {
         loadOrganizationPhotographers()
         loadSchools()
         loadScheduleForDate(reportDate)
-        selectedPhotographer = storedUserFirstName
+        // selectedPhotographerId will be set in loadOrgPhotographers
         calculateMultiStopMileage()
     }
     
@@ -1059,14 +1081,29 @@ struct DailyJobReportView: View {
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
         
         // Query Firestore for reports on this date by this user
+        // Get the selected photographer's name
+        guard let photographer = photographers.first(where: { $0.id == selectedPhotographerId }) else {
+            completion([])
+            return
+        }
+        
         let db = Firestore.firestore()
         db.collection("dailyJobReports")
-            .whereField("yourName", isEqualTo: selectedPhotographer)
+            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
+            .whereField("yourName", isEqualTo: photographer.firstName)
             .whereField("date", isGreaterThanOrEqualTo: startOfDay)
             .whereField("date", isLessThanOrEqualTo: endOfDay)
             .getDocuments { snapshot, error in
                 if let error = error {
                     print("Error checking existing reports: \(error.localizedDescription)")
+                    
+                    // Check if it's a permission error
+                    if (error as NSError).code == 7 || error.localizedDescription.contains("Missing or insufficient permissions") {
+                        DispatchQueue.main.async {
+                            self.showPermissionError = true
+                        }
+                    }
+                    
                     completion([])
                     return
                 }
@@ -1181,19 +1218,30 @@ struct DailyJobReportView: View {
                     return
                 }
                 guard let docs = snapshot?.documents else { return }
-                var names: [String] = []
+                var photogs: [PhotographerOption] = []
                 for doc in docs {
                     let data = doc.data()
                     if let fname = data["firstName"] as? String {
-                        names.append(fname)
+                        let lname = data["lastName"] as? String ?? ""
+                        let photographer = PhotographerOption(
+                            id: doc.documentID,
+                            firstName: fname,
+                            lastName: lname
+                        )
+                        photogs.append(photographer)
                     }
                 }
-                names.sort { $0.lowercased() < $1.lowercased() }
-                self.orgPhotographerNames = names
-                if names.contains(self.storedUserFirstName) {
-                    self.selectedPhotographer = self.storedUserFirstName
-                } else if let first = names.first {
-                    self.selectedPhotographer = first
+                photogs.sort { $0.displayName.lowercased() < $1.displayName.lowercased() }
+                self.photographers = photogs
+                
+                // Try to find and select the current user
+                if let currentUser = photogs.first(where: { 
+                    $0.firstName == self.storedUserFirstName && 
+                    $0.lastName == self.storedUserLastName 
+                }) {
+                    self.selectedPhotographerId = currentUser.id
+                } else if let first = photogs.first {
+                    self.selectedPhotographerId = first.id
                 }
             }
     }
@@ -1467,7 +1515,7 @@ struct DailyJobReportView: View {
             let reportData: [String: Any] = [
                 "organizationID": storedUserOrganizationID,
                 "date": reportDate,
-                "yourName": selectedPhotographer,
+                "yourName": photographers.first(where: { $0.id == selectedPhotographerId })?.firstName ?? "",
                 "userId": user.uid,  // New field for user ID
                 "photoshootNoteID": selectedPhotoshootNote?.id.uuidString ?? "",
                 "photoshootNoteText": selectedPhotoshootNote?.noteText ?? "",

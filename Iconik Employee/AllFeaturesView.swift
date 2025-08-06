@@ -2,9 +2,12 @@ import SwiftUI
 
 struct AllFeaturesView: View {
     @ObservedObject var viewModel: MainEmployeeViewModel
-    @Binding var selectedFeatureID: String?
+    @ObservedObject var tabBarManager: TabBarManager
     @State private var localEditMode: EditMode = .inactive
     let userRole: String
+    @StateObject private var timeTrackingService = TimeTrackingService()
+    @State private var elapsedTime: String = "00:00:00"
+    @State private var timer: Timer?
     
     // Manager features
     let managerFeatures: [FeatureItem] = [
@@ -51,7 +54,7 @@ struct AllFeaturesView: View {
                     } else {
                         // Use Button for navigation
                         Button(action: {
-                            selectedFeatureID = feature.id
+                            tabBarManager.selectedTab = feature.id
                             dismiss()
                         }) {
                             HStack {
@@ -90,7 +93,7 @@ struct AllFeaturesView: View {
                 Section(header: Text("Management Features")) {
                     ForEach(managerFeatures) { feature in
                         Button(action: {
-                            selectedFeatureID = feature.id
+                            tabBarManager.selectedTab = feature.id
                             dismiss()
                         }) {
                             HStack {
@@ -126,6 +129,49 @@ struct AllFeaturesView: View {
         .navigationTitle("All Features")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                // Clock In/Out Button
+                Button(action: {
+                    if timeTrackingService.isClockIn {
+                        timeTrackingService.clockOut { success, error in
+                            if !success {
+                                print("Clock out error: \(error ?? "Unknown")")
+                            }
+                        }
+                    } else {
+                        timeTrackingService.clockIn { success, error in
+                            if !success {
+                                print("Clock in error: \(error ?? "Unknown")")
+                            } else {
+                                startTimerIfNeeded()
+                            }
+                        }
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: timeTrackingService.isClockIn ? "stop.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 20))
+                        
+                        if timeTrackingService.isClockIn {
+                            Text(elapsedTime)
+                                .font(.system(.body, design: .monospaced))
+                                .fontWeight(.medium)
+                        } else {
+                            Text("Clock In")
+                                .font(.body)
+                                .fontWeight(.medium)
+                        }
+                    }
+                    .foregroundColor(timeTrackingService.isClockIn ? .red : .green)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(timeTrackingService.isClockIn ? Color.red.opacity(0.1) : Color.green.opacity(0.1))
+                    )
+                }
+            }
+            
             ToolbarItem(placement: .navigationBarTrailing) {
                 if localEditMode == .active {
                     Button("Done") {
@@ -144,6 +190,34 @@ struct AllFeaturesView: View {
             }
         }
         .environment(\.editMode, $localEditMode)
+        .onAppear {
+            timeTrackingService.refreshUserAndStatus()
+            startTimerIfNeeded()
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+    
+    private func startTimerIfNeeded() {
+        timer?.invalidate()
+        if timeTrackingService.isClockIn {
+            updateElapsedTime()
+            timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+                updateElapsedTime()
+            }
+        }
+    }
+    
+    private func updateElapsedTime() {
+        if timeTrackingService.isClockIn {
+            let elapsed = timeTrackingService.elapsedTime
+            let hours = Int(elapsed) / 3600
+            let minutes = Int(elapsed) % 3600 / 60
+            let seconds = Int(elapsed) % 60
+            elapsedTime = String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        }
     }
     
     private func featureColorFor(_ id: String) -> Color {

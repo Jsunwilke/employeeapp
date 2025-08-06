@@ -5,6 +5,20 @@ import FirebaseFirestore
 import MessageUI
 import MapKit
 import CoreLocation
+import UniformTypeIdentifiers
+
+// Widget identifier for drag and drop
+enum DashboardWidget: String, CaseIterable, Identifiable, Transferable, Codable {
+    case hours = "hours"
+    case mileage = "mileage"
+    case shifts = "shifts"
+    
+    var id: String { self.rawValue }
+    
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .plainText)
+    }
+}
 
 /// Simple model for a menu feature.
 struct FeatureItem: Identifiable, Equatable {
@@ -405,6 +419,7 @@ struct MainEmployeeView: View {
     @AppStorage("userRole") private var storedUserRole: String = "employee"
     @AppStorage("userPhotoURL") private var storedUserPhotoURL: String = ""
     @AppStorage("appTheme") private var appTheme: String = "system"
+    @AppStorage("dashboardWidgetOrder") private var widgetOrderString: String = ""
     
     // Separate view model for employee features
     @StateObject private var viewModel = MainEmployeeViewModel()
@@ -427,8 +442,6 @@ struct MainEmployeeView: View {
         FeatureItem(id: "jobBoxTracker", title: "Job Box Tracker", systemImage: "cube.box.fill", description: "Track and manage job box status")
     ]
     
-    // State to track which feature is selected
-    @State private var selectedFeatureID: String? = nil
     
     // State for Sports Shoots feature
     @State private var selectedSportsShootID: String? = nil
@@ -440,6 +453,10 @@ struct MainEmployeeView: View {
     @State private var isFlagged: Bool = false
     @State private var flagNote: String = ""
     @State private var flaggedByName: String = ""
+    
+    // Widget order management
+    @State private var widgetOrder: [DashboardWidget] = []
+    @State private var draggedWidget: DashboardWidget?
     @State private var flagListener: ListenerRegistration?
     @State private var isBannerDismissed: Bool = false
     @State private var currentListeningUserID: String? = nil
@@ -487,11 +504,6 @@ struct MainEmployeeView: View {
                 if tabBarManager.selectedTab == "chat" && newTab != "chat" {
                     ChatManager.shared.cleanup()
                 }
-                
-                // Handle tab selection
-                if newTab != "home" {
-                    selectedFeatureID = newTab
-                }
             }
             .onAppear {
                 onAppearActions()
@@ -519,68 +531,100 @@ struct MainEmployeeView: View {
     
     // MARK: - Home View (Dashboard)
     
+    private var homeBackground: some View {
+        Group {
+            if isFlagged {
+                Color.red.opacity(0.3).ignoresSafeArea()
+            } else {
+                backgroundGradient.ignoresSafeArea()
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var flagNotificationView: some View {
+        if isFlagged && !flagNote.isEmpty {
+            HStack {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "flag.fill")
+                            .foregroundColor(.red)
+                        if flaggedByName.isEmpty {
+                            Text("Flag Note")
+                                .font(.headline)
+                        } else {
+                            Text("Flag Note from \(flaggedByName)")
+                                .font(.headline)
+                        }
+                        Spacer()
+                    }
+                    Text(flagNote)
+                        .font(.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding()
+                .background(Color.red.opacity(0.2))
+                .cornerRadius(12)
+            }
+            .padding(.horizontal)
+        }
+    }
+    
+    private var dashboardWidgetsView: some View {
+        VStack(spacing: 16) {
+            ForEach(widgetOrder) { widget in
+                widgetView(for: widget)
+                    .onDrag {
+                        draggedWidget = widget
+                        return NSItemProvider(object: widget.rawValue as NSString)
+                    }
+                    .onDrop(of: [.plainText], delegate: WidgetDropDelegate(
+                        widget: widget,
+                        widgetOrder: $widgetOrder,
+                        draggedWidget: $draggedWidget,
+                        onReorder: saveWidgetOrder
+                    ))
+            }
+        }
+        .padding(.horizontal)
+    }
+    
+    @ViewBuilder
+    private func widgetView(for widget: DashboardWidget) -> some View {
+        switch widget {
+        case .hours:
+            HoursWidget(timeTrackingService: timeTrackingService)
+        case .mileage:
+            MileageWidget(userName: storedUserFirstName)
+        case .shifts:
+            UpcomingShiftsWidget(
+                sessions: viewModel.upcomingShifts,
+                isLoading: viewModel.isLoadingSchedule,
+                weatherDataBySession: viewModel.weatherDataBySession,
+                onRefresh: { loadSchedule() },
+                onSessionTap: { session in
+                    selectedSession = session
+                }
+            )
+        }
+    }
+    
+    
     private var homeView: some View {
         ZStack {
-                // Background with proper flag coloring
-                if isFlagged {
-                    Color.red.opacity(0.3).ignoresSafeArea()
-                } else {
-                    backgroundGradient.ignoresSafeArea()
-                }
-                
+            homeBackground
+            
             ScrollView {
                 VStack(spacing: 16) {
                     // Dashboard content
                     VStack(spacing: 16) {
-                        // Flag notification section
-                        if isFlagged && !flagNote.isEmpty {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Image(systemName: "flag.fill").foregroundColor(.red)
-                                        if flaggedByName.isEmpty {
-                                            Text("Flag Note").font(.headline)
-                                        } else {
-                                            Text("Flag Note from \(flaggedByName)").font(.headline)
-                                        }
-                                        Spacer()
-                                    }
-                                    Text(flagNote)
-                                        .font(.body)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                .padding()
-                                .background(Color.red.opacity(0.2))
-                                .cornerRadius(12)
-                            }
-                            .padding(.horizontal)
-                        }
-                    
-                        // Dashboard Widgets
-                        VStack(spacing: 16) {
-                            // Hours Widget
-                            HoursWidget(timeTrackingService: timeTrackingService)
-                            
-                            // Mileage Widget
-                            MileageWidget(userName: storedUserFirstName)
-                            
-                            // Upcoming Shifts Widget
-                            UpcomingShiftsWidget(
-                                sessions: viewModel.upcomingShifts,
-                                isLoading: viewModel.isLoadingSchedule,
-                                weatherDataBySession: viewModel.weatherDataBySession,
-                                onRefresh: { loadSchedule() },
-                                onSessionTap: { session in
-                                    selectedSession = session
-                                }
-                            )
-                        }
-                        .padding(.horizontal)
+                        flagNotificationView
+                        dashboardWidgetsView
                         
                         // All Features Button
                         NavigationLink(destination: AllFeaturesView(
                             viewModel: viewModel,
-                            selectedFeatureID: $selectedFeatureID,
+                            tabBarManager: tabBarManager,
                             userRole: storedUserRole
                         )) {
                             HStack {
@@ -624,155 +668,6 @@ struct MainEmployeeView: View {
                         }
                 }
                 
-                // HIDDEN NAVIGATION LINKS - For feature navigation
-                Group {
-                    // Employee features navigation links
-                    NavigationLink(
-                        destination: TimeTrackingMainView(timeTrackingService: timeTrackingService),
-                        tag: "timeTracking",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    NavigationLink(
-                        destination: MyTimeOffRequestsView(),
-                        tag: "timeOffRequests",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    NavigationLink(
-                        destination: PhotoshootNotesView(),
-                        tag: "photoshootNotes",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    NavigationLink(
-                        destination: DailyJobReportView(),
-                        tag: "dailyJobReport",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    NavigationLink(
-                        destination: CustomDailyReportsView(),
-                        tag: "customDailyReports",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    NavigationLink(
-                        destination: MyJobReportsView(),
-                        tag: "myDailyJobReports",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    NavigationLink(
-                        destination: MileageReportsView(userName: storedUserFirstName),
-                        tag: "mileageReports",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    NavigationLink(
-                        destination: SlingWeeklyView(),
-                        tag: "schedule",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    NavigationLink(
-                        destination: LocationPhotoAttachmentView(),
-                        tag: "locationPhotos",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    // Sports Shoots navigation link
-                    NavigationLink(
-                        destination: SportsShootListView(),
-                        tag: "sportsShoot",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    // Yearbook Checklists navigation link
-                    NavigationLink(
-                        destination: YearbookShootListsView(),
-                        tag: "yearbookChecklists",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    // Class Groups navigation link
-                    NavigationLink(
-                        destination: ClassGroupJobsListView(),
-                        tag: "classGroups",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    // Chat navigation link
-                    NavigationLink(
-                        destination: ConversationListView(),
-                        tag: "chat",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    // Scan navigation link
-                    NavigationLink(
-                        destination: NFCContainerView(),
-                        tag: "scan",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    // Manager features navigation links
-                    NavigationLink(
-                        destination: TimeOffApprovalView(),
-                        tag: "timeOffApprovals",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    .isDetailLink(false)
-                    
-                    NavigationLink(
-                        destination: FlagUserView(),
-                        tag: "flagUser",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    NavigationLink(
-                        destination: UnflagUserView(),
-                        tag: "unflagUser",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    NavigationLink(
-                        destination: ManagerMileageView(),
-                        tag: "managerMileage",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    // Stats view navigation link
-                    NavigationLink(
-                        destination: StatsView(),
-                        tag: "stats",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    // Gallery Creator navigation link
-                    NavigationLink(
-                        destination: GalleryCreatorView(),
-                        tag: "galleryCreator",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                    
-                    // Job Box Tracker navigation link
-                    NavigationLink(
-                        destination: ManagerJobBoxTrackerView(),
-                        tag: "jobBoxTracker",
-                        selection: $selectedFeatureID
-                    ) { EmptyView() }
-                }
-                .hidden()  // Hide these navigation links
                 
                 // Hidden navigation link for session details
                 if let session = selectedSession {
@@ -859,7 +754,6 @@ struct MainEmployeeView: View {
             } else {
                 Button(action: {
                     tabBarManager.selectedTab = "home"
-                    selectedFeatureID = nil
                 }) {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
@@ -930,6 +824,9 @@ struct MainEmployeeView: View {
             UITableView.appearance().backgroundColor = .clear
         }
         
+        // Load widget order
+        loadWidgetOrder()
+        
         // Check if user has changed
         let currentUID = Auth.auth().currentUser?.uid
         if currentUID != currentListeningUserID {
@@ -965,9 +862,6 @@ struct MainEmployeeView: View {
         }
         
         // Reset selections when view appears
-        if tabBarManager.selectedTab == "home" {
-            selectedFeatureID = nil
-        }
         selectedSession = nil
         
         // Apply the saved theme when the app starts or the view appears
@@ -1206,5 +1100,56 @@ struct MainEmployeeView: View {
             }
             self.flaggedByName = data["firstName"] as? String ?? ""
         }
+    }
+    
+    // MARK: - Widget Order Management
+    
+    private func loadWidgetOrder() {
+        if widgetOrderString.isEmpty {
+            // Default order
+            widgetOrder = DashboardWidget.allCases
+        } else {
+            // Parse saved order
+            let savedOrder = widgetOrderString.split(separator: ",").compactMap { rawValue in
+                DashboardWidget(rawValue: String(rawValue))
+            }
+            // Ensure all widgets are included (in case new ones are added)
+            let missingWidgets = DashboardWidget.allCases.filter { !savedOrder.contains($0) }
+            widgetOrder = savedOrder + missingWidgets
+        }
+    }
+    
+    private func saveWidgetOrder() {
+        widgetOrderString = widgetOrder.map { $0.rawValue }.joined(separator: ",")
+    }
+}
+
+// MARK: - Drop Delegate for Widget Reordering
+
+struct WidgetDropDelegate: DropDelegate {
+    let widget: DashboardWidget
+    @Binding var widgetOrder: [DashboardWidget]
+    @Binding var draggedWidget: DashboardWidget?
+    let onReorder: () -> Void
+    
+    func performDrop(info: DropInfo) -> Bool {
+        draggedWidget = nil
+        return true
+    }
+    
+    func dropEntered(info: DropInfo) {
+        guard let draggedWidget = draggedWidget,
+              draggedWidget != widget,
+              let fromIndex = widgetOrder.firstIndex(of: draggedWidget),
+              let toIndex = widgetOrder.firstIndex(of: widget) else {
+            return
+        }
+        
+        withAnimation(.spring()) {
+            widgetOrder.move(fromOffsets: IndexSet(integer: fromIndex),
+                           toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex)
+        }
+        
+        onReorder()
     }
 }

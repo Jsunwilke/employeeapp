@@ -4,108 +4,253 @@ import Firebase
 // MARK: - Hours Widget
 struct HoursWidget: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
-    @State private var payPeriodHours: Double = 0
-    @State private var weekHours: Double = 0
+    @State private var regularHours: Double = 0
+    @State private var overtimeHours: Double = 0
+    @State private var totalHours: Double = 0
+    @State private var currentWeekHours: Double = 0
     @State private var isLoadingHours = false
     @StateObject private var payPeriodService = PayPeriodService.shared
+    @State private var activeHours: Double = 0
+    @State private var timer: Timer?
     
-    private var elapsedTimeString: String {
-        let hours = Int(timeTrackingService.elapsedTime) / 3600
-        let minutes = Int(timeTrackingService.elapsedTime) % 3600 / 60
-        let seconds = Int(timeTrackingService.elapsedTime) % 60
-        return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+    // Format hours as "XXh XXm"
+    private func formatHours(_ hours: Double) -> String {
+        let totalMinutes = Int(hours * 60)
+        let h = totalMinutes / 60
+        let m = totalMinutes % 60
+        return "\(h)h \(m)m"
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             // Header
-            HStack {
-                Image(systemName: "clock.fill")
-                    .font(.title2)
-                    .foregroundColor(.cyan)
-                Text("Hours")
+            HStack(spacing: 8) {
+                Image(systemName: "clock")
+                    .font(.title3)
+                    .foregroundColor(.yellow)
+                    .background(
+                        Circle()
+                            .fill(Color.yellow.opacity(0.2))
+                            .frame(width: 28, height: 28)
+                    )
+                Text("Hours Tracking")
                     .font(.headline)
                 Spacer()
                 
-                // Clock in/out button
+                // Clock In/Out Button
                 Button(action: {
                     if timeTrackingService.isClockIn {
-                        clockOut()
+                        timeTrackingService.clockOut { success, error in
+                            if !success {
+                                print("Clock out error: \(error ?? "Unknown")")
+                            }
+                        }
                     } else {
-                        clockIn()
+                        timeTrackingService.clockIn { success, error in
+                            if !success {
+                                print("Clock in error: \(error ?? "Unknown")")
+                            }
+                        }
                     }
                 }) {
                     HStack(spacing: 4) {
                         Image(systemName: timeTrackingService.isClockIn ? "stop.circle.fill" : "play.circle.fill")
-                        Text(timeTrackingService.isClockIn ? "Clock Out" : "Clock In")
-                            .font(.caption)
+                            .font(.system(size: 18))
+                        
+                        if timeTrackingService.isClockIn {
+                            Text(formatHours(activeHours))
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(timeTrackingService.isClockIn ? Color.red : Color.green)
-                    .foregroundColor(.white)
-                    .cornerRadius(15)
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-            
-            // Current status
-            if timeTrackingService.isClockIn {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Currently Clocked In")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(elapsedTimeString)
-                        .font(.system(size: 24, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.green)
-                    if let sessionName = timeTrackingService.currentTimeEntry?.sessionName {
-                        Text(sessionName)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
+                    .foregroundColor(timeTrackingService.isClockIn ? .red : .green)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(timeTrackingService.isClockIn ? Color.red.opacity(0.1) : Color.green.opacity(0.1))
+                    )
                 }
             }
             
-            Divider()
-            
-            // Hours summary
-            VStack(spacing: 8) {
+            if isLoadingHours {
                 HStack {
-                    VStack(alignment: .leading) {
-                        Text("Pay Period")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        if isLoadingHours {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        } else {
-                            Text(String(format: "%.1f hrs", payPeriodHours))
-                                .font(.system(size: 20, weight: .semibold))
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+                .padding(.vertical, 30)
+            } else {
+                VStack(spacing: 20) {
+                    // This Week
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("This Week:")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        
+                        GeometryReader { geometry in
+                            HStack(spacing: 12) {
+                                // Progress bar with fixed width
+                                ZStack(alignment: .leading) {
+                                    // Background
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.gray.opacity(0.2))
+                                        .frame(height: 24)
+                                    
+                                    // Progress including active hours
+                                    let totalWithActive = currentWeekHours + activeHours
+                                    let weekProgress = min(currentWeekHours / 40.0, 1.0)
+                                    let activeProgress = min(totalWithActive / 40.0, 1.0)
+                                    let barWidth = geometry.size.width - 100 // Reserve 100 points for text
+                                    
+                                    // Logged hours bar
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.blue)
+                                        .frame(width: barWidth * CGFloat(weekProgress), height: 24)
+                                    
+                                    // Active hours overlay (lighter blue)
+                                    if activeHours > 0 {
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.blue.opacity(0.4))
+                                            .frame(width: barWidth * CGFloat(activeProgress), height: 24)
+                                    }
+                                }
+                                .frame(width: geometry.size.width - 100, height: 24)
+                                
+                                // Hours and percentage with fixed width
+                                VStack(alignment: .trailing, spacing: 0) {
+                                    if activeHours > 0 {
+                                        Text("\(formatHours(currentWeekHours + activeHours))/40h")
+                                            .font(.caption)
+                                            .foregroundColor(.primary)
+                                        Text("Active: \(formatHours(activeHours))")
+                                            .font(.caption2)
+                                            .foregroundColor(.blue)
+                                    } else {
+                                        Text("\(formatHours(currentWeekHours))/40h")
+                                            .font(.caption)
+                                            .foregroundColor(.primary)
+                                        Text("\(Int((currentWeekHours / 40.0) * 100))%")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .frame(width: 88, alignment: .trailing)
+                            }
                         }
+                        .frame(height: 24)
                     }
                     
-                    Spacer()
-                    
-                    VStack(alignment: .trailing) {
-                        Text("This Week")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        if isLoadingHours {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        } else {
-                            Text(String(format: "%.1f hrs", weekHours))
-                                .font(.system(size: 20, weight: .semibold))
+                    // Pay Period
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Pay Period:")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        
+                        GeometryReader { geometry in
+                            HStack(spacing: 12) {
+                                // Progress bar with overtime and fixed width
+                                ZStack(alignment: .leading) {
+                                    // Background
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.gray.opacity(0.2))
+                                        .frame(height: 24)
+                                    
+                                    // Regular hours progress
+                                    let barWidth = geometry.size.width - 100 // Same as This Week
+                                    let regularProgress = min(regularHours / 80.0, 1.0)
+                                    let totalWithActive = totalHours + activeHours
+                                    let activeProgress = min(totalWithActive / 80.0, 1.0)
+                                    
+                                    if overtimeHours > 0 {
+                                        // Blue segment with square right corners when overtime exists
+                                        UnevenRoundedRectangle(
+                                            topLeadingRadius: 8,
+                                            bottomLeadingRadius: 8,
+                                            bottomTrailingRadius: 0,
+                                            topTrailingRadius: 0
+                                        )
+                                        .fill(Color.blue)
+                                        .frame(width: barWidth * CGFloat(regularProgress), height: 24)
+                                    } else {
+                                        // Blue segment with rounded corners when no overtime
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.blue)
+                                            .frame(width: barWidth * CGFloat(regularProgress), height: 24)
+                                    }
+                                    
+                                    // Overtime hours progress (if any)
+                                    if overtimeHours > 0 {
+                                        let overtimeProgress = overtimeHours / 80.0
+                                        let overtimeWidth = barWidth * CGFloat(overtimeProgress)
+                                        
+                                        UnevenRoundedRectangle(
+                                            topLeadingRadius: 0,
+                                            bottomLeadingRadius: 0,
+                                            bottomTrailingRadius: 8,
+                                            topTrailingRadius: 8
+                                        )
+                                        .fill(Color.orange)
+                                        .frame(width: overtimeWidth, height: 24)
+                                        .offset(x: barWidth * CGFloat(regularProgress))
+                                    }
+                                    
+                                    // Active hours overlay (lighter blue on top)
+                                    if activeHours > 0 {
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.blue.opacity(0.4))
+                                            .frame(width: barWidth * CGFloat(activeProgress), height: 24)
+                                    }
+                                }
+                                .frame(width: geometry.size.width - 100, height: 24)
+                                
+                                // Hours and percentage with fixed width
+                                VStack(alignment: .trailing, spacing: 0) {
+                                    let totalWithActive = totalHours + activeHours
+                                    
+                                    // Always show total hours
+                                    Text("\(formatHours(totalWithActive))/80h")
+                                        .font(.caption)
+                                        .foregroundColor(.primary)
+                                        .lineLimit(1)
+                                    
+                                    // Show active hours if clocked in
+                                    if activeHours > 0 {
+                                        Text("Active: \(formatHours(activeHours))")
+                                            .font(.caption2)
+                                            .foregroundColor(.blue)
+                                            .lineLimit(1)
+                                    }
+                                    
+                                    // Always show overtime if present
+                                    if overtimeHours > 0 {
+                                        Text("(\(formatHours(overtimeHours)) OT)")
+                                            .font(.caption2)
+                                            .foregroundColor(.orange)
+                                            .lineLimit(1)
+                                    } else if activeHours == 0 {
+                                        // Only show percentage if no active hours and no overtime
+                                        Text("\(Int((totalHours / 80.0) * 100))%")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .frame(width: 88, alignment: .trailing)
+                            }
                         }
+                        .frame(height: 24)
                     }
                 }
             }
         }
-        .padding()
+        .padding(EdgeInsets(top: 12, leading: 16, bottom: 16, trailing: 16))
         .background(Color(.systemBackground))
         .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(.separator), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
         .task {
             // Use task modifier for async operations to avoid publishing warnings
             timeTrackingService.refreshUserAndStatus()
@@ -115,23 +260,30 @@ struct HoursWidget: View {
             
             await MainActor.run {
                 loadHoursData()
+                startActiveHoursTimer()
             }
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
         }
     }
     
-    private func clockIn() {
-        timeTrackingService.clockIn { success, error in
-            if !success {
-                print("Failed to clock in: \(error ?? "Unknown error")")
-            }
+    private func startActiveHoursTimer() {
+        timer?.invalidate()
+        updateActiveHours()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            updateActiveHours()
         }
     }
     
-    private func clockOut() {
-        timeTrackingService.clockOut { success, error in
-            if !success {
-                print("Failed to clock out: \(error ?? "Unknown error")")
-            }
+    private func updateActiveHours() {
+        if timeTrackingService.isClockIn,
+           let activeEntry = timeTrackingService.currentTimeEntry {
+            // currentTimeEntry doesn't have startTime directly, use elapsedTime instead
+            activeHours = timeTrackingService.elapsedTime / 3600.0 // Convert to hours
+        } else {
+            activeHours = 0
         }
     }
     
@@ -153,51 +305,86 @@ struct HoursWidget: View {
                 return
             }
             
-            // Calculate week start
-            let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
-            
             // Format dates for queries
             let dateFormatter = DateFormatter()
             dateFormatter.dateFormat = "yyyy-MM-dd"
             
             let payPeriodStartStr = dateFormatter.string(from: payPeriodStart)
             let payPeriodEndStr = dateFormatter.string(from: payPeriodEnd)
-            let weekStartStr = dateFormatter.string(from: weekStart)
-            let todayStr = dateFormatter.string(from: now)
             
             print("📅 HoursWidget querying pay period: \(payPeriodStartStr) to \(payPeriodEndStr)")
-            print("📅 HoursWidget querying week: \(weekStartStr) to \(todayStr)")
             
-            // Load pay period hours
+            // Load all pay period entries
             timeTrackingService.getTimeEntries(startDate: payPeriodStartStr, endDate: payPeriodEndStr) { entries in
-                let totalHours = entries.reduce(0.0) { total, entry in
-                    total + entry.durationInHours
-                }
+                // Calculate overtime breakdown
+                let breakdown = self.calculateOvertimeBreakdown(entries: entries, payPeriodStart: payPeriodStart)
+                
                 DispatchQueue.main.async {
-                    self.payPeriodHours = totalHours
-                }
-            }
-            
-            // Load week hours
-            timeTrackingService.getTimeEntries(startDate: weekStartStr, endDate: todayStr) { entries in
-                let totalHours = entries.reduce(0.0) { total, entry in
-                    total + entry.durationInHours
-                }
-                DispatchQueue.main.async {
-                    self.weekHours = totalHours
+                    self.regularHours = breakdown.regular
+                    self.overtimeHours = breakdown.overtime
+                    self.totalHours = breakdown.total
+                    self.currentWeekHours = breakdown.currentWeek
                     self.isLoadingHours = false
                 }
             }
         }
+    }
+    
+    private func calculateOvertimeBreakdown(entries: [TimeEntry], payPeriodStart: Date) -> (regular: Double, overtime: Double, total: Double, currentWeek: Double) {
+        let calendar = Calendar.current
+        let now = Date()
+        
+        // Group entries by week
+        var weeklyHours: [Date: Double] = [:]
+        var currentWeekTotal: Double = 0
+        
+        for entry in entries {
+            // Parse entry date
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            guard let entryDate = dateFormatter.date(from: entry.date) else { continue }
+            
+            // Find the start of the week for this entry
+            guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: entryDate)?.start else { continue }
+            
+            // Add hours to the appropriate week
+            weeklyHours[weekStart, default: 0] += entry.durationInHours
+            
+            // Check if this entry is in the current week
+            if calendar.isDate(entryDate, equalTo: now, toGranularity: .weekOfYear) {
+                currentWeekTotal += entry.durationInHours
+            }
+        }
+        
+        // Calculate regular and overtime hours
+        var totalRegular: Double = 0
+        var totalOvertime: Double = 0
+        
+        for (_, hours) in weeklyHours {
+            if hours > 40 {
+                totalRegular += 40
+                totalOvertime += hours - 40
+            } else {
+                totalRegular += hours
+            }
+        }
+        
+        let total = totalRegular + totalOvertime
+        
+        return (regular: totalRegular, overtime: totalOvertime, total: total, currentWeek: currentWeekTotal)
     }
 }
 
 // MARK: - Mileage Widget
 struct MileageWidget: View {
     let userName: String
-    @StateObject private var mileageViewModel = MileageReportsViewModel(userName: "")
     @State private var isLoading = true
-    @State private var hasInitialized = false
+    @StateObject private var mileageViewModel: MileageReportsViewModel
+    
+    init(userName: String) {
+        self.userName = userName
+        self._mileageViewModel = StateObject(wrappedValue: MileageReportsViewModel(userName: userName))
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -210,7 +397,7 @@ struct MileageWidget: View {
                     .font(.headline)
                 Spacer()
                 
-                NavigationLink(destination: MileageReportsView(userName: mileageViewModel.userName)) {
+                NavigationLink(destination: MileageReportsView(userName: userName)) {
                     HStack(spacing: 4) {
                         Text("View All")
                         Image(systemName: "chevron.right")
@@ -276,24 +463,25 @@ struct MileageWidget: View {
         .padding()
         .background(Color(.systemBackground))
         .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(.separator), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
         .task {
-            if !hasInitialized {
-                hasInitialized = true
-                // Initialize the view model with the correct userName
-                mileageViewModel.userName = userName
-                await MainActor.run {
-                    loadMileageData()
-                }
+            await MainActor.run {
+                loadMileageData()
             }
         }
     }
     
     private func loadMileageData() {
+        print("📊 MileageWidget: Starting to load mileage data for user: \(userName)")
         mileageViewModel.loadRecords()
         
         // Give it a moment to load
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            print("📊 MileageWidget: Loaded - Pay Period: \(mileageViewModel.currentPeriodMileage) mi, Month: \(mileageViewModel.monthMileage) mi, Year: \(mileageViewModel.yearMileage) mi")
             isLoading = false
         }
     }
@@ -383,7 +571,11 @@ struct UpcomingShiftsWidget: View {
         .padding()
         .background(Color(.systemBackground))
         .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(.separator), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
     }
     
     private func getWeatherForSession(_ session: Session) -> WeatherData? {
