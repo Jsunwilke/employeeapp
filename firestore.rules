@@ -640,7 +640,15 @@ service cloud.firestore {
                            request.resource.data.reviewerName is string &&
                            request.resource.data.reviewedAt is timestamp) ||
                           // Allow cancelled status
-                          request.resource.data.status == 'cancelled'))
+                          request.resource.data.status == 'cancelled' ||
+                          // Allow partially approved status (day-by-day approval)
+                          (request.resource.data.status == 'partially_approved' &&
+                           request.resource.data.keys().hasAll(['lastReviewedBy', 'lastReviewerName', 'lastReviewedAt']) &&
+                           request.resource.data.lastReviewedBy is string &&
+                           request.resource.data.lastReviewerName is string &&
+                           request.resource.data.lastReviewedAt is timestamp &&
+                           (!request.resource.data.keys().hasAny(['dayStatuses']) || request.resource.data.dayStatuses is map) &&
+                           (!request.resource.data.keys().hasAny(['hasPartialApproval']) || request.resource.data.hasPartialApproval is bool))))
                        );
       
       // Only admins can delete time off requests
@@ -1373,16 +1381,13 @@ service cloud.firestore {
       allow create: if request.auth != null && 
                        belongsToSameOrg(request.auth.uid, request.resource.data.organizationId) &&
                        // Validate required fields
-                       request.resource.data.keys().hasAll(['organizationId', 'sessionId', 'sessionDate', 'schoolId', 'schoolName', 'jobType', 'classGroups']) &&
+                       request.resource.data.keys().hasAll(['organizationId', 'sessionId', 'sessionDate', 'schoolId', 'schoolName', 'classGroups']) &&
                        // Validate data types
                        request.resource.data.organizationId is string &&
                        request.resource.data.sessionId is string &&
                        request.resource.data.sessionDate is timestamp &&
                        request.resource.data.schoolId is string &&
                        request.resource.data.schoolName is string &&
-                       request.resource.data.jobType is string &&
-                       // Validate jobType value
-                       request.resource.data.jobType in ['classGroups', 'classCandids'] &&
                        request.resource.data.classGroups is list &&
                        // Validate creator fields
                        request.resource.data.createdBy == request.auth.uid &&
