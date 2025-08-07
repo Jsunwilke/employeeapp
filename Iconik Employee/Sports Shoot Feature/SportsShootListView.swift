@@ -10,6 +10,7 @@ class SportsShootListViewModel: ObservableObject {
     @Published var isLoading = true
     @Published var errorMessage = ""
     @Published var showingErrorAlert = false
+    @Published var showArchived = false // Toggle between active and archived shoots
     
     // Network status
     @Published var isOnline = true
@@ -57,6 +58,56 @@ class SportsShootListViewModel: ObservableObject {
         case all
         case hasImages
         case noImages
+    }
+    
+    // Computed property to filter shoots based on archive status
+    var filteredSportsShoots: [SportsShoot] {
+        sportsShoots.filter { shoot in
+            showArchived ? shoot.isArchived : !shoot.isArchived
+        }
+    }
+    
+    // Method to archive/unarchive a shoot
+    func toggleArchiveStatus(for shoot: SportsShoot) {
+        if shoot.isArchived {
+            SportsShootService.shared.unarchiveSportsShoot(id: shoot.id) { [weak self] result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success:
+                        // Update local copy
+                        if let index = self?.sportsShoots.firstIndex(where: { $0.id == shoot.id }) {
+                            self?.sportsShoots[index].isArchived = false
+                        }
+                        // If we're viewing archived and unarchived the selected shoot, clear selection
+                        if self?.showArchived == true && self?.selectedShoot?.id == shoot.id {
+                            self?.selectedShoot = nil
+                        }
+                    case .failure(let error):
+                        self?.errorMessage = "Failed to unarchive: \(error.localizedDescription)"
+                        self?.showingErrorAlert = true
+                    }
+                }
+            }
+        } else {
+            SportsShootService.shared.archiveSportsShoot(id: shoot.id) { [weak self] result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success:
+                        // Update local copy
+                        if let index = self?.sportsShoots.firstIndex(where: { $0.id == shoot.id }) {
+                            self?.sportsShoots[index].isArchived = true
+                        }
+                        // If we're viewing active and archived the selected shoot, clear selection
+                        if self?.showArchived == false && self?.selectedShoot?.id == shoot.id {
+                            self?.selectedShoot = nil
+                        }
+                    case .failure(let error):
+                        self?.errorMessage = "Failed to archive: \(error.localizedDescription)"
+                        self?.showingErrorAlert = true
+                    }
+                }
+            }
+        }
     }
     
     // Method to manually trigger UI updates
@@ -253,22 +304,31 @@ struct SportsShootListView: View {
     // MARK: - iPhone View
     
     private var iPhoneView: some View {
-        List {
+        VStack(spacing: 0) {
+            // Segmented control for Active/Archived
+            Picker("View", selection: $viewModel.showArchived) {
+                Text("Active").tag(false)
+                Text("Archived").tag(true)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            .padding()
+            
+            List {
                 if viewModel.isLoading {
                     ProgressView("Loading sports shoots...")
                         .padding()
                         .listRowBackground(Color.clear)
-                } else if viewModel.sportsShoots.isEmpty {
+                } else if viewModel.filteredSportsShoots.isEmpty {
                     VStack(spacing: 20) {
-                        Image(systemName: "camera.on.rectangle")
+                        Image(systemName: viewModel.showArchived ? "archivebox" : "camera.on.rectangle")
                             .font(.system(size: 50))
                             .foregroundColor(.blue)
                             .padding()
                         
-                        Text("No Sports Shoots Available")
+                        Text(viewModel.showArchived ? "No Archived Sports Shoots" : "No Active Sports Shoots")
                             .font(.headline)
                         
-                        Text("Sports shoots are created via the web interface and will appear here once available")
+                        Text(viewModel.showArchived ? "No sports shoots have been archived yet" : "Sports shoots are created via the web interface and will appear here once available")
                             .multilineTextAlignment(.center)
                             .foregroundColor(.gray)
                             .padding(.horizontal)
@@ -286,7 +346,7 @@ struct SportsShootListView: View {
                     .listRowBackground(Color.clear)
                 } else {
                     // Sports shoots list with NavigationLinks for iPhone
-                    ForEach(viewModel.sportsShoots) { sportsShoot in
+                    ForEach(viewModel.filteredSportsShoots) { sportsShoot in
                         NavigationLink(destination: SportsShootDetailView(shootID: sportsShoot.id)) {
                             SportsShootRow(
                                 shoot: sportsShoot,
@@ -301,6 +361,17 @@ struct SportsShootListView: View {
                                 },
                                 isInsideNavigationLink: true // Tell the row it's inside a NavigationLink
                             )
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(action: {
+                                viewModel.toggleArchiveStatus(for: sportsShoot)
+                            }) {
+                                Label(
+                                    viewModel.showArchived ? "Unarchive" : "Archive",
+                                    systemImage: viewModel.showArchived ? "tray.and.arrow.up" : "archivebox"
+                                )
+                            }
+                            .tint(viewModel.showArchived ? .green : .orange)
                         }
                     }
                     
@@ -324,11 +395,12 @@ struct SportsShootListView: View {
                             .padding(.vertical, 4)
                     }
                 }
-        }
-        .navigationTitle("Sports Shoots")
-        .refreshable {
-            viewModel.clearAllStatusCaches()
-            loadSportsShoots()
+            }
+            .navigationTitle(viewModel.showArchived ? "Archived Sports Shoots" : "Sports Shoots")
+            .refreshable {
+                viewModel.clearAllStatusCaches()
+                loadSportsShoots()
+            }
         }
     }
     
@@ -337,22 +409,31 @@ struct SportsShootListView: View {
     private var iPadView: some View {
         NavigationView {
             // Left side - List of shoots
-            List {
+            VStack(spacing: 0) {
+                // Segmented control for Active/Archived
+                Picker("View", selection: $viewModel.showArchived) {
+                    Text("Active").tag(false)
+                    Text("Archived").tag(true)
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding()
+                
+                List {
                 if viewModel.isLoading {
                     ProgressView("Loading sports shoots...")
                         .padding()
                         .listRowBackground(Color.clear)
-                } else if viewModel.sportsShoots.isEmpty {
+                } else if viewModel.filteredSportsShoots.isEmpty {
                     VStack(spacing: 20) {
-                        Image(systemName: "camera.on.rectangle")
+                        Image(systemName: viewModel.showArchived ? "archivebox" : "camera.on.rectangle")
                             .font(.system(size: 50))
                             .foregroundColor(.blue)
                             .padding()
                         
-                        Text("No Sports Shoots Available")
+                        Text(viewModel.showArchived ? "No Archived Sports Shoots" : "No Active Sports Shoots")
                             .font(.headline)
                         
-                        Text("Sports shoots are created via the web interface and will appear here once available")
+                        Text(viewModel.showArchived ? "No sports shoots have been archived yet" : "Sports shoots are created via the web interface and will appear here once available")
                             .multilineTextAlignment(.center)
                             .foregroundColor(.gray)
                             .padding(.horizontal)
@@ -371,7 +452,7 @@ struct SportsShootListView: View {
                     .listRowBackground(Color.clear)
                 } else {
                     // Sports shoots list
-                    ForEach(viewModel.sportsShoots) { sportsShoot in
+                    ForEach(viewModel.filteredSportsShoots) { sportsShoot in
                         SportsShootRow(
                             shoot: sportsShoot,
                             isSelected: viewModel.selectedShoot?.id == sportsShoot.id,
@@ -391,6 +472,27 @@ struct SportsShootListView: View {
                         )
                         .background(viewModel.selectedShoot?.id == sportsShoot.id ? Color.blue.opacity(0.1) : Color.clear)
                         .cornerRadius(8)
+                        .contextMenu {
+                            Button(action: {
+                                viewModel.toggleArchiveStatus(for: sportsShoot)
+                            }) {
+                                Label(
+                                    viewModel.showArchived ? "Unarchive" : "Archive",
+                                    systemImage: viewModel.showArchived ? "tray.and.arrow.up" : "archivebox"
+                                )
+                            }
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(action: {
+                                viewModel.toggleArchiveStatus(for: sportsShoot)
+                            }) {
+                                Label(
+                                    viewModel.showArchived ? "Unarchive" : "Archive",
+                                    systemImage: viewModel.showArchived ? "tray.and.arrow.up" : "archivebox"
+                                )
+                            }
+                            .tint(viewModel.showArchived ? .green : .orange)
+                        }
                     }
                     
                     // Quick tools section for all actions
@@ -477,10 +579,11 @@ struct SportsShootListView: View {
                             .padding(.vertical, 4)
                     }
                 }
+                }
+                .listStyle(SidebarListStyle())
+                .frame(minWidth: 320)
             }
-            .listStyle(SidebarListStyle())
-            .frame(minWidth: 320)
-            .navigationTitle("Sports Shoots")
+            .navigationTitle(viewModel.showArchived ? "Archived Sports Shoots" : "Sports Shoots")
             .refreshable {
                 viewModel.clearAllStatusCaches() // Clear all caches on refresh
                 loadSportsShoots()

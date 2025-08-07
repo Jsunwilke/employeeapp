@@ -947,7 +947,8 @@ struct SportsRostersWidget: View {
                     
                     self.todaysSportsShoots = shoots.filter { shoot in
                         let shootDay = calendar.startOfDay(for: shoot.shootDate)
-                        return shootDay >= today && shootDay < tomorrow
+                        // Filter out archived shoots and only show today's shoots
+                        return !shoot.isArchived && shootDay >= today && shootDay < tomorrow
                     }.sorted { $0.shootDate < $1.shootDate }
                     
                     print("Loaded \(self.todaysSportsShoots.count) sports shoots for today")

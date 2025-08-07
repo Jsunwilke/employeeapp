@@ -132,6 +132,7 @@ struct SportsShoot: Identifiable, Codable {
     var organizationID: String
     var createdAt: Date
     var updatedAt: Date
+    var isArchived: Bool
     
     init(id: String = UUID().uuidString,
          schoolName: String = "",
@@ -144,7 +145,8 @@ struct SportsShoot: Identifiable, Codable {
          additionalNotes: String = "",
          organizationID: String = "",
          createdAt: Date = Date(),
-         updatedAt: Date = Date()) {
+         updatedAt: Date = Date(),
+         isArchived: Bool = false) {
         self.id = id
         self.schoolName = schoolName
         self.sportName = sportName
@@ -157,13 +159,14 @@ struct SportsShoot: Identifiable, Codable {
         self.organizationID = organizationID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.isArchived = isArchived
     }
     
     // Adding a custom Codable implementation to handle optional fields and field mapping
     enum CodingKeys: String, CodingKey {
         case id, schoolName, sportName, shootDate, location, photographer
         case roster, groupImages, additionalNotes, organizationID
-        case createdAt, updatedAt
+        case createdAt, updatedAt, isArchived
     }
     
     init(from decoder: Decoder) throws {
@@ -181,6 +184,7 @@ struct SportsShoot: Identifiable, Codable {
         organizationID = try container.decodeIfPresent(String.self, forKey: .organizationID) ?? ""
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
     }
     
     // Create from a Firestore document
@@ -197,6 +201,7 @@ struct SportsShoot: Identifiable, Codable {
         self.organizationID = data["organizationID"] as? String ?? ""
         self.createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
         self.updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+        self.isArchived = data["isArchived"] as? Bool ?? false
         
         // Parse roster entries with field mapping
         self.roster = []
@@ -787,6 +792,54 @@ class SportsShootService {
                     "remoteShoot": remoteShoot
                 ]
             )
+        }
+    }
+    
+    // MARK: - Archive Management
+    
+    // Archive a sports shoot
+    func archiveSportsShoot(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let docRef = db.collection(sportsShootsCollection).document(id)
+        
+        docRef.updateData([
+            "isArchived": true,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]) { error in
+            if let error = error {
+                completion(.failure(error))
+            } else {
+                // Update cached version if exists
+                if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
+                    var updatedShoot = cachedShoot
+                    updatedShoot.isArchived = true
+                    updatedShoot.updatedAt = Date()
+                    OfflineManager.shared.cacheShoot(updatedShoot) { _ in }
+                }
+                completion(.success(()))
+            }
+        }
+    }
+    
+    // Unarchive a sports shoot
+    func unarchiveSportsShoot(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let docRef = db.collection(sportsShootsCollection).document(id)
+        
+        docRef.updateData([
+            "isArchived": false,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]) { error in
+            if let error = error {
+                completion(.failure(error))
+            } else {
+                // Update cached version if exists
+                if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
+                    var updatedShoot = cachedShoot
+                    updatedShoot.isArchived = false
+                    updatedShoot.updatedAt = Date()
+                    OfflineManager.shared.cacheShoot(updatedShoot) { _ in }
+                }
+                completion(.success(()))
+            }
         }
     }
     
