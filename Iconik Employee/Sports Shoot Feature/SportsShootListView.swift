@@ -99,6 +99,9 @@ struct SportsShootListView: View {
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     @AppStorage("userLastName") private var storedUserLastName: String = ""
     
+    // Access TabBarManager to check for selected session
+    @ObservedObject private var tabBarManager = TabBarManager.shared
+    
     // Device session ID - unique to this app instance
     private static let deviceSessionID = UUID().uuidString
     
@@ -862,8 +865,17 @@ struct SportsShootListView: View {
         .onAppear {
             isViewVisible = true
             loadSportsShoots()
-            // Force the sidebar to be visible on first appear and ensure it stays visible
-            forceSidebarVisibility()
+            
+            // Check if we're navigating from a widget
+            if tabBarManager.selectedSportsShoot != nil {
+                // We came from widget - collapse sidebar to show detail view only
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    collapseSidebarAfterSelection()
+                }
+            } else {
+                // Normal navigation - show the sidebar
+                forceSidebarVisibility()
+            }
             
             // Monitor network status
             setupNetworkMonitoring()
@@ -1990,8 +2002,8 @@ struct SportsShootListView: View {
                                             print("Successfully fetched \(shoots.count) sports shoots")
                                             self.viewModel.sportsShoots = shoots
                                             
-                                            // Do not auto-select any item - let user choose explicitly
-                                            // selectedShoot remains nil until user makes a selection
+                                            // Check if we have a selected session from the widget
+                                            self.checkForSelectedSession()
                                             
                                         case .failure(let error):
                                             print("Error loading sports shoots: \(error.localizedDescription)")
@@ -1999,6 +2011,59 @@ struct SportsShootListView: View {
                                             self.viewModel.showingErrorAlert = true
                                         }
                                     }
+                                }
+                            }
+                            
+                            // MARK: - Session/Shoot Matching
+                            
+                            private func checkForSelectedSession() {
+                                // First check if we have a direct sports shoot selection from the widget
+                                if let selectedShoot = tabBarManager.selectedSportsShoot {
+                                    defer { tabBarManager.selectedSportsShoot = nil }
+                                    
+                                    // Find the shoot in our list and select it
+                                    if let match = viewModel.sportsShoots.first(where: { $0.id == selectedShoot.id }) {
+                                        viewModel.selectedShoot = match
+                                        print("Auto-selected sports shoot from widget: \(match.schoolName) - \(match.sportName)")
+                                    } else {
+                                        // If not in list, add it and select it
+                                        viewModel.selectedShoot = selectedShoot
+                                        print("Selected sports shoot from widget (not in list): \(selectedShoot.schoolName) - \(selectedShoot.sportName)")
+                                    }
+                                    return
+                                }
+                                
+                                // Fallback: Check if we have a selected session from elsewhere
+                                guard let selectedSession = tabBarManager.selectedSportsSession else { return }
+                                
+                                // Clear the selected session after using it
+                                defer { tabBarManager.selectedSportsSession = nil }
+                                
+                                // Try to find a matching sports shoot
+                                let calendar = Calendar.current
+                                
+                                // Match by school name and date (ignoring time)
+                                let matchingShoot = viewModel.sportsShoots.first { shoot in
+                                    let schoolMatches = shoot.schoolName.lowercased() == selectedSession.schoolName.lowercased()
+                                    
+                                    // Compare dates without time
+                                    if let sessionDate = selectedSession.startDate {
+                                        let sessionDay = calendar.startOfDay(for: sessionDate)
+                                        let shootDay = calendar.startOfDay(for: shoot.shootDate)
+                                        let dateMatches = sessionDay == shootDay
+                                        
+                                        return schoolMatches && dateMatches
+                                    }
+                                    
+                                    return false
+                                }
+                                
+                                // If we found a match, select it
+                                if let match = matchingShoot {
+                                    viewModel.selectedShoot = match
+                                    print("Auto-selected sports shoot: \(match.schoolName) - \(match.sportName)")
+                                } else {
+                                    print("No matching sports shoot found for session: \(selectedSession.schoolName)")
                                 }
                             }
                             

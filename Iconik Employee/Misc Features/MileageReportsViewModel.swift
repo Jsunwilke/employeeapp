@@ -6,12 +6,14 @@ import Firebase
 import FirebaseAuth
 
 class MileageReportsViewModel: ObservableObject {
+    static let shared = MileageReportsViewModel()
+    
     @Published var currentPeriodMileage: Double = 0
     @Published var monthMileage: Double = 0
     @Published var yearMileage: Double = 0
     @Published var records: [MileageRecordWrapper] = []
     
-    var userName: String
+    var userName: String = ""
     var userId: String?
     
     let calendar = Calendar.current
@@ -19,6 +21,8 @@ class MileageReportsViewModel: ObservableObject {
     var currentPeriodEnd: Date = Date()
     
     private let payPeriodService = PayPeriodService.shared
+    private var mileageListener: ListenerRegistration?
+    private var updateCallback: (() -> Void)?
     
     // Local wrapper model to hold Firestore data
     struct MileageRecordWrapper: Identifiable {
@@ -28,15 +32,15 @@ class MileageReportsViewModel: ObservableObject {
         let schoolName: String
     }
     
-    init(userName: String) {
-        self.userName = userName
+    init(userName: String = "") {
+        self.userName = userName.isEmpty ? (UserDefaults.standard.string(forKey: "userFirstName") ?? "") : userName
         
         // Get the current user's ID for more reliable filtering
         if let currentUser = Auth.auth().currentUser {
             self.userId = currentUser.uid
-            print("🚗 MileageReportsViewModel: Initialized with userId: \(currentUser.uid), userName: \(userName)")
+            print("🚗 MileageReportsViewModel: Initialized with userId: \(currentUser.uid), userName: \(self.userName)")
         } else {
-            print("⚠️ MileageReportsViewModel: No authenticated user, using userName: \(userName)")
+            print("⚠️ MileageReportsViewModel: No authenticated user, using userName: \(self.userName)")
         }
         
         // Load pay period settings and calculate current period
@@ -58,6 +62,15 @@ class MileageReportsViewModel: ObservableObject {
                 self.setDefaultPayPeriod()
             }
         }
+    }
+    
+    deinit {
+        mileageListener?.remove()
+    }
+    
+    // Add listener support for real-time updates
+    func listenForMileageUpdates(completion: @escaping () -> Void) {
+        self.updateCallback = completion
     }
     
     private func setDefaultPayPeriod() {
@@ -203,6 +216,9 @@ class MileageReportsViewModel: ObservableObject {
                     
                     // Also load month and year totals
                     self?.loadYearAndMonthMileage()
+                    
+                    // Notify listener of update
+                    self?.updateCallback?()
                 }
             }
     }
@@ -314,6 +330,9 @@ class MileageReportsViewModel: ObservableObject {
                     print("🚗 Calculated year mileage: \(self?.yearMileage ?? 0) miles from \(allRecords.count) total records")
                     print("🚗 Calculated month mileage: \(self?.monthMileage ?? 0) miles from \(monthRecords.count) month records")
                     print("🚗 Current year: \(currentYear), Current month: \(currentMonth)")
+                    
+                    // Notify listener of update
+                    self?.updateCallback?()
                 }
             }
     }

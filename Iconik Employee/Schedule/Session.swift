@@ -26,6 +26,7 @@ struct Session: Identifiable, Equatable, Hashable {
     let photographers: [[String: Any]]
     let hasClassGroupJob: Bool
     let hasClassCandids: Bool
+    let customSessionType: String?
     
     init(id: String, data: [String: Any]) {
         self.id = id
@@ -47,6 +48,7 @@ struct Session: Identifiable, Equatable, Hashable {
         self.organizationID = data["organizationID"] as? String ?? ""
         self.hasClassGroupJob = data["hasClassGroupJob"] as? Bool ?? false
         self.hasClassCandids = data["hasClassCandids"] as? Bool ?? false
+        self.customSessionType = data["customSessionType"] as? String
         
         // Log the raw isPublished value for debugging
         let rawIsPublished = data["isPublished"]
@@ -120,7 +122,8 @@ struct Session: Identifiable, Equatable, Hashable {
          updatedAt: Date = Date(),
          isPublished: Bool = true,
          hasClassGroupJob: Bool = false,
-         hasClassCandids: Bool = false) {
+         hasClassCandids: Bool = false,
+         customSessionType: String? = nil) {
         self.id = id
         self.employeeName = employeeName
         self.position = position
@@ -145,6 +148,7 @@ struct Session: Identifiable, Equatable, Hashable {
         self.photographers = []
         self.hasClassGroupJob = hasClassGroupJob
         self.hasClassCandids = hasClassCandids
+        self.customSessionType = customSessionType
     }
     
     // Helper method to parse date + time strings into Date objects
@@ -171,6 +175,19 @@ struct Session: Identifiable, Equatable, Hashable {
     }
     
     // MARK: - Helper Methods
+    
+    /// Get the display name for the session type (handles "other" with custom type)
+    func getSessionTypeDisplayName() -> String {
+        // Check if this is an "other" type with a custom name
+        if let sessionTypes = self.sessionType,
+           sessionTypes.contains("other"),
+           let customName = self.customSessionType,
+           !customName.isEmpty {
+            return customName
+        }
+        // Return the position which is based on the first sessionType
+        return self.position
+    }
     
     /// Check if a user ID is assigned as a photographer for this session
     func isUserAssigned(userID: String) -> Bool {

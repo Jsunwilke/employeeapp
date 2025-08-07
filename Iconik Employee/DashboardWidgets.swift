@@ -1,14 +1,17 @@
 import SwiftUI
 import Firebase
+import FirebaseFirestore
 
 // MARK: - Hours Widget
 struct HoursWidget: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
-    @State private var regularHours: Double = 0
-    @State private var overtimeHours: Double = 0
-    @State private var totalHours: Double = 0
-    @State private var currentWeekHours: Double = 0
+    // Initialize with cached values for instant display
+    @State private var regularHours: Double = UserDefaults.standard.double(forKey: "cached_regularHours")
+    @State private var overtimeHours: Double = UserDefaults.standard.double(forKey: "cached_overtimeHours")
+    @State private var totalHours: Double = UserDefaults.standard.double(forKey: "cached_totalHours")
+    @State private var currentWeekHours: Double = UserDefaults.standard.double(forKey: "cached_currentWeekHours")
     @State private var isLoadingHours = false
+    @State private var hasInitialData = false
     @StateObject private var payPeriodService = PayPeriodService.shared
     @State private var activeHours: Double = 0
     @State private var timer: Timer?
@@ -252,11 +255,8 @@ struct HoursWidget: View {
         )
         .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
         .task {
-            // Use task modifier for async operations to avoid publishing warnings
+            // Load data immediately without delay
             timeTrackingService.refreshUserAndStatus()
-            
-            // Give a moment for the service to initialize
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
             
             await MainActor.run {
                 loadHoursData()
@@ -266,6 +266,8 @@ struct HoursWidget: View {
         .onDisappear {
             timer?.invalidate()
             timer = nil
+            // Keep listener active for instant data when returning
+            // timeTrackingService.stopListeningForDashboardEntries()
         }
     }
     
@@ -288,46 +290,74 @@ struct HoursWidget: View {
     }
     
     private func loadHoursData() {
-        isLoadingHours = true
+        // Only show loading if we have no cached data
+        if regularHours == 0 && totalHours == 0 {
+            isLoadingHours = true
+        }
         
         // Ensure TimeTrackingService has user/org IDs
         timeTrackingService.refreshUserAndStatus()
         
-        // First load pay period settings if not already loaded
+        // Load pay period settings in parallel with listener setup
         payPeriodService.loadPayPeriodSettings { success in
-            let calendar = Calendar.current
-            let now = Date()
+            // This might complete after listener is already set up
+        }
+        
+        // Give UserManager a moment to fetch orgId if needed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.setupHoursListener()
+        }
+    }
+    
+    private func setupHoursListener() {
+        // Refresh again in case orgId was just fetched
+        timeTrackingService.refreshUserAndStatus()
+        
+        // Try to get pay period immediately if available, otherwise use default
+        let (payPeriodStart, payPeriodEnd) = payPeriodService.getCurrentPayPeriod() ?? getDefaultPayPeriod()
+        
+        // Format dates for queries
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        
+        let payPeriodStartStr = dateFormatter.string(from: payPeriodStart)
+        let payPeriodEndStr = dateFormatter.string(from: payPeriodEnd)
+        
+        print("📅 HoursWidget setting up listener for pay period: \(payPeriodStartStr) to \(payPeriodEndStr)")
+        
+        // Set up real-time listener immediately
+        timeTrackingService.listenForTimeEntries(startDate: payPeriodStartStr, endDate: payPeriodEndStr) { entries in
+            // Calculate overtime breakdown
+            let breakdown = self.calculateOvertimeBreakdown(entries: entries, payPeriodStart: payPeriodStart)
             
-            // Get pay period from service
-            guard let (payPeriodStart, payPeriodEnd) = payPeriodService.getCurrentPayPeriod() else {
-                print("Error getting pay period from service")
-                isLoadingHours = false
-                return
-            }
-            
-            // Format dates for queries
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd"
-            
-            let payPeriodStartStr = dateFormatter.string(from: payPeriodStart)
-            let payPeriodEndStr = dateFormatter.string(from: payPeriodEnd)
-            
-            print("📅 HoursWidget querying pay period: \(payPeriodStartStr) to \(payPeriodEndStr)")
-            
-            // Load all pay period entries
-            timeTrackingService.getTimeEntries(startDate: payPeriodStartStr, endDate: payPeriodEndStr) { entries in
-                // Calculate overtime breakdown
-                let breakdown = self.calculateOvertimeBreakdown(entries: entries, payPeriodStart: payPeriodStart)
+            DispatchQueue.main.async {
+                self.regularHours = breakdown.regular
+                self.overtimeHours = breakdown.overtime
+                self.totalHours = breakdown.total
+                self.currentWeekHours = breakdown.currentWeek
                 
-                DispatchQueue.main.async {
-                    self.regularHours = breakdown.regular
-                    self.overtimeHours = breakdown.overtime
-                    self.totalHours = breakdown.total
-                    self.currentWeekHours = breakdown.currentWeek
+                // Cache values for instant display next time
+                UserDefaults.standard.set(breakdown.regular, forKey: "cached_regularHours")
+                UserDefaults.standard.set(breakdown.overtime, forKey: "cached_overtimeHours")
+                UserDefaults.standard.set(breakdown.total, forKey: "cached_totalHours")
+                UserDefaults.standard.set(breakdown.currentWeek, forKey: "cached_currentWeekHours")
+                
+                // Only set loading to false on first load
+                if self.isLoadingHours {
                     self.isLoadingHours = false
                 }
+                
+                self.hasInitialData = true
             }
         }
+    }
+    
+    private func getDefaultPayPeriod() -> (Date, Date) {
+        // Default to current 2-week period if settings not loaded yet
+        let calendar = Calendar.current
+        let now = Date()
+        let twoWeeksAgo = calendar.date(byAdding: .weekOfYear, value: -2, to: now) ?? now
+        return (twoWeeksAgo, now)
     }
     
     private func calculateOvertimeBreakdown(entries: [TimeEntry], payPeriodStart: Date) -> (regular: Double, overtime: Double, total: Double, currentWeek: Double) {
@@ -378,12 +408,17 @@ struct HoursWidget: View {
 // MARK: - Mileage Widget
 struct MileageWidget: View {
     let userName: String
-    @State private var isLoading = true
+    // Initialize with cached values for instant display
+    @State private var currentPeriodMileage: Double = UserDefaults.standard.double(forKey: "cached_currentPeriodMileage")
+    @State private var monthMileage: Double = UserDefaults.standard.double(forKey: "cached_monthMileage")
+    @State private var yearMileage: Double = UserDefaults.standard.double(forKey: "cached_yearMileage")
+    @State private var isLoading = false
+    @State private var hasInitialData = false
     @StateObject private var mileageViewModel: MileageReportsViewModel
     
     init(userName: String) {
         self.userName = userName
-        self._mileageViewModel = StateObject(wrappedValue: MileageReportsViewModel(userName: userName))
+        self._mileageViewModel = StateObject(wrappedValue: MileageReportsViewModel.shared)
     }
     
     var body: some View {
@@ -423,7 +458,7 @@ struct MileageWidget: View {
                             Text("Pay Period")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("\(Int(mileageViewModel.currentPeriodMileage)) mi")
+                            Text("\(Int(currentPeriodMileage)) mi")
                                 .font(.system(size: 24, weight: .semibold))
                         }
                         Spacer()
@@ -437,7 +472,7 @@ struct MileageWidget: View {
                             Text("This Month")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("\(Int(mileageViewModel.monthMileage)) mi")
+                            Text("\(Int(monthMileage)) mi")
                                 .font(.system(size: 18, weight: .medium))
                         }
                         
@@ -447,7 +482,7 @@ struct MileageWidget: View {
                             Text("This Year")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("\(Int(mileageViewModel.yearMileage)) mi")
+                            Text("\(Int(yearMileage)) mi")
                                 .font(.system(size: 18, weight: .medium))
                         }
                     }
@@ -476,14 +511,36 @@ struct MileageWidget: View {
     }
     
     private func loadMileageData() {
-        print("📊 MileageWidget: Starting to load mileage data for user: \(userName)")
-        mileageViewModel.loadRecords()
-        
-        // Give it a moment to load
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            print("📊 MileageWidget: Loaded - Pay Period: \(mileageViewModel.currentPeriodMileage) mi, Month: \(mileageViewModel.monthMileage) mi, Year: \(mileageViewModel.yearMileage) mi")
-            isLoading = false
+        // Only show loading if we have no cached data
+        if currentPeriodMileage == 0 && monthMileage == 0 && yearMileage == 0 {
+            isLoading = true
         }
+        
+        print("📊 MileageWidget: Setting up mileage listener for user: \(userName)")
+        
+        // Listen for changes to the view model
+        mileageViewModel.listenForMileageUpdates {
+            DispatchQueue.main.async {
+                self.currentPeriodMileage = self.mileageViewModel.currentPeriodMileage
+                self.monthMileage = self.mileageViewModel.monthMileage
+                self.yearMileage = self.mileageViewModel.yearMileage
+                
+                // Cache values for instant display next time
+                UserDefaults.standard.set(self.currentPeriodMileage, forKey: "cached_currentPeriodMileage")
+                UserDefaults.standard.set(self.monthMileage, forKey: "cached_monthMileage")
+                UserDefaults.standard.set(self.yearMileage, forKey: "cached_yearMileage")
+                
+                print("📊 MileageWidget: Updated - Pay Period: \(self.currentPeriodMileage) mi, Month: \(self.monthMileage) mi, Year: \(self.yearMileage) mi")
+                
+                if self.isLoading {
+                    self.isLoading = false
+                }
+                self.hasInitialData = true
+            }
+        }
+        
+        // Trigger initial load
+        mileageViewModel.loadRecords()
     }
 }
 
@@ -654,7 +711,7 @@ struct CompactShiftRow: View {
                     
                     Spacer()
                     
-                    Text(session.position)
+                    Text(session.getSessionTypeDisplayName())
                         .font(.caption2)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
@@ -699,5 +756,809 @@ struct CompactShiftRow: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
+    }
+}
+
+// MARK: - iPad Widgets
+
+struct SportsRostersWidget: View {
+    @State private var todaysSportsShoots: [SportsShoot] = []
+    @State private var isLoading = true
+    @ObservedObject var tabBarManager: TabBarManager
+    @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
+    
+    private var dateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        return formatter
+    }
+    
+    // Break down complex view into computed properties
+    private var headerView: some View {
+        HStack {
+            Image(systemName: "sportscourt")
+                .font(.title2)
+                .foregroundColor(.orange)
+            Text("Sports Rosters")
+                .font(.headline)
+            Spacer()
+            
+            Button(action: {
+                // Navigate to sports shoots feature
+                tabBarManager.selectedTab = "sportsShoot"
+            }) {
+                HStack(spacing: 4) {
+                    Text("View All")
+                    Image(systemName: "chevron.right")
+                }
+                .font(.caption)
+                .foregroundColor(.blue)
+            }
+        }
+    }
+    
+    private var loadingView: some View {
+        HStack {
+            Spacer()
+            ProgressView()
+            Spacer()
+        }
+        .padding(.vertical, 40)
+    }
+    
+    private var emptyStateView: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "sportscourt")
+                .font(.system(size: 40))
+                .foregroundColor(.gray)
+            Text("No sports rosters today")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
+    }
+    
+    private var contentView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(todaysSportsShoots.prefix(3)) { shoot in
+                shootRowView(for: shoot)
+            }
+            
+            if todaysSportsShoots.count > 3 {
+                HStack {
+                    Spacer()
+                    Text("\(todaysSportsShoots.count - 3) more rosters")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            }
+        }
+    }
+    
+    private func shootRowView(for shoot: SportsShoot) -> some View {
+        Button(action: {
+            // Set selected shoot and navigate to sports shoots feature
+            TabBarManager.shared.selectedSportsShoot = shoot
+            tabBarManager.selectedTab = "sportsShoot"
+        }) {
+            HStack {
+                // Sports icon
+                Image(systemName: getSportsIcon(for: shoot.sportName))
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .frame(width: 20)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(shoot.schoolName)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    
+                    HStack(spacing: 8) {
+                        // Sport name
+                        Text(shoot.sportName)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        // Time
+                        Text("• \(dateFormatter.string(from: shoot.shootDate))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Spacer()
+                
+                // Roster count
+                Group {
+                    if shoot.roster.count > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "person.3.fill")
+                                .font(.caption2)
+                            Text("\(shoot.roster.count)")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.blue)
+                    } else {
+                        Text("No roster")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+                }
+                
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(Color(.secondarySystemBackground))
+            .cornerRadius(8)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            headerView
+            
+            if isLoading {
+                loadingView
+            } else if todaysSportsShoots.isEmpty {
+                emptyStateView
+            } else {
+                contentView
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(.separator), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
+        .onAppear {
+            loadSportsRosters()
+        }
+    }
+    
+    private func loadSportsRosters() {
+        guard !storedUserOrganizationID.isEmpty else {
+            print("No organization ID found for sports rosters widget")
+            self.isLoading = false
+            return
+        }
+        
+        isLoading = true
+        
+        // Fetch all sports shoots for the organization
+        SportsShootService.shared.fetchAllSportsShoots(forOrganization: storedUserOrganizationID) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let shoots):
+                    // Filter for today's shoots
+                    let calendar = Calendar.current
+                    let today = calendar.startOfDay(for: Date())
+                    let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+                    
+                    self.todaysSportsShoots = shoots.filter { shoot in
+                        let shootDay = calendar.startOfDay(for: shoot.shootDate)
+                        return shootDay >= today && shootDay < tomorrow
+                    }.sorted { $0.shootDate < $1.shootDate }
+                    
+                    print("Loaded \(self.todaysSportsShoots.count) sports shoots for today")
+                    
+                case .failure(let error):
+                    print("Error loading sports shoots: \(error.localizedDescription)")
+                    self.todaysSportsShoots = []
+                }
+                
+                self.isLoading = false
+            }
+        }
+    }
+    
+    private func getSportsIcon(for sportName: String) -> String {
+        let sessionTypeString = sportName.lowercased()
+        
+        if sessionTypeString.contains("basketball") {
+            return "basketball"
+        } else if sessionTypeString.contains("football") {
+            return "football"
+        } else if sessionTypeString.contains("soccer") {
+            return "soccerball"
+        } else if sessionTypeString.contains("baseball") || sessionTypeString.contains("softball") {
+            return "baseball"
+        } else if sessionTypeString.contains("tennis") {
+            return "tennis.racket"
+        } else if sessionTypeString.contains("golf") {
+            return "flag"
+        } else if sessionTypeString.contains("swim") {
+            return "drop"
+        } else if sessionTypeString.contains("track") || sessionTypeString.contains("cross country") {
+            return "figure.run"
+        } else if sessionTypeString.contains("volleyball") {
+            return "volleyball"
+        } else {
+            return "sportscourt"
+        }
+    }
+}
+
+struct ClassGroupsWidget: View {
+    @StateObject private var service = ClassGroupJobService.shared
+    @State private var organizationId: String?
+    @State private var todaysJobs: [ClassGroupJob] = []
+    @State private var isLoading = true
+    @State private var showingCreateJob = false
+    @ObservedObject var tabBarManager: TabBarManager
+    
+    private var dateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack {
+                Image(systemName: "person.3.fill")
+                    .font(.title2)
+                    .foregroundColor(.purple)
+                Text("Class Group Jobs")
+                    .font(.headline)
+                Spacer()
+                
+                Button(action: {
+                    showingCreateJob = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.circle.fill")
+                        Text("Add Jobs")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.purple)
+                    .cornerRadius(15)
+                }
+            }
+            
+            if isLoading {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+                .padding(.vertical, 40)
+            } else if todaysJobs.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "person.3.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.gray)
+                    Text("No class group jobs today")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    Button(action: {
+                        showingCreateJob = true
+                    }) {
+                        Text("Add Class Group Jobs")
+                            .font(.caption)
+                            .foregroundColor(.purple)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.purple.opacity(0.1))
+                            .cornerRadius(20)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 30)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(todaysJobs.prefix(3)) { job in
+                        Button(action: {
+                            // Set selected job and navigate to class groups feature
+                            tabBarManager.selectedClassGroupJobId = job.id
+                            tabBarManager.selectedTab = "classGroups"
+                        }) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                // School name and time
+                                HStack {
+                                    Text(job.schoolName)
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                        .lineLimit(1)
+                                        .foregroundColor(.primary)
+                                    Spacer()
+                                    Text(dateFormatter.string(from: job.sessionDate))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                
+                                // Group count and type
+                                HStack {
+                                    if job.classGroupCount > 0 {
+                                        Label("\(job.classGroupCount) group\(job.classGroupCount == 1 ? "" : "s")", 
+                                              systemImage: "person.3")
+                                            .font(.caption)
+                                            .foregroundColor(.blue)
+                                    } else {
+                                        Text("No groups added")
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    if job.totalImageCount > 0 {
+                                        Label("\(job.totalImageCount)", systemImage: "photo")
+                                            .font(.caption)
+                                            .foregroundColor(.green)
+                                    }
+                                    
+                                    // Job type badge
+                                    Text(job.jobType == "classGroups" ? "Groups" : "Candids")
+                                        .font(.caption)
+                                        .foregroundColor(.purple)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.purple.opacity(0.1))
+                                        .cornerRadius(12)
+                                }
+                            }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                            .background(Color(.secondarySystemBackground))
+                            .cornerRadius(8)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                    
+                    if todaysJobs.count > 3 {
+                        Button(action: {
+                            // Navigate to class groups feature to view all
+                            tabBarManager.selectedClassGroupJobId = nil
+                            tabBarManager.selectedTab = "classGroups"
+                        }) {
+                            HStack {
+                                Spacer()
+                                Text("View All (\(todaysJobs.count) jobs)")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                                Spacer()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(.separator), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
+        .onAppear {
+            loadClassGroupJobs()
+        }
+        .sheet(isPresented: $showingCreateJob) {
+            CreateClassGroupJobView(initialJobType: "classGroups") { _ in
+                // Refresh jobs after creation
+                loadClassGroupJobs()
+            }
+        }
+    }
+    
+    private func loadClassGroupJobs() {
+        isLoading = true
+        
+        UserManager.shared.getCurrentUserOrganizationID { orgId in
+            guard let organizationId = orgId else {
+                print("Failed to get organization ID")
+                self.isLoading = false
+                return
+            }
+            
+            self.organizationId = organizationId
+            
+            // Fetch all jobs for the organization
+            service.fetchAllClassGroupJobs(forOrganization: organizationId) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let jobs):
+                        // Filter for today's jobs
+                        let calendar = Calendar.current
+                        let today = calendar.startOfDay(for: Date())
+                        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+                        
+                        self.todaysJobs = jobs.filter { job in
+                            job.sessionDate >= today && job.sessionDate < tomorrow
+                        }.sorted { $0.sessionDate < $1.sessionDate }
+                        
+                    case .failure(let error):
+                        print("Error loading class group jobs: \(error)")
+                        self.todaysJobs = []
+                    }
+                    
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+}
+
+struct PhotoshootNotesWidget: View {
+    // Access the same storage as PhotoshootNotesView
+    @AppStorage("photoshootNotes") private var storedNotesData: Data = Data()
+    @State private var notes: [PhotoshootNote] = []
+    @State private var selectedNote: PhotoshootNote? = nil
+    @State private var schoolOptions: [SchoolItem] = []
+    @State private var todaySessions: [Session] = []
+    @State private var isLoading = false
+    @State private var showingFullView = false
+    
+    private let sessionService = SessionService.shared
+    
+    private var dateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }
+    
+    private var todayDateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack {
+                Image(systemName: "note.text")
+                    .font(.title2)
+                    .foregroundColor(.blue)
+                Text("Photoshoot Notes")
+                    .font(.headline)
+                Spacer()
+                
+                HStack(spacing: 12) {
+                    Button(action: createNewNote) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                            .foregroundColor(.blue)
+                    }
+                    
+                    Button(action: {
+                        showingFullView = true
+                    }) {
+                        Image(systemName: "arrow.up.forward.circle")
+                            .font(.title3)
+                            .foregroundColor(.gray)
+                    }
+                }
+            }
+            
+            // Notes list or empty state
+            if notes.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "note.text")
+                        .font(.system(size: 40))
+                        .foregroundColor(.gray)
+                    Text("No notes created yet")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    Button(action: createNewNote) {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                            Text("Add Note")
+                        }
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(20)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 30)
+            } else {
+                // Horizontal scrollable list of notes
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(notes.sorted(by: { $0.timestamp > $1.timestamp }).prefix(5)) { note in
+                            Button(action: {
+                                selectedNote = note
+                            }) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(dateFormatter.string(from: note.timestamp))
+                                            .font(.caption2)
+                                            .fontWeight(.medium)
+                                        if note.photoURLs.count > 0 {
+                                            Image(systemName: "photo")
+                                                .font(.caption2)
+                                            Text("\(note.photoURLs.count)")
+                                                .font(.caption2)
+                                        }
+                                    }
+                                    .foregroundColor(.blue)
+                                    
+                                    Text(note.school.isEmpty ? "No school" : note.school)
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.primary)
+                                        .lineLimit(1)
+                                    
+                                    Text(note.noteText.isEmpty ? "(No content)" : note.noteText)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                }
+                                .padding(8)
+                                .frame(width: 120, height: 70)
+                                .background(selectedNote?.id == note.id ? Color.blue.opacity(0.1) : Color(.systemGray6))
+                                .cornerRadius(8)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(selectedNote?.id == note.id ? Color.blue : Color.clear, lineWidth: 1)
+                                )
+                            }
+                        }
+                    }
+                }
+                .frame(height: 75)
+            }
+            
+            // Selected note editor
+            if let note = selectedNote {
+                VStack(alignment: .leading, spacing: 8) {
+                    // School selector
+                    if schoolOptions.isEmpty {
+                        HStack {
+                            Text("Loading schools...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        }
+                        .padding(8)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(6)
+                    } else {
+                        HStack {
+                            Text("School:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            Picker("", selection: Binding(
+                                get: {
+                                    schoolOptions.first(where: { $0.name == note.school }) ?? schoolOptions.first!
+                                },
+                                set: { newSchool in
+                                    if let index = notes.firstIndex(where: { $0.id == note.id }) {
+                                        notes[index].school = newSchool.name
+                                        selectedNote = notes[index]
+                                        saveNotes()
+                                    }
+                                }
+                            )) {
+                                ForEach(schoolOptions, id: \.id) { school in
+                                    Text(school.name).tag(school)
+                                }
+                            }
+                            .pickerStyle(MenuPickerStyle())
+                            .font(.caption)
+                        }
+                        .padding(8)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(6)
+                    }
+                    
+                    // Note content editor
+                    VStack(alignment: .trailing, spacing: 4) {
+                        TextEditor(text: Binding(
+                            get: { note.noteText },
+                            set: { newValue in
+                                if let index = notes.firstIndex(where: { $0.id == note.id }) {
+                                    notes[index].noteText = newValue
+                                    selectedNote = notes[index]
+                                    saveNotes()
+                                }
+                            }
+                        ))
+                        .font(.caption)
+                        .padding(4)
+                        .background(Color(.systemBackground))
+                        .cornerRadius(6)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                        )
+                        .frame(height: 60)
+                        
+                        Text("\(note.noteText.count) characters")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    // Photo indicator and action buttons
+                    HStack {
+                        if note.photoURLs.count > 0 {
+                            Label("\(note.photoURLs.count) photo\(note.photoURLs.count == 1 ? "" : "s")", systemImage: "photo")
+                                .font(.caption2)
+                                .foregroundColor(.blue)
+                        }
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            deleteNote(note)
+                        }) {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(Color(.systemGray6).opacity(0.5))
+                .cornerRadius(8)
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(.separator), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
+        .onAppear {
+            loadNotes()
+            loadSchoolOptions()
+            loadScheduleForToday()
+        }
+        .sheet(isPresented: $showingFullView) {
+            NavigationView {
+                PhotoshootNotesView()
+                    .navigationBarTitle("Photoshoot Notes", displayMode: .inline)
+                    .navigationBarItems(
+                        leading: Button("Done") {
+                            showingFullView = false
+                        }
+                    )
+            }
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func createNewNote() {
+        let newNote = PhotoshootNote(id: UUID(), timestamp: Date(), school: "", noteText: "", photoURLs: [])
+        notes.append(newNote)
+        selectedNote = newNote
+        
+        // Try to set school from today's schedule
+        setSchoolFromSchedule(for: newNote)
+        
+        saveNotes()
+    }
+    
+    private func deleteNote(_ note: PhotoshootNote) {
+        if let index = notes.firstIndex(where: { $0.id == note.id }) {
+            notes.remove(at: index)
+            if selectedNote?.id == note.id {
+                selectedNote = nil
+            }
+            saveNotes()
+        }
+    }
+    
+    private func loadNotes() {
+        if let decoded = try? JSONDecoder().decode([PhotoshootNote].self, from: storedNotesData) {
+            notes = decoded
+        }
+    }
+    
+    private func saveNotes() {
+        if let encoded = try? JSONEncoder().encode(notes) {
+            storedNotesData = encoded
+        }
+    }
+    
+    private func loadSchoolOptions() {
+        let db = Firestore.firestore()
+        
+        UserManager.shared.getCurrentUserOrganizationID { organizationID in
+            guard let orgID = organizationID else { return }
+            
+            db.collection("schools")
+                .whereField("organizationID", isEqualTo: orgID)
+                .whereField("type", isEqualTo: "school")
+                .getDocuments { snapshot, error in
+                    guard let docs = snapshot?.documents else { return }
+                    var temp: [SchoolItem] = []
+                    for doc in docs {
+                        let data = doc.data()
+                        if let value = data["value"] as? String,
+                           let address = data["schoolAddress"] as? String {
+                            let coordinates = data["coordinates"] as? String
+                            let item = SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates)
+                            temp.append(item)
+                        }
+                    }
+                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
+                    self.schoolOptions = temp
+                    
+                    // Auto-set school for selected note if empty
+                    if let note = self.selectedNote, note.school.isEmpty {
+                        self.setSchoolFromSchedule(for: note)
+                    }
+                }
+        }
+    }
+    
+    private func loadScheduleForToday() {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date())
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+        
+        guard let currentUserID = UserManager.shared.getCurrentUserID() else { return }
+        
+        // Use listenForSessions with immediate removal for one-time fetch
+        let listener = sessionService.listenForSessions { sessions in
+            let sessionsForToday = sessions.filter { session in
+                guard let sessionDate = session.startDate else { return false }
+                let isToday = sessionDate >= startOfDay && sessionDate < endOfDay
+                let isUserAssigned = session.isUserAssigned(userID: currentUserID)
+                return isToday && isUserAssigned
+            }
+            
+            DispatchQueue.main.async {
+                self.todaySessions = sessionsForToday
+                
+                // Auto-set school for selected note if needed
+                if let note = self.selectedNote, note.school.isEmpty {
+                    self.setSchoolFromSchedule(for: note)
+                }
+            }
+        }
+        
+        // Remove listener after first callback for one-time fetch
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            listener.remove()
+        }
+    }
+    
+    private func setSchoolFromSchedule(for note: PhotoshootNote) {
+        guard !todaySessions.isEmpty && !schoolOptions.isEmpty else { return }
+        
+        let sortedSessions = todaySessions.sorted { (a, b) -> Bool in
+            guard let aStart = a.startDate, let bStart = b.startDate else { return false }
+            return aStart < bStart
+        }
+        
+        if let firstSession = sortedSessions.first,
+           schoolOptions.contains(where: { $0.name == firstSession.schoolName }) {
+            if let index = notes.firstIndex(where: { $0.id == note.id }) {
+                notes[index].school = firstSession.schoolName
+                selectedNote = notes[index]
+                saveNotes()
+            }
+        }
     }
 }

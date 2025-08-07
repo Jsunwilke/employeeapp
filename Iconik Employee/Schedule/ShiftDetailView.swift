@@ -159,7 +159,7 @@ struct ShiftDetailView: View {
                         
                         iconRow(systemName: "camera.fill",
                                 label: "Position",
-                                value: session.position.isEmpty ? "Position" : session.position)
+                                value: session.getSessionTypeDisplayName())
                         
                         iconRow(systemName: "person.2.fill",
                                 label: "Coworkers",
@@ -1144,7 +1144,7 @@ struct ShiftDetailView: View {
         // Convert Session to ICSEvent for JobBoxService compatibility
         let compatibilityEvent = ICSEvent(
             id: session.id,
-            summary: "\(session.employeeName) - \(session.position) - \(session.schoolName)",
+            summary: "\(session.employeeName) - \(session.getSessionTypeDisplayName()) - \(session.schoolName)",
             startDate: session.startDate,
             endDate: session.endDate,
             description: session.description,
