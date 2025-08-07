@@ -16,6 +16,7 @@ class TimeTrackingService: ObservableObject {
     // Listeners for real-time updates
     private var currentEntryListener: ListenerRegistration?
     private var entriesListener: ListenerRegistration?
+    private var dashboardEntriesListener: ListenerRegistration?
     
     init() {
         setupUser()
@@ -25,6 +26,7 @@ class TimeTrackingService: ObservableObject {
     deinit {
         currentEntryListener?.remove()
         entriesListener?.remove()
+        dashboardEntriesListener?.remove()
     }
     
     func setupUser() {
@@ -44,6 +46,16 @@ class TimeTrackingService: ObservableObject {
     
     func refreshUserAndStatus() {
         setupUser()
+        
+        // If orgId is still nil, try to get it from UserDefaults again
+        // This helps when UserManager has fetched it asynchronously
+        if currentOrgId == nil {
+            currentOrgId = UserDefaults.standard.string(forKey: "userOrganizationID")
+            if currentOrgId != nil {
+                print("✅ TimeTrackingService.refreshUserAndStatus: orgId updated to \(currentOrgId!)")
+            }
+        }
+        
         checkCurrentStatus()
     }
     
@@ -151,6 +163,87 @@ class TimeTrackingService: ObservableObject {
                 "status": "clocked-out",
                 "updatedAt": FieldValue.serverTimestamp()
             ]
+            
+            if let notes = notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updateData["notes"] = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            
+            self?.db.collection("timeEntries").document(activeEntry.id).updateData(updateData) { [weak self] error in
+                DispatchQueue.main.async {
+                    if let error = error {
+                        completion(false, "Failed to clock out: \(error.localizedDescription)")
+                    } else {
+                        self?.checkCurrentStatus()
+                        completion(true, nil)
+                    }
+                }
+            }
+        }
+    }
+    
+    // Manual clock out with specific date/time for cross-midnight support
+    func clockOutManual(clockOutDateTime: Date, notes: String? = nil, completion: @escaping (Bool, String?) -> Void) {
+        guard let userId = currentUserId,
+              let orgId = currentOrgId else {
+            completion(false, "User not authenticated")
+            return
+        }
+        
+        // Validate notes
+        let (isValid, error) = TimeEntryValidator.validateNotes(notes)
+        if !isValid {
+            completion(false, error)
+            return
+        }
+        
+        // Validate clock out time is not in the future
+        if clockOutDateTime > Date() {
+            completion(false, "Clock out time cannot be in the future")
+            return
+        }
+        
+        getCurrentTimeEntry(userId: userId, organizationID: orgId) { [weak self] activeEntry in
+            guard let activeEntry = activeEntry else {
+                completion(false, "No active time entry found. Please clock in first.")
+                return
+            }
+            
+            // Validate clock out is after clock in
+            guard let clockInTime = activeEntry.clockInTime else {
+                completion(false, "Invalid clock in time")
+                return
+            }
+            
+            if clockOutDateTime <= clockInTime {
+                completion(false, "Clock out time must be after clock in time")
+                return
+            }
+            
+            // Validate shift is not longer than 24 hours
+            let duration = clockOutDateTime.timeIntervalSince(clockInTime)
+            if duration > 24 * 60 * 60 { // 24 hours in seconds
+                completion(false, "Shift duration cannot exceed 24 hours")
+                return
+            }
+            
+            // Format the clock out date for the date field
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            dateFormatter.timeZone = TimeZone.current
+            let clockOutDateString = dateFormatter.string(from: clockOutDateTime)
+            
+            var updateData: [String: Any] = [
+                "clockOutTime": Timestamp(date: clockOutDateTime),
+                "status": "clocked-out",
+                "updatedAt": FieldValue.serverTimestamp()
+            ]
+            
+            // Update the date field if clock out is on a different day
+            let clockInDateString = dateFormatter.string(from: clockInTime)
+            if clockOutDateString != clockInDateString {
+                // Keep the original clock in date, but note this is a cross-midnight entry
+                updateData["crossMidnight"] = true
+            }
             
             if let notes = notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 updateData["notes"] = notes.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -354,6 +447,14 @@ class TimeTrackingService: ObservableObject {
         print("   - currentUserId: \(currentUserId ?? "nil")")
         print("   - currentOrgId: \(currentOrgId ?? "nil")")
         
+        // If orgId is nil, try to refresh it from UserDefaults
+        if currentOrgId == nil {
+            currentOrgId = UserDefaults.standard.string(forKey: "userOrganizationID")
+            if currentOrgId != nil {
+                print("✅ TimeTrackingService.getTimeEntries: orgId refreshed to \(currentOrgId!)")
+            }
+        }
+        
         guard let userId = currentUserId,
               let orgId = currentOrgId else {
             print("❌ TimeTrackingService.getTimeEntries: Missing userId or orgId, returning empty array")
@@ -390,6 +491,76 @@ class TimeTrackingService: ObservableObject {
                 
                 completion(timeEntries)
             }
+    }
+    
+    // Real-time listener for time entries with cache support
+    func listenForTimeEntries(startDate: String, endDate: String, completion: @escaping ([TimeEntry]) -> Void) {
+        print("🔍 TimeTrackingService.listenForTimeEntries called - startDate: \(startDate), endDate: \(endDate)")
+        print("   - currentUserId: \(currentUserId ?? "nil")")
+        print("   - currentOrgId: \(currentOrgId ?? "nil")")
+        
+        // If orgId is nil, try to refresh it from UserDefaults
+        if currentOrgId == nil {
+            currentOrgId = UserDefaults.standard.string(forKey: "userOrganizationID")
+            if currentOrgId != nil {
+                print("✅ TimeTrackingService.listenForTimeEntries: orgId refreshed to \(currentOrgId!)")
+            }
+        }
+        
+        guard let userId = currentUserId,
+              let orgId = currentOrgId else {
+            print("❌ TimeTrackingService.listenForTimeEntries: Missing userId or orgId, returning empty array")
+            completion([])
+            return
+        }
+        
+        // Remove existing listener if any
+        dashboardEntriesListener?.remove()
+        
+        // Set up real-time listener with cache
+        dashboardEntriesListener = db.collection("timeEntries")
+            .whereField("userId", isEqualTo: userId)
+            .whereField("organizationID", isEqualTo: orgId)
+            .whereField("date", isGreaterThanOrEqualTo: startDate)
+            .whereField("date", isLessThanOrEqualTo: endDate)
+            .order(by: "date", descending: true)
+            .order(by: "createdAt", descending: true)
+            .limit(to: 100)
+            .addSnapshotListener(includeMetadataChanges: false) { snapshot, error in
+                if let error = error {
+                    print("❌ TimeTrackingService.listenForTimeEntries: Error - \(error)")
+                    completion([])
+                    return
+                }
+                
+                guard let snapshot = snapshot else {
+                    print("❌ TimeTrackingService.listenForTimeEntries: No snapshot")
+                    completion([])
+                    return
+                }
+                
+                // Check if data is from cache or server
+                let source = snapshot.metadata.isFromCache ? "cache" : "server"
+                print("📊 TimeTrackingService.listenForTimeEntries: Data from \(source)")
+                
+                let timeEntries = snapshot.documents.compactMap { document in
+                    TimeEntry(document: document)
+                }
+                
+                print("✅ TimeTrackingService.listenForTimeEntries: Update received")
+                print("   - Source: \(source)")
+                print("   - Date range: \(startDate) to \(endDate)")
+                print("   - Found \(timeEntries.count) entries")
+                
+                completion(timeEntries)
+            }
+    }
+    
+    // Clean up dashboard listener when not needed
+    func stopListeningForDashboardEntries() {
+        dashboardEntriesListener?.remove()
+        dashboardEntriesListener = nil
+        print("🛑 TimeTrackingService: Stopped listening for dashboard entries")
     }
     
     func getTodayAssignedSessions(completion: @escaping ([Session]) -> Void) {

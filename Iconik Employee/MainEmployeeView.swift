@@ -9,11 +9,21 @@ import UniformTypeIdentifiers
 
 // Widget identifier for drag and drop
 enum DashboardWidget: String, CaseIterable, Identifiable, Transferable, Codable {
+    // iPhone widgets (personal tracking)
     case hours = "hours"
     case mileage = "mileage"
     case shifts = "shifts"
     
+    // iPad widgets (job tasks)
+    case sportsRosters = "sportsRosters"
+    case classGroups = "classGroups"
+    case photoshootNotes = "photoshootNotes"
+    
     var id: String { self.rawValue }
+    
+    // Device-specific widget lists
+    static var iPhoneWidgets: [DashboardWidget] = [.hours, .mileage, .shifts]
+    static var iPadWidgets: [DashboardWidget] = [.sportsRosters, .classGroups, .photoshootNotes]
     
     static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .plainText)
@@ -356,7 +366,7 @@ struct CompactSessionRow: View {
                     Spacer()
                     
                     // Position label
-                    Text(session.position)
+                    Text(session.getSessionTypeDisplayName())
                         .font(.caption)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
@@ -420,6 +430,7 @@ struct MainEmployeeView: View {
     @AppStorage("userPhotoURL") private var storedUserPhotoURL: String = ""
     @AppStorage("appTheme") private var appTheme: String = "system"
     @AppStorage("dashboardWidgetOrder") private var widgetOrderString: String = ""
+    @AppStorage("iPadDashboardWidgetOrder") private var iPadWidgetOrderString: String = ""
     
     // Separate view model for employee features
     @StateObject private var viewModel = MainEmployeeViewModel()
@@ -471,6 +482,11 @@ struct MainEmployeeView: View {
     // Environment
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    
+    // Device detection
+    private var isIPad: Bool {
+        horizontalSizeClass == .regular && UIDevice.current.userInterfaceIdiom == .pad
+    }
     
     var body: some View {
         NavigationView {
@@ -591,21 +607,32 @@ struct MainEmployeeView: View {
     
     @ViewBuilder
     private func widgetView(for widget: DashboardWidget) -> some View {
-        switch widget {
-        case .hours:
-            HoursWidget(timeTrackingService: timeTrackingService)
-        case .mileage:
-            MileageWidget(userName: storedUserFirstName)
-        case .shifts:
-            UpcomingShiftsWidget(
-                sessions: viewModel.upcomingShifts,
-                isLoading: viewModel.isLoadingSchedule,
-                weatherDataBySession: viewModel.weatherDataBySession,
-                onRefresh: { loadSchedule() },
-                onSessionTap: { session in
-                    selectedSession = session
-                }
-            )
+        Group {
+            switch widget {
+            // iPhone widgets
+            case .hours:
+                HoursWidget(timeTrackingService: timeTrackingService)
+            case .mileage:
+                MileageWidget(userName: storedUserFirstName)
+            case .shifts:
+                UpcomingShiftsWidget(
+                    sessions: viewModel.upcomingShifts,
+                    isLoading: viewModel.isLoadingSchedule,
+                    weatherDataBySession: viewModel.weatherDataBySession,
+                    onRefresh: { loadSchedule() },
+                    onSessionTap: { session in
+                        selectedSession = session
+                    }
+                )
+            
+            // iPad widgets
+            case .sportsRosters:
+                SportsRostersWidget(tabBarManager: tabBarManager)
+            case .classGroups:
+                ClassGroupsWidget(tabBarManager: tabBarManager)
+            case .photoshootNotes:
+                PhotoshootNotesWidget()
+            }
         }
     }
     
@@ -646,6 +673,7 @@ struct MainEmployeeView: View {
                     }
                     .padding(.bottom, 100) // Space for tab bar
                 }
+                .padding(.top, 9) // Add padding under header
                 .refreshable {
                     loadSchedule()
                 }
@@ -1105,22 +1133,31 @@ struct MainEmployeeView: View {
     // MARK: - Widget Order Management
     
     private func loadWidgetOrder() {
-        if widgetOrderString.isEmpty {
-            // Default order
-            widgetOrder = DashboardWidget.allCases
+        let availableWidgets = isIPad ? DashboardWidget.iPadWidgets : DashboardWidget.iPhoneWidgets
+        let currentOrderString = isIPad ? iPadWidgetOrderString : widgetOrderString
+        
+        if currentOrderString.isEmpty {
+            // Default order based on device type
+            widgetOrder = availableWidgets
         } else {
-            // Parse saved order
-            let savedOrder = widgetOrderString.split(separator: ",").compactMap { rawValue in
-                DashboardWidget(rawValue: String(rawValue))
-            }
-            // Ensure all widgets are included (in case new ones are added)
-            let missingWidgets = DashboardWidget.allCases.filter { !savedOrder.contains($0) }
+            // Parse saved order and filter by available widgets
+            let savedOrder = currentOrderString.split(separator: ",")
+                .compactMap { DashboardWidget(rawValue: String($0)) }
+                .filter { availableWidgets.contains($0) }
+            
+            // Add any new widgets not in saved order
+            let missingWidgets = availableWidgets.filter { !savedOrder.contains($0) }
             widgetOrder = savedOrder + missingWidgets
         }
     }
     
     private func saveWidgetOrder() {
-        widgetOrderString = widgetOrder.map { $0.rawValue }.joined(separator: ",")
+        let orderString = widgetOrder.map { $0.rawValue }.joined(separator: ",")
+        if isIPad {
+            iPadWidgetOrderString = orderString
+        } else {
+            widgetOrderString = orderString
+        }
     }
 }
 

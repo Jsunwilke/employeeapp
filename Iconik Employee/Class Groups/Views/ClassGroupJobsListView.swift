@@ -9,6 +9,9 @@ struct ClassGroupJobsListView: View {
     @State private var showingDeleteConfirmation = false
     @State private var jobToDelete: IndexSet?
     
+    // Access TabBarManager to check for selected job
+    @ObservedObject private var tabBarManager = TabBarManager.shared
+    
     var filteredJobs: [ClassGroupJob] {
         service.classGroupJobs.filter { $0.jobType == selectedTab }
     }
@@ -89,6 +92,9 @@ struct ClassGroupJobsListView: View {
             
             self.organizationId = organizationId
             service.startListening(organizationId: organizationId)
+            
+            // Check if we have a selected job from the widget
+            checkForSelectedJob()
         }
     }
     
@@ -108,6 +114,19 @@ struct ClassGroupJobsListView: View {
                     print("Error deleting job: \(error.localizedDescription)")
                 }
             }
+        }
+    }
+    
+    private func checkForSelectedJob() {
+        // Check if we have a selected job ID from the widget
+        guard let selectedId = tabBarManager.selectedClassGroupJobId else { return }
+        
+        // Clear the selected job after using it
+        defer { tabBarManager.selectedClassGroupJobId = nil }
+        
+        // Navigate to the selected job
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.selectedJobId = selectedId
         }
     }
 }

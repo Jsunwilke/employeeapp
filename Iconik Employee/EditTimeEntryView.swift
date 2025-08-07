@@ -7,8 +7,10 @@ struct EditTimeEntryView: View {
     
     let timeEntry: TimeEntry
     
-    @State private var startTime: Date
-    @State private var endTime: Date
+    @State private var clockInDate: Date
+    @State private var clockInTime: Date
+    @State private var clockOutDate: Date
+    @State private var clockOutTime: Date
     @State private var selectedSession: Session?
     @State private var notes: String
     @State private var availableSessions: [Session] = []
@@ -26,9 +28,38 @@ struct EditTimeEntryView: View {
         self.timeTrackingService = timeTrackingService
         
         // Initialize state with current values
-        _startTime = State(initialValue: timeEntry.clockInTime ?? Date())
-        _endTime = State(initialValue: timeEntry.clockOutTime ?? Date())
+        let clockIn = timeEntry.clockInTime ?? Date()
+        let clockOut = timeEntry.clockOutTime ?? Date()
+        
+        _clockInDate = State(initialValue: clockIn)
+        _clockInTime = State(initialValue: clockIn)
+        _clockOutDate = State(initialValue: clockOut)
+        _clockOutTime = State(initialValue: clockOut)
         _notes = State(initialValue: timeEntry.notes ?? "")
+    }
+    
+    // Computed properties for combined date/time
+    private var combinedClockIn: Date {
+        combineDateAndTime(date: clockInDate, time: clockInTime)
+    }
+    
+    private var combinedClockOut: Date {
+        combineDateAndTime(date: clockOutDate, time: clockOutTime)
+    }
+    
+    private func combineDateAndTime(date: Date, time: Date) -> Date {
+        let calendar = Calendar.current
+        let dateComponents = calendar.dateComponents([.year, .month, .day], from: date)
+        let timeComponents = calendar.dateComponents([.hour, .minute], from: time)
+        
+        var combined = DateComponents()
+        combined.year = dateComponents.year
+        combined.month = dateComponents.month
+        combined.day = dateComponents.day
+        combined.hour = timeComponents.hour
+        combined.minute = timeComponents.minute
+        
+        return calendar.date(from: combined) ?? Date()
     }
     
     var body: some View {
@@ -50,26 +81,51 @@ struct EditTimeEntryView: View {
                 }
                 
                 if TimeEntryValidator.canEditEntry(timeEntry) {
-                    Section(header: Text("Time Details")) {
-                        // Start time picker
-                        DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute)
-                            .onChange(of: startTime) { _ in
-                                // Auto-adjust end time if it's before start time
-                                if endTime <= startTime {
-                                    endTime = Calendar.current.date(byAdding: .hour, value: 1, to: startTime) ?? startTime
-                                }
+                    Section(header: Text("Clock In")) {
+                        DatePicker("Date", selection: $clockInDate, 
+                                  in: ...Date(), // Cannot be in the future
+                                  displayedComponents: .date)
+                        
+                        DatePicker("Time", selection: $clockInTime, 
+                                  displayedComponents: .hourAndMinute)
+                    }
+                    
+                    Section(header: Text("Clock Out")) {
+                        DatePicker("Date", selection: $clockOutDate,
+                                  in: clockInDate...Date(), // Must be after clock in, not in future
+                                  displayedComponents: .date)
+                            .onChange(of: clockOutDate) { _ in
+                                validateDuration()
                             }
                         
-                        // End time picker
-                        DatePicker("End Time", selection: $endTime, displayedComponents: .hourAndMinute)
+                        DatePicker("Time", selection: $clockOutTime,
+                                  displayedComponents: .hourAndMinute)
+                            .onChange(of: clockOutTime) { _ in
+                                validateDuration()
+                            }
                         
-                        // Duration display
+                        // Duration display with validation
                         HStack {
                             Text("Duration")
                             Spacer()
-                            Text(formattedDuration)
-                                .foregroundColor(.blue)
-                                .fontWeight(.semibold)
+                            VStack(alignment: .trailing) {
+                                Text(formattedDuration)
+                                    .foregroundColor(isDurationValid ? .blue : .red)
+                                    .fontWeight(.semibold)
+                                
+                                if combinedClockOut > combinedClockIn && 
+                                   !Calendar.current.isDate(clockInDate, inSameDayAs: clockOutDate) {
+                                    Label("Crosses midnight", systemImage: "moon.fill")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                }
+                                
+                                if !isDurationValid {
+                                    Text(durationError)
+                                        .font(.caption)
+                                        .foregroundColor(.red)
+                                }
+                            }
                         }
                     }
                     
@@ -212,42 +268,68 @@ struct EditTimeEntryView: View {
     // MARK: - Computed Properties
     
     private var formattedDuration: String {
-        let duration = endTime.timeIntervalSince(startTime)
+        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
         return duration.formatAsHoursMinutes()
     }
     
+    private var isDurationValid: Bool {
+        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
+        return duration > 0 && duration <= 24 * 60 * 60
+    }
+    
+    private var durationError: String {
+        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
+        if duration <= 0 {
+            return "End must be after start"
+        } else if duration > 24 * 60 * 60 {
+            return "Exceeds 24 hour limit"
+        }
+        return ""
+    }
+    
     private var isValidEntry: Bool {
-        // End time must be after start time
-        guard endTime > startTime else { return false }
+        // Clock out must be after clock in
+        guard combinedClockOut > combinedClockIn else { return false }
         
         // Duration must be at least 1 minute
-        let duration = endTime.timeIntervalSince(startTime)
+        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
         guard duration >= 60 else { return false }
         
-        // Duration must not exceed 16 hours
-        guard duration <= 16 * 3600 else { return false }
+        // Duration must not exceed 24 hours (for cross-midnight support)
+        guard duration <= 24 * 3600 else { return false }
         
         // Cannot create future entries
-        guard endTime <= Date() else { return false }
+        guard combinedClockOut <= Date() else { return false }
         
         return true
     }
     
+    private func validateDuration() {
+        // Auto-adjust if needed
+        if combinedClockOut <= combinedClockIn {
+            // Move clock out to next day if times suggest crossing midnight
+            let calendar = Calendar.current
+            if let nextDay = calendar.date(byAdding: .day, value: 1, to: clockInDate) {
+                clockOutDate = nextDay
+            }
+        }
+    }
+    
     private var validationMessage: String {
-        if endTime <= startTime {
-            return "End time must be after start time"
+        if combinedClockOut <= combinedClockIn {
+            return "Clock out time must be after clock in time"
         }
         
-        let duration = endTime.timeIntervalSince(startTime)
+        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
         if duration < 60 {
             return "Duration must be at least 1 minute"
         }
         
-        if duration > 16 * 3600 {
-            return "Duration cannot exceed 16 hours"
+        if duration > 24 * 3600 {
+            return "Duration cannot exceed 24 hours"
         }
         
-        if endTime > Date() {
+        if combinedClockOut > Date() {
             return "Cannot create entries for future times"
         }
         
@@ -290,10 +372,11 @@ struct EditTimeEntryView: View {
     private func updateTimeEntry() {
         isLoading = true
         
+        // Use combined date/time values for cross-midnight support
         timeTrackingService.updateTimeEntry(
             entryId: timeEntry.id,
-            startTime: startTime,
-            endTime: endTime,
+            startTime: combinedClockIn,
+            endTime: combinedClockOut,
             sessionId: selectedSession?.id,
             notes: notes.isEmpty ? nil : notes
         ) { success, errorMessage in

@@ -117,6 +117,11 @@ class TabBarManager: ObservableObject {
     @Published var configuration: TabBarConfiguration
     @Published var selectedTab: String = ""
     
+    // Navigation data for passing between features
+    @Published var selectedSportsSession: Session? = nil
+    @Published var selectedSportsShoot: SportsShoot? = nil
+    @Published var selectedClassGroupJobId: String? = nil
+    
     private let configurationKey = "TabBarConfiguration"
     
     private init() {

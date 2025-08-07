@@ -5,8 +5,11 @@ struct TimeTrackingMainView: View {
     
     @State private var showingSessionSelection = false
     @State private var showingNotesInput = false
+    @State private var showingCustomClockOut = false
+    @State private var showingLongShiftAlert = false
     @State private var showingAlert = false
     @State private var alertMessage = ""
+    @State private var pendingClockOutNotes: String? = nil
     
     var body: some View {
         VStack(spacing: 8) {
@@ -45,6 +48,29 @@ struct TimeTrackingMainView: View {
                         clockOut(notes: notes)
                     }
                 )
+            }
+            .sheet(isPresented: $showingCustomClockOut) {
+                if let entry = timeTrackingService.currentTimeEntry,
+                   let clockInTime = entry.clockInTime {
+                    CustomClockOutView(
+                        timeTrackingService: timeTrackingService,
+                        clockInTime: clockInTime,
+                        onComplete: { _, _ in
+                            // Completion handled in CustomClockOutView
+                        }
+                    )
+                }
+            }
+            .alert("Long Shift Detected", isPresented: $showingLongShiftAlert) {
+                Button("Clock Out Now") {
+                    showingNotesInput = true
+                }
+                Button("Set Custom Time") {
+                    showingCustomClockOut = true
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("You've been clocked in for over 24 hours. Would you like to set a custom clock out time?")
             }
             .alert(isPresented: $showingAlert) {
                 Alert(
@@ -100,7 +126,7 @@ struct TimeTrackingMainView: View {
             if timeTrackingService.isClockIn {
                 // Clock Out Button
                 Button(action: {
-                    showingNotesInput = true
+                    checkForLongShift()
                 }) {
                     HStack {
                         Image(systemName: "stop.circle.fill")
@@ -108,6 +134,17 @@ struct TimeTrackingMainView: View {
                         Text("Clock Out")
                             .font(.subheadline)
                             .fontWeight(.semibold)
+                        
+                        // Add indicator for long shifts
+                        if let entry = timeTrackingService.currentTimeEntry,
+                           let clockInTime = entry.clockInTime {
+                            let elapsed = Date().timeIntervalSince(clockInTime)
+                            if elapsed > 24 * 60 * 60 {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.yellow)
+                            }
+                        }
                     }
                     .foregroundColor(.white)
                     .padding(.vertical, 10)
@@ -190,6 +227,24 @@ struct TimeTrackingMainView: View {
     }
     
     // MARK: - Actions
+    
+    private func checkForLongShift() {
+        // Check if user has been clocked in for over 24 hours
+        if let entry = timeTrackingService.currentTimeEntry,
+           let clockInTime = entry.clockInTime {
+            let elapsed = Date().timeIntervalSince(clockInTime)
+            
+            if elapsed > 24 * 60 * 60 { // Over 24 hours
+                showingLongShiftAlert = true
+            } else {
+                // Normal clock out flow
+                showingNotesInput = true
+            }
+        } else {
+            // No active entry, shouldn't happen but handle gracefully
+            showingNotesInput = true
+        }
+    }
     
     private func clockIn(sessionId: String?, notes: String?) {
         timeTrackingService.clockIn(sessionId: sessionId, notes: notes) { success, errorMessage in

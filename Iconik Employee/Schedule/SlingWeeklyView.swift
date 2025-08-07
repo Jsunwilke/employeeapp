@@ -812,6 +812,18 @@ struct SlingWeeklyView: View {
             return notes.joined(separator: "\n")
         }
         
+        private func getSessionTypeDisplay(typeId: String) -> (name: String, color: Color) {
+            // Check if this is "other" type with custom name
+            if typeId == "other" && session.customSessionType != nil && !session.customSessionType!.isEmpty {
+                return (session.customSessionType!, .gray)
+            } else if let sessionType = organizationService.getSessionType(by: typeId) {
+                return (sessionType.name, Color(hex: sessionType.color))
+            } else {
+                // Fallback: show the typeId if no definition found
+                return (typeId, .gray)
+            }
+        }
+        
         private var colorForPosition: Color {
             // First priority: use sessionColor if available
             if let sessionColor = session.sessionColor {
@@ -896,26 +908,15 @@ struct SlingWeeklyView: View {
                         if let sessionTypeIds = session.sessionType {
                             ForEach(sessionTypeIds, id: \.self) { typeId in
                                 let _ = print("🏷️ Looking for sessionType '\(typeId)' in \(organizationService.sessionTypes.count) types")
-                                if let sessionType = organizationService.getSessionType(by: typeId) {
-                                    Text(sessionType.name)
-                                        .font(.caption2)
-                                        .fontWeight(.medium)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 3)
-                                        .background(Color(hex: sessionType.color).opacity(0.2))
-                                        .foregroundColor(Color(hex: sessionType.color))
-                                        .cornerRadius(12)
-                                } else {
-                                    // Fallback: show the typeId if no definition found
-                                    Text(typeId)
-                                        .font(.caption2)
-                                        .fontWeight(.medium)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 3)
-                                        .background(Color.gray.opacity(0.2))
-                                        .foregroundColor(.gray)
-                                        .cornerRadius(12)
-                                }
+                                
+                                Text(getSessionTypeDisplay(typeId: typeId).name)
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(getSessionTypeDisplay(typeId: typeId).color.opacity(0.2))
+                                    .foregroundColor(getSessionTypeDisplay(typeId: typeId).color)
+                                    .cornerRadius(12)
                             }
                         }
                     }
