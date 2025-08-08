@@ -13,6 +13,7 @@ struct JobBoxFormView: View {
     
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var userManager = UserManager.shared
+    @StateObject private var timeTrackingService = TimeTrackingService()
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     
     @State private var localPhotographer: String = ""
@@ -209,59 +210,20 @@ struct JobBoxFormView: View {
     }
     
     private func updateAvailableSessions() {
-        // Get today's sessions for the selected photographer
-        let today = Date()
-        let calendar = Calendar.current
-        
-        // Load sessions from Firestore
-        let db = Firestore.firestore()
-        let orgID = userManager.currentUserOrganizationID
-        
-        guard !orgID.isEmpty else { return }
-        
-        // Query for today's sessions
-        db.collection("sessions")
-            .whereField("organizationID", isEqualTo: orgID)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    print("Error loading sessions: \(error)")
-                    return
-                }
-                
-                guard let documents = snapshot?.documents else { return }
-                
-                let allSessions = documents.map { doc -> Session in
-                    let data = doc.data()
-                    return Session(id: doc.documentID, data: data)
-                }
-                
-                self.availableSessions = allSessions.filter { session in
-                    // Check if session is today
-                    if let sessionDate = session.startDate ?? session.endDate {
-                        let isToday = calendar.isDate(sessionDate, inSameDayAs: today)
-                        
-                        // Check if photographer is assigned
-                        let isAssigned = session.photographers.contains { photographerData in
-                            if let name = photographerData["name"] as? String {
-                                return name.lowercased() == localPhotographer.lowercased()
-                            }
-                            return false
-                        }
-                        
-                        return isToday && isAssigned
-                    }
-                    return false
-                }
-                .sorted { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) }
+        // Use the same logic as ManualEntryView - get sessions for next 2 weeks
+        timeTrackingService.getAvailableSessionsForJobBox { sessions in
+            DispatchQueue.main.async {
+                self.availableSessions = sessions.sorted { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) }
                 
                 // If there's a last record with a shiftUid, try to select that session
-                if let lastShiftUid = lastRecord?.shiftUid {
-                    selectedSession = availableSessions.first { $0.id == lastShiftUid }
-                } else if availableSessions.count == 1 {
+                if let lastShiftUid = self.lastRecord?.shiftUid {
+                    self.selectedSession = self.availableSessions.first { $0.id == lastShiftUid }
+                } else if self.availableSessions.count == 1 {
                     // Auto-select if only one session
-                    selectedSession = availableSessions.first
+                    self.selectedSession = self.availableSessions.first
                 }
             }
+        }
     }
     
     private func updateDefaults() {

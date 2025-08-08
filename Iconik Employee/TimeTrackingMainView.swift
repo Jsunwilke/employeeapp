@@ -10,6 +10,7 @@ struct TimeTrackingMainView: View {
     @State private var showingAlert = false
     @State private var alertMessage = ""
     @State private var pendingClockOutNotes: String? = nil
+    @State private var showingActiveClockInEdit = false
     
     var body: some View {
         VStack(spacing: 8) {
@@ -58,6 +59,14 @@ struct TimeTrackingMainView: View {
                         onComplete: { _, _ in
                             // Completion handled in CustomClockOutView
                         }
+                    )
+                }
+            }
+            .sheet(isPresented: $showingActiveClockInEdit) {
+                if let entry = timeTrackingService.currentTimeEntry {
+                    ActiveClockInEditView(
+                        timeEntry: entry,
+                        timeTrackingService: timeTrackingService
                     )
                 }
             }
@@ -151,6 +160,25 @@ struct TimeTrackingMainView: View {
                     .padding(.horizontal, 16)
                     .frame(maxWidth: .infinity)
                     .background(Color.red)
+                    .cornerRadius(8)
+                }
+                
+                // Edit Clock-In Time Button
+                Button(action: {
+                    showingActiveClockInEdit = true
+                }) {
+                    HStack {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.body)
+                        Text("Edit Clock-In Time")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundColor(.blue)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.blue.opacity(0.1))
                     .cornerRadius(8)
                 }
                 

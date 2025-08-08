@@ -26,6 +26,9 @@ struct MileageDetailView: View {
     @Environment(\.presentationMode) var presentationMode
     @Environment(\.colorScheme) var colorScheme
     
+    // User organization for filtering schools
+    @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
+    
     // Date formatter for header
     private var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
@@ -192,6 +195,7 @@ struct MileageDetailView: View {
     private func loadSchools() {
         let db = Firestore.firestore()
         db.collection("schools")
+            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
             .whereField("type", isEqualTo: "school")
             .getDocuments { snapshot, error in
                 if let error = error {

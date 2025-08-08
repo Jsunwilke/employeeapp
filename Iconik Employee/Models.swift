@@ -459,17 +459,38 @@ struct TimeEntryValidator {
     }
     
     // Check if user can edit entry (30-day rule)
-    static func canEditEntry(_ entry: TimeEntry) -> Bool {
+    static func canEditEntry(_ entry: TimeEntry, clockInOnly: Bool = false) -> Bool {
         guard let createdAt = entry.createdAt else { return false }
         
-        // Cannot edit active entries
+        // Allow editing for active entries (clock-in time can be edited)
         if entry.status == "clocked-in" {
-            return false
+            return true // Allow editing active entries
         }
         
-        // 30-day edit window
+        // 30-day edit window for completed entries
         let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
         return createdAt >= thirtyDaysAgo
+    }
+    
+    // Validate clock-in time for active entries
+    static func canEditActiveClockIn(_ entry: TimeEntry, newClockInTime: Date) -> (isValid: Bool, error: String?) {
+        // Must be an active entry
+        guard entry.status == "clocked-in" else {
+            return (false, "Entry is not currently active")
+        }
+        
+        // Cannot be in the future
+        if newClockInTime > Date() {
+            return (false, "Clock-in time cannot be in the future")
+        }
+        
+        // Must be within the last 48 hours (reasonable limit)
+        let fortyEightHoursAgo = Calendar.current.date(byAdding: .hour, value: -48, to: Date()) ?? Date()
+        if newClockInTime < fortyEightHoursAgo {
+            return (false, "Clock-in time must be within the last 48 hours")
+        }
+        
+        return (true, nil)
     }
 }
 
