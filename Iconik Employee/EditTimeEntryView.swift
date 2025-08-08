@@ -85,12 +85,15 @@ struct EditTimeEntryView: View {
                         DatePicker("Date", selection: $clockInDate, 
                                   in: ...Date(), // Cannot be in the future
                                   displayedComponents: .date)
+                            .disabled(timeEntry.status == "clocked-in") // Don't allow date change for active entries
                         
                         DatePicker("Time", selection: $clockInTime, 
                                   displayedComponents: .hourAndMinute)
                     }
                     
-                    Section(header: Text("Clock Out")) {
+                    // Only show Clock Out section for completed entries
+                    if timeEntry.status != "clocked-in" {
+                        Section(header: Text("Clock Out")) {
                         DatePicker("Date", selection: $clockOutDate,
                                   in: clockInDate...Date(), // Must be after clock in, not in future
                                   displayedComponents: .date)
@@ -128,9 +131,10 @@ struct EditTimeEntryView: View {
                             }
                         }
                     }
+                    }
                     
-                    // Session selection (if available)
-                    if !availableSessions.isEmpty {
+                    // Session selection (if available) - disabled for active entries
+                    if !availableSessions.isEmpty && timeEntry.status != "clocked-in" {
                         Section(header: Text("Associated Session")) {
                             Picker("Session", selection: $selectedSession) {
                                 Text("No Session").tag(nil as Session?)
@@ -150,7 +154,7 @@ struct EditTimeEntryView: View {
                         }
                     }
                     
-                    // Notes section
+                    // Notes section - always editable
                     Section(header: Text("Notes")) {
                         TextEditor(text: $notes)
                             .frame(minHeight: 80)
@@ -170,11 +174,20 @@ struct EditTimeEntryView: View {
                         }
                     }
                     
-                    // Validation warnings
-                    if !isValidEntry {
+                    // Validation warnings - only for completed entries
+                    if !isValidEntry && timeEntry.status != "clocked-in" {
                         Section {
                             Label(validationMessage, systemImage: "exclamationmark.triangle")
                                 .foregroundColor(.orange)
+                        }
+                    }
+                    
+                    // Show info for active entries
+                    if timeEntry.status == "clocked-in" {
+                        Section {
+                            Label("You can only edit the clock-in time and notes while actively clocked in", systemImage: "info.circle")
+                                .font(.caption)
+                                .foregroundColor(.blue)
                         }
                     }
                     
@@ -288,6 +301,13 @@ struct EditTimeEntryView: View {
     }
     
     private var isValidEntry: Bool {
+        // For active entries, only validate clock-in time
+        if timeEntry.status == "clocked-in" {
+            // Validate clock-in time is not in future and within 48 hours
+            let validation = TimeEntryValidator.canEditActiveClockIn(timeEntry, newClockInTime: combinedClockIn)
+            return validation.isValid
+        }
+        
         // Clock out must be after clock in
         guard combinedClockOut > combinedClockIn else { return false }
         

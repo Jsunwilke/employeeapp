@@ -706,7 +706,7 @@ class TimeTrackingService: ObservableObject {
             
             // Check if user can edit this entry
             if !TimeEntryValidator.canEditEntry(timeEntry) {
-                completion(false, "This time entry cannot be edited (either it's active or outside the 30-day edit window)")
+                completion(false, "This time entry cannot be edited (outside the 30-day edit window)")
                 return
             }
             
@@ -716,7 +716,55 @@ class TimeTrackingService: ObservableObject {
                 return
             }
             
-            // Validate the updated times
+            // Handle active entries differently - only update clock-in time
+            if timeEntry.status == "clocked-in" {
+                // Validate the new clock-in time
+                let validation = TimeEntryValidator.canEditActiveClockIn(timeEntry, newClockInTime: startTime)
+                if !validation.isValid {
+                    completion(false, validation.error)
+                    return
+                }
+                
+                // Update only clock-in time for active entries
+                self?.db.collection("timeEntries").document(entryId).updateData([
+                    "clockInTime": Timestamp(date: startTime),
+                    "notes": notes ?? NSNull(),
+                    "updatedAt": FieldValue.serverTimestamp()
+                ]) { error in
+                    DispatchQueue.main.async {
+                        if let error = error {
+                            completion(false, "Failed to update time entry: \(error.localizedDescription)")
+                        } else {
+                            // Update local copy if this is the current entry
+                            if self?.currentTimeEntry?.id == entryId {
+                                if let currentEntry = self?.currentTimeEntry {
+                                    let updatedEntry = TimeEntry(
+                                        id: currentEntry.id,
+                                        userId: currentEntry.userId,
+                                        organizationID: currentEntry.organizationID,
+                                        clockInTime: startTime,
+                                        clockOutTime: currentEntry.clockOutTime,
+                                        date: currentEntry.date,
+                                        status: currentEntry.status,
+                                        sessionId: currentEntry.sessionId,
+                                        sessionName: currentEntry.sessionName,
+                                        notes: notes,
+                                        createdAt: currentEntry.createdAt,
+                                        updatedAt: Date()
+                                    )
+                                    self?.currentTimeEntry = updatedEntry
+                                    self?.elapsedTime = Date().timeIntervalSince(startTime)
+                                    self?.objectWillChange.send()
+                                }
+                            }
+                            completion(true, nil)
+                        }
+                    }
+                }
+                return
+            }
+            
+            // For completed entries, validate the updated times
             let dateString = timeEntry.date
             let (isValid, validationError) = TimeEntryValidator.validateManualEntry(date: dateString, startTime: startTime, endTime: endTime)
             if !isValid {
@@ -766,6 +814,68 @@ class TimeTrackingService: ObservableObject {
                         }
                     }
                 }
+            }
+        }
+    }
+    
+    // Update clock-in time for active entry
+    func updateActiveClockInTime(newClockInTime: Date, completion: @escaping (Bool, String?) -> Void) {
+        guard let userId = currentUserId,
+              let orgId = currentOrgId else {
+            completion(false, "User not authenticated")
+            return
+        }
+        
+        // Get the current active entry
+        guard let currentEntry = currentTimeEntry,
+              currentEntry.status == "clocked-in" else {
+            completion(false, "No active time entry found")
+            return
+        }
+        
+        // Validate the new clock-in time
+        let validation = TimeEntryValidator.canEditActiveClockIn(currentEntry, newClockInTime: newClockInTime)
+        if !validation.isValid {
+            completion(false, validation.error)
+            return
+        }
+        
+        // Update the entry in Firestore
+        db.collection("timeEntries").document(currentEntry.id).updateData([
+            "clockInTime": Timestamp(date: newClockInTime),
+            "updatedAt": FieldValue.serverTimestamp()
+        ]) { [weak self] error in
+            if let error = error {
+                completion(false, "Failed to update clock-in time: \(error.localizedDescription)")
+            } else {
+                // Create updated entry with new clock-in time
+                if let self = self, let currentEntry = self.currentTimeEntry {
+                    let updatedEntry = TimeEntry(
+                        id: currentEntry.id,
+                        userId: currentEntry.userId,
+                        organizationID: currentEntry.organizationID,
+                        clockInTime: newClockInTime,
+                        clockOutTime: currentEntry.clockOutTime,
+                        date: currentEntry.date,
+                        status: currentEntry.status,
+                        sessionId: currentEntry.sessionId,
+                        sessionName: currentEntry.sessionName,
+                        notes: currentEntry.notes,
+                        createdAt: currentEntry.createdAt,
+                        updatedAt: Date()
+                    )
+                    self.currentTimeEntry = updatedEntry
+                    
+                    // Recalculate elapsed time
+                    self.elapsedTime = Date().timeIntervalSince(newClockInTime)
+                    
+                    // Notify observers of the change
+                    DispatchQueue.main.async {
+                        self.objectWillChange.send()
+                    }
+                }
+                
+                completion(true, nil)
             }
         }
     }
