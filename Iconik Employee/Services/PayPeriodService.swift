@@ -96,17 +96,21 @@ class PayPeriodService: ObservableObject {
             return getDefaultPayPeriod(for: date)
         }
         
-        // Parse the start date
+        // Ensure consistent timezone usage
+        var calendar = Calendar.current
+        calendar.timeZone = TimeZone.current
+        
+        // Parse the start date with explicit timezone
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
         dateFormatter.timeZone = TimeZone.current
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         
         guard let referenceDate = dateFormatter.date(from: activeSettings.startDate) else {
             print("❌ PayPeriodService: Invalid start date format: \(activeSettings.startDate)")
             return getDefaultPayPeriod(for: date)
         }
         
-        let calendar = Calendar.current
         let referenceStartOfDay = calendar.startOfDay(for: referenceDate)
         let targetStartOfDay = calendar.startOfDay(for: date)
         
@@ -126,9 +130,10 @@ class PayPeriodService: ObservableObject {
         }
         
         // Calculate how many days between reference and target
-        let daysSinceReference = calendar.dateComponents([.day], from: referenceStartOfDay, to: targetStartOfDay).day ?? 0
+        let components = calendar.dateComponents([.day], from: referenceStartOfDay, to: targetStartOfDay)
+        let daysSinceReference = components.day ?? 0
         
-        // Calculate periods - if reference is in future, we need to go backwards
+        // Calculate periods using proper floor division
         let periodsElapsed: Int
         if daysSinceReference >= 0 {
             // Normal case: reference date is in the past
@@ -186,28 +191,55 @@ class PayPeriodService: ObservableObject {
     
     // Default fallback using the old hardcoded date
     private func getDefaultPayPeriod(for date: Date = Date()) -> (start: Date, end: Date)? {
-        let calendar = Calendar.current
+        // Ensure consistent timezone usage
+        var calendar = Calendar.current
+        calendar.timeZone = TimeZone.current
         
-        // Reference date: 2/25/2024 (existing hardcoded date)
+        // Reference date: 2/25/2024 (Sunday - start of a pay period)
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "M/d/yyyy"
+        dateFormatter.timeZone = TimeZone.current
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         
         guard let referenceDate = dateFormatter.date(from: "2/25/2024") else {
+            print("❌ PayPeriodService: Failed to parse reference date")
             return nil
         }
         
         let referenceStartOfDay = calendar.startOfDay(for: referenceDate)
         let targetStartOfDay = calendar.startOfDay(for: date)
-        let daysSinceReference = calendar.dateComponents([.day], from: referenceStartOfDay, to: targetStartOfDay).day ?? 0
-        let periodLength = 14
-        let periodsElapsed = daysSinceReference / periodLength
         
-        guard let periodStart = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay),
-              let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: periodStart),
-              let periodEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) else {
+        // Calculate days between dates using dateComponents
+        let components = calendar.dateComponents([.day], from: referenceStartOfDay, to: targetStartOfDay)
+        let daysSinceReference = components.day ?? 0
+        
+        let periodLength = 14
+        
+        // Use integer division to get complete periods elapsed
+        let periodsElapsed = daysSinceReference >= 0 ? 
+            daysSinceReference / periodLength : 
+            ((daysSinceReference - periodLength + 1) / periodLength)
+        
+        // Calculate the start of the current period
+        guard let periodStart = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay) else {
+            print("❌ PayPeriodService: Failed to calculate period start")
             return nil
         }
+        
+        // Calculate the end of the period (13 days later, end of day)
+        guard let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: periodStart),
+              let periodEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) else {
+            print("❌ PayPeriodService: Failed to calculate period end")
+            return nil
+        }
+        
+        // Debug logging
+        print("📅 Default Pay Period Calculation:")
+        print("   Reference: 2/25/2024 (Sunday)")
+        print("   Target: \(dateFormatter.string(from: date))")
+        print("   Days since reference: \(daysSinceReference)")
+        print("   Periods elapsed: \(periodsElapsed)")
+        print("   Period: \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
         
         return (periodStart, periodEnd)
     }

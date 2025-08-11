@@ -607,8 +607,8 @@ struct ShiftDetailView: View {
     // Action Buttons Row
     private var actionButtonsRow: some View {
         HStack(spacing: 8) {
-            // Directions Button
-            if let _ = session.location, !session.location!.isEmpty {
+            // Directions Button - Show if we have school coordinates or location
+            if !schoolAddress.isEmpty || (session.location != nil && !session.location!.isEmpty) {
                 ActionButton(
                     title: "Directions",
                     systemImage: "map.fill",
@@ -2137,28 +2137,56 @@ struct ShiftDetailView: View {
     // Action Methods
     
     private func openInAppleMaps() {
-        guard let location = session.location, !location.isEmpty else { return }
+        // Prefer school coordinates/address over session location
+        let locationToUse = !schoolAddress.isEmpty ? schoolAddress : (session.location ?? "")
+        guard !locationToUse.isEmpty else { return }
         
-        let addressString = location.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let mapsString = "http://maps.apple.com/?address=\(addressString)"
-        
-        if let url = URL(string: mapsString), UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url)
+        // Check if it's coordinates (lat,lon format)
+        if let coordinates = parseCoordinateString(locationToUse) {
+            // Use coordinates directly for more accuracy
+            let mapsString = "http://maps.apple.com/?ll=\(coordinates.latitude),\(coordinates.longitude)&q=\(session.schoolName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
+            if let url = URL(string: mapsString) {
+                UIApplication.shared.open(url)
+            }
+        } else {
+            // Use as address
+            let addressString = locationToUse.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            let mapsString = "http://maps.apple.com/?address=\(addressString)"
+            if let url = URL(string: mapsString) {
+                UIApplication.shared.open(url)
+            }
         }
     }
     
     private func openInGoogleMaps() {
-        guard let location = session.location, !location.isEmpty else { return }
+        // Prefer school coordinates/address over session location
+        let locationToUse = !schoolAddress.isEmpty ? schoolAddress : (session.location ?? "")
+        guard !locationToUse.isEmpty else { return }
         
-        let addressString = location.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let mapsString = "comgooglemaps://?q=\(addressString)"
-        
-        if let url = URL(string: mapsString), UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url)
+        // Check if it's coordinates (lat,lon format)
+        if let coordinates = parseCoordinateString(locationToUse) {
+            // Use coordinates directly for more accuracy
+            let mapsString = "comgooglemaps://?center=\(coordinates.latitude),\(coordinates.longitude)&q=\(coordinates.latitude),\(coordinates.longitude)&label=\(session.schoolName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
+            
+            if let url = URL(string: mapsString), UIApplication.shared.canOpenURL(url) {
+                UIApplication.shared.open(url)
+            } else {
+                // Fallback to browser if Google Maps app is not installed
+                let webURL = URL(string: "https://maps.google.com/?q=\(coordinates.latitude),\(coordinates.longitude)")!
+                UIApplication.shared.open(webURL)
+            }
         } else {
-            // Fallback to browser if Google Maps app is not installed
-            let webURL = URL(string: "https://maps.google.com/?q=\(addressString)")!
-            UIApplication.shared.open(webURL)
+            // Use as address
+            let addressString = locationToUse.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            let mapsString = "comgooglemaps://?q=\(addressString)"
+            
+            if let url = URL(string: mapsString), UIApplication.shared.canOpenURL(url) {
+                UIApplication.shared.open(url)
+            } else {
+                // Fallback to browser if Google Maps app is not installed
+                let webURL = URL(string: "https://maps.google.com/?q=\(addressString)")!
+                UIApplication.shared.open(webURL)
+            }
         }
     }
     

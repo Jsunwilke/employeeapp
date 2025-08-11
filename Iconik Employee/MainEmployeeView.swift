@@ -73,7 +73,8 @@ class MainEmployeeViewModel: ObservableObject {
         FeatureItem(id: "locationPhotos", title: "Location Photos", systemImage: "photo.on.rectangle", description: "Manage photos for locations"),
         FeatureItem(id: "sportsShoot", title: "Sports Shoots", systemImage: "sportscourt", description: "Manage sports shoot rosters and images"),
         FeatureItem(id: "yearbookChecklists", title: "Yearbook Checklists", systemImage: "list.clipboard", description: "Track yearbook photo requirements"),
-        FeatureItem(id: "classGroups", title: "Class Groups", systemImage: "person.3", description: "Track class photos by grade and teacher")
+        FeatureItem(id: "classGroups", title: "Class Groups", systemImage: "person.3", description: "Track class photos by grade and teacher"),
+        FeatureItem(id: "training", title: "Training", systemImage: "graduationcap.fill", description: "View your training photos and feedback")
     ]
     
     private let employeeOrderKey = "employeeFeatureOrder"
@@ -142,12 +143,14 @@ class MainEmployeeViewModel: ObservableObject {
                     return
                 }
                 
-                // Filter sessions for today and tomorrow where current user is assigned
+                // Filter sessions for today, tomorrow, and day after tomorrow where current user is assigned
                 let calendar = Calendar.current
-                let startOfToday = calendar.startOfDay(for: Date())
-                let endOfTomorrow = calendar.date(byAdding: .day, value: 2, to: startOfToday) ?? startOfToday
+                let now = Date()
+                let startOfToday = calendar.startOfDay(for: now)
+                let endOfDayAfterTomorrow = calendar.date(byAdding: .day, value: 3, to: startOfToday) ?? startOfToday
                 
-                print("📅 Date range filter: \(startOfToday) to \(endOfTomorrow)")
+                print("📅 Date range filter: \(startOfToday) to \(endOfDayAfterTomorrow)")
+                print("📅 Current time: \(now)")
                 print("📅 Processing \(sessions.count) sessions for filtering")
                 
                 let userSessions = sessions.filter { session in
@@ -160,12 +163,25 @@ class MainEmployeeViewModel: ObservableObject {
                         return false 
                     }
                     
-                    let isInTimeRange = startDate >= startOfToday && startDate < endOfTomorrow
+                    // Check if session is within the 3-day range
+                    let isInTimeRange = startDate >= startOfToday && startDate < endOfDayAfterTomorrow
                     print("📅 Session \(session.schoolName) time range check: \(isInTimeRange) (date: \(startDate))")
                     
                     if !isInTimeRange {
                         print("❌ Session \(session.schoolName) outside time range - FILTERED OUT")
                         return false
+                    }
+                    
+                    // For today's sessions, check if they've already ended
+                    if calendar.isDateInToday(startDate) {
+                        // Estimate session end time (assuming 2 hour duration if not specified)
+                        let estimatedDuration: TimeInterval = 2 * 60 * 60 // 2 hours in seconds
+                        let endDate = startDate.addingTimeInterval(estimatedDuration)
+                        
+                        if endDate < now {
+                            print("❌ Session \(session.schoolName) has already ended - FILTERED OUT")
+                            return false
+                        }
                     }
                     
                     let isUserAssigned = session.isUserAssigned(userID: currentUserID)
@@ -504,7 +520,7 @@ struct MainEmployeeView: View {
                         timeTrackingService: timeTrackingService
                     )
                 }
-                .ignoresSafeArea(edges: .bottom)
+                .ignoresSafeArea(edges: .bottom) // Keep tab bar positioned correctly
                 
                 // Flag notification banner overlay
                 if isFlagged && !flagNote.isEmpty && !isBannerDismissed {
@@ -737,6 +753,8 @@ struct MainEmployeeView: View {
             YearbookShootListsView()
         case "classGroups":
             ClassGroupJobsListView()
+        case "training":
+            PhotoCritiqueListView()
         case "customDailyReports":
             CustomDailyReportsView()
         case "myDailyJobReports":
@@ -1047,6 +1065,8 @@ struct MainEmployeeView: View {
         case "locationPhotos": return .pink
         case "sportsShoot": return .indigo
         case "yearbookChecklists": return .purple
+        case "classGroups": return .teal
+        case "training": return .yellow
         case "chat": return .blue
         case "scan": return .orange
         case "flagUser": return .red
