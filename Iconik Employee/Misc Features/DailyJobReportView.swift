@@ -5,6 +5,23 @@ import FirebaseFirestore
 import FirebaseStorage
 import CoreLocation
 import MapKit
+import Combine
+
+// MARK: - Keyboard Height Publisher
+extension Publishers {
+    static var keyboardHeight: AnyPublisher<CGFloat, Never> {
+        let willShow = NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
+            .map { notification -> CGFloat in
+                (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect)?.height ?? 0
+            }
+        
+        let willHide = NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+            .map { _ -> CGFloat in 0 }
+        
+        return MergeMany(willShow, willHide)
+            .eraseToAnyPublisher()
+    }
+}
 
 // Photographer struct to handle duplicate names
 struct PhotographerOption: Identifiable {
@@ -144,6 +161,12 @@ struct DailyJobReportView: View {
     @Environment(\.presentationMode) var presentationMode
     
     // ------------------------------------------------------------------
+    // Keyboard handling
+    // ------------------------------------------------------------------
+    @FocusState private var isTextFieldFocused: Bool
+    @State private var keyboardHeight: CGFloat = 0
+    
+    // ------------------------------------------------------------------
     // UI State Management - All sections expanded by default
     // ------------------------------------------------------------------
     @State private var expandedSections: Set<FormSection> = Set(FormSection.allCases)
@@ -207,36 +230,42 @@ struct DailyJobReportView: View {
     // MARK: - Body
     
     var body: some View {
-        ZStack {
-            backgroundGradient
-                .ignoresSafeArea()
-            
+        ScrollView {
             VStack(spacing: 0) {
-                headerView
-                
-                // Progress bar
-                progressView
+                // Header section with background
+                ZStack {
+                    backgroundGradient
+                        .frame(maxHeight: 200)
+                    
+                    VStack(spacing: 0) {
+                        headerView
+                        progressView
+                    }
+                }
                 
                 // Main content with sections
-                ScrollView {
-                    VStack(spacing: 16) {
-                        ForEach(FormSection.allCases) { section in
-                            let isExpanded = expandedSections.contains(section)
-                            sectionCard(for: section, isExpanded: isExpanded)
-                        }
-                        
-                        // Submit button
-                        submitButton
-                            .padding(.vertical, 20)
+                VStack(spacing: 16) {
+                    ForEach(FormSection.allCases) { section in
+                        let isExpanded = expandedSections.contains(section)
+                        sectionCard(for: section, isExpanded: isExpanded)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 20)
                 }
-                .scrollIndicators(.hidden)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 20)
             }
+        }
+        .background(backgroundGradient)
+        .scrollIndicators(.hidden)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear
+                .frame(height: keyboardHeight)
+                .animation(.easeOut(duration: 0.25), value: keyboardHeight)
         }
         .onAppear {
             loadData()
+        }
+        .onReceive(Publishers.keyboardHeight) { height in
+            self.keyboardHeight = height
         }
         .onDisappear {
             // Clean up real-time listener
@@ -257,6 +286,21 @@ struct DailyJobReportView: View {
             Text("Unable to access daily job reports. Please contact your administrator.")
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: submitReport) {
+                    if isSubmitting {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .scaleEffect(0.8)
+                    } else {
+                        Text("Submit")
+                            .fontWeight(.semibold)
+                    }
+                }
+                .disabled(isSubmitting)
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if isSubmitting {
@@ -805,6 +849,15 @@ struct DailyJobReportView: View {
                     .padding(8)
                     .background(inputFieldBackground)
                     .cornerRadius(8)
+                    .focused($isTextFieldFocused)
+                    .toolbar {
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button("Done") {
+                                isTextFieldFocused = false
+                            }
+                        }
+                    }
             }
             
             if let note = selectedPhotoshootNote {
@@ -827,6 +880,15 @@ struct DailyJobReportView: View {
                     .padding(8)
                     .background(inputFieldBackground)
                     .cornerRadius(8)
+                    .focused($isTextFieldFocused)
+                    .toolbar {
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button("Done") {
+                                isTextFieldFocused = false
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -922,37 +984,8 @@ struct DailyJobReportView: View {
         }
     }
     
-    private var submitButton: some View {
-        Button(action: submitReport) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(
-                        LinearGradient(
-                            gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.8)]),
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .shadow(color: Color.blue.opacity(0.3), radius: 10, x: 0, y: 5)
-                
-                if isSubmitting {
-                    ProgressView()
-                        .tint(.white)
-                } else {
-                    HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                        Text("Submit Report")
-                            .fontWeight(.semibold)
-                    }
-                    .foregroundColor(.white)
-                    .padding()
-                }
-            }
-            .frame(height: 56)
-            .padding(.horizontal, 16)
-        }
-        .disabled(isSubmitting)
-    }
+    // Submit button moved to navigation bar - keeping this for reference
+    // private var submitButton: some View { ... }
     
     // MARK: - Helper Functions for UI
     

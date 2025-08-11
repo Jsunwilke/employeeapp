@@ -589,3 +589,55 @@ struct DropdownRecord: Codable, Identifiable {
     let value: String
     let organizationID: String?
 }
+
+// MARK: - Photo Critique Models
+
+struct Critique: Codable, Identifiable {
+    @DocumentID var id: String?
+    let organizationId: String
+    
+    // Submission info
+    let submitterId: String
+    let submitterName: String
+    let submitterEmail: String
+    
+    // Target photographer
+    let targetPhotographerId: String
+    let targetPhotographerName: String
+    
+    // Images
+    let imageUrls: [String]
+    let thumbnailUrls: [String]
+    let imageUrl: String  // Backward compatibility
+    let thumbnailUrl: String
+    let imageCount: Int
+    
+    // Content
+    let managerNotes: String
+    let exampleType: String  // "example" or "improvement"
+    let status: String
+    
+    // Timestamps
+    @ServerTimestamp var createdAt: Date?
+    @ServerTimestamp var updatedAt: Date?
+    
+    // Computed property for display
+    var isGoodExample: Bool {
+        exampleType == "example"
+    }
+    
+    // Computed property for formatted date
+    var formattedDate: String {
+        guard let createdAt = createdAt else { return "" }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: createdAt)
+    }
+}
+
+struct CritiqueStats {
+    let total: Int
+    let goodExamples: Int
+    let needsImprovement: Int
+}

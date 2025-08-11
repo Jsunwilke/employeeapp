@@ -16,6 +16,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case sessionUpdate = "session_update"
         case clockReminder = "clock_reminder"
         case reportReminder = "report_reminder"
+        case photoCritique = "photo_critique"
         case unknown = "unknown"
     }
     
@@ -122,6 +123,9 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case .reportReminder:
             // Process report reminder notification
             handleReportReminderNotification(userInfo: userInfo)
+        case .photoCritique:
+            // Process photo critique notification
+            handlePhotoCritiqueNotification(userInfo: userInfo)
         case .unknown:
             print("Received unknown notification type: \(type)")
         }
@@ -215,6 +219,24 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         
         // Post a notification that Views can listen for
         notificationCenter.post(name: Notification.Name("didReceiveReportReminderNotification"),
+                                 object: nil,
+                                 userInfo: userInfo)
+    }
+    
+    /// Handle photo critique notifications
+    private func handlePhotoCritiqueNotification(userInfo: [AnyHashable: Any]) {
+        guard let critiqueId = userInfo["critiqueId"] as? String,
+              let submitterName = userInfo["submitterName"] as? String else {
+            print("Missing required photo critique notification data")
+            return
+        }
+        
+        let exampleType = userInfo["exampleType"] as? String ?? "unknown"
+        
+        print("Received photo critique notification: From: \(submitterName), Type: \(exampleType), ID: \(critiqueId)")
+        
+        // Post a notification that Views can listen for
+        notificationCenter.post(name: Notification.Name("didReceivePhotoCritiqueNotification"),
                                  object: nil,
                                  userInfo: userInfo)
     }

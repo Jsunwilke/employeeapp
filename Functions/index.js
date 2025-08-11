@@ -1,8 +1,9 @@
 const { onDocumentWritten, onDocumentCreated } = require('firebase-functions/v2/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onRequest, onCall } = require('firebase-functions/v2/https');
+const { logger } = require('firebase-functions/logger');
 const admin = require('firebase-admin');
-const { logger } = require('firebase-functions');
+const axios = require('axios');
 
 // Initialize admin (only once)
 if (!admin.apps.length) {
@@ -13,6 +14,12 @@ const db = admin.firestore();
 
 // Import notification service
 const { notificationService, NotificationType } = require('./notificationService');
+
+// Import Captura stats functions
+const capturaStats = require('./capturaStats');
+
+// Import proofing email service
+const proofingEmailService = require('./proofingEmailService');
 
 // Function 1: Update Player Search Index when sports jobs change
 exports.updatePlayerSearchIndex = onDocumentWritten('sportsJobs/{jobId}', async (event) => {
@@ -1052,12 +1059,10 @@ exports.sendFlagNotificationCallable = onCall({
         }
 
         const callerData = callerDoc.data();
-        
-        // Check if the caller has admin or manager role
-        const callerRole = callerData.role;
-        if (callerRole !== 'admin' && callerRole !== 'manager') {
-            throw new Error('Access denied: Only administrators and managers can flag users');
-        }
+        // Add your permission logic here, for example:
+        // if (!callerData.isManager && !callerData.canFlagUsers) {
+        //     throw new Error('Insufficient permissions to flag users');
+        // }
 
         // Format and send the notification
         const notification = notificationService.formatNotification(NotificationType.FLAG, {
@@ -1625,5 +1630,916 @@ exports.onNewChatMessage = onDocumentCreated('messages/{conversationId}/messages
     } catch (error) {
         logger.error(`Error sending chat notifications for message ${messageId}:`, error);
         // Don't throw - we don't want to retry notification sends
+    }
+});
+
+// ======================================
+// CAPTURA API PROXY FUNCTIONS
+// ======================================
+
+// Cache for OAuth tokens
+let capturaTokenCache = {
+    token: null,
+    expiresAt: null
+};
+
+/**
+ * Get Captura OAuth token with caching
+ */
+async function getCapturaAccessToken() {
+    // Check if we have a valid cached token
+    if (capturaTokenCache.token && capturaTokenCache.expiresAt && new Date() < capturaTokenCache.expiresAt) {
+        logger.info('Using cached Captura token');
+        return capturaTokenCache.token;
+    }
+
+    logger.info('Fetching new Captura token');
+
+    // Get credentials from environment config or fallback to hardcoded values
+    const clientId = process.env.CAPTURA_CLIENT_ID || '1ab255f1-5a89-4ae8-b454-4da98b64afcb';
+    const clientSecret = process.env.CAPTURA_CLIENT_SECRET || '18458cffbe1e0fe82b2c99d4ead741cc8271640b0020d8f61035945be374675913a32303e32ce6c6a78d88c91554419e19cd458ce28d490302d2c1dd020df03d';
+    const tokenUrl = 'https://api.imagequix.com/api/oauth/token';
+
+    try {
+        const response = await axios.post(tokenUrl, 
+            new URLSearchParams({
+                grant_type: 'client_credentials',
+                client_id: clientId,
+                client_secret: clientSecret
+            }).toString(),
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            }
+        );
+
+        const { access_token, expires_in = 3600 } = response.data;
+        
+        // Cache the token with expiration
+        capturaTokenCache.token = access_token;
+        capturaTokenCache.expiresAt = new Date(Date.now() + (expires_in - 300) * 1000); // 5 min buffer
+        
+        logger.info('Captura token obtained successfully');
+        return access_token;
+    } catch (error) {
+        logger.error('Error getting Captura token:', error.response?.data || error.message);
+        throw new Error('Failed to authenticate with Captura API');
+    }
+}
+
+// Function 13: Get Captura Orders
+exports.getCapturaOrders = onCall({
+    cors: true,
+    maxInstances: 10,
+}, async (request) => {
+    let url = ''; // Define url at function scope
+    
+    try {
+        // Validate authentication
+        if (!request.auth) {
+            throw new Error('Authentication required');
+        }
+        
+        // Get account ID from environment or use default
+        const accountId = process.env.CAPTURA_ACCOUNT_ID || 'J98TA9W';
+        
+        // Get access token
+        const accessToken = await getCapturaAccessToken();
+        
+        // Extract parameters
+        const { 
+            start = 1, 
+            end = 500, // Increased to handle more orders per day
+            orderStartDate,
+            orderEndDate,
+            orderType,
+            paymentStatus
+        } = request.data || {};
+        
+        // Handle date formatting if dates are provided as Date objects or strings
+        let formattedStartDate = orderStartDate;
+        let formattedEndDate = orderEndDate;
+        
+        // Convert JavaScript Date strings to YYYY-MM-DD format
+        if (orderStartDate instanceof Date || (typeof orderStartDate === 'string' && orderStartDate.includes('GMT'))) {
+            const dateObj = new Date(orderStartDate);
+            formattedStartDate = dateObj.toISOString().split('T')[0];
+        }
+        
+        if (orderEndDate instanceof Date || (typeof orderEndDate === 'string' && orderEndDate.includes('GMT'))) {
+            const dateObj = new Date(orderEndDate);
+            formattedEndDate = dateObj.toISOString().split('T')[0];
+        }
+        
+        // Add one day to end date to make it inclusive (API treats end date as exclusive)
+        if (formattedEndDate) {
+            logger.info(`Original end date: ${formattedEndDate}`);
+            const endDateObj = new Date(formattedEndDate + 'T00:00:00'); // Ensure we parse as UTC
+            endDateObj.setUTCDate(endDateObj.getUTCDate() + 1); // Use UTC date to avoid timezone issues
+            const adjustedEndDate = endDateObj.toISOString().split('T')[0];
+            logger.info(`Adjusting end date from ${formattedEndDate} to ${adjustedEndDate} for inclusive range`);
+            formattedEndDate = adjustedEndDate;
+        }
+        
+        // Build request parameters - only include filters if provided
+        const params = {
+            start: start.toString(),
+            end: end.toString()
+        };
+
+        // Only add date filters if they are provided
+        if (formattedStartDate) params.orderStartDate = formattedStartDate;
+        if (formattedEndDate) params.orderEndDate = formattedEndDate;
+        if (orderType) params.orderType = orderType;
+        if (paymentStatus) params.paymentStatus = paymentStatus;
+        
+        const hasDateFilters = !!(formattedStartDate || formattedEndDate);
+
+        const queryString = new URLSearchParams(params).toString();
+        url = `https://api.imagequix.com/api/v1/account/${accountId}/order?${queryString}`;
+        
+        logger.info(`=== CAPTURA API REQUEST DEBUG ===`);
+        logger.info(`URL: ${url}`);
+        logger.info('Request parameters:', JSON.stringify(params, null, 2));
+        logger.info(`Has date filters: ${hasDateFilters}`);
+
+        const response = await axios.get(url, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 30000 // 30 second timeout
+        });
+
+        logger.info(`=== CAPTURA API RESPONSE DEBUG ===`);
+        logger.info('Response status:', response.status);
+        
+        // Comprehensive response structure logging
+        const responseDebug = {
+            hasData: !!response.data,
+            dataType: typeof response.data,
+            topLevelKeys: response.data ? Object.keys(response.data) : []
+        };
+        
+        // Check for orders field
+        if (response.data?.orders !== undefined) {
+            responseDebug.orders = {
+                exists: true,
+                isArray: Array.isArray(response.data.orders),
+                length: Array.isArray(response.data.orders) ? response.data.orders.length : 'not-array',
+                firstOrderKeys: response.data.orders?.[0] ? Object.keys(response.data.orders[0]) : []
+            };
+        }
+        
+        // Check for data field
+        if (response.data?.data !== undefined) {
+            responseDebug.dataField = {
+                exists: true,
+                isArray: Array.isArray(response.data.data),
+                length: Array.isArray(response.data.data) ? response.data.data.length : 'not-array'
+            };
+            
+            if (Array.isArray(response.data.data) && response.data.data.length > 0) {
+                responseDebug.dataField.firstItemKeys = Object.keys(response.data.data[0]);
+                responseDebug.dataField.firstItemHasOrders = !!response.data.data[0].orders;
+                if (response.data.data[0].orders) {
+                    responseDebug.dataField.firstItemOrdersCount = response.data.data[0].orders.length;
+                }
+            }
+        }
+        
+        // Check for pagination fields
+        responseDebug.pagination = {
+            total: response.data?.total,
+            start: response.data?.start,
+            end: response.data?.end
+        };
+        
+        // Check for address fields
+        responseDebug.hasAddresses = {
+            billTo: !!response.data?.billTo,
+            shipTo: !!response.data?.shipTo
+        };
+        
+        logger.info('Response structure:', JSON.stringify(responseDebug, null, 2));
+        
+        // If response is small enough, log it entirely for debugging
+        const responseSize = JSON.stringify(response.data).length;
+        if (responseSize < 2000) {
+            logger.info('Full response (small enough to log):', JSON.stringify(response.data, null, 2));
+        } else {
+            logger.info(`Response too large to log fully (${responseSize} chars)`);
+        }
+
+        // Handle different response formats based on actual structure
+        // First priority: Check if we have direct format (orders array at top level)
+        if (response.data?.orders && Array.isArray(response.data.orders)) {
+            // Direct format - orders at top level (unfiltered requests)
+            logger.info('=== USING DIRECT FORMAT HANDLER ===');
+            logger.info(`Direct format contains ${response.data.orders.length} orders`);
+            
+            return {
+                success: true,
+                data: response.data
+            };
+        }
+        // Second priority: Check if we have the wrapped format with date filters
+        else if (response.data?.data && Array.isArray(response.data.data) && response.data.total !== undefined) {
+            // Date filtered format - data array contains orders directly
+            logger.info('=== USING DATE FILTERED FORMAT HANDLER ===');
+            logger.info(`Found ${response.data.data.length} orders in data array`);
+            logger.info(`Total orders reported: ${response.data.total}`);
+            
+            // The data array contains the orders directly when date filters are used
+            const orders = response.data.data;
+            
+            // Log the date range of orders we received
+            if (orders.length > 0) {
+                const orderDates = orders.map(o => o.orderDate?.split(' ')[0]).filter(Boolean);
+                const uniqueDates = [...new Set(orderDates)].sort();
+                logger.info(`=== ORDER DATES RETURNED ===`);
+                logger.info(`Requested: ${params.orderStartDate} to ${params.orderEndDate}`);
+                logger.info(`Received ${orders.length} orders with dates: ${uniqueDates.join(', ')}`);
+                logger.info(`Date range in response: ${uniqueDates[0]} to ${uniqueDates[uniqueDates.length - 1]}`);
+            }
+            
+            // Return in the format expected by the service (consistent with direct format)
+            return {
+                success: true,
+                data: {
+                    orders: orders,
+                    total: response.data.total,
+                    start: response.data.start,
+                    end: response.data.end,
+                    // Extract billTo/shipTo from first order if available
+                    billTo: orders[0]?.billTo || null,
+                    shipTo: orders[0]?.shipTo || null,
+                    accountID: accountId
+                }
+            };
+        }
+        // Third priority: Check if we have the batch format (for backfill function)
+        else if (response.data?.data && Array.isArray(response.data.data)) {
+            // This might be the batch format used by backfill
+            logger.info('=== CHECKING FOR BATCH FORMAT ===');
+            
+            // Check if first item has orders array (batch format)
+            if (response.data.data[0]?.orders && Array.isArray(response.data.data[0].orders)) {
+                logger.info('Detected batch format with nested orders arrays');
+                
+                const allOrders = [];
+                response.data.data.forEach((batchItem, index) => {
+                    if (batchItem.orders && Array.isArray(batchItem.orders)) {
+                        logger.info(`Batch item ${index}: extracting ${batchItem.orders.length} orders`);
+                        
+                        // Merge billTo/shipTo from batch item with each order
+                        const ordersWithContext = batchItem.orders.map(order => ({
+                            ...order,
+                            billTo: batchItem.billTo || order.billTo,
+                            shipTo: batchItem.shipTo || order.shipTo,
+                            accountID: batchItem.accountID || order.accountID
+                        }));
+                        allOrders.push(...ordersWithContext);
+                    }
+                });
+                
+                logger.info(`Total orders extracted from batch format: ${allOrders.length}`);
+                
+                return {
+                    success: true,
+                    data: {
+                        orders: allOrders,
+                        total: response.data.total || allOrders.length,
+                        start: response.data.start,
+                        end: response.data.end,
+                        billTo: response.data.data[0]?.billTo,
+                        shipTo: response.data.data[0]?.shipTo,
+                        accountID: accountId
+                    }
+                };
+            } else {
+                logger.warn('Data array exists but first item has no orders array - treating as empty response');
+            }
+        }
+        
+        // Unexpected format
+        logger.error('=== UNEXPECTED RESPONSE FORMAT ===');
+        logger.error('Cannot find orders in response. Structure:', responseDebug);
+        
+        // If response is small, log it for debugging
+        if (responseSize < 5000) {
+            logger.error('Full response for debugging:', JSON.stringify(response.data, null, 2));
+        }
+        
+        // Return empty result instead of throwing error
+        logger.warn('Returning empty result due to unexpected format');
+        return {
+            success: true,
+            data: {
+                orders: [],
+                total: 0,
+                billTo: null,
+                shipTo: null,
+                accountID: accountId
+            }
+        };
+    } catch (error) {
+        // Log detailed error information
+        logger.error('Error in getCapturaOrders:', {
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            data: error.response?.data,
+            message: error.message,
+            url: url
+        });
+        
+        if (error.response?.status === 401) {
+            // Clear token cache on auth error
+            capturaTokenCache = { token: null, expiresAt: null };
+            throw new Error('Authentication failed - invalid token');
+        }
+        
+        if (error.response?.status === 404) {
+            throw new Error(`Orders endpoint not found. The API endpoint may be incorrect: ${url}`);
+        }
+        
+        throw new Error(error.response?.data?.message || error.message || 'Failed to fetch orders');
+    }
+});
+
+// Function 14: Get Single Captura Order
+exports.getCapturaOrder = onCall({
+    cors: true,
+    maxInstances: 10,
+}, async (request) => {
+    let url = ''; // Define url at function scope
+    
+    try {
+        // Validate authentication
+        if (!request.auth) {
+            throw new Error('Authentication required');
+        }
+
+        const { orderId } = request.data;
+
+        if (!orderId) {
+            throw new Error('Order ID is required');
+        }
+
+        // Get account ID from environment or use default
+        const accountId = process.env.CAPTURA_ACCOUNT_ID || 'J98TA9W';
+
+        // Get access token
+        const accessToken = await getCapturaAccessToken();
+
+        // Make request to Captura API - using 'order' not 'orders'
+        url = `https://api.imagequix.com/api/v1/account/${accountId}/order/${orderId}`;
+        
+        logger.info(`Fetching order ${orderId} from Captura`);
+        
+        const response = await axios.get(url, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        logger.info(`Captura order ${orderId} fetched successfully`);
+        
+        // Log the structure to understand it better
+        logger.info('Order response structure:', {
+            hasOrders: !!response.data.orders,
+            hasBillTo: !!response.data.billTo,
+            hasShipTo: !!response.data.shipTo,
+            hasItems: !!response.data.items,
+            itemsCount: response.data.items?.length || 0,
+            directFields: Object.keys(response.data || {}),
+            // Check if it's nested in orders array
+            firstOrderHasItems: response.data.orders?.[0]?.items ? response.data.orders[0].items.length : 'N/A'
+        });
+
+        return {
+            success: true,
+            data: response.data
+        };
+
+    } catch (error) {
+        // Log detailed error information
+        logger.error('Error in getCapturaOrder:', {
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            data: error.response?.data,
+            headers: error.response?.headers,
+            message: error.message,
+            url: url
+        });
+        
+        if (error.response?.status === 401) {
+            // Clear token cache on auth error
+            capturaTokenCache = { token: null, expiresAt: null };
+            throw new Error('Authentication failed - invalid token');
+        }
+        
+        if (error.response?.status === 404) {
+            throw new Error(`Order endpoint not found. The API endpoint may be incorrect: ${url}`);
+        }
+        
+        throw new Error(error.response?.data?.message || error.message || 'Failed to fetch order');
+    }
+});
+
+// Function 15: Get Captura Order Statistics
+// NOTE: This endpoint might not exist in the Captura API
+// You may need to fetch orders and calculate statistics locally
+exports.getCapturaOrderStats = onCall({
+    cors: true,
+    maxInstances: 10,
+}, async (request) => {
+    try {
+        // Validate authentication
+        if (!request.auth) {
+            throw new Error('Authentication required');
+        }
+
+        const { dateRange = 'month' } = request.data;
+
+        // For now, throw an error indicating this endpoint doesn't exist
+        // TODO: Implement statistics calculation by fetching orders and computing stats
+        throw new Error('Statistics endpoint not implemented. The Captura API may not have a dedicated statistics endpoint.');
+
+        // Alternative implementation could be:
+        // 1. Fetch orders with date filters
+        // 2. Calculate statistics (total orders, revenue, etc.) in the function
+        // 3. Return computed statistics
+
+    } catch (error) {
+        logger.error('Error in getCapturaOrderStats:', error.message);
+        throw error;
+    }
+});
+
+// Function 16: Test Captura API Endpoints (for debugging)
+exports.testCapturaEndpoints = onCall({
+    cors: true,
+    maxInstances: 1,
+}, async (request) => {
+    try {
+        // Validate authentication
+        if (!request.auth) {
+            throw new Error('Authentication required');
+        }
+
+        // Get access token
+        const accessToken = await getCapturaAccessToken();
+        const accountId = process.env.CAPTURA_ACCOUNT_ID || 'J98TA9W';
+        
+        // Test different possible endpoint formats
+        const endpoints = [
+            // Base URL without any parameters
+            `https://api.imagequix.com/api/v1/account/${accountId}/orders`,
+            
+            // With minimal parameters
+            `https://api.imagequix.com/api/v1/account/${accountId}/orders?page=1`,
+            `https://api.imagequix.com/api/v1/account/${accountId}/orders?page=1&pageSize=50`,
+            
+            // With full parameters like current implementation
+            `https://api.imagequix.com/api/v1/account/${accountId}/orders?page=1&pageSize=50&sortBy=orderDate&sortOrder=desc`,
+            
+            // Alternative URL structures
+            `https://api.imagequix.com/api/v1/accounts/${accountId}/orders`,
+            `https://api.imagequix.com/api/v1/orders?accountId=${accountId}`,
+            `https://api.imagequix.com/api/orders?accountId=${accountId}`,
+            `https://api.imagequix.com/api/account/${accountId}/orders`,
+            `https://api.imagequix.com/v1/account/${accountId}/orders`,
+            
+            // Singular form
+            `https://api.imagequix.com/api/v1/account/${accountId}/order`,
+            
+            // Development URL
+            `https://api.imagequix-dev.com/api/v1/account/${accountId}/orders`,
+        ];
+        
+        const results = [];
+        
+        for (const endpoint of endpoints) {
+            try {
+                logger.info(`Testing endpoint: ${endpoint}`);
+                const response = await axios.get(endpoint, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    timeout: 5000
+                });
+                
+                results.push({
+                    endpoint,
+                    success: true,
+                    status: response.status,
+                    hasData: !!response.data
+                });
+                
+                logger.info(`Success: ${endpoint} returned status ${response.status}`);
+            } catch (error) {
+                results.push({
+                    endpoint,
+                    success: false,
+                    status: error.response?.status,
+                    error: error.response?.statusText || error.message
+                });
+                
+                logger.info(`Failed: ${endpoint} - ${error.response?.status} ${error.response?.statusText || error.message}`);
+            }
+        }
+        
+        return {
+            success: true,
+            token: accessToken ? 'Token obtained successfully' : 'No token',
+            results
+        };
+        
+    } catch (error) {
+        logger.error('Error in testCapturaEndpoints:', error);
+        throw new Error(error.message || 'Failed to test endpoints');
+    }
+});
+
+// Function 17: Get Captura Orders Simple (without parameters)
+exports.getCapturaOrdersSimple = onCall({
+    cors: true,
+    maxInstances: 10,
+}, async (request) => {
+    let url = ''; // Define url at function scope
+    
+    try {
+        // Validate authentication
+        if (!request.auth) {
+            throw new Error('Authentication required');
+        }
+
+        // Get account ID from environment or use default
+        const accountId = process.env.CAPTURA_ACCOUNT_ID || 'J98TA9W';
+
+        // Get access token
+        const accessToken = await getCapturaAccessToken();
+
+        // Try base URL without any parameters first
+        url = `https://api.imagequix.com/api/v1/account/${accountId}/orders`;
+        
+        logger.info(`Testing simple orders fetch from: ${url}`);
+        
+        const response = await axios.get(url, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+        });
+
+        logger.info(`Simple orders fetch successful. Status: ${response.status}`);
+        logger.info(`Response data structure:`, {
+            hasData: !!response.data,
+            dataType: typeof response.data,
+            keys: response.data ? Object.keys(response.data) : [],
+            ordersCount: response.data?.orders?.length || response.data?.length || 'unknown'
+        });
+
+        return {
+            success: true,
+            url: url,
+            status: response.status,
+            data: response.data
+        };
+
+    } catch (error) {
+        // Log detailed error information
+        logger.error('Error in getCapturaOrdersSimple:', {
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            data: error.response?.data,
+            headers: error.response?.headers,
+            message: error.message,
+            url: url
+        });
+        
+        return {
+            success: false,
+            url: url,
+            status: error.response?.status,
+            error: error.response?.data?.message || error.message || 'Failed to fetch orders',
+            details: error.response?.data
+        };
+    }
+});
+
+// Export Captura stats functions
+exports.syncDailyOrders = capturaStats.syncDailyOrders;
+exports.backfillHistoricalData = capturaStats.backfillHistoricalData;
+
+// ======================================
+// PROOFING GALLERY EMAIL NOTIFICATIONS
+// ======================================
+
+/**
+ * Cloud Function triggered when a proofGallery document is updated
+ * Checks if the gallery status changed to "approved" and sends notifications
+ */
+exports.onProofGalleryUpdate = onDocumentWritten('proofGalleries/{galleryId}', async (event) => {
+    // For v2 functions, the structure is different
+    const galleryId = event.params.galleryId;
+    
+    try {
+        // Check if we have the data
+        if (!event.data) {
+            console.log('No data in event');
+            return null;
+        }
+        
+        const change = event.data;
+        
+        // Skip if document was deleted
+        if (!change.after) {
+            console.log(`Gallery ${galleryId} deleted`);
+            return null;
+        }
+        
+        const beforeData = change.before ? change.before.data() : null;
+        const afterData = change.after.data();
+        
+        // Skip if this is a new document (not an update)
+        if (!beforeData) {
+            console.log(`Gallery ${galleryId} created (not an update)`);
+            return null;
+        }
+        
+        // Check if status changed to approved
+        if (beforeData.status !== 'approved' && afterData.status === 'approved') {
+            console.log(`Gallery ${galleryId} approved. Sending notifications...`);
+            
+            // Get organization ID
+            const organizationId = afterData.organizationId || afterData.organizationID;
+            if (!organizationId) {
+                console.error('No organization ID found for gallery');
+                return null;
+            }
+            
+            // Get team members who should be notified
+            const notifiableMembers = await getNotifiableTeamMembers(organizationId);
+            
+            if (notifiableMembers.length === 0) {
+                console.log('No team members have notifications enabled');
+                return null;
+            }
+            
+            console.log(`Found ${notifiableMembers.length} team members to notify`);
+            
+            // Prepare gallery details for email
+            const galleryDetails = {
+                id: galleryId,
+                name: afterData.name,
+                schoolName: afterData.schoolName,
+                totalImages: afterData.totalImages,
+                approvedBy: afterData.lastApprovedBy || 'Client',
+                approvedDate: new Date().toISOString()
+            };
+            
+            // Send batch emails
+            const results = await proofingEmailService.sendBatchProofingApprovalEmails(
+                notifiableMembers,
+                galleryDetails
+            );
+            
+            // Log the notification event
+            await logProofingNotificationActivity(galleryId, notifiableMembers.length, results);
+            
+            console.log(`Successfully sent ${results.successful} emails, ${results.failed} failed`);
+            return {
+                success: true,
+                sent: results.successful,
+                failed: results.failed
+            };
+        }
+        
+        return null;
+    } catch (error) {
+        // Safer error logging
+        const errorMessage = error ? (error.message || String(error)) : 'Unknown error';
+        const safeGalleryId = galleryId || 'unknown';
+        console.error(`Error in onProofGalleryUpdate for gallery ${safeGalleryId}:`, errorMessage);
+        if (error && error.stack) {
+            console.error('Stack trace:', error.stack);
+        }
+        // Don't throw error to prevent function retry
+        return { error: errorMessage };
+    }
+});
+
+/**
+ * Optional: HTTP endpoint for manual trigger (for testing)
+ */
+exports.sendProofingApprovalEmailManual = onCall({
+    cors: true,
+    enforceAppCheck: false,
+}, async (request) => {
+    try {
+        // Validate authentication
+        if (!request.auth) {
+            throw new Error('Authentication required');
+        }
+        
+        const { galleryId, organizationId } = request.data;
+        
+        if (!galleryId || !organizationId) {
+            throw new Error('Gallery ID and Organization ID are required');
+        }
+        
+        // Get gallery data
+        const galleryDoc = await db.collection('proofGalleries')
+            .doc(galleryId)
+            .get();
+        
+        if (!galleryDoc.exists) {
+            throw new Error('Gallery not found');
+        }
+        
+        const galleryData = galleryDoc.data();
+        
+        // Get notifiable team members
+        const teamMembers = await getNotifiableTeamMembers(organizationId);
+        
+        if (teamMembers.length === 0) {
+            return {
+                success: true,
+                message: 'No team members have notifications enabled',
+                sent: 0
+            };
+        }
+        
+        // Send emails
+        const results = await proofingEmailService.sendBatchProofingApprovalEmails(
+            teamMembers,
+            {
+                id: galleryId,
+                name: galleryData.name,
+                schoolName: galleryData.schoolName,
+                totalImages: galleryData.totalImages,
+                approvedBy: galleryData.lastApprovedBy || 'Client',
+                approvedDate: new Date().toISOString()
+            }
+        );
+        
+        return {
+            success: true,
+            message: `Emails sent to ${results.successful} recipients`,
+            sent: results.successful,
+            failed: results.failed,
+            results: results.details
+        };
+    } catch (error) {
+        logger.error('Error in sendProofingApprovalEmailManual:', error);
+        throw new Error(`Failed to send approval emails: ${error.message}`);
+    }
+});
+
+/**
+ * Helper function to get team members with notifications enabled
+ */
+async function getNotifiableTeamMembers(organizationId) {
+    try {
+        const snapshot = await db.collection('users')
+            .where('organizationID', '==', organizationId)
+            .where('notifyOnProofingApproval', '==', true)
+            .get();
+        
+        const teamMembers = [];
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            if (data.email) {
+                teamMembers.push({
+                    id: doc.id,
+                    email: data.email,
+                    firstName: data.firstName || '',
+                    lastName: data.lastName || '',
+                    displayName: data.displayName || `${data.firstName} ${data.lastName}`
+                });
+            }
+        });
+        
+        return teamMembers;
+    } catch (error) {
+        console.error('Error getting notifiable team members:', error);
+        return [];
+    }
+}
+
+/**
+ * Log notification activity to Firestore
+ */
+async function logProofingNotificationActivity(galleryId, recipientCount, results) {
+    try {
+        await db.collection('proofActivity').add({
+            galleryId,
+            action: 'notifications_sent',
+            recipientCount,
+            successful: results.successful,
+            failed: results.failed,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            details: `Sent approval notifications to ${recipientCount} team members`
+        });
+    } catch (error) {
+        console.error('Error logging notification activity:', error);
+        // Don't throw - logging shouldn't break the notification flow
+    }
+}
+
+// Function: Send Photo Critique Notification when new critique is created
+exports.onPhotoCritiqueCreated = onDocumentCreated('photoCritiques/{critiqueId}', async (event) => {
+    const critique = event.data.data();
+    const critiqueId = event.params.critiqueId;
+    
+    try {
+        // Get the target photographer's user document
+        const userDoc = await db.collection('users')
+            .doc(critique.targetPhotographerId)
+            .get();
+        
+        if (!userDoc.exists) {
+            console.log(`Target photographer ${critique.targetPhotographerId} not found`);
+            return null;
+        }
+        
+        const userData = userDoc.data();
+        const fcmToken = userData?.fcmToken;
+        
+        if (!fcmToken) {
+            console.log(`No FCM token for photographer ${critique.targetPhotographerId}`);
+            return null;
+        }
+        
+        // Determine the message based on example type
+        const isGoodExample = critique.exampleType === 'example';
+        const exampleTypeText = isGoodExample ? 'good example' : 'needs improvement';
+        
+        // Create the notification message
+        const message = {
+            notification: {
+                title: 'New Training Photo',
+                body: `${critique.submitterName} sent you a ${exampleTypeText} photo with feedback`
+            },
+            data: {
+                type: 'photo_critique',
+                critiqueId: critiqueId,
+                submitterName: critique.submitterName,
+                exampleType: critique.exampleType,
+                targetPhotographerId: critique.targetPhotographerId,
+                targetPhotographerName: critique.targetPhotographerName
+            },
+            token: fcmToken,
+            apns: {
+                payload: {
+                    aps: {
+                        sound: 'default',
+                        badge: 1
+                    }
+                }
+            }
+        };
+        
+        // Send the notification
+        const response = await admin.messaging().send(message);
+        console.log(`Photo critique notification sent successfully to ${critique.targetPhotographerName}:`, response);
+        
+        // Log the notification activity
+        await db.collection('notificationLogs').add({
+            type: 'photo_critique',
+            critiqueId: critiqueId,
+            recipientId: critique.targetPhotographerId,
+            recipientName: critique.targetPhotographerName,
+            submitterName: critique.submitterName,
+            exampleType: critique.exampleType,
+            fcmToken: fcmToken.substring(0, 10) + '...', // Store partial token for debugging
+            status: 'sent',
+            response: response,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+        
+        return { success: true, messageId: response };
+        
+    } catch (error) {
+        console.error('Error sending photo critique notification:', error);
+        
+        // Log the error
+        await db.collection('notificationLogs').add({
+            type: 'photo_critique',
+            critiqueId: critiqueId,
+            recipientId: critique.targetPhotographerId,
+            status: 'error',
+            error: error.message,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+        
+        return { success: false, error: error.message };
     }
 });

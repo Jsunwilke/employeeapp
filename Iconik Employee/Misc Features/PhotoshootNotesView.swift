@@ -43,8 +43,9 @@ struct PhotoshootNotesView: View {
     }
     
     var body: some View {
-        VStack(spacing: 8) {
-                // Header with buttons
+        VStack(spacing: 0) {
+            // Header with buttons - Keep at top, outside ScrollView
+            VStack(spacing: 8) {
                 HStack {
                     Text("Photoshoot Notes")
                         .font(.largeTitle)
@@ -90,6 +91,11 @@ struct PhotoshootNotesView: View {
                     Spacer()
                 }
                 .padding(.horizontal)
+            }
+            
+            // Scrollable content
+            ScrollView {
+                VStack(spacing: 8) {
                 
                 // Note list
                 if notes.isEmpty {
@@ -352,8 +358,12 @@ struct PhotoshootNotesView: View {
                         .padding(.horizontal)
                 }
                 
-                Spacer()
+                    Spacer()
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .navigationBarTitle("", displayMode: .inline)
         .onAppear {
             loadNotes()

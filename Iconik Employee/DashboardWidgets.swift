@@ -5,7 +5,8 @@ import FirebaseFirestore
 // MARK: - Hours Widget
 struct HoursWidget: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
-    // Initialize with cached values for instant display
+    
+    // Initialize with cached values for instant display (will be validated when settings load)
     @State private var regularHours: Double = UserDefaults.standard.double(forKey: "cached_regularHours")
     @State private var overtimeHours: Double = UserDefaults.standard.double(forKey: "cached_overtimeHours")
     @State private var totalHours: Double = UserDefaults.standard.double(forKey: "cached_totalHours")
@@ -15,6 +16,12 @@ struct HoursWidget: View {
     @StateObject private var payPeriodService = PayPeriodService.shared
     @State private var activeHours: Double = 0
     @State private var timer: Timer?
+    @State private var listenerSetUp = false // Prevent duplicate listeners
+    @State private var currentListenerPeriodStart: Date? // Track what period the listener is using
+    
+    // Sheet presentation states
+    @State private var showingSessionSelection = false
+    @State private var showingNotesInput = false
     
     // Format hours as "XXh XXm"
     private func formatHours(_ hours: Double) -> String {
@@ -43,17 +50,11 @@ struct HoursWidget: View {
                 // Clock In/Out Button
                 Button(action: {
                     if timeTrackingService.isClockIn {
-                        timeTrackingService.clockOut { success, error in
-                            if !success {
-                                print("Clock out error: \(error ?? "Unknown")")
-                            }
-                        }
+                        // Show notes input for clock out
+                        showingNotesInput = true
                     } else {
-                        timeTrackingService.clockIn { success, error in
-                            if !success {
-                                print("Clock in error: \(error ?? "Unknown")")
-                            }
-                        }
+                        // Show session selection for clock in
+                        showingSessionSelection = true
                     }
                 }) {
                     HStack(spacing: 4) {
@@ -102,28 +103,77 @@ struct HoursWidget: View {
                                     
                                     // Progress including active hours
                                     let totalWithActive = currentWeekHours + activeHours
-                                    let weekProgress = min(currentWeekHours / 40.0, 1.0)
-                                    let activeProgress = min(totalWithActive / 40.0, 1.0)
                                     let barWidth = geometry.size.width - 100 // Reserve 100 points for text
                                     
-                                    // Logged hours bar
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color.blue)
-                                        .frame(width: barWidth * CGFloat(weekProgress), height: 24)
-                                    
-                                    // Active hours overlay (lighter blue)
-                                    if activeHours > 0 {
+                                    if totalWithActive <= 40 {
+                                        // Under 40h: Show actual progress
+                                        let progress = totalWithActive / 40.0
+                                        
+                                        // Logged hours bar
                                         RoundedRectangle(cornerRadius: 8)
-                                            .fill(Color.blue.opacity(0.4))
-                                            .frame(width: barWidth * CGFloat(activeProgress), height: 24)
+                                            .fill(Color.blue)
+                                            .frame(width: barWidth * CGFloat(currentWeekHours / 40.0), height: 24)
+                                        
+                                        // Active hours overlay (lighter blue)
+                                        if activeHours > 0 {
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(Color.blue.opacity(0.4))
+                                                .frame(width: barWidth * CGFloat(progress), height: 24)
+                                        }
+                                    } else {
+                                        // Over 40h: Full bar with proportional segments
+                                        let regularHours = min(currentWeekHours, 40.0)
+                                        let overtimeHours = max(currentWeekHours - 40.0, 0)
+                                        let totalHours = regularHours + overtimeHours
+                                        let regularRatio = regularHours / totalHours
+                                        
+                                        // Blue segment (regular hours proportion)
+                                        UnevenRoundedRectangle(
+                                            topLeadingRadius: 8,
+                                            bottomLeadingRadius: 8,
+                                            bottomTrailingRadius: 0,
+                                            topTrailingRadius: 0
+                                        )
+                                        .fill(Color.blue)
+                                        .frame(width: barWidth * CGFloat(regularRatio), height: 24)
+                                        
+                                        // Orange segment (overtime proportion)
+                                        if overtimeHours > 0 {
+                                            UnevenRoundedRectangle(
+                                                topLeadingRadius: 0,
+                                                bottomLeadingRadius: 0,
+                                                bottomTrailingRadius: 8,
+                                                topTrailingRadius: 8
+                                            )
+                                            .fill(Color.orange)
+                                            .frame(width: barWidth * CGFloat(1.0 - regularRatio), height: 24)
+                                            .offset(x: barWidth * CGFloat(regularRatio))
+                                        }
+                                        
+                                        // Active hours overlay on top
+                                        if activeHours > 0 {
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(Color.white.opacity(0.3))
+                                                .frame(width: barWidth, height: 24)
+                                        }
                                     }
                                 }
                                 .frame(width: geometry.size.width - 100, height: 24)
                                 
                                 // Hours and percentage with fixed width
                                 VStack(alignment: .trailing, spacing: 0) {
-                                    if activeHours > 0 {
-                                        Text("\(formatHours(currentWeekHours + activeHours))/40h")
+                                    let totalWithActive = currentWeekHours + activeHours
+                                    if totalWithActive > 40 {
+                                        // Show total with overtime indicator
+                                        Text("\(formatHours(totalWithActive))/40h")
+                                            .font(.caption)
+                                            .foregroundColor(.primary)
+                                        let overtime = totalWithActive - 40
+                                        Text("+\(formatHours(overtime)) OT")
+                                            .font(.caption2)
+                                            .foregroundColor(.orange)
+                                    } else if activeHours > 0 {
+                                        Text("\(formatHours(totalWithActive))/40h")
                                             .font(.caption)
                                             .foregroundColor(.primary)
                                         Text("Active: \(formatHours(activeHours))")
@@ -159,50 +209,59 @@ struct HoursWidget: View {
                                         .fill(Color.gray.opacity(0.2))
                                         .frame(height: 24)
                                     
-                                    // Regular hours progress
                                     let barWidth = geometry.size.width - 100 // Same as This Week
-                                    let regularProgress = min(regularHours / 80.0, 1.0)
                                     let totalWithActive = totalHours + activeHours
-                                    let activeProgress = min(totalWithActive / 80.0, 1.0)
                                     
-                                    if overtimeHours > 0 {
-                                        // Blue segment with square right corners when overtime exists
+                                    if totalWithActive <= 80 {
+                                        // Under 80h: Show actual progress
+                                        let progress = totalWithActive / 80.0
+                                        
+                                        // Just blue bar for regular hours
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.blue)
+                                            .frame(width: barWidth * CGFloat(totalHours / 80.0), height: 24)
+                                        
+                                        // Active hours overlay
+                                        if activeHours > 0 {
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(Color.blue.opacity(0.4))
+                                                .frame(width: barWidth * CGFloat(progress), height: 24)
+                                        }
+                                    } else {
+                                        // Over 80h: Full bar with proportional segments
+                                        let totalForRatio = totalHours // Use only logged hours for ratio
+                                        let regularRatio = regularHours / totalForRatio
+                                        let overtimeRatio = overtimeHours / totalForRatio
+                                        
+                                        // Blue segment (regular hours proportion)
                                         UnevenRoundedRectangle(
                                             topLeadingRadius: 8,
                                             bottomLeadingRadius: 8,
-                                            bottomTrailingRadius: 0,
-                                            topTrailingRadius: 0
+                                            bottomTrailingRadius: overtimeHours > 0 ? 0 : 8,
+                                            topTrailingRadius: overtimeHours > 0 ? 0 : 8
                                         )
                                         .fill(Color.blue)
-                                        .frame(width: barWidth * CGFloat(regularProgress), height: 24)
-                                    } else {
-                                        // Blue segment with rounded corners when no overtime
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(Color.blue)
-                                            .frame(width: barWidth * CGFloat(regularProgress), height: 24)
-                                    }
-                                    
-                                    // Overtime hours progress (if any)
-                                    if overtimeHours > 0 {
-                                        let overtimeProgress = overtimeHours / 80.0
-                                        let overtimeWidth = barWidth * CGFloat(overtimeProgress)
+                                        .frame(width: barWidth * CGFloat(regularRatio), height: 24)
                                         
-                                        UnevenRoundedRectangle(
-                                            topLeadingRadius: 0,
-                                            bottomLeadingRadius: 0,
-                                            bottomTrailingRadius: 8,
-                                            topTrailingRadius: 8
-                                        )
-                                        .fill(Color.orange)
-                                        .frame(width: overtimeWidth, height: 24)
-                                        .offset(x: barWidth * CGFloat(regularProgress))
-                                    }
-                                    
-                                    // Active hours overlay (lighter blue on top)
-                                    if activeHours > 0 {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(Color.blue.opacity(0.4))
-                                            .frame(width: barWidth * CGFloat(activeProgress), height: 24)
+                                        // Orange segment (overtime proportion)
+                                        if overtimeHours > 0 {
+                                            UnevenRoundedRectangle(
+                                                topLeadingRadius: 0,
+                                                bottomLeadingRadius: 0,
+                                                bottomTrailingRadius: 8,
+                                                topTrailingRadius: 8
+                                            )
+                                            .fill(Color.orange)
+                                            .frame(width: barWidth * CGFloat(overtimeRatio), height: 24)
+                                            .offset(x: barWidth * CGFloat(regularRatio))
+                                        }
+                                        
+                                        // Active hours overlay on top
+                                        if activeHours > 0 {
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(Color.white.opacity(0.3))
+                                                .frame(width: barWidth, height: 24)
+                                        }
                                     }
                                 }
                                 .frame(width: geometry.size.width - 100, height: 24)
@@ -269,6 +328,36 @@ struct HoursWidget: View {
             // Keep listener active for instant data when returning
             // timeTrackingService.stopListeningForDashboardEntries()
         }
+        .sheet(isPresented: $showingSessionSelection) {
+            SessionSelectionView(
+                timeTrackingService: timeTrackingService,
+                onClockIn: { sessionId, notes in
+                    // Clock in with selected session
+                    timeTrackingService.clockIn(sessionId: sessionId, notes: notes) { success, error in
+                        if success {
+                            showingSessionSelection = false
+                        } else {
+                            print("Clock in error: \(error ?? "Unknown")")
+                        }
+                    }
+                }
+            )
+        }
+        .sheet(isPresented: $showingNotesInput) {
+            NotesInputView(
+                isClockOut: true,
+                onComplete: { notes in
+                    // Clock out with optional notes
+                    timeTrackingService.clockOut(notes: notes) { success, error in
+                        if success {
+                            showingNotesInput = false
+                        } else {
+                            print("Clock out error: \(error ?? "Unknown")")
+                        }
+                    }
+                }
+            )
+        }
     }
     
     private func startActiveHoursTimer() {
@@ -298,14 +387,73 @@ struct HoursWidget: View {
         // Ensure TimeTrackingService has user/org IDs
         timeTrackingService.refreshUserAndStatus()
         
-        // Load pay period settings in parallel with listener setup
+        // Load pay period settings FIRST, then set up listener
         payPeriodService.loadPayPeriodSettings { success in
-            // This might complete after listener is already set up
+            print("📅 HoursWidget: Pay period settings loaded, success: \(success)")
+            
+            // Now that settings are loaded, check if we need to clear cache
+            self.checkAndClearCacheIfNewPeriod()
+            
+            // Set up the listener with the correct pay period
+            if !self.listenerSetUp {
+                self.listenerSetUp = true
+                self.setupHoursListener()
+            } else {
+                print("📅 HoursWidget: Listener already set up, skipping duplicate setup")
+            }
         }
         
-        // Give UserManager a moment to fetch orgId if needed
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.setupHoursListener()
+        // Fallback: If settings take too long, set up with defaults after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            if !self.listenerSetUp {
+                print("⚠️ HoursWidget: Settings load timeout, using defaults")
+                self.checkAndClearCacheIfNewPeriod()
+                self.listenerSetUp = true
+                self.setupHoursListener()
+            }
+        }
+    }
+    
+    private func checkAndClearCacheIfNewPeriod() {
+        var calendar = Calendar.current
+        calendar.timeZone = TimeZone.current
+        let now = Date()
+        
+        // Get the last cached period start date
+        let lastCachedPeriodStart = UserDefaults.standard.object(forKey: "cached_period_start") as? Date
+        
+        // Get current pay period
+        let currentPeriod = payPeriodService.getCurrentPayPeriod() ?? getDefaultPayPeriod()
+        
+        // Check if we're in a different pay period than cached
+        let shouldClearCache = lastCachedPeriodStart == nil || 
+            !calendar.isDate(lastCachedPeriodStart!, equalTo: currentPeriod.0, toGranularity: .day)
+        
+        if shouldClearCache {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
+            dateFormatter.timeZone = TimeZone.current
+            
+            print("📅 Pay period change detected, clearing cached hours")
+            print("   Last period start: \(lastCachedPeriodStart != nil ? dateFormatter.string(from: lastCachedPeriodStart!) : "none")")
+            print("   Current period: \(dateFormatter.string(from: currentPeriod.0)) to \(dateFormatter.string(from: currentPeriod.1))")
+            print("   Current date: \(dateFormatter.string(from: now))")
+            
+            // Clear all cached values
+            UserDefaults.standard.set(0.0, forKey: "cached_regularHours")
+            UserDefaults.standard.set(0.0, forKey: "cached_overtimeHours")
+            UserDefaults.standard.set(0.0, forKey: "cached_totalHours")
+            UserDefaults.standard.set(0.0, forKey: "cached_currentWeekHours")
+            
+            // Reset state values to force reload
+            regularHours = 0
+            overtimeHours = 0
+            totalHours = 0
+            currentWeekHours = 0
+            
+            // Store the new period start date
+            UserDefaults.standard.set(currentPeriod.0, forKey: "cached_period_start")
+            UserDefaults.standard.synchronize() // Force immediate write
         }
     }
     
@@ -316,9 +464,29 @@ struct HoursWidget: View {
         // Try to get pay period immediately if available, otherwise use default
         let (payPeriodStart, payPeriodEnd) = payPeriodService.getCurrentPayPeriod() ?? getDefaultPayPeriod()
         
+        // Check if we need to restart the listener with new dates
+        if let existingStart = currentListenerPeriodStart {
+            let calendar = Calendar.current
+            if !calendar.isDate(existingStart, equalTo: payPeriodStart, toGranularity: .day) {
+                print("📅 HoursWidget: Period changed! Restarting listener...")
+                print("   Old period start: \(existingStart)")
+                print("   New period start: \(payPeriodStart)")
+                timeTrackingService.stopListeningForDashboardEntries()
+                
+                // Clear the cached values since we're in a new period
+                regularHours = 0
+                overtimeHours = 0
+                totalHours = 0
+                currentWeekHours = 0
+            }
+        }
+        
+        currentListenerPeriodStart = payPeriodStart
+        
         // Format dates for queries
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
+        dateFormatter.timeZone = TimeZone.current
         
         let payPeriodStartStr = dateFormatter.string(from: payPeriodStart)
         let payPeriodEndStr = dateFormatter.string(from: payPeriodEnd)
@@ -342,6 +510,12 @@ struct HoursWidget: View {
                 UserDefaults.standard.set(breakdown.total, forKey: "cached_totalHours")
                 UserDefaults.standard.set(breakdown.currentWeek, forKey: "cached_currentWeekHours")
                 
+                // Also save the current period start so we can validate cache later
+                if let periodStart = self.currentListenerPeriodStart {
+                    UserDefaults.standard.set(periodStart, forKey: "cached_period_start")
+                }
+                UserDefaults.standard.synchronize() // Force immediate write
+                
                 // Only set loading to false on first load
                 if self.isLoadingHours {
                     self.isLoadingHours = false
@@ -353,19 +527,74 @@ struct HoursWidget: View {
     }
     
     private func getDefaultPayPeriod() -> (Date, Date) {
-        // Default to current 2-week period if settings not loaded yet
-        let calendar = Calendar.current
-        let now = Date()
-        let twoWeeksAgo = calendar.date(byAdding: .weekOfYear, value: -2, to: now) ?? now
-        return (twoWeeksAgo, now)
+        // Use the same default calculation as PayPeriodService
+        var calendar = Calendar.current
+        calendar.timeZone = TimeZone.current
+        
+        // Reference date: 2/25/2024 (Sunday - start of a pay period)
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "M/d/yyyy"
+        dateFormatter.timeZone = TimeZone.current
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        
+        guard let referenceDate = dateFormatter.date(from: "2/25/2024") else {
+            print("❌ HoursWidget: Failed to parse reference date, using fallback")
+            let now = Date()
+            let twoWeeksAgo = calendar.date(byAdding: .weekOfYear, value: -2, to: now) ?? now
+            return (twoWeeksAgo, now)
+        }
+        
+        let referenceStartOfDay = calendar.startOfDay(for: referenceDate)
+        let targetStartOfDay = calendar.startOfDay(for: Date())
+        
+        // Calculate days between dates
+        let components = calendar.dateComponents([.day], from: referenceStartOfDay, to: targetStartOfDay)
+        let daysSinceReference = components.day ?? 0
+        
+        let periodLength = 14
+        
+        // Calculate complete periods elapsed
+        let periodsElapsed = daysSinceReference >= 0 ? 
+            daysSinceReference / periodLength : 
+            ((daysSinceReference - periodLength + 1) / periodLength)
+        
+        // Calculate the start of the current period
+        guard let periodStart = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay) else {
+            print("❌ HoursWidget: Failed to calculate period start")
+            let now = Date()
+            let twoWeeksAgo = calendar.date(byAdding: .weekOfYear, value: -2, to: now) ?? now
+            return (twoWeeksAgo, now)
+        }
+        
+        // Calculate the end of the period (13 days later, end of day)
+        guard let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: periodStart),
+              let periodEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) else {
+            print("❌ HoursWidget: Failed to calculate period end")
+            return (periodStart, Date())
+        }
+        
+        print("📅 HoursWidget Default Pay Period:")
+        print("   Reference: 2/25/2024 (Sunday)")
+        print("   Target: \(dateFormatter.string(from: Date()))")
+        print("   Days since reference: \(daysSinceReference)")
+        print("   Periods elapsed: \(periodsElapsed)")
+        print("   Period: \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
+        
+        return (periodStart, periodEnd)
     }
     
     private func calculateOvertimeBreakdown(entries: [TimeEntry], payPeriodStart: Date) -> (regular: Double, overtime: Double, total: Double, currentWeek: Double) {
         let calendar = Calendar.current
         let now = Date()
         
-        // Group entries by week
-        var weeklyHours: [Date: Double] = [:]
+        // Calculate which week of the pay period we're currently in
+        let daysSincePeriodStart = calendar.dateComponents([.day], from: calendar.startOfDay(for: payPeriodStart), to: calendar.startOfDay(for: now)).day ?? 0
+        let currentWeekOfPeriod = (daysSincePeriodStart / 7) + 1 // 1 for first week, 2 for second week
+        
+        print("📅 Current week calculation: Days since period start: \(daysSincePeriodStart), Current week: \(currentWeekOfPeriod)")
+        
+        // Group entries by week within the pay period
+        var weeklyHours: [Int: Double] = [:] // Week number -> hours
         var currentWeekTotal: Double = 0
         
         for entry in entries {
@@ -374,14 +603,15 @@ struct HoursWidget: View {
             dateFormatter.dateFormat = "yyyy-MM-dd"
             guard let entryDate = dateFormatter.date(from: entry.date) else { continue }
             
-            // Find the start of the week for this entry
-            guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: entryDate)?.start else { continue }
+            // Calculate which week of the pay period this entry belongs to
+            let entryDaysSincePeriodStart = calendar.dateComponents([.day], from: calendar.startOfDay(for: payPeriodStart), to: calendar.startOfDay(for: entryDate)).day ?? 0
+            let entryWeekOfPeriod = (entryDaysSincePeriodStart / 7) + 1
             
             // Add hours to the appropriate week
-            weeklyHours[weekStart, default: 0] += entry.durationInHours
+            weeklyHours[entryWeekOfPeriod, default: 0] += entry.durationInHours
             
-            // Check if this entry is in the current week
-            if calendar.isDate(entryDate, equalTo: now, toGranularity: .weekOfYear) {
+            // Check if this entry is in the current week of the pay period
+            if entryWeekOfPeriod == currentWeekOfPeriod {
                 currentWeekTotal += entry.durationInHours
             }
         }
@@ -415,6 +645,9 @@ struct MileageWidget: View {
     @State private var isLoading = false
     @State private var hasInitialData = false
     @StateObject private var mileageViewModel: MileageReportsViewModel
+    @State private var mileageRate: Double = 0.30 // Default rate
+    
+    private let db = Firestore.firestore()
     
     init(userName: String) {
         self.userName = userName
@@ -454,12 +687,15 @@ struct MileageWidget: View {
                 VStack(spacing: 12) {
                     // Pay Period
                     HStack {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text("Pay Period")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                             Text("\(Int(currentPeriodMileage)) mi")
                                 .font(.system(size: 24, weight: .semibold))
+                            Text("$\(currentPeriodMileage * mileageRate, specifier: "%.2f")")
+                                .font(.caption)
+                                .foregroundColor(.green)
                         }
                         Spacer()
                     }
@@ -468,22 +704,28 @@ struct MileageWidget: View {
                     
                     // Month and Year
                     HStack {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text("This Month")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                             Text("\(Int(monthMileage)) mi")
                                 .font(.system(size: 18, weight: .medium))
+                            Text("$\(monthMileage * mileageRate, specifier: "%.2f")")
+                                .font(.caption2)
+                                .foregroundColor(.green)
                         }
                         
                         Spacer()
                         
-                        VStack(alignment: .trailing, spacing: 4) {
+                        VStack(alignment: .trailing, spacing: 2) {
                             Text("This Year")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                             Text("\(Int(yearMileage)) mi")
                                 .font(.system(size: 18, weight: .medium))
+                            Text("$\(yearMileage * mileageRate, specifier: "%.2f")")
+                                .font(.caption2)
+                                .foregroundColor(.green)
                         }
                     }
                 }
@@ -518,6 +760,9 @@ struct MileageWidget: View {
         
         print("📊 MileageWidget: Setting up mileage listener for user: \(userName)")
         
+        // Fetch user's mileage rate from Firebase
+        fetchUserMileageRate()
+        
         // Listen for changes to the view model
         mileageViewModel.listenForMileageUpdates {
             DispatchQueue.main.async {
@@ -541,6 +786,35 @@ struct MileageWidget: View {
         
         // Trigger initial load
         mileageViewModel.loadRecords()
+    }
+    
+    private func fetchUserMileageRate() {
+        // Get current user ID
+        guard let userId = Auth.auth().currentUser?.uid else {
+            print("⚠️ MileageWidget: No authenticated user")
+            return
+        }
+        
+        // Fetch amountPerMile from users collection
+        db.collection("users").document(userId).getDocument { snapshot, error in
+            if let error = error {
+                print("❌ MileageWidget: Error fetching user profile: \(error)")
+                return
+            }
+            
+            guard let data = snapshot?.data() else {
+                print("⚠️ MileageWidget: No user data found")
+                return
+            }
+            
+            // Get amountPerMile field, default to 0.30 if not set
+            let rate = data["amountPerMile"] as? Double ?? 0.30
+            
+            DispatchQueue.main.async {
+                self.mileageRate = rate
+                print("💰 MileageWidget: Mileage rate set to $\(rate) per mile")
+            }
+        }
     }
 }
 
