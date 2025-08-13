@@ -621,6 +621,40 @@ class SportsShootService {
         }
     }
     
+    // Batch add multiple roster entries
+    func batchAddRosterEntries(shootID: String, entries: [RosterEntry], completion: @escaping (Bool, Error?) -> Void) {
+        // Check if we are offline
+        if !isOnline {
+            print("Device is offline, cannot batch add entries")
+            let error = NSError(domain: "SportsShootService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot batch add entries while offline"])
+            completion(false, error)
+            return
+        }
+        
+        // We're online, update in Firestore
+        let docRef = db.collection(sportsShootsCollection).document(shootID)
+        
+        // Convert all entries to dictionaries for Firestore
+        let entryDicts = entries.map { $0.toDictionary() }
+        
+        // Use batch operation for better performance
+        docRef.updateData([
+            "roster": FieldValue.arrayUnion(entryDicts),
+            "updatedAt": FieldValue.serverTimestamp()
+        ]) { [weak self] error in
+            if let error = error {
+                completion(false, error)
+            } else {
+                // Update succeeded, update the cached version too
+                self?.fetchSportsShoot(id: shootID) { _ in
+                    // Just refresh the cache, don't need to handle result
+                }
+                
+                completion(true, nil)
+            }
+        }
+    }
+    
     // Add a new group image
     func addGroupImage(shootID: String, groupImage: GroupImage, completion: @escaping (Result<Void, Error>) -> Void) {
         // Check if we are offline

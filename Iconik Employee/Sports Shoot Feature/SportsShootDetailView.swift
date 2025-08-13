@@ -26,6 +26,7 @@ struct SportsShootDetailView: View {
     
     // States for roster management
     @State private var showingAddRosterEntry = false
+    @State private var showingBatchAdd = false
     @State private var showingAddGroupImage = false
     @State private var selectedRosterEntry: RosterEntry?
     @State private var selectedGroupImage: GroupImage?
@@ -267,6 +268,18 @@ struct SportsShootDetailView: View {
                 )
             }
         }
+        .sheet(isPresented: $showingBatchAdd) {
+            if let shoot = sportsShoot {
+                BatchAddAthletesView(
+                    shootID: shoot.id,
+                    onComplete: { success in
+                        if success {
+                            refreshSportsShoot()
+                        }
+                    }
+                )
+            }
+        }
         .sheet(isPresented: $showingAddGroupImage) {
             if let shoot = sportsShoot {
                 AddGroupImageView(
@@ -503,24 +516,48 @@ struct SportsShootDetailView: View {
                         ))
                         .listRowBackground(Color.clear)
                 }
+                
             }
             .listStyle(PlainListStyle())
             
-            // Add athlete button
-            Button(action: {
-                selectedRosterEntry = nil
-                showingAddRosterEntry = true
-            }) {
-                Label("Add Athlete", systemImage: "person.badge.plus")
-                    .font(.headline)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity)
+            // Add athlete buttons below the list
+            HStack(spacing: 10) {
+                Spacer()
+                
+                Button(action: {
+                    selectedRosterEntry = nil
+                    showingAddRosterEntry = true
+                }) {
+                    HStack {
+                        Image(systemName: "person.badge.plus")
+                        Text("Add")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
                     .background(Color.blue)
                     .foregroundColor(.white)
-                    .cornerRadius(10)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
+                    .cornerRadius(8)
+                }
+                
+                Button(action: {
+                    showingBatchAdd = true
+                }) {
+                    HStack {
+                        Image(systemName: "person.3.fill")
+                        Text("Batch")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+                
+                Spacer()
             }
+            .padding(.vertical, 8)
         }
     }
     
