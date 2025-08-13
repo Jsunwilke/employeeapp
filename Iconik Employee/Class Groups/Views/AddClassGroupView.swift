@@ -138,8 +138,7 @@ struct AddClassGroupView: View {
     }
     
     private var isFormValid: Bool {
-        !grade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !teacher.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !grade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     
     private var canShowWhiteboard: Bool {
@@ -315,8 +314,7 @@ struct EditClassGroupView: View {
     }
     
     private var isFormValid: Bool {
-        !grade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !teacher.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !grade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     
     private var canShowWhiteboard: Bool {

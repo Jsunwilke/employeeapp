@@ -122,7 +122,9 @@ struct GroupImage: Identifiable, Codable, Hashable {
 struct SportsShoot: Identifiable, Codable {
     var id: String
     var schoolName: String
+    var schoolId: String?
     var sportName: String
+    var seasonType: String?
     var shootDate: Date
     var location: String
     var photographer: String
@@ -136,7 +138,9 @@ struct SportsShoot: Identifiable, Codable {
     
     init(id: String = UUID().uuidString,
          schoolName: String = "",
+         schoolId: String? = nil,
          sportName: String = "",
+         seasonType: String? = nil,
          shootDate: Date = Date(),
          location: String = "",
          photographer: String = "",
@@ -149,7 +153,9 @@ struct SportsShoot: Identifiable, Codable {
          isArchived: Bool = false) {
         self.id = id
         self.schoolName = schoolName
+        self.schoolId = schoolId
         self.sportName = sportName
+        self.seasonType = seasonType
         self.shootDate = shootDate
         self.location = location
         self.photographer = photographer
@@ -164,7 +170,7 @@ struct SportsShoot: Identifiable, Codable {
     
     // Adding a custom Codable implementation to handle optional fields and field mapping
     enum CodingKeys: String, CodingKey {
-        case id, schoolName, sportName, shootDate, location, photographer
+        case id, schoolName, schoolId, sportName, seasonType, shootDate, location, photographer
         case roster, groupImages, additionalNotes, organizationID
         case createdAt, updatedAt, isArchived
     }
@@ -174,7 +180,9 @@ struct SportsShoot: Identifiable, Codable {
         
         id = try container.decode(String.self, forKey: .id)
         schoolName = try container.decodeIfPresent(String.self, forKey: .schoolName) ?? ""
+        schoolId = try container.decodeIfPresent(String.self, forKey: .schoolId)
         sportName = try container.decodeIfPresent(String.self, forKey: .sportName) ?? ""
+        seasonType = try container.decodeIfPresent(String.self, forKey: .seasonType)
         shootDate = try container.decodeIfPresent(Date.self, forKey: .shootDate) ?? Date()
         location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
         photographer = try container.decodeIfPresent(String.self, forKey: .photographer) ?? ""

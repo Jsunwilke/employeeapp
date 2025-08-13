@@ -180,7 +180,13 @@ struct ScanView: View {
             jobBoxListener = nil
             nfcReader.errorMessage = nil
         }
-        .sheet(isPresented: $showingForm) {
+        .sheet(isPresented: $showingForm, onDismiss: {
+            // Reset state when form is dismissed
+            nfcReader.scannedCardNumber = nil
+            school = ""
+            schoolId = nil
+            status = "Job Box"
+        }) {
             if let cardNumber = nfcReader.scannedCardNumber {
                 FormView(
                     cardNumber: cardNumber,
@@ -219,7 +225,13 @@ struct ScanView: View {
                 )
             }
         }
-        .sheet(isPresented: $showingJobBoxForm) {
+        .sheet(isPresented: $showingJobBoxForm, onDismiss: {
+            // Reset state when form is dismissed
+            nfcReader.scannedCardNumber = nil
+            school = ""
+            schoolId = nil
+            status = "Job Box"
+        }) {
             Group {
                 if let boxNumber = nfcReader.scannedCardNumber {
                     JobBoxFormView(
@@ -528,9 +540,13 @@ struct ScanView: View {
                 case .success(let message):
                     self.toastMessage = message
                     self.isSuccessToast = true
-                    self.nfcReader.scannedCardNumber = nil
-                    self.showingForm = false
                     self.showToast = true
+                    
+                    // Close form and reset state
+                    self.showingForm = false
+                    self.nfcReader.scannedCardNumber = nil
+                    
+                    // Then notify completion
                     completion(true)
                     
                 case .failure(let error):
@@ -589,8 +605,6 @@ struct ScanView: View {
                 case .success(let message):
                     self.toastMessage = message
                     self.isSuccessToast = true
-                    self.nfcReader.scannedCardNumber = nil
-                    self.showingJobBoxForm = false
                     self.showToast = true
                     
                     // For immediate UI update if a notification box is being updated
@@ -601,9 +615,14 @@ struct ScanView: View {
                         }
                     }
                     
+                    // Close form and reset state
+                    self.showingJobBoxForm = false
+                    self.nfcReader.scannedCardNumber = nil
+                    
                     // No need to manually refresh since the Firestore listener
                     // will automatically pick up changes for cross-device updates
                     
+                    // Then notify completion
                     completion(true)
                     
                 case .failure(let error):

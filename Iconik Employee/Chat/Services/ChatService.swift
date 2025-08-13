@@ -173,20 +173,15 @@ class ChatService: ChatServiceProtocol {
         
         let snapshot = try await query.getDocuments()
         
-        let messages = try snapshot.documents.compactMap { document -> ChatMessage? in
-            var data = document.data()
-            data["id"] = document.documentID
-            
-            // Convert Firestore types to JSON-compatible types
-            if let timestamp = data["timestamp"] as? Timestamp {
-                data["timestamp"] = ["seconds": timestamp.seconds, "nanoseconds": timestamp.nanoseconds]
+        let messages = snapshot.documents.compactMap { document -> ChatMessage? in
+            do {
+                // Use Firestore's built-in decoder
+                let message = try document.data(as: ChatMessage.self)
+                return message
+            } catch {
+                print("Error decoding message: \(error)")
+                return nil
             }
-            if let createdAt = data["createdAt"] as? Timestamp {
-                data["createdAt"] = ["seconds": createdAt.seconds, "nanoseconds": createdAt.nanoseconds]
-            }
-            
-            let jsonData = try JSONSerialization.data(withJSONObject: data)
-            return try JSONDecoder().decode(ChatMessage.self, from: jsonData)
         }.reversed() // Reverse to show chronologically
         
         let lastDoc = snapshot.documents.last
@@ -217,27 +212,13 @@ class ChatService: ChatServiceProtocol {
                 
                 let conversations = documents.compactMap { document -> Conversation? in
                     do {
-                        var data = document.data()
-                        data["id"] = document.documentID
-                        
-                        // Convert Firestore types to JSON-compatible types
-                        if let createdAt = data["createdAt"] as? Timestamp {
-                            data["createdAt"] = ["seconds": createdAt.seconds, "nanoseconds": createdAt.nanoseconds]
-                        }
-                        if let lastActivity = data["lastActivity"] as? Timestamp {
-                            data["lastActivity"] = ["seconds": lastActivity.seconds, "nanoseconds": lastActivity.nanoseconds]
-                        }
-                        if let lastMessage = data["lastMessage"] as? [String: Any],
-                           let timestamp = lastMessage["timestamp"] as? Timestamp {
-                            var updatedLastMessage = lastMessage
-                            updatedLastMessage["timestamp"] = ["seconds": timestamp.seconds, "nanoseconds": timestamp.nanoseconds]
-                            data["lastMessage"] = updatedLastMessage
-                        }
-                        
-                        let jsonData = try JSONSerialization.data(withJSONObject: data)
-                        return try JSONDecoder().decode(Conversation.self, from: jsonData)
+                        // Use Firestore's built-in decoder which properly handles Timestamp fields
+                        let conversation = try document.data(as: Conversation.self)
+                        return conversation
                     } catch {
-                        print("Error decoding conversation: \(error)")
+                        print("Error decoding conversation \(document.documentID): \(error)")
+                        // Log the document data for debugging
+                        print("Document data: \(document.data())")
                         return nil
                     }
                 }
@@ -260,19 +241,9 @@ class ChatService: ChatServiceProtocol {
                 
                 let messages = documents.compactMap { document -> ChatMessage? in
                     do {
-                        var data = document.data()
-                        data["id"] = document.documentID
-                        
-                        // Convert Firestore types to JSON-compatible types
-                        if let timestamp = data["timestamp"] as? Timestamp {
-                            data["timestamp"] = ["seconds": timestamp.seconds, "nanoseconds": timestamp.nanoseconds]
-                        }
-                        if let createdAt = data["createdAt"] as? Timestamp {
-                            data["createdAt"] = ["seconds": createdAt.seconds, "nanoseconds": createdAt.nanoseconds]
-                        }
-                        
-                        let jsonData = try JSONSerialization.data(withJSONObject: data)
-                        return try JSONDecoder().decode(ChatMessage.self, from: jsonData)
+                        // Use Firestore's built-in decoder
+                        let message = try document.data(as: ChatMessage.self)
+                        return message
                     } catch {
                         print("Error decoding message: \(error)")
                         return nil
@@ -305,19 +276,9 @@ class ChatService: ChatServiceProtocol {
             
             let messages = documents.compactMap { document -> ChatMessage? in
                 do {
-                    var data = document.data()
-                    data["id"] = document.documentID
-                    
-                    // Convert Firestore types to JSON-compatible types
-                    if let timestamp = data["timestamp"] as? Timestamp {
-                        data["timestamp"] = ["seconds": timestamp.seconds, "nanoseconds": timestamp.nanoseconds]
-                    }
-                    if let createdAt = data["createdAt"] as? Timestamp {
-                        data["createdAt"] = ["seconds": createdAt.seconds, "nanoseconds": createdAt.nanoseconds]
-                    }
-                    
-                    let jsonData = try JSONSerialization.data(withJSONObject: data)
-                    return try JSONDecoder().decode(ChatMessage.self, from: jsonData)
+                    // Use Firestore's built-in decoder
+                    let message = try document.data(as: ChatMessage.self)
+                    return message
                 } catch {
                     print("Error decoding message: \(error)")
                     return nil

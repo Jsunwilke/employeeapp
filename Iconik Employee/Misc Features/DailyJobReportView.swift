@@ -155,10 +155,12 @@ struct DailyJobReportView: View {
     @State private var showPermissionError: Bool = false
     
     // ------------------------------------------------------------------
-    // NEW: Success Alert
+    // Toast for success feedback
     // ------------------------------------------------------------------
-    @State private var showSuccessAlert: Bool = false
+    @State private var showToast = false
+    @State private var toastMessage = ""
     @Environment(\.presentationMode) var presentationMode
+    @ObservedObject private var tabBarManager = TabBarManager.shared
     
     // ------------------------------------------------------------------
     // Keyboard handling
@@ -271,15 +273,6 @@ struct DailyJobReportView: View {
             // Clean up real-time listener
             scheduleListener?.remove()
         }
-        .alert(isPresented: $showSuccessAlert) {
-            Alert(
-                title: Text("Success"),
-                message: Text("Report submitted successfully."),
-                dismissButton: .default(Text("OK")) {
-                    presentationMode.wrappedValue.dismiss()
-                }
-            )
-        }
         .alert("Permission Error", isPresented: $showPermissionError) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -309,6 +302,7 @@ struct DailyJobReportView: View {
                 }
             }
         }
+        .toast(isPresented: $showToast, message: toastMessage, isSuccess: true)
     }
     
     // MARK: - UI Components
@@ -1574,7 +1568,12 @@ struct DailyJobReportView: View {
                         self.photoshootNotes.remove(at: index)
                         self.savePhotoshootNotes()
                     }
-                    self.showSuccessAlert = true
+                    
+                    // Post notification to show toast on main view
+                    NotificationCenter.default.post(name: Notification.Name("ShowReportSuccessToast"), object: nil)
+                    
+                    // Return to home tab
+                    self.tabBarManager.selectedTab = "home"
                 }
             }
         }
