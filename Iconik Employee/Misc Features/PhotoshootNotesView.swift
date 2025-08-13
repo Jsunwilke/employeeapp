@@ -20,6 +20,8 @@ struct PhotoshootNotesView: View {
     @State private var isLoadingSchedule: Bool = false
     @State private var scheduleError: String = ""
     @State private var scheduleListener: ListenerRegistration?
+    @State private var showSchoolSelectionDialog = false
+    @State private var pendingNote: PhotoshootNote? = nil
     
     // User's stored information
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
@@ -374,6 +376,27 @@ struct PhotoshootNotesView: View {
             // Clean up real-time listener
             scheduleListener?.remove()
         }
+        .confirmationDialog(
+            "Select School for Note",
+            isPresented: $showSchoolSelectionDialog,
+            titleVisibility: .visible
+        ) {
+            ForEach(todaySessions.sorted(by: { (a, b) -> Bool in
+                guard let aStart = a.startDate, let bStart = b.startDate else { return false }
+                return aStart < bStart
+            }), id: \.id) { session in
+                Button(action: {
+                    selectSchoolFromSession(session, for: pendingNote)
+                }) {
+                    Text(formatSessionOption(session))
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingNote = nil
+            }
+        } message: {
+            Text("You have multiple photoshoots today. Which school would you like to use for this note?")
+        }
     }
     
     // MARK: - Custom UIImagePicker
@@ -692,28 +715,62 @@ struct PhotoshootNotesView: View {
             return
         }
         
-        // Sort sessions by start time, so we get the earliest one first
-        let sortedSessions = todaySessions.sorted { (a, b) -> Bool in
-            guard let aStart = a.startDate, let bStart = b.startDate else { return false }
-            return aStart < bStart
+        // If there's only one session, auto-select it
+        if todaySessions.count == 1 {
+            if let session = todaySessions.first,
+               let matchIndex = schoolOptions.firstIndex(where: { $0.name == session.schoolName }) {
+                // Found a match - update the note
+                if let index = notes.firstIndex(where: { $0.id == note.id }) {
+                    notes[index].school = schoolOptions[matchIndex].name
+                    selectedNote = notes[index]
+                    saveNotes()
+                    
+                    successMessage = "Auto-selected school from your schedule"
+                    
+                    // Clear success message after delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        self.successMessage = ""
+                    }
+                }
+            }
+        } else {
+            // Multiple sessions - show selection dialog
+            pendingNote = note
+            showSchoolSelectionDialog = true
         }
+    }
+    
+    // Select a specific school from a session
+    private func selectSchoolFromSession(_ session: Session, for note: PhotoshootNote?) {
+        guard let note = note else { return }
         
-        // Look for a matching school in our options for the first session
-        if let firstSession = sortedSessions.first,
-           let matchIndex = schoolOptions.firstIndex(where: { $0.name == firstSession.schoolName }) {
+        if let matchIndex = schoolOptions.firstIndex(where: { $0.name == session.schoolName }) {
             // Found a match - update the note
             if let index = notes.firstIndex(where: { $0.id == note.id }) {
                 notes[index].school = schoolOptions[matchIndex].name
                 selectedNote = notes[index]
                 saveNotes()
                 
-                successMessage = "Auto-selected school from your schedule"
+                successMessage = "Selected \(session.schoolName) for this note"
                 
                 // Clear success message after delay
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     self.successMessage = ""
                 }
             }
+        }
+        pendingNote = nil
+    }
+    
+    // Format session for display in selection dialog
+    private func formatSessionOption(_ session: Session) -> String {
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeStyle = .short
+        
+        if let startDate = session.startDate {
+            return "\(session.schoolName) - \(timeFormatter.string(from: startDate))"
+        } else {
+            return session.schoolName
         }
     }
 }

@@ -491,6 +491,8 @@ struct MainEmployeeView: View {
     // For navigating to Settings and appearance
     @State private var showSettings = false
     @State private var showThemePicker = false
+    @State private var showToast = false
+    @State private var toastMessage = ""
     
     // Track initialization state to prevent duplicate loads
     @State private var hasInitializedData = false
@@ -546,6 +548,11 @@ struct MainEmployeeView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .toast(isPresented: $showToast, message: toastMessage, isSuccess: true)
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowReportSuccessToast"))) { _ in
+            toastMessage = "Report submitted successfully"
+            showToast = true
+        }
     }
     
     // MARK: - Main Content View

@@ -80,8 +80,8 @@ class NFCReaderCoordinator: NSObject, NFCNDEFReaderSessionDelegate, ObservableOb
                 // OPTIMIZATION: Get the data first, then invalidate quickly
                 let finalCardNumber = trimmed
                 
-                // OPTIMIZATION: First invalidate for faster UI dismissal
-                session.invalidate(errorMessage: "Successfully read tag.")
+                // OPTIMIZATION: First invalidate for faster UI dismissal (silently)
+                session.invalidate()
                 
                 // THEN update our state, which will trigger the UI to show the form
                 DispatchQueue.main.async {

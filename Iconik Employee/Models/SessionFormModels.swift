@@ -17,7 +17,7 @@ struct SessionFormData {
 }
 
 // MARK: - School Model
-struct School: Identifiable, Codable {
+struct School: Identifiable, Codable, Hashable {
     let id: String
     let organizationID: String
     let value: String // School name (legacy field name)

@@ -26,7 +26,10 @@ struct EditDailyJobReportView: View {
     
     @State private var isSubmitting: Bool = false
     @State private var errorMessage: String = ""
+    @State private var showDeleteAlert = false
+    @State private var isDeleting = false
     @Environment(\.presentationMode) var presentationMode
+    @Environment(\.dismiss) private var dismiss
     
     // Options arrays (same as in DailyJobReportView)
     let yesNoNaOptions = ["Yes", "No", "NA"]
@@ -188,7 +191,28 @@ struct EditDailyJobReportView: View {
             }
         }
         .navigationTitle("Edit Job Report")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    showDeleteAlert = true
+                }) {
+                    Image(systemName: "trash")
+                        .foregroundColor(.red)
+                }
+                .disabled(isDeleting)
+            }
+        }
+        .alert("Delete Report", isPresented: $showDeleteAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deleteReport()
+            }
+        } message: {
+            Text("Are you sure you want to delete this report? This action cannot be undone.")
+        }
         .onAppear(perform: loadReportData)
+        .disabled(isDeleting)
     }
     
     func loadReportData() {
@@ -312,6 +336,25 @@ struct EditDailyJobReportView: View {
                 errorMessage = error.localizedDescription
             } else {
                 presentationMode.wrappedValue.dismiss()
+            }
+        }
+    }
+    
+    func deleteReport() {
+        isDeleting = true
+        
+        let db = Firestore.firestore()
+        db.collection("dailyJobReports").document(report.id).delete { error in
+            DispatchQueue.main.async {
+                isDeleting = false
+                
+                if let error = error {
+                    print("Error deleting report: \(error.localizedDescription)")
+                    errorMessage = "Failed to delete report: \(error.localizedDescription)"
+                } else {
+                    print("Report deleted successfully")
+                    dismiss()
+                }
             }
         }
     }

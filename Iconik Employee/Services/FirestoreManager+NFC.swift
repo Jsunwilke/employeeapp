@@ -15,6 +15,10 @@ class FirestoreManager: ObservableObject {
     @Published var isLoading = false
     @Published var loadingMessage = ""
     
+    // Cache for schools data to prevent unnecessary updates
+    private var lastSchoolsData: [SchoolItem]?
+    private let schoolsDataQueue = DispatchQueue(label: "com.iconik.schoolsdata", attributes: .concurrent)
+    
     // MARK: - Save Record (SD Card)
     func saveRecord(timestamp: Date,
                    photographer: String,
@@ -310,13 +314,16 @@ class FirestoreManager: ObservableObject {
     }
     
     // MARK: - Listen for Schools Data
+    
     func listenForSchoolsData(forOrgID orgID: String, completion: @escaping ([SchoolItem]) -> Void) {
         let db = Firestore.firestore()
         
         db.collection("schools")
             .whereField("organizationID", isEqualTo: orgID)
             .order(by: "value")
-            .addSnapshotListener { snapshot, error in
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self = self else { return }
+                
                 if let error = error {
                     print("Error listening for schools: \(error)")
                     completion([])
@@ -326,6 +333,21 @@ class FirestoreManager: ObservableObject {
                 guard let documents = snapshot?.documents else {
                     completion([])
                     return
+                }
+                
+                // Skip metadata-only updates
+                if let snapshot = snapshot {
+                    // Check if this is just a metadata update (no actual data changes)
+                    if snapshot.metadata.hasPendingWrites && snapshot.documentChanges.isEmpty {
+                        print("Skipping metadata-only update")
+                        return
+                    }
+                    
+                    // If from cache and no changes, skip
+                    if snapshot.metadata.isFromCache && snapshot.documentChanges.isEmpty {
+                        print("Skipping cache-only update with no changes")
+                        return
+                    }
                 }
                 
                 let schools = documents.compactMap { doc -> SchoolItem? in
@@ -358,13 +380,63 @@ class FirestoreManager: ObservableObject {
                     )
                 }
                 
-                // Cache the school records
-                if let encoded = try? JSONEncoder().encode(schools) {
-                    UserDefaults.standard.set(encoded, forKey: "nfcSchools")
+                // Thread-safe check if data has changed
+                self.schoolsDataQueue.async(flags: .barrier) {
+                    let oldSchools = self.lastSchoolsData
+                    let schoolsChanged = self.hasSchoolsDataChanged(oldSchools: oldSchools, newSchools: schools)
+                    
+                    if schoolsChanged {
+                        // Update the cached data
+                        self.lastSchoolsData = schools
+                        
+                        // Cache the school records to UserDefaults
+                        if let encoded = try? JSONEncoder().encode(schools) {
+                            UserDefaults.standard.set(encoded, forKey: "nfcSchools")
+                        }
+                        
+                        // Only call completion if data actually changed
+                        DispatchQueue.main.async {
+                            completion(schools)
+                        }
+                        print("Schools data updated - \(schools.count) schools")
+                    } else {
+                        // Data hasn't changed, don't trigger an update
+                        print("Schools data unchanged, skipping update")
+                    }
                 }
-                
-                completion(schools)
             }
+    }
+    
+    private func hasSchoolsDataChanged(oldSchools: [SchoolItem]?, newSchools: [SchoolItem]) -> Bool {
+        guard let oldSchools = oldSchools else {
+            // First load, always update
+            return true
+        }
+        
+        // Check if count is different
+        if oldSchools.count != newSchools.count {
+            return true
+        }
+        
+        // Check if any school has changed by comparing sorted arrays
+        let sortedOld = oldSchools.sorted { $0.id < $1.id }
+        let sortedNew = newSchools.sorted { $0.id < $1.id }
+        
+        for (index, newSchool) in sortedNew.enumerated() {
+            if index >= sortedOld.count {
+                return true
+            }
+            
+            let oldSchool = sortedOld[index]
+            if oldSchool.id != newSchool.id ||
+               oldSchool.name != newSchool.name ||
+               oldSchool.address != newSchool.address ||
+               oldSchool.coordinates != newSchool.coordinates {
+                return true
+            }
+        }
+        
+        return false
     }
     
     // MARK: - Delete Operations
