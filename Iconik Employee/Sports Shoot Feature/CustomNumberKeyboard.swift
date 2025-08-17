@@ -15,38 +15,83 @@ struct CustomNumberKeyboard: View {
     
     var body: some View {
         VStack(spacing: 10) {
-            // Number grid
-            LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(1...9, id: \.self) { number in
-                    NumberButton(text: "\(number)") {
-                        text.append("\(number)")
+            // Number grid and bottom row
+            VStack(spacing: 10) {
+                // Numbers 1-9 in 3x3 grid
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(1...9, id: \.self) { number in
+                        NumberButton(text: "\(number)") {
+                            text.append("\(number)")
+                        }
                     }
                 }
                 
-                // Hyphen button
-                NumberButton(text: "-") {
-                    text.append("-")
-                }
-                
-                // Zero button
-                NumberButton(text: "0") {
-                    text.append("0")
-                }
-                
-                // Delete button
-                Button(action: {
-                    if !text.isEmpty {
-                        text.removeLast()
+                // Bottom row - using GeometryReader for proper column sizing
+                GeometryReader { geometry in
+                    let columnWidth = (geometry.size.width - 20) / 3 // 3 columns with spacing
+                    let halfButtonWidth = (columnWidth - 10) / 2 // Half width for - and + buttons
+                    
+                    HStack(spacing: 10) {
+                        // First column: hyphen and plus buttons (each half of column width)
+                        HStack(spacing: 10) {
+                            Button(action: {
+                                text.append("-")
+                            }) {
+                                Text("-")
+                                    .font(.system(size: 28, weight: .regular))
+                                    .foregroundColor(Color(UIColor.label))
+                                    .frame(width: halfButtonWidth, height: 50)
+                                    .background(Color(UIColor.systemBackground))
+                                    .cornerRadius(8)
+                                    .shadow(radius: 1)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            
+                            Button(action: {
+                                text.append("+")
+                            }) {
+                                Text("+")
+                                    .font(.system(size: 28, weight: .regular))
+                                    .foregroundColor(Color(UIColor.label))
+                                    .frame(width: halfButtonWidth, height: 50)
+                                    .background(Color(UIColor.systemBackground))
+                                    .cornerRadius(8)
+                                    .shadow(radius: 1)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                        .frame(width: columnWidth)
+                        
+                        // Second column: Zero button (full column width)
+                        Button(action: {
+                            text.append("0")
+                        }) {
+                            Text("0")
+                                .font(.system(size: 28, weight: .regular))
+                                .foregroundColor(Color(UIColor.label))
+                                .frame(width: columnWidth, height: 50)
+                                .background(Color(UIColor.systemBackground))
+                                .cornerRadius(8)
+                                .shadow(radius: 1)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        // Third column: Delete button (full column width)
+                        Button(action: {
+                            if !text.isEmpty {
+                                text.removeLast()
+                            }
+                        }) {
+                            Image(systemName: "delete.left.fill")
+                                .font(.system(size: 24))
+                                .foregroundColor(Color(UIColor.label))
+                                .frame(width: columnWidth, height: 50)
+                                .background(Color.gray.opacity(0.2))
+                                .cornerRadius(8)
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
-                }) {
-                    Image(systemName: "delete.left.fill")
-                        .font(.system(size: 24))
-                        .foregroundColor(Color(UIColor.label))  // Explicit color for proper contrast
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color.gray.opacity(0.2))
-                        .cornerRadius(8)
                 }
-                .buttonStyle(PlainButtonStyle())
                 .frame(height: 50)
             }
             .padding(.horizontal)
