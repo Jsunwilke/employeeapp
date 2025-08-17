@@ -154,6 +154,18 @@ struct SportsShootDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(false) // Use default back button
         .toolbar {
+            // Add sidebar toggle button for iPad
+            ToolbarItem(placement: .navigationBarLeading) {
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    Button(action: {
+                        toggleSidebar()
+                    }) {
+                        Image(systemName: "sidebar.left")
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+            
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Button(action: {
@@ -578,122 +590,98 @@ struct SportsShootDetailView: View {
                     // Vertical layout for extremely long content
                     VStack(alignment: .leading, spacing: 8) {
                         // Player info - full width
-                        Button(action: {
-                            if !isLockedByOthers {
-                                selectedRosterEntry = entry
-                                showingAddRosterEntry = true
-                            }
-                        }) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 4) {
-                                    Text(entry.firstName)
-                                        .font(.system(size: 18, weight: .bold))
-                                        .foregroundColor(.blue)
-                                    
-                                    if !entry.teacher.isEmpty {
-                                        Text(specialTranslation(entry.teacher))
-                                            .font(.system(size: 14))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    
-                                    Spacer()
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 4) {
+                                Text(entry.firstName)
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(.blue)
+                                
+                                if !entry.teacher.isEmpty {
+                                    Text(specialTranslation(entry.teacher))
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.secondary)
                                 }
                                 
-                                Text(entry.lastName)
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.primary)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer()
                             }
+                            
+                            Text(entry.lastName)
+                                .font(.system(size: 16))
+                                .foregroundColor(.primary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .buttonStyle(PlainButtonStyle())
-                        .disabled(isLockedByOthers)
                         
                         // Group tag - full width
                         if !entry.group.isEmpty {
-                            Button(action: {
-                                if !isLockedByOthers {
-                                    selectedRosterEntry = entry
-                                    showingAddRosterEntry = true
-                                }
-                            }) {
-                                Text(entry.group)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.white)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .frame(minHeight: 32)
-                                    .background(groupColor)
-                                    .cornerRadius(4)
-                                    .lineLimit(2)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .disabled(isLockedByOthers)
+                            Text(entry.group)
+                                .font(.system(size: 11))
+                                .foregroundColor(.white)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .frame(minHeight: 32)
+                                .background(groupColor)
+                                .cornerRadius(4)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
+                    }
+                    .contentShape(Rectangle())  // Make entire area tappable
+                    .onTapGesture {
+                        // Open edit view when tapping on player info or group
+                        selectedRosterEntry = entry
+                        showingAddRosterEntry = true
                     }
                 } else {
                     // Horizontal layout for normal/moderately long content
                     HStack(alignment: .top) {
                         // Player info - gets priority for space
-                        Button(action: {
-                            if !isLockedByOthers {
-                                selectedRosterEntry = entry
-                                showingAddRosterEntry = true
-                            }
-                        }) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 4) {
-                                    Text(entry.firstName)
-                                        .font(.system(size: 18, weight: .bold))
-                                        .foregroundColor(.blue)
-                                    
-                                    if !entry.teacher.isEmpty {
-                                        Text(specialTranslation(entry.teacher))
-                                            .font(.system(size: 14))
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 4) {
+                                Text(entry.firstName)
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(.blue)
                                 
-                                Text(entry.lastName)
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.primary)
-                                    .lineLimit(layoutStrategy.playerLines)
-                                    .multilineTextAlignment(.leading)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                if !entry.teacher.isEmpty {
+                                    Text(specialTranslation(entry.teacher))
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.secondary)
+                                }
                             }
+                            
+                            Text(entry.lastName)
+                                .font(.system(size: 16))
+                                .foregroundColor(.primary)
+                                .lineLimit(layoutStrategy.playerLines)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .buttonStyle(PlainButtonStyle())
-                        .disabled(isLockedByOthers)
                         .layoutPriority(1)
                         
                         Spacer(minLength: 8)
                         
                         // Group/Team tag
                         if !entry.group.isEmpty {
-                            Button(action: {
-                                if !isLockedByOthers {
-                                    selectedRosterEntry = entry
-                                    showingAddRosterEntry = true
-                                }
-                            }) {
-                                Text(entry.group)
-                                    .font(.system(size: needsMultiLine ? 10 : 11))
-                                    .foregroundColor(.white)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 4)
-                                    .frame(minHeight: needsMultiLine ? 44 : 32)
-                                    .background(groupColor)
-                                    .cornerRadius(4)
-                                    .lineLimit(layoutStrategy.groupLines)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .disabled(isLockedByOthers)
+                            Text(entry.group)
+                                .font(.system(size: needsMultiLine ? 10 : 11))
+                                .foregroundColor(.white)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 4)
+                                .frame(minHeight: needsMultiLine ? 44 : 32)
+                                .background(groupColor)
+                                .cornerRadius(4)
+                                .lineLimit(layoutStrategy.groupLines)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
+                    }
+                    .contentShape(Rectangle())  // Make entire area tappable
+                    .onTapGesture {
+                        // Open edit view when tapping on player info or group
+                        selectedRosterEntry = entry
+                        showingAddRosterEntry = true
                     }
                 }
                 
@@ -775,6 +763,7 @@ struct SportsShootDetailView: View {
                             .foregroundColor(.white)
                             .cornerRadius(6)
                     }
+                    .buttonStyle(PlainButtonStyle())  // Prevents button from taking over entire tap area
                 }
             }
             .padding(.vertical, 8)
@@ -1449,6 +1438,29 @@ struct SportsShootDetailView: View {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         return formatter.string(from: date)
+    }
+    
+    private func toggleSidebar() {
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            findAndToggleSplitView(from: rootVC)
+        }
+    }
+    
+    private func findAndToggleSplitView(from viewController: UIViewController) {
+        if let splitVC = viewController as? UISplitViewController {
+            // Toggle between showing and hiding the sidebar
+            if splitVC.preferredDisplayMode == .oneBesideSecondary || splitVC.preferredDisplayMode == .automatic {
+                splitVC.preferredDisplayMode = .secondaryOnly
+            } else {
+                splitVC.preferredDisplayMode = .oneBesideSecondary
+            }
+            return
+        }
+        
+        for child in viewController.children {
+            findAndToggleSplitView(from: child)
+        }
     }
     
     private func specialTranslation(_ special: String) -> String {
