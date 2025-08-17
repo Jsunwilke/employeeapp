@@ -40,7 +40,7 @@ class SportsShootListViewModel: ObservableObject {
     @Published var lockedEntries: [String: String] = [:] // [entryID: editorName]
     
     // UI state - header collapsed in landscape
-    @Published var isHeaderCollapsed = false
+    @Published var isHeaderCollapsed = true
     
     // Filter panel state
     @Published var showFilterPanel = false
@@ -600,15 +600,14 @@ struct SportsShootListView: View {
                             if viewModel.isHeaderCollapsed {
                                 // Compressed header with connection status and cache status
                                 HStack {
-                                    // Back button for returning to master view
+                                    // Sidebar toggle button
                                     Button(action: {
-                                        // This action will show the primary/master view (sidebar)
-                                        withAnimation {
-                                            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                                               let rootVC = windowScene.windows.first?.rootViewController {
-                                                if let splitVC = findSplitViewController(from: rootVC) {
-                                                    splitVC.preferredDisplayMode = .oneBesideSecondary
-                                                }
+                                        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                                           let rootVC = windowScene.windows.first?.rootViewController {
+                                            if let splitVC = Self.findSplitViewController(from: rootVC) {
+                                                splitVC.preferredDisplayMode = 
+                                                    splitVC.preferredDisplayMode == .oneBesideSecondary ? 
+                                                    .secondaryOnly : .oneBesideSecondary
                                             }
                                         }
                                     }) {
@@ -616,7 +615,6 @@ struct SportsShootListView: View {
                                             .font(.system(size: 16))
                                             .foregroundColor(.blue)
                                     }
-                                    .padding(.trailing, 4)
                                     
                                     Text(shoot.schoolName)
                                         .font(.headline)
@@ -651,27 +649,8 @@ struct SportsShootListView: View {
                             } else {
                                 // Full header with connection status and cache status
                                 VStack(alignment: .leading, spacing: 8) {
-                                    HStack(alignment: .top) {
-                                        // Back button for returning to master view
-                                        Button(action: {
-                                            // This action will show the primary/master view (sidebar)
-                                            withAnimation {
-                                                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                                                   let rootVC = windowScene.windows.first?.rootViewController {
-                                                    if let splitVC = findSplitViewController(from: rootVC) {
-                                                        splitVC.preferredDisplayMode = .oneBesideSecondary
-                                                    }
-                                                }
-                                            }
-                                        }) {
-                                            Image(systemName: "sidebar.left")
-                                                .font(.system(size: 18))
-                                                .foregroundColor(.blue)
-                                        }
-                                        .padding(.trailing, 8)
-                                        
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(shoot.schoolName)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(shoot.schoolName)
                                                 .font(.title2)
                                                 .fontWeight(.bold)
                                             
@@ -694,7 +673,6 @@ struct SportsShootListView: View {
                                                 Text(formatDate(shoot.shootDate))
                                                     .font(.subheadline)
                                                     .foregroundColor(.gray)
-                                            }
                                         }
                                     }
                                     
@@ -1070,44 +1048,45 @@ struct SportsShootListView: View {
         @State private var isOnline: Bool = true
         
         var body: some View {
-            let content = HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(shoot.schoolName)
-                            .font(.headline)
-                        Spacer()
-                        Text(shoot.sportName)
-                            .font(.subheadline)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Color.blue.opacity(0.2))
-                            .cornerRadius(4)
-                    }
+            let content = HStack(alignment: .center, spacing: 6) {
+                // Always show sidebar button for testing
+                Button(action: {
+                    // Show the sidebar
+                    showSidebar()
+                }) {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 16))
+                        .foregroundColor(.blue)
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                // School name - takes available space
+                Text(shoot.schoolName)
+                    .font(.system(size: 14, weight: .medium))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                
+                // Sport and date on the right
+                HStack(spacing: 4) {
+                    Text(shoot.sportName)
+                        .font(.system(size: 11))
+                        .foregroundColor(.blue)
                     
-                    Text(formatDate(shoot.shootDate))
-                        .font(.subheadline)
+                    Text("•")
+                        .font(.system(size: 10))
                         .foregroundColor(.gray)
                     
-                    HStack {
-                        Label("\(shoot.roster.count) Athletes", systemImage: "person.3")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        Spacer()
-                        
-                        Label("\(shoot.groupImages.count) Groups", systemImage: "person.3.sequence")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.top, 4)
+                    Text(formatDate(shoot.shootDate))
+                        .font(.system(size: 10))
+                        .foregroundColor(.gray)
                 }
                 
-                // Sync status badge - moved to a separate component
+                // Sync status badge
                 statusBadge
-                    .font(.system(size: 18))
-                    .padding(.leading, 4)
+                    .font(.system(size: 14))
             }
-            .padding(.vertical, 4)
+            .frame(height: 30)
+            .fixedSize(horizontal: false, vertical: true)
             
             // Conditionally wrap in Button based on isInsideNavigationLink
             Group {
@@ -1224,6 +1203,24 @@ struct SportsShootListView: View {
             let formatter = DateFormatter()
             formatter.dateStyle = .medium
             return formatter.string(from: date)
+        }
+        
+        private func showSidebar() {
+            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+               let rootVC = windowScene.windows.first?.rootViewController {
+                findAndShowSplitView(from: rootVC)
+            }
+        }
+        
+        private func findAndShowSplitView(from viewController: UIViewController) {
+            if let splitVC = viewController as? UISplitViewController {
+                splitVC.preferredDisplayMode = .oneBesideSecondary
+                return
+            }
+            
+            for child in viewController.children {
+                findAndShowSplitView(from: child)
+            }
         }
     }
     
@@ -1476,10 +1473,11 @@ struct SportsShootListView: View {
                     .cornerRadius(16)
                     .shadow(color: .black.opacity(0.2), radius: 10, x: -5, y: 0)
                     .offset(x: isShowing ? 0 : 300)
+                    .padding(.top, 60) // Add padding to avoid navigation bar
                 }
                 .animation(.spring(), value: isShowing)
             }
-            .edgesIgnoringSafeArea(.all)
+            .edgesIgnoringSafeArea(.horizontal)
             .opacity(isShowing ? 1 : 0)
         }
         
@@ -1693,38 +1691,45 @@ struct SportsShootListView: View {
         return VStack(spacing: 0) {
             HStack(spacing: 0) {
                 // Left side - Name and SubjectId (fixed width)
-                Button(action: {
+                VStack(alignment: .leading, spacing: 2) {
+                    // Subject ID (firstName) with special info
+                    HStack(spacing: 4) {
+                        Text(entry.firstName)
+                            .font(.system(size: 20))
+                            .foregroundColor(.primary)
+                        
+                        if !entry.teacher.isEmpty {
+                            Text(specialTranslation(entry.teacher))
+                                .font(.system(size: 16))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    
+                    // Name (lastName)
+                    Text(entry.lastName)
+                        .font(.system(size: 20, weight: .bold))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(width: 200, alignment: .leading)
+                .contentShape(Rectangle())  // Make entire area tappable
+                .onTapGesture {
+                    // Open edit view when tapping on name area
                     if !isLockedByOthers {
                         viewModel.selectedRosterEntry = entry
                         viewModel.showingAddRosterEntry = true
                     }
-                }) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Subject ID (firstName) with special info
-                        HStack(spacing: 4) {
-                            Text(entry.firstName)
-                                .font(.system(size: 20))
-                                .foregroundColor(.primary)
-                            
-                            if !entry.teacher.isEmpty {
-                                Text(specialTranslation(entry.teacher))
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        
-                        // Name (lastName)
-                        Text(entry.lastName)
-                            .font(.system(size: 20, weight: .bold))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(width: 200, alignment: .leading)
                 }
-                .buttonStyle(PlainButtonStyle())
-                .disabled(isLockedByOthers)
                 
                 // This keeps the image centered by distributing space evenly
                 Spacer(minLength: 20)
+                    .contentShape(Rectangle())  // Make spacer area tappable
+                    .onTapGesture {
+                        // Open edit view when tapping in empty space
+                        if !isLockedByOthers {
+                            viewModel.selectedRosterEntry = entry
+                            viewModel.showingAddRosterEntry = true
+                        }
+                    }
                 
                 // Center - Image input box
                 if isCurrentlyEditing {
@@ -1786,35 +1791,44 @@ struct SportsShootListView: View {
                             .foregroundColor(.white) // White text for better contrast in both modes
                             .cornerRadius(6)
                     }
+                    .buttonStyle(PlainButtonStyle())  // Prevents button from taking over entire tap area
                 }
                 
                 // This keeps the image centered by distributing space evenly
                 Spacer(minLength: 20)
-                
-                // Right side - Group/Team tag
-                if !entry.group.isEmpty {
-                    Button(action: {
+                    .contentShape(Rectangle())  // Make spacer area tappable
+                    .onTapGesture {
+                        // Open edit view when tapping in empty space
                         if !isLockedByOthers {
                             viewModel.selectedRosterEntry = entry
                             viewModel.showingAddRosterEntry = true
                         }
-                    }) {
-                        Text(entry.group)
-                            .font(.system(size: fontSize)) // Dynamic font size
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(groupColor)
-                            .cornerRadius(5)
-                            .lineLimit(2) // 2 lines max
-                            .fixedSize(horizontal: true, vertical: true) // Never truncate
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .disabled(isLockedByOthers)
+                
+                // Right side - Group/Team tag
+                if !entry.group.isEmpty {
+                    Text(entry.group)
+                        .font(.system(size: fontSize)) // Dynamic font size
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(groupColor)
+                        .cornerRadius(5)
+                        .lineLimit(2) // 2 lines max
+                        .fixedSize(horizontal: true, vertical: true) // Never truncate
+                        .contentShape(Rectangle())  // Make entire area tappable
+                        .onTapGesture {
+                            // Open edit view when tapping on group tag
+                            if !isLockedByOthers {
+                                viewModel.selectedRosterEntry = entry
+                                viewModel.showingAddRosterEntry = true
+                            }
+                        }
                 }
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
+            .contentShape(Rectangle())
             
             Divider()
         }
@@ -2375,7 +2389,7 @@ struct SportsShootListView: View {
                                     if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                                        let rootVC = windowScene.windows.first?.rootViewController {
                                         // Find split view controller in hierarchy
-                                        let splitVC = findSplitViewController(from: rootVC)
+                                        let splitVC = Self.findSplitViewController(from: rootVC)
                                         if let splitVC = splitVC {
                                             // Force sidebar to be visible with focus on the sidebar (primaryOverlay)
                                             splitVC.preferredDisplayMode = .oneBesideSecondary
@@ -2392,13 +2406,13 @@ struct SportsShootListView: View {
                             }
                             
                             // Helper method to find UISplitViewController in view hierarchy
-                            private func findSplitViewController(from viewController: UIViewController) -> UISplitViewController? {
+                            private static func findSplitViewController(from viewController: UIViewController) -> UISplitViewController? {
                                 if let splitVC = viewController as? UISplitViewController {
                                     return splitVC
                                 }
                                 
                                 for child in viewController.children {
-                                    if let splitVC = findSplitViewController(from: child) {
+                                    if let splitVC = Self.findSplitViewController(from: child) {
                                         return splitVC
                                     }
                                 }

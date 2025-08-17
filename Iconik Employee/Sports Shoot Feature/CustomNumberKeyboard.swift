@@ -41,6 +41,7 @@ struct CustomNumberKeyboard: View {
                 }) {
                     Image(systemName: "delete.left.fill")
                         .font(.system(size: 24))
+                        .foregroundColor(Color(UIColor.label))  // Explicit color for proper contrast
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.gray.opacity(0.2))
                         .cornerRadius(8)
@@ -89,8 +90,9 @@ struct NumberButton: View {
         Button(action: action) {
             Text(text)
                 .font(.system(size: 28, weight: .regular))
+                .foregroundColor(Color(UIColor.label))  // Explicit text color for proper contrast
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.white)
+                .background(Color(UIColor.systemBackground))  // Adaptive background color
                 .cornerRadius(8)
                 .shadow(radius: 1)
         }
@@ -109,7 +111,7 @@ struct NavigationButton: View {
                 .font(.system(size: 24))
                 .foregroundColor(.blue)
                 .frame(width: 50, height: 44)
-                .background(Color.white)
+                .background(Color(UIColor.systemBackground))  // Adaptive background color
                 .cornerRadius(8)
                 .shadow(radius: 1)
         }

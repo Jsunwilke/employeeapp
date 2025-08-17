@@ -20,6 +20,7 @@ struct AddRosterEntryView: View {
     @State private var isLoading = false
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
+    @State private var isLoadingSubjectID = false
     
     // Focus state for keyboard navigation
     @FocusState private var focusedField: String?
@@ -40,11 +41,19 @@ struct AddRosterEntryView: View {
                         .submitLabel(.next)
                         .onSubmit { focusedField = "firstName" }
                     
-                    TextField("Subject ID", text: $firstName)
-                        .autocapitalization(.words)
-                        .focused($focusedField, equals: "firstName")
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = "teacher" }
+                    HStack {
+                        TextField("Subject ID", text: $firstName)
+                            .autocapitalization(.words)
+                            .focused($focusedField, equals: "firstName")
+                            .submitLabel(.next)
+                            .onSubmit { focusedField = "teacher" }
+                            .disabled(isLoadingSubjectID)
+                        
+                        if isLoadingSubjectID {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        }
+                    }
                     
                     TextField("Special", text: $teacher)
                         .autocapitalization(.words)
@@ -166,6 +175,7 @@ struct AddRosterEntryView: View {
             }
             .onAppear {
                 if let entry = existingEntry {
+                    // Editing existing entry - load its values
                     lastName = entry.lastName
                     firstName = entry.firstName
                     teacher = entry.teacher
@@ -174,6 +184,35 @@ struct AddRosterEntryView: View {
                     phone = entry.phone
                     imageNumbers = entry.imageNumbers
                     notes = entry.notes
+                } else {
+                    // New entry - load next available Subject ID
+                    loadNextSubjectID()
+                }
+            }
+        }
+    }
+    
+    private func loadNextSubjectID() {
+        isLoadingSubjectID = true
+        
+        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let shoot):
+                    // Find the highest Subject ID value
+                    let highestID = shoot.roster.compactMap { entry -> Int? in
+                        return Int(entry.firstName)
+                    }.max() ?? 100  // Default to 100 if no entries
+                    
+                    // Set the next available ID
+                    self.firstName = "\(highestID + 1)"
+                    self.isLoadingSubjectID = false
+                    
+                case .failure(let error):
+                    print("Error loading sports shoot for Subject ID: \(error.localizedDescription)")
+                    // Use default starting ID on error
+                    self.firstName = "101"
+                    self.isLoadingSubjectID = false
                 }
             }
         }
