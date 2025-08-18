@@ -5,6 +5,7 @@ import Combine
 struct AutosaveTextField: View {
     @Binding var text: String
     var placeholder: String
+    var context: String = ""  // Add context parameter
     var onTapOutside: (() -> Void)? = nil
     var onEnterOrDown: (() -> Void)? = nil  // Callback for Enter or Down arrow
     var onEnterOrUp: (() -> Void)? = nil  // Callback for Up arrow
@@ -18,9 +19,10 @@ struct AutosaveTextField: View {
     // Track the previous focus state to detect when focus is lost
     @State private var wasFocused = false
     
-    init(text: Binding<String>, placeholder: String, onTapOutside: (() -> Void)? = nil, onEnterOrDown: (() -> Void)? = nil, onEnterOrUp: (() -> Void)? = nil) {
+    init(text: Binding<String>, placeholder: String, context: String = "", onTapOutside: (() -> Void)? = nil, onEnterOrDown: (() -> Void)? = nil, onEnterOrUp: (() -> Void)? = nil) {
         self._text = text
         self.placeholder = placeholder
+        self.context = context
         self.onTapOutside = onTapOutside
         self.onEnterOrDown = onEnterOrDown
         self.onEnterOrUp = onEnterOrUp
@@ -32,6 +34,7 @@ struct AutosaveTextField: View {
             CustomKeyboardTextField(
                 text: $text,
                 placeholder: placeholder,
+                context: context,
                 onEnterOrDown: onEnterOrDown,
                 onEnterOrUp: onEnterOrUp,
                 onDismiss: onTapOutside
@@ -44,6 +47,7 @@ struct AutosaveTextField: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         KeyboardManager.shared.showKeyboard(
                             for: $text,
+                            context: context,
                             onUp: onEnterOrUp,
                             onDown: onEnterOrDown,
                             onDismiss: onTapOutside

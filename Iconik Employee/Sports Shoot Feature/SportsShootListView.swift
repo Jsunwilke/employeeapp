@@ -1736,6 +1736,7 @@ struct SportsShootListView: View {
                     AutosaveTextField(
                         text: $viewModel.editingImageNumber,
                         placeholder: "Enter image numbers",
+                        context: "\(entry.firstName) - \(entry.lastName)",
                         onTapOutside: {
                             print("📝 onTapOutside triggered for entry \(entry.id)")
                             // Just call the centralized save function
