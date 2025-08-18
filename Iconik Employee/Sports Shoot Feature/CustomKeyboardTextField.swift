@@ -3,6 +3,7 @@ import SwiftUI
 struct CustomKeyboardTextField: View {
     @Binding var text: String
     var placeholder: String
+    var context: String = ""  // Add context parameter
     var onEnterOrDown: (() -> Void)? = nil
     var onEnterOrUp: (() -> Void)? = nil
     var onDismiss: (() -> Void)? = nil
@@ -47,6 +48,7 @@ struct CustomKeyboardTextField: View {
             startCursorAnimation()
             keyboardManager.showKeyboard(
                 for: $text,
+                context: context,
                 onUp: onEnterOrUp,
                 onDown: onEnterOrDown,
                 onDismiss: onDismiss

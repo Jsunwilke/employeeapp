@@ -8,11 +8,13 @@ class KeyboardManager: ObservableObject {
     @Published var onUp: (() -> Void)?
     @Published var onDown: (() -> Void)?
     @Published var onDismiss: (() -> Void)?
+    @Published var editingContext: String = "" // Add context about what's being edited
     
     private init() {}
     
-    func showKeyboard(for text: Binding<String>, onUp: (() -> Void)? = nil, onDown: (() -> Void)? = nil, onDismiss: (() -> Void)? = nil) {
+    func showKeyboard(for text: Binding<String>, context: String = "", onUp: (() -> Void)? = nil, onDown: (() -> Void)? = nil, onDismiss: (() -> Void)? = nil) {
         self.activeFieldText = text
+        self.editingContext = context
         self.onUp = onUp
         self.onDown = onDown
         self.onDismiss = onDismiss
@@ -25,6 +27,7 @@ class KeyboardManager: ObservableObject {
         
         self.isShowingCustomKeyboard = false
         self.activeFieldText = nil
+        self.editingContext = ""
         self.onUp = nil
         self.onDown = nil
         self.onDismiss = nil
