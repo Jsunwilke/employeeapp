@@ -212,49 +212,47 @@ struct HoursWidget: View {
                                     let barWidth = geometry.size.width - 100 // Same as This Week
                                     let totalWithActive = totalHours + activeHours
                                     
-                                    if totalWithActive <= 80 {
-                                        // Under 80h: Show actual progress
+                                    if overtimeHours == 0 {
+                                        // No overtime: Show simple progress bar
                                         let progress = totalWithActive / 80.0
                                         
                                         // Just blue bar for regular hours
                                         RoundedRectangle(cornerRadius: 8)
                                             .fill(Color.blue)
-                                            .frame(width: barWidth * CGFloat(totalHours / 80.0), height: 24)
+                                            .frame(width: barWidth * CGFloat(min(totalHours / 80.0, 1.0)), height: 24)
                                         
                                         // Active hours overlay
                                         if activeHours > 0 {
                                             RoundedRectangle(cornerRadius: 8)
                                                 .fill(Color.blue.opacity(0.4))
-                                                .frame(width: barWidth * CGFloat(progress), height: 24)
+                                                .frame(width: barWidth * CGFloat(min(progress, 1.0)), height: 24)
                                         }
                                     } else {
-                                        // Over 80h: Full bar with proportional segments
-                                        let totalForRatio = totalHours // Use only logged hours for ratio
-                                        let regularRatio = regularHours / totalForRatio
-                                        let overtimeRatio = overtimeHours / totalForRatio
+                                        // Has overtime: Show proportional segments scaled to bar width
+                                        let maxHours = max(totalWithActive, 80.0) // Scale to at least 80 or actual if more
+                                        let regularRatio = regularHours / maxHours
+                                        let overtimeRatio = overtimeHours / maxHours
                                         
                                         // Blue segment (regular hours proportion)
                                         UnevenRoundedRectangle(
                                             topLeadingRadius: 8,
                                             bottomLeadingRadius: 8,
-                                            bottomTrailingRadius: overtimeHours > 0 ? 0 : 8,
-                                            topTrailingRadius: overtimeHours > 0 ? 0 : 8
+                                            bottomTrailingRadius: 0,
+                                            topTrailingRadius: 0
                                         )
                                         .fill(Color.blue)
-                                        .frame(width: barWidth * CGFloat(regularRatio), height: 24)
+                                        .frame(width: min(barWidth * CGFloat(regularRatio), barWidth), height: 24)
                                         
                                         // Orange segment (overtime proportion)
-                                        if overtimeHours > 0 {
-                                            UnevenRoundedRectangle(
-                                                topLeadingRadius: 0,
-                                                bottomLeadingRadius: 0,
-                                                bottomTrailingRadius: 8,
-                                                topTrailingRadius: 8
-                                            )
-                                            .fill(Color.orange)
-                                            .frame(width: barWidth * CGFloat(overtimeRatio), height: 24)
-                                            .offset(x: barWidth * CGFloat(regularRatio))
-                                        }
+                                        UnevenRoundedRectangle(
+                                            topLeadingRadius: 0,
+                                            bottomLeadingRadius: 0,
+                                            bottomTrailingRadius: 8,
+                                            topTrailingRadius: 8
+                                        )
+                                        .fill(Color.orange)
+                                        .frame(width: min(barWidth * CGFloat(overtimeRatio), barWidth - min(barWidth * CGFloat(regularRatio), barWidth)), height: 24)
+                                        .offset(x: min(barWidth * CGFloat(regularRatio), barWidth))
                                         
                                         // Active hours overlay on top
                                         if activeHours > 0 {
