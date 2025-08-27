@@ -302,10 +302,53 @@ struct ConversationRow: View {
     }
     
     private func messagePreview(_ lastMessage: LastMessage) -> String {
-        if lastMessage.senderId == currentUserId {
-            return "You: \(lastMessage.text)"
+        let text = lastMessage.text
+        
+        // Check if it's already a preview with emoji (from Stream adapter)
+        if text == "📷 Photo" || text == "📎 File" || text == "🎬 GIF" {
+            if lastMessage.senderId == currentUserId {
+                return "You: \(text)"
+            }
+            return text
         }
-        return lastMessage.text
+        
+        // Check if it's a GIF URL
+        if text.lowercased().contains("giphy.com") || 
+           text.lowercased().contains(".gif") ||
+           text.lowercased().contains("tenor.com") {
+            let gifText = "🎬 GIF"
+            if lastMessage.senderId == currentUserId {
+                return "You: \(gifText)"
+            }
+            return gifText
+        }
+        
+        // Check if it's an image URL
+        if text.lowercased().contains(".jpg") || 
+           text.lowercased().contains(".jpeg") || 
+           text.lowercased().contains(".png") ||
+           text.lowercased().contains(".webp") {
+            let imageText = "📷 Photo"
+            if lastMessage.senderId == currentUserId {
+                return "You: \(imageText)"
+            }
+            return imageText
+        }
+        
+        // Check if it's a URL (generic)
+        if text.hasPrefix("http://") || text.hasPrefix("https://") {
+            let linkText = "🔗 Link"
+            if lastMessage.senderId == currentUserId {
+                return "You: \(linkText)"
+            }
+            return linkText
+        }
+        
+        // Regular text message
+        if lastMessage.senderId == currentUserId {
+            return "You: \(text)"
+        }
+        return text
     }
 }
 

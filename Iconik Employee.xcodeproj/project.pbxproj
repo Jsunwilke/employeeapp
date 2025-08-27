@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		4DA3DF6967B24AF9ECB29C28 /* Pods_Iconik_Employee.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 72D6A6C54BBCF2ED26D7EFAE /* Pods_Iconik_Employee.framework */; };
-		C317FA8A2DD8340A00937E35 /* SwiftAnthropic in Frameworks */ = {isa = PBXBuildFile; productRef = C317FA892DD8340A00937E35 /* SwiftAnthropic */; };
 		C3B8E9752DC7D5080014357D /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C3B8E9742DC7D5080014357D /* Metal.framework */; };
 /* End PBXBuildFile section */
 
@@ -64,7 +63,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				C3B8E9752DC7D5080014357D /* Metal.framework in Frameworks */,
-				C317FA8A2DD8340A00937E35 /* SwiftAnthropic in Frameworks */,
 				4DA3DF6967B24AF9ECB29C28 /* Pods_Iconik_Employee.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -226,9 +224,6 @@
 			);
 			mainGroup = C38974512D74DACE00F75F9F;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				C317FA802DD81AAE00937E35 /* XCRemoteSwiftPackageReference "SwiftAnthropic" */,
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C389745B2D74DACE00F75F9F /* Products */;
 			projectDirPath = "";
@@ -481,7 +476,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				DEVELOPMENT_TEAM = H42FQ49589;
 				ENABLE_PREVIEWS = YES;
@@ -524,7 +519,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				DEVELOPMENT_TEAM = H42FQ49589;
 				ENABLE_PREVIEWS = YES;
@@ -670,25 +665,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		C317FA802DD81AAE00937E35 /* XCRemoteSwiftPackageReference "SwiftAnthropic" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/jamesrochabrun/SwiftAnthropic";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.4.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		C317FA892DD8340A00937E35 /* SwiftAnthropic */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C317FA802DD81AAE00937E35 /* XCRemoteSwiftPackageReference "SwiftAnthropic" */;
-			productName = SwiftAnthropic;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = C38974522D74DACE00F75F9F /* Project object */;
 }

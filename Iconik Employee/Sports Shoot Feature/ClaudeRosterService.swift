@@ -17,9 +17,17 @@ class ClaudeRosterService {
     // Flag for debugging
     private let debugMode = true
     
-    // Claude API key would typically be stored securely or fetched from your backend
+    // Claude API key from Info.plist (compiled from Config.xcconfig)
     private var apiKey: String {
-        // First check UserDefaults for an API key
+        // First check Info.plist for the API key
+        if let infoPlistKey = Bundle.main.object(forInfoDictionaryKey: "CLAUDE_API_KEY") as? String, !infoPlistKey.isEmpty {
+            if debugMode {
+                print("Using API key from Info.plist: \(infoPlistKey.prefix(5))...")
+            }
+            return infoPlistKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        // Fallback to UserDefaults for existing installations
         if let key = UserDefaults.standard.string(forKey: "CLAUDE_API_KEY"), !key.isEmpty {
             if debugMode {
                 print("Using API key from UserDefaults: \(key.prefix(5))...")
@@ -38,7 +46,7 @@ class ClaudeRosterService {
         // Then try the organization-level settings - this is a placeholder
         // The actual key will be fetched asynchronously by fetchAPIKeyFromFirestore
         if debugMode {
-            print("No API key found in UserDefaults or Environment. Will try to fetch from Firestore.")
+            print("No API key found in Info.plist or UserDefaults. Will try to fetch from Firestore.")
         }
         
         if let cachedKey = self.cachedAPIKey, !cachedKey.isEmpty {
@@ -86,7 +94,7 @@ class ClaudeRosterService {
                     print("Successfully retrieved Claude API key from Firestore: \(apiKey.prefix(5))...")
                 }
                 
-                // Store it in UserDefaults for future use
+                // Store it in UserDefaults for future use (will be replaced by Info.plist value in production)
                 UserDefaults.standard.set(apiKey, forKey: "CLAUDE_API_KEY")
                 
                 // Also cache it in memory
@@ -231,8 +239,8 @@ class ClaudeRosterService {
                 if isValid {
                     self.proceedWithRosterExtraction(image, startingSubjectID: startingSubjectID, apiKey: self.apiKey, completion: completion)
                 } else {
-                    // The API key we had is invalid. Clear it and try to fetch a new one
-                    UserDefaults.standard.removeObject(forKey: "CLAUDE_API_KEY")
+                    // The API key we had is invalid
+                    // Don't clear from UserDefaults in case it's a temporary issue
                     self.cachedAPIKey = nil
                     
                     let error = NSError(domain: "ClaudeRosterService", code: 101,
@@ -245,8 +253,8 @@ class ClaudeRosterService {
     
     // Helper function to compress image to stay under 5MB limit
     private func compressImageForAPI(_ image: UIImage) -> Data? {
-        let maxSizeInBytes = 5 * 1024 * 1024 // 5MB in bytes
-        let compressionQualities: [CGFloat] = [0.8, 0.6, 0.4, 0.2, 0.1]
+        let maxSizeInBytes = 4 * 1024 * 1024 // 4MB to leave buffer (API limit is 5MB)
+        let compressionQualities: [CGFloat] = [0.9, 0.7, 0.5, 0.3, 0.15, 0.1]
         
         // Try different compression qualities
         for quality in compressionQualities {
@@ -264,7 +272,7 @@ class ClaudeRosterService {
         }
         
         // If still too large, resize the image
-        let maxDimension: CGFloat = 2048
+        let maxDimension: CGFloat = 1920 // Reduced from 2048 for better compression
         let scale = min(maxDimension / image.size.width, maxDimension / image.size.height)
         
         if scale < 1.0 {

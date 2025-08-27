@@ -11,7 +11,7 @@ struct Conversation: Codable, Identifiable {
     let createdAt: Timestamp
     let lastActivity: Timestamp
     let lastMessage: LastMessage?
-    let unreadCounts: [String: Int]
+    var unreadCounts: [String: Int]
     var pinnedBy: [String]?
     
     // Resolved display name (populated by ChatManager)

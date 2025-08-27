@@ -1,5 +1,8 @@
 import SwiftUI
 import FirebaseAuth
+import WebKit  // For WKWebView in AnimatedGifView
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct MessageThreadView: View {
     let conversation: Conversation?
@@ -7,6 +10,12 @@ struct MessageThreadView: View {
     @State private var messageText = ""
     @State private var scrollToBottom = false
     @State private var showConversationSettings = false
+    @State private var showEmojiPicker = false
+    @State private var showGifPicker = false
+    @State private var showPhotoPicker = false
+    @State private var showDocumentPicker = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var isUploadingMedia = false
     @FocusState private var isMessageFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     
@@ -133,23 +142,88 @@ struct MessageThreadView: View {
                 ConversationSettingsView(conversation: conversation)
             }
         }
+        .sheet(isPresented: $showGifPicker) {
+            GifPickerView(
+                isPresented: $showGifPicker,
+                onGifSelected: { gifUrl in
+                    // Send GIF as a message
+                    Task {
+                        await chatManager.sendMessage(
+                            text: gifUrl,
+                            type: .file,
+                            fileUrl: gifUrl
+                        )
+                    }
+                }
+            )
+        }
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $selectedPhotoItem,
+            matching: .images
+        )
+        .onChange(of: selectedPhotoItem) { item in
+            if let item = item {
+                Task {
+                    await handlePhotoSelection(item)
+                }
+            }
+        }
+        .fileImporter(
+            isPresented: $showDocumentPicker,
+            allowedContentTypes: [.pdf, .text, .plainText, .data],
+            onCompletion: handleFileSelection
+        )
+        .overlay(
+            Group {
+                if isUploadingMedia {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                        .overlay(
+                            VStack {
+                                ProgressView()
+                                Text("Uploading...")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                            }
+                            .padding()
+                            .background(Color.black.opacity(0.7))
+                            .cornerRadius(10)
+                        )
+                }
+            }
+        )
+        .animation(.easeInOut(duration: 0.2), value: showEmojiPicker)
     }
     
     // MARK: - Message Input View
     
     private var messageInputView: some View {
         VStack(spacing: 0) {
+            // Emoji picker overlay
+            if showEmojiPicker {
+                EmojiPickerView(
+                    onEmojiSelected: { emoji in
+                        messageText += emoji
+                    },
+                    isPresented: $showEmojiPicker
+                )
+                .padding()
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            
             Divider()
             
-            HStack(alignment: .bottom, spacing: 12) {
-                // Attachment button
-                Button(action: {
-                    // TODO: Implement file attachment
-                }) {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 22))
-                        .foregroundColor(.blue)
-                }
+            HStack(alignment: .bottom, spacing: 8) {
+                // Input accessory buttons with sliding menu
+                MessageInputAccessoryView(
+                    showEmojiPicker: $showEmojiPicker,
+                    showGifPicker: $showGifPicker,
+                    showPhotoPicker: $showPhotoPicker,
+                    onAttachmentTap: {
+                        showDocumentPicker = true
+                    }
+                )
                 .disabled(chatManager.isSendingMessage)
                 
                 // Message field
@@ -165,9 +239,15 @@ struct MessageThreadView: View {
                                 sendMessage()
                             }
                         }
+                        .onChange(of: isMessageFieldFocused) { focused in
+                            if focused {
+                                showEmojiPicker = false
+                            }
+                        }
                 }
                 .background(Color(.systemGray6))
                 .cornerRadius(20)
+                .frame(maxWidth: .infinity)
                 
                 // Send button
                 Button(action: sendMessage) {
@@ -214,6 +294,76 @@ struct MessageThreadView: View {
         Task {
             await chatManager.sendMessage(text: text)
             scrollToBottom = true
+        }
+    }
+    
+    // MARK: - Photo Selection Handler
+    
+    private func handlePhotoSelection(_ item: PhotosPickerItem) async {
+        isUploadingMedia = true
+        selectedPhotoItem = nil
+        
+        do {
+            // Load the image data
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                isUploadingMedia = false
+                return
+            }
+            
+            // Convert to UIImage to verify it's valid
+            guard let image = UIImage(data: data) else {
+                isUploadingMedia = false
+                return
+            }
+            
+            // Compress the image for upload
+            guard let compressedData = image.jpegData(compressionQuality: 0.8) else {
+                isUploadingMedia = false
+                return
+            }
+            
+            // Send image through Stream Chat (handles upload internally)
+            _ = await chatManager.uploadImage(data: compressedData)
+            
+            isUploadingMedia = false
+        } catch {
+            print("Error handling photo selection: \(error)")
+            isUploadingMedia = false
+        }
+    }
+    
+    // MARK: - File Selection Handler
+    
+    private func handleFileSelection(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            Task {
+                isUploadingMedia = true
+                
+                // Start accessing the security-scoped resource
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer {
+                    if accessing {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                
+                do {
+                    // Read file data
+                    let data = try Data(contentsOf: url)
+                    let fileName = url.lastPathComponent
+                    
+                    // Send file through Stream Chat (handles upload internally)
+                    _ = await chatManager.uploadFile(data: data, fileName: fileName)
+                    
+                    isUploadingMedia = false
+                } catch {
+                    print("Error reading file: \(error)")
+                    isUploadingMedia = false
+                }
+            }
+        case .failure(let error):
+            print("File selection error: \(error)")
         }
     }
 }
@@ -300,24 +450,81 @@ struct ChatMessageContent: View {
     let message: ChatMessage
     let isOwnMessage: Bool
     
+    init(message: ChatMessage, isOwnMessage: Bool) {
+        self.message = message
+        self.isOwnMessage = isOwnMessage
+        print("[ChatMessageContent] Rendering message: type=\(message.type.rawValue), text='\(message.text)', fileUrl=\(message.fileUrl ?? "nil")")
+    }
+    
     var body: some View {
         Group {
             switch message.type {
             case .text:
-                Text(message.text)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(isOwnMessage ? Color.blue : Color(.systemGray5))
-                    .foregroundColor(isOwnMessage ? .white : .primary)
-                    .cornerRadius(16)
+                // Check if it's a media URL
+                if isGifURL(message.text) {
+                    let _ = print("[ChatMessageContent] Detected GIF URL in text: \(message.text)")
+                    EnhancedGifMessageView(url: message.text, isOwnMessage: isOwnMessage)
+                } else if isImageURL(message.text) {
+                    let _ = print("[ChatMessageContent] Detected image URL in text: \(message.text)")
+                    ChatImageView(url: message.text, isOwnMessage: isOwnMessage)
+                } else {
+                    Text(message.text)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(isOwnMessage ? Color.blue : Color(.systemGray5))
+                        .foregroundColor(isOwnMessage ? .white : .primary)
+                        .cornerRadius(16)
+                }
             case .file:
-                FileMessageView(message: message, isOwnMessage: isOwnMessage)
+                if let fileUrl = message.fileUrl {
+                    let _ = print("[ChatMessageContent] File message with URL: \(fileUrl)")
+                    if isGifURL(fileUrl) {
+                        let _ = print("[ChatMessageContent] Detected GIF URL in fileUrl: \(fileUrl)")
+                        EnhancedGifMessageView(url: fileUrl, isOwnMessage: isOwnMessage)
+                    } else if isImageURL(fileUrl) {
+                        let _ = print("[ChatMessageContent] Detected image URL in fileUrl: \(fileUrl)")
+                        ChatImageView(url: fileUrl, isOwnMessage: isOwnMessage)
+                    } else {
+                        FileMessageView(message: message, isOwnMessage: isOwnMessage)
+                    }
+                } else {
+                    // Fallback to text display if no file URL
+                    Text(message.text)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(isOwnMessage ? Color.blue : Color(.systemGray5))
+                        .foregroundColor(isOwnMessage ? .white : .primary)
+                        .cornerRadius(16)
+                }
             case .system:
                 Text(message.text)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
         }
+    }
+    
+    private func isGifURL(_ url: String) -> Bool {
+        let lowercased = url.lowercased()
+        let isGif = lowercased.contains(".gif") ||
+                   lowercased.contains("giphy.com") ||
+                   lowercased.contains("tenor.com") ||
+                   lowercased.contains("gfycat.com") ||
+                   lowercased.hasPrefix("https://media") && lowercased.contains("gif")
+        
+        if isGif {
+            print("[ChatMessageContent] isGifURL('\(url)') = true")
+        }
+        return isGif
+    }
+    
+    private func isImageURL(_ url: String) -> Bool {
+        let lowercased = url.lowercased()
+        return lowercased.contains(".jpg") ||
+               lowercased.contains(".jpeg") ||
+               lowercased.contains(".png") ||
+               lowercased.contains(".webp") ||
+               lowercased.contains("imgur.com")
     }
 }
 

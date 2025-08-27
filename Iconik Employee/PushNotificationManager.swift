@@ -4,6 +4,7 @@ import FirebaseMessaging
 import UserNotifications
 import FirebaseAuth
 import FirebaseFirestore
+import StreamChat
 
 class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
     
@@ -53,6 +54,13 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         
         // Also register with our JobBoxService
         JobBoxService.shared.registerDeviceToken(deviceToken)
+        
+        // Register device token with Stream Chat if connected
+        if let client = StreamChatManager.shared.client {
+            Task {
+                try? await client.currentUserController().addDevice(.apn(token: deviceToken))
+            }
+        }
     }
     
     func userNotificationCenter(_ center: UNUserNotificationCenter,

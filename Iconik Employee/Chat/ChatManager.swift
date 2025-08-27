@@ -3,6 +3,7 @@ import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 import Combine
+import StreamChat
 
 // MARK: - Chat Manager
 @MainActor
@@ -19,6 +20,9 @@ class ChatManager: ObservableObject {
     @Published var errorMessage: String?
     @Published var totalUnreadCount: Int = 0
     
+    // Stream Chat Mode
+    private let useStreamChat = true  // Toggle this to switch between Firestore and Stream
+    
     // Services
     private let chatService: ChatServiceProtocol
     private let cacheService: ChatCacheServiceProtocol
@@ -29,15 +33,23 @@ class ChatManager: ObservableObject {
     private var messagesListener: ListenerRegistration?
     private var lastMessageDoc: DocumentSnapshot?
     
+    // Stream controllers (defined in extension)
+    var channelListController: ChatChannelListController?
+    var channelController: ChatChannelController?
+    
+    // State management for Stream updates
+    var isProcessingStreamUpdate = false
+    var hasLoadedInitialMessages = false
+    
     // Debouncing
     private var messageUpdateDebouncer = Debouncer(delay: 0.1)
     
     // Current user info
-    private var currentUserId: String? {
+    var currentUserId: String? {
         Auth.auth().currentUser?.uid
     }
     
-    private var currentUserOrganizationId: String? {
+    var currentUserOrganizationId: String? {
         UserManager.shared.getCachedOrganizationID()
     }
     
@@ -55,7 +67,12 @@ class ChatManager: ObservableObject {
     func initialize() async {
         // Load users first so we can resolve conversation names
         await loadOrganizationUsers()
-        await loadConversations()
+        
+        if useStreamChat {
+            await initializeWithStream()
+        } else {
+            await loadConversations()
+        }
     }
     
     // MARK: - Conversation Management
@@ -122,36 +139,44 @@ class ChatManager: ObservableObject {
             throw ChatError.notAuthenticated
         }
         
-        // Ensure current user is in participants
-        var allParticipants = participants
-        if !allParticipants.contains(userId) {
-            allParticipants.append(userId)
+        if useStreamChat {
+            return try await createStreamConversation(with: participants, type: type, customName: customName)
+        } else {
+            // Ensure current user is in participants
+            var allParticipants = participants
+            if !allParticipants.contains(userId) {
+                allParticipants.append(userId)
+            }
+            
+            let conversationId = try await chatService.createConversation(
+                participants: allParticipants,
+                type: type,
+                customName: customName
+            )
+            
+            readCounter.recordRead(
+                operation: "createConversation",
+                collection: "conversations",
+                component: "ChatManager",
+                count: 1
+            )
+            
+            return conversationId
         }
-        
-        let conversationId = try await chatService.createConversation(
-            participants: allParticipants,
-            type: type,
-            customName: customName
-        )
-        
-        readCounter.recordRead(
-            operation: "createConversation",
-            collection: "conversations",
-            component: "ChatManager",
-            count: 1
-        )
-        
-        return conversationId
     }
     
     func selectConversation(_ conversation: Conversation, markAsRead: Bool = true) async {
-        self.activeConversation = conversation
-        await loadMessages(for: conversation)
-        
-        // Mark messages as read only if requested (i.e., user is actively viewing the conversation)
-        if markAsRead, let userId = currentUserId {
-            Task {
-                try? await chatService.markMessagesAsRead(conversationId: conversation.id, userId: userId)
+        if useStreamChat {
+            await selectStreamConversation(conversation)
+        } else {
+            self.activeConversation = conversation
+            await loadMessages(for: conversation)
+            
+            // Mark messages as read only if requested (i.e., user is actively viewing the conversation)
+            if markAsRead, let userId = currentUserId {
+                Task {
+                    try? await chatService.markMessagesAsRead(conversationId: conversation.id, userId: userId)
+                }
             }
         }
     }
@@ -265,6 +290,11 @@ class ChatManager: ObservableObject {
     func loadMoreMessages() async {
         guard let conversation = activeConversation, hasMoreMessages else { return }
         
+        if useStreamChat {
+            await loadMoreStreamMessages()
+            return
+        }
+        
         do {
             let result = try await chatService.getConversationMessages(
                 conversationId: conversation.id,
@@ -296,6 +326,11 @@ class ChatManager: ObservableObject {
         guard let conversation = activeConversation,
               let currentUser = Auth.auth().currentUser,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        
+        if useStreamChat {
+            await sendStreamMessage(text: text)
+            return
+        }
         
         isSendingMessage = true
         errorMessage = nil
@@ -512,40 +547,58 @@ class ChatManager: ObservableObject {
     
     // MARK: - Helper Methods
     
-    private func resolveConversationNames(_ conversations: [Conversation]) -> [Conversation] {
-        guard let currentUserId = self.currentUserId else { return conversations }
+    func updateMessagesFromStreamMessages(_ streamMessages: [StreamChat.ChatMessage]) {
+        // This is called from the extension and from refreshMessages
+        // Convert Stream messages to our ChatMessage model
+        // Stream Chat returns messages in newest-first order, but our UI expects oldest-first
+        let sortedMessages = streamMessages.sorted { $0.createdAt < $1.createdAt }
         
-        return conversations.map { conversation in
-            var updatedConversation = conversation
-            
-            if conversation.type == .direct {
-                // For direct conversations, find the other participant
-                let otherUserId = conversation.participants.first(where: { $0 != currentUserId }) ?? conversation.participants.first ?? ""
-                
-                // Look up the user in our cached organization users
-                if let otherUser = organizationUsers.first(where: { $0.id == otherUserId }) {
-                    updatedConversation.resolvedDisplayName = otherUser.fullName
-                }
-            } else {
-                // For group conversations, create a list of participant names
-                let participantNames = conversation.participants.compactMap { participantId in
-                    organizationUsers.first(where: { $0.id == participantId })?.firstName
-                }.prefix(3)
-                
-                if !participantNames.isEmpty {
-                    var groupName = participantNames.joined(separator: ", ")
-                    if conversation.participants.count > 3 {
-                        groupName += " and \(conversation.participants.count - 3) others"
-                    }
-                    updatedConversation.resolvedDisplayName = groupName
-                }
-            }
-            
-            return updatedConversation
+        // Remove any temporary messages before updating
+        let hasTemp = messages.contains { $0.id.hasSuffix("_temp") }
+        if hasTemp {
+            print("[StreamChat] Removing temporary messages")
         }
+        
+        self.messages = sortedMessages.map { StreamChatAdapter.convertToChatMessage($0) }
+        print("[StreamChat] Updated messages array with \(self.messages.count) messages (sorted oldest-first)")
     }
     
-    private func updateTotalUnreadCount() {
+    func resolveConversationName(_ conversation: Conversation) -> Conversation {
+        guard let currentUserId = self.currentUserId else { return conversation }
+        
+        var updatedConversation = conversation
+        
+        if conversation.type == .direct {
+            // For direct conversations, find the other participant
+            let otherUserId = conversation.participants.first(where: { $0 != currentUserId }) ?? conversation.participants.first ?? ""
+            
+            // Look up the user in our cached organization users
+            if let otherUser = organizationUsers.first(where: { $0.id == otherUserId }) {
+                updatedConversation.resolvedDisplayName = otherUser.fullName
+            }
+        } else {
+            // For group conversations, create a list of participant names
+            let participantNames = conversation.participants.compactMap { participantId in
+                organizationUsers.first(where: { $0.id == participantId })?.firstName
+            }.prefix(3)
+            
+            if !participantNames.isEmpty {
+                var groupName = participantNames.joined(separator: ", ")
+                if conversation.participants.count > 3 {
+                    groupName += " and \(conversation.participants.count - 3) others"
+                }
+                updatedConversation.resolvedDisplayName = groupName
+            }
+        }
+        
+        return updatedConversation
+    }
+    
+    func resolveConversationNames(_ conversations: [Conversation]) -> [Conversation] {
+        return conversations.map { resolveConversationName($0) }
+    }
+    
+    func updateTotalUnreadCount() {
         guard let userId = currentUserId else { return }
         totalUnreadCount = conversations.reduce(0) { $0 + $1.unreadCount(for: userId) }
     }
@@ -591,15 +644,56 @@ class ChatManager: ObservableObject {
     func refreshMessages() async {
         guard let conversation = activeConversation else { return }
         
-        // Clear cache for this conversation
-        cacheService.clearMessagesCache(conversationId: conversation.id)
+        if useStreamChat {
+            // For Stream, re-synchronize the channel and reload messages
+            if let controller = channelController {
+                do {
+                    try await controller.synchronize()
+                    
+                    // Force reload messages
+                    let messages = controller.messages
+                    updateMessagesFromStreamMessages(Array(messages))
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        } else {
+            // Clear cache for this conversation
+            cacheService.clearMessagesCache(conversationId: conversation.id)
+            
+            // Reset pagination
+            lastMessageDoc = nil
+            hasMoreMessages = true
+            
+            // Reload messages
+            await loadMessages(for: conversation)
+        }
+    }
+    
+    // MARK: - File Upload Methods
+    
+    func uploadImage(data: Data) async -> String? {
+        // Use Stream Chat for uploads when enabled
+        if useStreamChat {
+            return await sendStreamMessageWithImage(data: data)
+        }
         
-        // Reset pagination
-        lastMessageDoc = nil
-        hasMoreMessages = true
+        // Fallback to Firebase for non-Stream mode (if needed in future)
+        // For now, return nil since we're using Stream
+        errorMessage = "Image upload only supported with Stream Chat"
+        return nil
+    }
+    
+    func uploadFile(data: Data, fileName: String) async -> String? {
+        // Use Stream Chat for uploads when enabled
+        if useStreamChat {
+            return await sendStreamMessageWithFile(data: data, fileName: fileName)
+        }
         
-        // Reload messages
-        await loadMessages(for: conversation)
+        // Fallback to Firebase for non-Stream mode (if needed in future)
+        // For now, return nil since we're using Stream
+        errorMessage = "File upload only supported with Stream Chat"
+        return nil
     }
     
     deinit {
