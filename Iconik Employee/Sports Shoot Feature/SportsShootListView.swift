@@ -1608,6 +1608,19 @@ struct SportsShootListView: View {
             .padding(.vertical, 4)
             .background(Color(.secondarySystemGroupedBackground))
             
+            // Athlete count display
+            HStack {
+                let filteredRoster = filterRoster(shoot.roster)
+                let athleteCount = filteredRoster.filter { !$0.lastName.isEmpty }.count
+                Text("Athletes: \(athleteCount)")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+                    .padding(.vertical, 4)
+                Spacer()
+            }
+            .background(Color(.systemGroupedBackground))
+            
             // List of roster entries
             List {
                 // Sort roster based on current sort field and direction
