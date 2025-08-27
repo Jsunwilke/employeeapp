@@ -1,6 +1,9 @@
 platform :ios, '16.0'
 use_frameworks!
 
+# Suppress all warnings from CocoaPods dependencies
+inhibit_all_warnings!
+
 target 'Iconik Employee' do
   # Firebase pods
   pod 'Firebase/Auth'
@@ -37,12 +40,27 @@ post_install do |installer|
       end
     end
     
+    # Fix "Run script build phase will be run during every build" warnings
+    # by disabling dependency analysis for symlink creation scripts
+    if ['abseil', 'BoringSSL-GRPC', 'gRPC-C++', 'gRPC-Core'].include?(target.name)
+      target.shell_script_build_phases.each do |phase|
+        if phase.name && phase.name.include?('Create Symlinks to Header Folders')
+          phase.always_out_of_date = '1'
+        end
+      end
+    end
+    
     # Set C++ language standard to gnu++17 for all pods
     target.build_configurations.each do |config|
       config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'gnu++17'
       config.build_settings['CMAKE_CXX_STANDARD'] = '17'
       # Set iOS deployment target to match the main app
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.6'
+      
+      # Suppress warnings
+      config.build_settings['GCC_WARN_INHIBIT_ALL_WARNINGS'] = 'YES'
+      config.build_settings['SWIFT_SUPPRESS_WARNINGS'] = 'YES'
+      config.build_settings['OTHER_LDFLAGS'] = '$(inherited) -w'
     end
   end
   
