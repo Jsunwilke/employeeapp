@@ -26,26 +26,12 @@ struct CustomNumberKeyboard: View {
                         .foregroundColor(.secondary)
                 }
                 
-                HStack {
-                    // Always show the text binding value
-                    Text(displayText.isEmpty ? "Enter image numbers" : displayText)
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(displayText.isEmpty ? Color.gray : Color.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .animation(.none) // Disable animation to ensure immediate updates
-                
-                    // Clear button
-                    if !displayText.isEmpty {
-                        Button(action: {
-                            text = ""
-                            displayText = ""
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 20))
-                                .foregroundColor(.gray)
-                        }
-                    }
-                }
+                // Display text without clear button
+                Text(displayText.isEmpty ? "Enter image numbers" : displayText)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(displayText.isEmpty ? Color.gray : Color.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .animation(.none) // Disable animation to ensure immediate updates
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)

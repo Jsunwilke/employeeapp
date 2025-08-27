@@ -15,6 +15,10 @@ target 'Iconik Employee' do
   pod 'GoogleAPIClientForREST/Drive'
   pod 'GoogleAPIClientForREST/Sheets'
   
+  # Stream Chat
+  pod 'StreamChat', '~> 4.50.0'
+  pod 'StreamChatUI', '~> 4.50.0'
+  
   # Add any other pods you need here...
 end
 

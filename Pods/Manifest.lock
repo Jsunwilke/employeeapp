@@ -1224,6 +1224,9 @@ PODS:
   - nanopb/encode (2.30910.0)
   - PromisesObjC (2.4.0)
   - RecaptchaInterop (100.0.0)
+  - StreamChat (4.50.0)
+  - StreamChatUI (4.50.0):
+    - StreamChat (= 4.50.0)
 
 DEPENDENCIES:
   - Firebase/Analytics
@@ -1237,6 +1240,8 @@ DEPENDENCIES:
   - GoogleAPIClientForREST/Drive
   - GoogleAPIClientForREST/Sheets
   - GoogleSignIn
+  - StreamChat (~> 4.50.0)
+  - StreamChatUI (~> 4.50.0)
 
 SPEC REPOS:
   trunk:
@@ -1273,6 +1278,8 @@ SPEC REPOS:
     - nanopb
     - PromisesObjC
     - RecaptchaInterop
+    - StreamChat
+    - StreamChatUI
 
 SPEC CHECKSUMS:
   abseil: d121da9ef7e2ff4cab7666e76c5a3e0915ae08c3
@@ -1308,7 +1315,9 @@ SPEC CHECKSUMS:
   nanopb: 438bc412db1928dac798aa6fd75726007be04262
   PromisesObjC: f5707f49cb48b9636751c5b2e7d227e43fba9f47
   RecaptchaInterop: 7d1a4a01a6b2cb1610a47ef3f85f0c411434cb21
+  StreamChat: 70fe2a5ccc7ac5ff7c10489f4f74dd94fec8d338
+  StreamChatUI: 8e074e136ea75321c35916d5aef5984010ec6b46
 
-PODFILE CHECKSUM: f1b748e1a34b000c15da07751bede707d831b960
+PODFILE CHECKSUM: 2c719f4164be4c585c6d855c8dde7c7c5e95b4a8
 
 COCOAPODS: 1.16.2

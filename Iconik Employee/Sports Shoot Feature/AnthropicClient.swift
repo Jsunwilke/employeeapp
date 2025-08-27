@@ -53,7 +53,7 @@ class Anthropic {
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("anthropic-swift/0.1", forHTTPHeaderField: "User-Agent")
-        urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "x-api-key")
+        urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         
         // Add request body

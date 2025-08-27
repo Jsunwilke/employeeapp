@@ -24,6 +24,8 @@ ${BUILT_PRODUCTS_DIR}/GoogleSignIn/GoogleSignIn.framework
 ${BUILT_PRODUCTS_DIR}/GoogleUtilities/GoogleUtilities.framework
 ${BUILT_PRODUCTS_DIR}/PromisesObjC/FBLPromises.framework
 ${BUILT_PRODUCTS_DIR}/RecaptchaInterop/RecaptchaInterop.framework
+${BUILT_PRODUCTS_DIR}/StreamChat/StreamChat.framework
+${BUILT_PRODUCTS_DIR}/StreamChatUI/StreamChatUI.framework
 ${BUILT_PRODUCTS_DIR}/abseil/absl.framework
 ${BUILT_PRODUCTS_DIR}/gRPC-C++/grpcpp.framework
 ${BUILT_PRODUCTS_DIR}/gRPC-Core/grpc.framework
