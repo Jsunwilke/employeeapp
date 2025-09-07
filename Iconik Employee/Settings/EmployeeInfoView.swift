@@ -243,7 +243,7 @@ struct EmployeeInfoView: View {
     }
     
     private func saveChanges() {
-        guard let uid = Auth.auth().currentUser?.uid else {
+        guard let _ = Auth.auth().currentUser?.uid else {
             saveAlertMessage = "No authenticated user found"
             showingSaveAlert = true
             return

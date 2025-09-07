@@ -526,7 +526,7 @@ struct MultiPhotoRosterImporterView: View {
         allExtractedRosters = []
         
         // Track the current subject ID as we process each image
-        var currentSubjectID = nextSubjectID
+        let currentSubjectID = nextSubjectID
         
         processNextImage(startingAt: 0, currentSubjectID: currentSubjectID)
     }

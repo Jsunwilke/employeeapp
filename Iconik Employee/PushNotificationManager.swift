@@ -58,7 +58,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         // Register device token with Stream Chat if connected
         if let client = StreamChatManager.shared.client {
             Task {
-                try? await client.currentUserController().addDevice(.apn(token: deviceToken))
+                await client.currentUserController().addDevice(.apn(token: deviceToken))
             }
         }
     }
@@ -103,7 +103,14 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     
     /// Handle incoming notifications
     func handleNotification(userInfo: [AnyHashable: Any]) {
-        // Determine the notification type
+        // Check if this is a Stream Chat notification first
+        if userInfo["stream"] != nil || userInfo["channel_cid"] != nil {
+            // This is a Stream Chat notification
+            handleChatNotification(userInfo: userInfo)
+            return
+        }
+        
+        // Determine the notification type for Firebase notifications
         let type = userInfo["type"] as? String ?? ""
         let notificationType = NotificationType(rawValue: type) ?? .unknown
         
@@ -156,25 +163,48 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                                  userInfo: userInfo)
     }
     
-    /// Handle chat message notifications
+    /// Handle chat message notifications (both Firebase and Stream Chat)
     private func handleChatNotification(userInfo: [AnyHashable: Any]) {
-        guard let conversationId = userInfo["conversationId"] as? String else {
-            print("Missing conversation ID in chat notification")
-            return
+        // Check if this is a Stream Chat notification
+        if let stream = userInfo["stream"] as? [String: Any],
+           let channelId = stream["channel_id"] as? String {
+            // Handle Stream Chat notification
+            print("Received Stream Chat notification for channel: \(channelId)")
+            
+            // Extract Stream Chat specific data
+            let channelCid = stream["channel_cid"] as? String ?? ""
+            let messageId = stream["message_id"] as? String
+            let messageText = stream["message_text"] as? String ?? "New message"
+            let senderName = stream["sender_name"] as? String ?? "Someone"
+            
+            // Post notification for Stream Chat
+            notificationCenter.post(name: Notification.Name("didReceiveStreamChatNotification"),
+                                     object: nil,
+                                     userInfo: [
+                                        "channelCid": channelCid,
+                                        "channelId": channelId,
+                                        "messageId": messageId ?? "",
+                                        "messageText": messageText,
+                                        "senderName": senderName
+                                     ])
+            
+        } else if let conversationId = userInfo["conversationId"] as? String {
+            // Handle legacy Firebase chat notification
+            print("Received Firebase chat notification")
+            
+            let senderId = userInfo["senderId"] as? String
+            let senderName = userInfo["senderName"] as? String ?? "Someone"
+            let messageText = userInfo["messageText"] as? String ?? "New message"
+            
+            print("From: \(senderName), ConversationId: \(conversationId)")
+            
+            // Post notification for Firebase chat
+            notificationCenter.post(name: Notification.Name("didReceiveChatNotification"),
+                                     object: nil,
+                                     userInfo: userInfo)
+        } else {
+            print("Unknown chat notification format")
         }
-        
-        let senderId = userInfo["senderId"] as? String
-        let senderName = userInfo["senderName"] as? String ?? "Someone"
-        let messageText = userInfo["messageText"] as? String ?? "New message"
-        
-        print("Received chat notification: From: \(senderName), ConversationId: \(conversationId)")
-        
-        // Post a notification that Views can listen for
-        notificationCenter.post(name: Notification.Name("didReceiveChatNotification"),
-                                 object: nil,
-                                 userInfo: userInfo)
-        
-        // TODO: Navigate to the specific conversation when app opens from notification
     }
     
     /// Handle session notifications (new or updated)

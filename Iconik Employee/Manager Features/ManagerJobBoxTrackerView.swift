@@ -166,8 +166,8 @@ class ManagerJobBoxViewModel: ObservableObject {
             var jobboxNumber = ""
             var cardNumber = ""
             var date = jobBox.timestamp
-            var photographerName = jobBox.scannedBy
-            var position = "Unknown"
+            let photographerName = jobBox.scannedBy
+            let position = "Unknown"
             
             // Extract fields from the document
             
@@ -215,7 +215,7 @@ class ManagerJobBoxViewModel: ObservableObject {
         
         DispatchQueue.main.async {
             // First apply search filter to all boxes
-            var filteredBoxes = self.filterJobBoxesBySearch(allBoxes)
+            let filteredBoxes = self.filterJobBoxesBySearch(allBoxes)
             
             // If we're searching for a specific card number, show all results for that card
             if self.isSearchingByCardNumber {

@@ -14,9 +14,8 @@ struct EmployeeAppApp: App {
         
         // Enable Firestore offline persistence for better caching and offline support
         let settings = FirestoreSettings()
-        settings.isPersistenceEnabled = true
-        // Increase cache size to 100MB (default is 40MB) for better performance
-        settings.cacheSizeBytes = FirestoreCacheSizeUnlimited
+        // Use the new cacheSettings property
+        settings.cacheSettings = PersistentCacheSettings(sizeBytes: NSNumber(value: FirestoreCacheSizeUnlimited))
         Firestore.firestore().settings = settings
         
         print("🔥 Firestore persistence enabled with unlimited cache")

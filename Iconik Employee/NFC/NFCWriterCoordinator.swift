@@ -55,13 +55,13 @@ class NFCWriterCoordinator: NSObject, ObservableObject, NFCTagReaderSessionDeleg
     private func getNDEFTag(from rawTag: NFCTag) -> NFCNDEFTag? {
         switch rawTag {
         case .miFare(let mifareTag):
-            return mifareTag as? NFCNDEFTag
+            return mifareTag
         case .iso7816(let iso7816Tag):
-            return iso7816Tag as? NFCNDEFTag
+            return iso7816Tag
         case .iso15693(let iso15693Tag):
-            return iso15693Tag as? NFCNDEFTag
+            return iso15693Tag
         case .feliCa(let feliCaTag):
-            return feliCaTag as? NFCNDEFTag
+            return feliCaTag
         @unknown default:
             return nil
         }

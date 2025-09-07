@@ -59,20 +59,11 @@ struct MileageDetailView: View {
                                 .foregroundColor(.secondary)
                                 .onAppear(perform: loadSchools)
                         } else {
-                            Picker("School", selection: Binding(
-                                get: {
-                                    schoolOptions.first(where: { $0.name == localSchoolName }) 
-                                        ?? (schoolOptions.first ?? MileageSchoolItem(id: "", name: ""))
-                                },
-                                set: { newSchool in
-                                    localSchoolName = newSchool.name
-                                }
-                            )) {
-                                ForEach(schoolOptions, id: \.id) { school in
-                                    Text(school.name).tag(school)
-                                }
-                            }
-                            .pickerStyle(MenuPickerStyle())
+                            SearchableMileageSchoolPicker(
+                                selectedSchoolName: $localSchoolName,
+                                schools: schoolOptions,
+                                title: "School"
+                            )
                             .padding(.horizontal)
                             .frame(maxWidth: .infinity)
                             .background(Color(.secondarySystemBackground))

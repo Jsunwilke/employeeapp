@@ -756,7 +756,7 @@ struct TemplateFormView: View {
         errorMessage = ""
         
         // Add photo URLs to form data if images are selected
-        var finalFormData = formData
+        let finalFormData = formData
         
         if !selectedImages.isEmpty {
             uploadImagesAndSubmit(formData: finalFormData)

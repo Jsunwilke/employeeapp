@@ -93,6 +93,19 @@ class ChatManager: ObservableObject {
         }
     }
     
+    func openChannel(cid: String) async {
+        // Find and select the conversation with the given channel CID
+        if let conversation = conversations.first(where: { $0.id == cid }) {
+            await selectConversation(conversation)
+        } else {
+            // If not found, try to load conversations first
+            await loadConversations()
+            if let conversation = conversations.first(where: { $0.id == cid }) {
+                await selectConversation(conversation)
+            }
+        }
+    }
+    
     func loadConversations() async {
         guard let userId = currentUserId else {
             errorMessage = "Not authenticated"
@@ -647,15 +660,11 @@ class ChatManager: ObservableObject {
         if useStreamChat {
             // For Stream, re-synchronize the channel and reload messages
             if let controller = channelController {
-                do {
-                    try await controller.synchronize()
+                await controller.synchronize()
                     
-                    // Force reload messages
-                    let messages = controller.messages
-                    updateMessagesFromStreamMessages(Array(messages))
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
+                // Force reload messages
+                let messages = controller.messages
+                updateMessagesFromStreamMessages(Array(messages))
             }
         } else {
             // Clear cache for this conversation

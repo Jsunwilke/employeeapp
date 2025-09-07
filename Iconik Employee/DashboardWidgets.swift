@@ -15,6 +15,7 @@ struct HoursWidget: View {
     @State private var hasInitialData = false
     @StateObject private var payPeriodService = PayPeriodService.shared
     @State private var activeHours: Double = 0
+    @State private var activeEntryIncludedInTotal: Bool = false
     @State private var timer: Timer?
     @State private var listenerSetUp = false // Prevent duplicate listeners
     @State private var currentListenerPeriodStart: Date? // Track what period the listener is using
@@ -101,8 +102,8 @@ struct HoursWidget: View {
                                         .fill(Color.gray.opacity(0.2))
                                         .frame(height: 24)
                                     
-                                    // Progress including active hours
-                                    let totalWithActive = currentWeekHours + activeHours
+                                    // Progress including active hours (only if not already included)
+                                    let totalWithActive = activeEntryIncludedInTotal ? currentWeekHours : (currentWeekHours + activeHours)
                                     let barWidth = geometry.size.width - 100 // Reserve 100 points for text
                                     
                                     if totalWithActive <= 40 {
@@ -122,8 +123,9 @@ struct HoursWidget: View {
                                         }
                                     } else {
                                         // Over 40h: Full bar with proportional segments
-                                        let regularHours = min(currentWeekHours, 40.0)
-                                        let overtimeHours = max(currentWeekHours - 40.0, 0)
+                                        let effectiveTotal = activeEntryIncludedInTotal ? currentWeekHours : (currentWeekHours + activeHours)
+                                        let regularHours = min(effectiveTotal, 40.0)
+                                        let overtimeHours = max(effectiveTotal - 40.0, 0)
                                         let totalHours = regularHours + overtimeHours
                                         let regularRatio = regularHours / totalHours
                                         
@@ -162,7 +164,7 @@ struct HoursWidget: View {
                                 
                                 // Hours and percentage with fixed width
                                 VStack(alignment: .trailing, spacing: 0) {
-                                    let totalWithActive = currentWeekHours + activeHours
+                                    let totalWithActive = activeEntryIncludedInTotal ? currentWeekHours : (currentWeekHours + activeHours)
                                     if totalWithActive > 40 {
                                         // Show total with overtime indicator
                                         Text("\(formatHours(totalWithActive))/40h")
@@ -210,7 +212,7 @@ struct HoursWidget: View {
                                         .frame(height: 24)
                                     
                                     let barWidth = geometry.size.width - 100 // Same as This Week
-                                    let totalWithActive = totalHours + activeHours
+                                    let totalWithActive = activeEntryIncludedInTotal ? totalHours : (totalHours + activeHours)
                                     
                                     if overtimeHours == 0 {
                                         // No overtime: Show simple progress bar
@@ -266,7 +268,7 @@ struct HoursWidget: View {
                                 
                                 // Hours and percentage with fixed width
                                 VStack(alignment: .trailing, spacing: 0) {
-                                    let totalWithActive = totalHours + activeHours
+                                    let totalWithActive = activeEntryIncludedInTotal ? totalHours : (totalHours + activeHours)
                                     
                                     // Always show total hours
                                     Text("\(formatHours(totalWithActive))/80h")
@@ -494,13 +496,14 @@ struct HoursWidget: View {
         // Set up real-time listener immediately
         timeTrackingService.listenForTimeEntries(startDate: payPeriodStartStr, endDate: payPeriodEndStr) { entries in
             // Calculate overtime breakdown
-            let breakdown = self.calculateOvertimeBreakdown(entries: entries, payPeriodStart: payPeriodStart)
+            let breakdown = self.calculateOvertimeBreakdown(entries: entries, payPeriodStart: payPeriodStart, excludeActiveEntry: false)
             
             DispatchQueue.main.async {
                 self.regularHours = breakdown.regular
                 self.overtimeHours = breakdown.overtime
                 self.totalHours = breakdown.total
                 self.currentWeekHours = breakdown.currentWeek
+                self.activeEntryIncludedInTotal = breakdown.includesActive
                 
                 // Cache values for instant display next time
                 UserDefaults.standard.set(breakdown.regular, forKey: "cached_regularHours")
@@ -581,7 +584,7 @@ struct HoursWidget: View {
         return (periodStart, periodEnd)
     }
     
-    private func calculateOvertimeBreakdown(entries: [TimeEntry], payPeriodStart: Date) -> (regular: Double, overtime: Double, total: Double, currentWeek: Double) {
+    private func calculateOvertimeBreakdown(entries: [TimeEntry], payPeriodStart: Date, excludeActiveEntry: Bool = false) -> (regular: Double, overtime: Double, total: Double, currentWeek: Double, includesActive: Bool) {
         let calendar = Calendar.current
         let now = Date()
         
@@ -591,11 +594,26 @@ struct HoursWidget: View {
         
         print("📅 Current week calculation: Days since period start: \(daysSincePeriodStart), Current week: \(currentWeekOfPeriod)")
         
+        // Check if active entry is already in the entries list
+        var hasActiveEntry = false
+        if timeTrackingService.isClockIn,
+           let activeEntryId = timeTrackingService.currentTimeEntry?.id {
+            hasActiveEntry = entries.contains { $0.id == activeEntryId }
+            print("📊 Active entry check: ID=\(activeEntryId), Found in entries=\(hasActiveEntry)")
+        }
+        
         // Group entries by week within the pay period
         var weeklyHours: [Int: Double] = [:] // Week number -> hours
         var currentWeekTotal: Double = 0
         
         for entry in entries {
+            // Skip active entry if requested and it exists
+            if excludeActiveEntry && timeTrackingService.isClockIn,
+               let activeId = timeTrackingService.currentTimeEntry?.id,
+               entry.id == activeId {
+                continue
+            }
+            
             // Parse entry date
             let dateFormatter = DateFormatter()
             dateFormatter.dateFormat = "yyyy-MM-dd"
@@ -629,7 +647,7 @@ struct HoursWidget: View {
         
         let total = totalRegular + totalOvertime
         
-        return (regular: totalRegular, overtime: totalOvertime, total: total, currentWeek: currentWeekTotal)
+        return (regular: totalRegular, overtime: totalOvertime, total: total, currentWeek: currentWeekTotal, includesActive: hasActiveEntry)
     }
 }
 

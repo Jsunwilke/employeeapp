@@ -148,7 +148,7 @@ struct CreateSportsShootView: View {
         let docRef = db.collection("sportsJobs").document(newShoot.id)
         
         // Convert to Firestore data
-        var data: [String: Any] = [
+        let data: [String: Any] = [
             "schoolName": newShoot.schoolName,
             "schoolId": newShoot.schoolId ?? "",
             "sportName": newShoot.sportName,

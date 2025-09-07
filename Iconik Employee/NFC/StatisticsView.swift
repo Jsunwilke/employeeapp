@@ -1510,7 +1510,7 @@ extension StatisticsView {
     
     // Calculate label position for pie slice
     func labelPosition(for index: Int, in size: CGSize) -> CGPoint {
-        let data = isJobBoxMode ? jobBoxStatusCounts : statusCounts
+        let _ = isJobBoxMode ? jobBoxStatusCounts : statusCounts
         let startAngle = self.startAngle(for: index)
         let endAngle = self.endAngle(for: index)
         let midAngle = (startAngle.degrees + endAngle.degrees) / 2

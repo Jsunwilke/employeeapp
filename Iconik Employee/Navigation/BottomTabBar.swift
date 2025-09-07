@@ -477,7 +477,7 @@ struct TabBarConfigurationView: View {
     
     private func saveConfiguration() {
         // Update all items' quick access status
-        var allItems = availableFeatures.map { feature in
+        let allItems = availableFeatures.map { feature in
             TabBarItem(
                 from: feature,
                 order: selectedFeatures.firstIndex(where: { $0.id == feature.id }) ?? 999,

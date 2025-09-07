@@ -48,6 +48,7 @@ struct AutosaveTextField: View {
                         KeyboardManager.shared.showKeyboard(
                             for: $text,
                             context: context,
+                            miniMode: true,  // Use mini mode for iPad roster list
                             onUp: onEnterOrUp,
                             onDown: onEnterOrDown,
                             onDismiss: onTapOutside

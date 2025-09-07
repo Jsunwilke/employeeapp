@@ -1261,7 +1261,11 @@ struct SportsShootListView: View {
             // Show conflict resolution view
             DispatchQueue.main.async {
                 // Present conflict resolution view
-                let keyWindow = UIApplication.shared.windows.first(where: { $0.isKeyWindow })
+                let keyWindow = UIApplication.shared.connectedScenes
+                    .filter { $0.activationState == .foregroundActive }
+                    .compactMap { $0 as? UIWindowScene }
+                    .first?.windows
+                    .filter { $0.isKeyWindow }.first
                 if let rootVC = keyWindow?.rootViewController {
                     // Create and present the conflict resolution view
                     let conflictView = ConflictResolutionView(

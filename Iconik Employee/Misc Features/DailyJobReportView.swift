@@ -294,14 +294,6 @@ struct DailyJobReportView: View {
                 .disabled(isSubmitting)
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                if isSubmitting {
-                    ProgressView()
-                        .tint(.white)
-                }
-            }
-        }
         .toast(isPresented: $showToast, message: toastMessage, isSuccess: true)
     }
     
@@ -647,19 +639,18 @@ struct DailyJobReportView: View {
                             Text("Loading schools...")
                                 .foregroundColor(.secondary)
                         } else {
-                            Picker("", selection: Binding(
-                                get: { selectedSchools[index] },
-                                set: { newValue in
-                                    selectedSchools[index] = newValue
-                                    calculateMultiStopMileage()
-                                }
-                            )) {
-                                Text("Select a school").tag(nil as SchoolItem?)
-                                ForEach(schoolOptions, id: \.id) { school in
-                                    Text(school.name).tag(school as SchoolItem?)
-                                }
-                            }
-                            .pickerStyle(.menu)
+                            SearchableSchoolPicker(
+                                selection: Binding(
+                                    get: { selectedSchools[index] },
+                                    set: { newValue in
+                                        selectedSchools[index] = newValue
+                                        calculateMultiStopMileage()
+                                    }
+                                ),
+                                schools: $schoolOptions,
+                                title: "Select School",
+                                organizationID: storedUserOrganizationID
+                            )
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         
@@ -1294,7 +1285,11 @@ struct DailyJobReportView: View {
                     }
                 }
                 temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                self.schoolOptions = temp
+                
+                // Only update schoolOptions if the data actually changed to prevent re-renders
+                if !areSchoolListsEqual(self.schoolOptions, temp) {
+                    self.schoolOptions = temp
+                }
                 
                 // Now that we have schools loaded, check if we need to set defaults
                 if let note = self.selectedPhotoshootNote,
@@ -1320,6 +1315,18 @@ struct DailyJobReportView: View {
     }
     
     // MARK: - Helper Functions
+    func areSchoolListsEqual(_ list1: [SchoolItem], _ list2: [SchoolItem]) -> Bool {
+        guard list1.count == list2.count else { return false }
+        for i in 0..<list1.count {
+            if list1[i].id != list2[i].id || 
+               list1[i].name != list2[i].name ||
+               list1[i].address != list2[i].address {
+                return false
+            }
+        }
+        return true
+    }
+    
     func parseCoordinateString(_ text: String) -> CLLocationCoordinate2D? {
         let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         guard parts.count == 2,

@@ -398,7 +398,7 @@ class ChatService: ChatServiceProtocol {
         
         // Get current conversation data
         let conversation = try await conversationRef.getDocument()
-        guard var data = conversation.data(),
+        guard let data = conversation.data(),
               var unreadCounts = data["unreadCounts"] as? [String: Int] else {
             throw NSError(domain: "ChatService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Conversation not found"])
         }

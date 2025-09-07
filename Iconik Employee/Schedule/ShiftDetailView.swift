@@ -129,13 +129,29 @@ struct ShiftDetailView: View {
                     actionButtonsRow
                         .padding(.vertical, 8)
                     
+                    // Session Types Pills
+                    if let sessionTypes = session.sessionType, !sessionTypes.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(sessionTypes, id: \.self) { type in
+                                    SessionTypePill(
+                                        sessionType: type,
+                                        color: colorForSessionType(type)
+                                    )
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
                     // Shift details
                     VStack(spacing: 8) {
                         iconRow(systemName: "person.fill",
                                 label: "Employee",
                                 value: displayEmployeeName)
                         
-                        if let startDate = session.startDate {
+                        if let _ = session.startDate {
                             iconRow(systemName: "calendar",
                                     label: "Date",
                                     value: formattedFullDate)
@@ -156,10 +172,6 @@ struct ShiftDetailView: View {
                                     label: "Location",
                                     value: location)
                         }
-                        
-                        iconRow(systemName: "camera.fill",
-                                label: "Position",
-                                value: session.getSessionTypeDisplayName())
                         
                         iconRow(systemName: "person.2.fill",
                                 label: "Coworkers",
@@ -507,7 +519,7 @@ struct ShiftDetailView: View {
                         schoolId: schoolId,
                         schoolName: session.schoolName,
                         sessionContext: YearbookSessionContext(
-                            sessionId: session.id ?? "",
+                            sessionId: session.id,
                             photographerId: currentUserID ?? "",
                             photographerName: currentUserPhotographerInfo?.name ?? "Unknown",
                             sessionDate: session.startDate ?? Date()
@@ -636,7 +648,7 @@ struct ShiftDetailView: View {
                         print("📚 Yearbook button tapped")
                         print("📚 Session schoolId: '\(session.schoolId ?? "nil")'")
                         print("📚 Session schoolName: '\(session.schoolName)'")
-                        print("📚 Session ID: '\(session.id ?? "nil")'")
+                        print("📚 Session ID: '\(session.id)'")
                         showingYearbookChecklist = true
                     }
                 )
@@ -1218,6 +1230,41 @@ struct ShiftDetailView: View {
         return colorMap[session.position] ?? .blue
     }
     
+    private func colorForSessionType(_ type: String) -> Color {
+        // First check positionColorMap
+        if let positionColor = positionColorMap[type] {
+            return positionColor
+        }
+        
+        // Then use the color map
+        let colorMap: [String: Color] = [
+            "Photographer 1": .red,
+            "Photographer 2": .blue,
+            "Photographer 3": .green,
+            "Photographer 4": .orange,
+            "Photographer 5": .purple,
+            "Photographer 6": .indigo,
+            "Photographer 7": .brown,
+            "Photographer 8": .cyan,
+            "Poser 1": .pink,
+            "Poser 2": .teal,
+            "Poser 3": .mint,
+            "Poser 4": .yellow,
+            "Poser 5": .gray,
+            "Poser 6": .purple,
+            "Production": .mint,
+            "Production Manager": .mint,
+            "Delivery": .gray,
+            "Front Office Assistant": .blue,
+            "Graphic Designer": .purple,
+            "Sales Representative": .orange,
+            "Yearbook Team": .green,
+            "Leadership Team": .indigo
+        ]
+        
+        return colorMap[type] ?? .blue
+    }
+    
     private var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
         formatter.dateStyle = .full
@@ -1306,7 +1353,7 @@ struct ShiftDetailView: View {
         guard let currentShiftDate = session.startDate else { return false }
         
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: currentShiftDate)
+        let _ = calendar.startOfDay(for: currentShiftDate)
         
         // Find all sessions for the same employee on the same day
         let employeeSessions = allSessions.filter { evt in
@@ -1583,7 +1630,7 @@ struct ShiftDetailView: View {
                 .whereField("organizationID", isEqualTo: orgID)
                 .whereField("value", isEqualTo: self.session.schoolName)
                 .getDocuments { snapshot, error in
-                    if let error = error {
+                    if let _ = error {
                         self.travelPlan.errorMessage = "Could not load school data"
                         return
                     }

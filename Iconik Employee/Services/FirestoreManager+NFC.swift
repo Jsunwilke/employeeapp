@@ -315,9 +315,71 @@ class FirestoreManager: ObservableObject {
     
     // MARK: - Listen for Schools Data
     
+    // Force refresh schools from server (for pull-to-refresh)
+    func refreshSchoolsFromServer(forOrgID orgID: String, completion: @escaping ([SchoolItem]) -> Void) {
+        let db = Firestore.firestore()
+        
+        db.collection("schools")
+            .whereField("organizationID", isEqualTo: orgID)
+            .order(by: "value")
+            .getDocuments(source: .server) { [weak self] snapshot, error in
+                guard let self = self else { return }
+                
+                if let error = error {
+                    print("Error refreshing schools from server: \(error)")
+                    completion([])
+                    return
+                }
+                
+                guard let documents = snapshot?.documents else {
+                    completion([])
+                    return
+                }
+                
+                let schools = documents.compactMap { doc -> SchoolItem? in
+                    let data = doc.data()
+                    guard let name = data["value"] as? String else { return nil }
+                    
+                    var addressComponents: [String] = []
+                    if let street = data["street"] as? String, !street.isEmpty {
+                        addressComponents.append(street)
+                    }
+                    if let city = data["city"] as? String, !city.isEmpty {
+                        addressComponents.append(city)
+                    }
+                    if let state = data["state"] as? String, !state.isEmpty {
+                        addressComponents.append(state)
+                    }
+                    if let zipCode = data["zipCode"] as? String, !zipCode.isEmpty {
+                        addressComponents.append(zipCode)
+                    }
+                    
+                    let address = addressComponents.isEmpty ? name : addressComponents.joined(separator: ", ")
+                    let coordinates = data["coordinates"] as? String
+                    
+                    return SchoolItem(
+                        id: doc.documentID,
+                        name: name,
+                        address: address,
+                        coordinates: coordinates
+                    )
+                }
+                
+                // Update cache
+                self.lastSchoolsData = schools
+                if let encoded = try? JSONEncoder().encode(schools) {
+                    UserDefaults.standard.set(encoded, forKey: "nfcSchools")
+                }
+                
+                completion(schools)
+                print("Schools refreshed from server - \(schools.count) schools")
+            }
+    }
+    
     func listenForSchoolsData(forOrgID orgID: String, completion: @escaping ([SchoolItem]) -> Void) {
         let db = Firestore.firestore()
         
+        // Set up the listener - it will automatically sync from server if online
         db.collection("schools")
             .whereField("organizationID", isEqualTo: orgID)
             .order(by: "value")
@@ -343,11 +405,8 @@ class FirestoreManager: ObservableObject {
                         return
                     }
                     
-                    // If from cache and no changes, skip
-                    if snapshot.metadata.isFromCache && snapshot.documentChanges.isEmpty {
-                        print("Skipping cache-only update with no changes")
-                        return
-                    }
+                    // Don't skip cache updates - they might contain new data from server
+                    // The hasSchoolsDataChanged function below will handle duplicate prevention
                 }
                 
                 let schools = documents.compactMap { doc -> SchoolItem? in

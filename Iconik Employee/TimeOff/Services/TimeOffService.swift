@@ -510,7 +510,7 @@ class TimeOffService: ObservableObject {
         // For full day requests, check entire days
         if !isPartialDay {
             // Check each day in the range
-            var conflicts: [String] = []
+            let conflicts: [String] = []
             let calendar = Calendar.current
             var currentDate = startDate
             

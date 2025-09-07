@@ -32,7 +32,6 @@ class StreamChatManager: ObservableObject {
         // Configure Stream Chat
         var config = ChatClientConfig(apiKey: .init(apiKey))
         config.isLocalStorageEnabled = true
-        config.shouldConnectAutomatically = true
         config.staysConnectedInBackground = true
         
         // Create client
@@ -76,7 +75,7 @@ class StreamChatManager: ObservableObject {
     
     func disconnect() {
         Task {
-            await chatClient?.disconnect()
+            try? await chatClient?.disconnect()
             isConnected = false
         }
     }
@@ -130,7 +129,7 @@ class StreamChatManager: ObservableObject {
             ]
         )
         
-        try await channelController.synchronize()
+        await channelController.synchronize()
         
         guard let channel = channelController.channel else {
             throw StreamChatError.channelCreationFailed
@@ -164,7 +163,7 @@ class StreamChatManager: ObservableObject {
             ]
         )
         
-        try await channelController.synchronize()
+        await channelController.synchronize()
         
         guard let channel = channelController.channel else {
             throw StreamChatError.channelCreationFailed
@@ -181,7 +180,7 @@ class StreamChatManager: ObservableObject {
             return nil
         }
         
-        let organizationId = UserManager.shared.getCachedOrganizationID()
+        let _ = UserManager.shared.getCachedOrganizationID()
         
         // Create filter for user's channels
         // Note: Custom fields filtering requires backend configuration

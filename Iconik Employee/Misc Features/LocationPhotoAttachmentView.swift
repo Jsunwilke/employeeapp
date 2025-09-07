@@ -24,6 +24,7 @@ struct LocationPhotoAttachmentView: View {
     // School selection
     @State private var schoolOptions: [SchoolItem] = []
     @State private var selectedSchool: SchoolItem? = nil
+    @State private var organizationID: String = ""
     
     // Photo management
     @State private var labeledImages: [LabeledImage] = []
@@ -198,14 +199,12 @@ struct LocationPhotoAttachmentView: View {
                 )
             } else {
                 HStack {
-                    Picker("", selection: $selectedSchool) {
-                        Text("Select a location").tag(nil as SchoolItem?)
-                        
-                        ForEach(schoolOptions) { school in
-                            Text(school.name).tag(school as SchoolItem?)
-                        }
-                    }
-                    .pickerStyle(.menu)
+                    SearchableSchoolPicker(
+                        selection: $selectedSchool,
+                        schools: $schoolOptions,
+                        title: "Select Location",
+                        organizationID: organizationID
+                    )
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
                     
@@ -603,6 +602,9 @@ struct LocationPhotoAttachmentView: View {
                 self.errorMessage = "User organization not found"
                 return
             }
+            
+            // Store the organization ID for refresh
+            self.organizationID = organizationID
             
             // Now query schools for this organization
             db.collection("schools")

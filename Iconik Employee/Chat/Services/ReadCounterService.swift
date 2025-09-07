@@ -62,7 +62,7 @@ class ReadCounterService: ReadCounterProtocol {
         self.dailyKey = "focal_read_daily_\(Date().toYYYYMMDD())"
         
         // Load existing daily operations
-        loadDailyOperations()
+        _ = loadDailyOperations()
     }
     
     // MARK: - Recording Operations

@@ -16,7 +16,7 @@ class SchoolService: ObservableObject {
         let query = db.collection("schools")
             .whereField("organizationID", isEqualTo: organizationID)
         
-        let snapshot = try await query.getDocuments()
+        let snapshot = try await query.getDocuments(source: .server)
         
         let schools = snapshot.documents.compactMap { doc -> School? in
             var data = doc.data()

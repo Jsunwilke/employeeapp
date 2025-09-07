@@ -14,6 +14,7 @@ struct ManualEntryView: View {
     
     @State private var schools: [SchoolItem] = []
     @State private var photographerNames: [String] = []
+    @State private var isRefreshing = false
     
     @State private var localPhotographer: String = ""
     @State private var uploadedFromJasonsHouse: Bool = false
@@ -160,13 +161,13 @@ struct ManualEntryView: View {
                         Text("Loading schools...")
                             .foregroundColor(.gray)
                     } else {
-                        Picker("School", selection: $selectedSchool) {
-                            Text("Select School").tag("")
-                            ForEach(schools.sorted { $0.name < $1.name }) { school in
-                                Text(school.name).tag(school.name)
-                            }
-                        }
-                        .disabled(isJobBoxMode && selectedSession != nil)
+                        SearchableSchoolPickerString(
+                            selection: $selectedSchool,
+                            schools: $schools,
+                            title: "School",
+                            disabled: isJobBoxMode && selectedSession != nil,
+                            organizationID: userManager.currentUserOrganizationID
+                        )
                     }
                     
                     // Status
@@ -249,6 +250,23 @@ struct ManualEntryView: View {
         }
         .navigationTitle(isJobBoxMode ? "Manual Job Box Entry" : "Manual SD Card Entry")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: refreshSchools) {
+                    if isRefreshing {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .scaleEffect(0.8)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .disabled(isRefreshing)
+            }
+        }
+        .refreshable {
+            await refreshSchoolsAsync()
+        }
         .alert(isPresented: $showAlert) {
             Alert(title: Text("Info"),
                   message: Text(alertMessage),
@@ -264,6 +282,36 @@ struct ManualEntryView: View {
         .onAppear {
             localPhotographer = storedUserFirstName
             loadInitialData()
+        }
+    }
+    
+    func refreshSchools() {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        
+        let orgID = userManager.currentUserOrganizationID
+        guard !orgID.isEmpty else {
+            isRefreshing = false
+            return
+        }
+        
+        // Force refresh from server
+        FirestoreManager.shared.refreshSchoolsFromServer(forOrgID: orgID) { schoolItems in
+            DispatchQueue.main.async {
+                self.schools = schoolItems
+                self.isRefreshing = false
+                print("ManualEntryView: Manually refreshed \(schoolItems.count) schools from server")
+            }
+        }
+    }
+    
+    func refreshSchoolsAsync() async {
+        await MainActor.run {
+            refreshSchools()
+        }
+        // Wait for refresh to complete
+        while isRefreshing {
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
         }
     }
     
@@ -295,6 +343,15 @@ struct ManualEntryView: View {
             self.schools = cachedSchools
             print("ManualEntryView: Loaded \(cachedSchools.count) cached schools")
         }
+        // First refresh from server to get latest schools
+        FirestoreManager.shared.refreshSchoolsFromServer(forOrgID: orgID) { schoolItems in
+            DispatchQueue.main.async {
+                self.schools = schoolItems
+                print("ManualEntryView: Refreshed schools from server with \(schoolItems.count) schools")
+            }
+        }
+        
+        // Then listen for real-time updates
         FirestoreManager.shared.listenForSchoolsData(forOrgID: orgID) { schoolItems in
             DispatchQueue.main.async {
                 self.schools = schoolItems

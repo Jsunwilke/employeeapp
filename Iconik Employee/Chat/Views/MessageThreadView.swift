@@ -554,7 +554,7 @@ struct FileMessageView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             
-            if let fileUrl = message.fileUrl {
+            if let _ = message.fileUrl {
                 Button(action: {
                     // TODO: Open file
                 }) {

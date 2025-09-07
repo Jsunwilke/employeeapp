@@ -49,6 +49,17 @@ struct ConversationListView: View {
                     await chatManager.initialize()
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("didReceiveStreamChatNotification"))) { notification in
+                // Handle Stream Chat notification tap
+                if let userInfo = notification.userInfo,
+                   let channelCid = userInfo["channelCid"] as? String {
+                    print("📱 Stream Chat notification received for channel: \(channelCid)")
+                    // Navigate to the specific channel
+                    Task {
+                        await chatManager.openChannel(cid: channelCid)
+                    }
+                }
+            }
             .sheet(isPresented: $showNewConversation) {
                 EmployeeSelectorView { selectedUsers in
                     if selectedUsers.count > 1 {
