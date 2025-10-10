@@ -996,6 +996,7 @@ struct SportsShootListView: View {
                 AddGroupImageView(
                     shootID: shoot.id,
                     existingGroup: viewModel.selectedGroupImage,
+                    sportsShoot: shoot,
                     onComplete: { success in
                         if success {
                             refreshSelectedShoot()

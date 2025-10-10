@@ -12,6 +12,9 @@ class KeyboardManager: ObservableObject {
     @Published var useMiniMode: Bool = false // Use mini mode for iPad
     @Published var keyboardOffset: CGSize = .zero // Track keyboard position when dragged
     
+    // Persistent storage for keyboard position
+    private static var savedKeyboardPosition: CGPoint? = nil
+    
     private init() {}
     
     func showKeyboard(for text: Binding<String>, context: String = "", miniMode: Bool = false, onUp: (() -> Void)? = nil, onDown: (() -> Void)? = nil, onDismiss: (() -> Void)? = nil) {
@@ -32,18 +35,26 @@ class KeyboardManager: ObservableObject {
         self.activeFieldText = nil
         self.editingContext = ""
         self.useMiniMode = false
-        self.keyboardOffset = .zero // Reset position when keyboard is hidden
+        // Don't reset keyboardOffset here - we want to remember it
         self.onUp = nil
         self.onDown = nil
         self.onDismiss = nil
+    }
+    
+    func saveKeyboardPosition(_ position: CGPoint) {
+        Self.savedKeyboardPosition = position
+    }
+    
+    func getSavedKeyboardPosition() -> CGPoint? {
+        return Self.savedKeyboardPosition
     }
 }
 
 // View modifier to add the keyboard overlay at the root level
 struct CustomKeyboardModifier: ViewModifier {
     @StateObject private var keyboardManager = KeyboardManager.shared
-    @State private var dragOffset: CGSize = .zero
-    @State private var totalOffset: CGSize = .zero
+    @State private var keyboardPosition: CGPoint = .zero
+    @State private var isDragging = false
     
     func body(content: Content) -> some View {
         ZStack {
@@ -51,14 +62,6 @@ struct CustomKeyboardModifier: ViewModifier {
             
             if keyboardManager.isShowingCustomKeyboard,
                let textBinding = keyboardManager.activeFieldText {
-                
-                // Background overlay to detect taps outside keyboard
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        keyboardManager.hideKeyboard()
-                    }
-                    .transition(.opacity)
                 
                 // Position keyboard based on mode
                 if keyboardManager.useMiniMode {
@@ -84,37 +87,40 @@ struct CustomKeyboardModifier: ViewModifier {
                         .background(Color(UIColor.systemBackground))
                         .cornerRadius(12)
                         .shadow(radius: 10)
-                        .offset(x: totalOffset.width + dragOffset.width,
-                                y: totalOffset.height + dragOffset.height)
+                        .position(keyboardPosition)
                         .gesture(
                             DragGesture()
                                 .onChanged { value in
-                                    dragOffset = value.translation
+                                    isDragging = true
+                                    keyboardPosition = value.location
                                 }
                                 .onEnded { value in
-                                    // Calculate new position
-                                    let newWidth = totalOffset.width + value.translation.width
-                                    let newHeight = totalOffset.height + value.translation.height
-                                    
+                                    isDragging = false
                                     // Apply bounds checking
-                                    let maxX = geometry.size.width - 380 - 20
-                                    let maxY = geometry.size.height - 400
+                                    let minX: CGFloat = 190
+                                    let maxX = geometry.size.width - 190
+                                    let minY: CGFloat = 160
+                                    let maxY = geometry.size.height - 160
                                     
-                                    totalOffset.width = min(max(-20, newWidth), maxX)
-                                    totalOffset.height = min(max(20, newHeight), maxY)
+                                    keyboardPosition.x = min(max(minX, keyboardPosition.x), maxX)
+                                    keyboardPosition.y = min(max(minY, keyboardPosition.y), maxY)
                                     
-                                    // Save to manager
-                                    keyboardManager.keyboardOffset = totalOffset
-                                    
-                                    // Reset temporary offset
-                                    dragOffset = .zero
+                                    // Save position
+                                    keyboardManager.saveKeyboardPosition(keyboardPosition)
                                 }
                         )
-                        .position(x: geometry.size.width - 200, y: geometry.size.height / 2)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                         .onAppear {
-                            // Restore saved position
-                            totalOffset = keyboardManager.keyboardOffset
+                            // Set initial position: use saved position or default to lower-right
+                            if let savedPosition = keyboardManager.getSavedKeyboardPosition() {
+                                keyboardPosition = savedPosition
+                            } else {
+                                // Default to lower-right corner
+                                keyboardPosition = CGPoint(
+                                    x: geometry.size.width - 200,
+                                    y: geometry.size.height - 200
+                                )
+                            }
                         }
                     }
                 } else {

@@ -99,6 +99,9 @@ Config.xcconfig
 # Google Services configuration (contains API keys)
 GoogleService-Info.plist
 
+# Info.plist with API keys
+Iconik-Employee-Info.plist
+
 # Certificates
 *.p12
 *.cer

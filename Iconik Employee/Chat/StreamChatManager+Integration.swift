@@ -424,7 +424,7 @@ extension ChatManager {
         
         // Convert Stream channels to our Conversation model
         let updatedConversations = channels.map { channel in
-            StreamChatAdapter.convertToConversation(channel, currentUserId: currentUserId)
+            StreamChatAdapter.convertToConversation(channel, currentUserId: currentUserId, organizationUsers: organizationUsers)
         }
         
         // Resolve names and sort
@@ -555,7 +555,7 @@ extension ChatManager: ChatChannelControllerDelegate {
             
             // Update the conversation in our list
             if case .update(let updatedChannel) = channel {
-                let updatedConversation = StreamChatAdapter.convertToConversation(updatedChannel, currentUserId: currentUserId)
+                let updatedConversation = StreamChatAdapter.convertToConversation(updatedChannel, currentUserId: currentUserId, organizationUsers: self.organizationUsers)
                 
                 if let index = self.conversations.firstIndex(where: { $0.id == updatedConversation.id }) {
                     self.conversations[index] = self.resolveConversationName(updatedConversation)

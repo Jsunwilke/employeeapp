@@ -18,12 +18,27 @@ class StreamChatAdapter {
     
     // MARK: - Channel Conversion
     
-    static func convertToConversation(_ channel: StreamChatChannel, currentUserId: String) -> AppConversation {
+    static func convertToConversation(_ channel: StreamChatChannel, currentUserId: String, organizationUsers: [AppChatUser] = []) -> AppConversation {
         // Get conversation type
         let type: Conversation.ConversationType = channel.type == .messaging ? .direct : .group
         
-        // Get participant IDs
-        let participants = channel.lastActiveMembers.map { $0.id }
+        // Get participant IDs - try multiple sources
+        var participants: [String] = []
+        
+        // First try lastActiveMembers
+        if !channel.lastActiveMembers.isEmpty {
+            participants = channel.lastActiveMembers.map { $0.id }
+        } else {
+            // Fall back to parsing channel CID for direct messages
+            // Direct message CIDs often contain user IDs
+            if type == .direct {
+                let cidParts = channel.cid.id.split(separator: "-")
+                participants = cidParts.compactMap { String($0) }.filter { $0 != currentUserId || cidParts.count == 1 }
+                if !participants.contains(currentUserId) {
+                    participants.append(currentUserId)
+                }
+            }
+        }
         
         // Get display name
         var displayName: String? = nil
@@ -32,15 +47,39 @@ class StreamChatAdapter {
         if let channelName = channel.name, !channelName.isEmpty {
             displayName = channelName
         } else if type == .direct {
-            // For direct messages, use the other person's name
-            if let otherMember = channel.lastActiveMembers.first(where: { $0.id != currentUserId }) {
-                defaultName = otherMember.name ?? "User"
+            // For direct messages, try to get the other person's name
+            let otherUserId = participants.first(where: { $0 != currentUserId }) ?? participants.first ?? ""
+            
+            // First try Stream Chat member data
+            if let otherMember = channel.lastActiveMembers.first(where: { $0.id == otherUserId }),
+               let memberName = otherMember.name, !memberName.isEmpty && memberName != "User" {
+                defaultName = memberName
+            } 
+            // Then try organization users cache
+            else if let cachedUser = organizationUsers.first(where: { $0.id == otherUserId }) {
+                defaultName = cachedUser.fullName
+            }
+            // Last resort fallback
+            else {
+                defaultName = "User"
             }
         } else {
             // For groups without a name, create one from members
-            let otherMembers = channel.lastActiveMembers.filter { $0.id != currentUserId }
-            let names = otherMembers.prefix(3).compactMap { $0.name }
-            defaultName = names.joined(separator: ", ")
+            let otherUserIds = participants.filter { $0 != currentUserId }
+            var names: [String] = []
+            
+            // Try to get names from Stream members first
+            for userId in otherUserIds.prefix(3) {
+                if let member = channel.lastActiveMembers.first(where: { $0.id == userId }),
+                   let memberName = member.name, !memberName.isEmpty && memberName != "User" {
+                    names.append(memberName)
+                } else if let cachedUser = organizationUsers.first(where: { $0.id == userId }) {
+                    // Fall back to organization users cache
+                    names.append(cachedUser.firstName.isEmpty ? cachedUser.fullName : cachedUser.firstName)
+                }
+            }
+            
+            defaultName = names.isEmpty ? "Group Chat" : names.joined(separator: ", ")
         }
         
         // Convert last message

@@ -288,11 +288,19 @@ struct MessageThreadView: View {
         let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         
-        // Clear input immediately for better UX
-        messageText = ""
+        // Dismiss keyboard first to stop any ongoing dictation
+        isMessageFieldFocused = false
+        
+        // Store the message text and clear the field
+        let messageToSend = text
+        
+        // Clear the field after a small delay to ensure dictation has stopped
+        DispatchQueue.main.async {
+            self.messageText = ""
+        }
         
         Task {
-            await chatManager.sendMessage(text: text)
+            await chatManager.sendMessage(text: messageToSend)
             scrollToBottom = true
         }
     }

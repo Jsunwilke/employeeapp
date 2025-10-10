@@ -297,6 +297,7 @@ struct SportsShootDetailView: View {
                 AddGroupImageView(
                     shootID: shoot.id,
                     existingGroup: selectedGroupImage,
+                    sportsShoot: shoot,
                     onComplete: { success in
                         if success {
                             refreshSportsShoot()

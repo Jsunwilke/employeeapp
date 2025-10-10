@@ -19,26 +19,31 @@ class ClaudeRosterService {
     
     // Claude API key from Info.plist (compiled from Config.xcconfig)
     private var apiKey: String {
-        // First check Info.plist for the API key
-        if let infoPlistKey = Bundle.main.object(forInfoDictionaryKey: "CLAUDE_API_KEY") as? String, !infoPlistKey.isEmpty {
+        // First check Info.plist for the API key (compiled from Config.xcconfig)
+        if let infoPlistKey = Bundle.main.object(forInfoDictionaryKey: "CLAUDE_API_KEY") as? String,
+           !infoPlistKey.isEmpty,
+           !infoPlistKey.contains("YOUR-API-KEY-HERE") {
             if debugMode {
-                print("Using API key from Info.plist: \(infoPlistKey.prefix(5))...")
+                print("Using API key from Info.plist: \(infoPlistKey.prefix(10))...")
             }
             return infoPlistKey.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         
         // Fallback to UserDefaults for existing installations
-        if let key = UserDefaults.standard.string(forKey: "CLAUDE_API_KEY"), !key.isEmpty {
+        if let key = UserDefaults.standard.string(forKey: "CLAUDE_API_KEY"), 
+           !key.isEmpty,
+           !key.contains("YOUR-API-KEY-HERE") {
             if debugMode {
-                print("Using API key from UserDefaults: \(key.prefix(5))...")
+                print("Using API key from UserDefaults: \(key.prefix(10))...")
             }
             return key.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         
         // Try to load from environment (development only)
-        if let envKey = ProcessInfo.processInfo.environment["CLAUDE_API_KEY"], !envKey.isEmpty {
+        if let envKey = ProcessInfo.processInfo.environment["CLAUDE_API_KEY"], 
+           !envKey.isEmpty {
             if debugMode {
-                print("Using API key from Environment: \(envKey.prefix(5))...")
+                print("Using API key from Environment: \(envKey.prefix(10))...")
             }
             return envKey.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -51,7 +56,7 @@ class ClaudeRosterService {
         
         if let cachedKey = self.cachedAPIKey, !cachedKey.isEmpty {
             if debugMode {
-                print("Using cached API key: \(cachedKey.prefix(5))...")
+                print("Using cached API key: \(cachedKey.prefix(10))...")
             }
             return cachedKey.trimmingCharacters(in: .whitespacesAndNewlines)
         }

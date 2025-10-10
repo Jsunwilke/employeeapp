@@ -84,15 +84,24 @@ struct GroupImage: Identifiable, Codable, Hashable {
     var description: String
     var imageNumbers: String
     var notes: String
+    var sport: String?  // Selected sport from roster
+    var gender: String?  // Gender (Boys, Girls, Co-ed)
+    var teamLevel: String?  // Team level (Varsity, JV, etc.)
     
     init(id: String = UUID().uuidString,
          description: String = "",
          imageNumbers: String = "",
-         notes: String = "") {
+         notes: String = "",
+         sport: String? = nil,
+         gender: String? = nil,
+         teamLevel: String? = nil) {
         self.id = id
         self.description = description
         self.imageNumbers = imageNumbers
         self.notes = notes
+        self.sport = sport
+        self.gender = gender
+        self.teamLevel = teamLevel
     }
     
     // Create from a dictionary
@@ -105,16 +114,31 @@ struct GroupImage: Identifiable, Codable, Hashable {
         self.description = dictionary["description"] as? String ?? ""
         self.imageNumbers = dictionary["imageNumbers"] as? String ?? ""
         self.notes = dictionary["notes"] as? String ?? ""
+        self.sport = dictionary["sport"] as? String
+        self.gender = dictionary["gender"] as? String
+        self.teamLevel = dictionary["teamLevel"] as? String
     }
     
     // Convert to dictionary for Firestore
     func toDictionary() -> [String: Any] {
-        return [
+        var dict: [String: Any] = [
             "id": id,
             "description": description,
             "imageNumbers": imageNumbers,
             "notes": notes
         ]
+        
+        if let sport = sport {
+            dict["sport"] = sport
+        }
+        if let gender = gender {
+            dict["gender"] = gender
+        }
+        if let teamLevel = teamLevel {
+            dict["teamLevel"] = teamLevel
+        }
+        
+        return dict
     }
 }
 

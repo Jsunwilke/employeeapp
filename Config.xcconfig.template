@@ -7,3 +7,6 @@ CAPTURA_CLIENT_ID = your-captura-client-id-here
 CAPTURA_CLIENT_SECRET = your-captura-client-secret-here
 CAPTURA_ACCOUNT_ID = your-captura-account-id-here
 CAPTURA_GOOGLE_CLIENT_ID = your-google-client-id-here
+
+// Claude API Configuration
+CLAUDE_API_KEY = your-claude-api-key-here
