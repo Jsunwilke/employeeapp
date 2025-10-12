@@ -10,6 +10,8 @@ struct CreateSportsShootView: View {
     let onComplete: (_ success: Bool) -> Void
     
     // Form fields
+    @State private var selectedSession: Session?
+    @State private var sessions: [Session] = []
     @State private var selectedSchool: School?
     @State private var schools: [School] = []
     @State private var sportName: String = ""
@@ -18,6 +20,7 @@ struct CreateSportsShootView: View {
     @State private var location: String = ""
     @State private var photographer: String = ""
     @State private var additionalNotes: String = ""
+    @State private var linkToSession: Bool = false
     
     // Season type options
     private let seasonTypes = ["Fall Sports", "Winter Sports", "Spring Sports", "League"]
@@ -35,6 +38,61 @@ struct CreateSportsShootView: View {
     var body: some View {
         NavigationView {
             Form {
+                // Session linking section (optional)
+                Section(header: Text("Link to Session (Optional)")) {
+                    Toggle("Link to upcoming session", isOn: $linkToSession)
+
+                    if linkToSession {
+                        Picker("Select Session", selection: $selectedSession) {
+                            Text("No Session").tag(nil as Session?)
+                            ForEach(sessions, id: \.id) { session in
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(session.schoolName)
+                                            .font(.system(size: 14))
+                                        Text(session.date ?? "")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.gray)
+                                    }
+                                }
+                                .tag(session as Session?)
+                            }
+                        }
+                        .onChange(of: selectedSession) { newSession in
+                            // Auto-populate fields from selected session
+                            if let session = newSession {
+                                // Find and select the matching school
+                                if let school = schools.first(where: { $0.id == session.schoolId }) {
+                                    selectedSchool = school
+                                } else if !session.schoolName.isEmpty {
+                                    // Try to match by name if ID doesn't match
+                                    selectedSchool = schools.first(where: { $0.value == session.schoolName })
+                                }
+
+                                // Set date from session
+                                if let dateStr = session.date {
+                                    let formatter = DateFormatter()
+                                    formatter.dateFormat = "yyyy-MM-dd"
+                                    if let date = formatter.date(from: dateStr) {
+                                        shootDate = date
+                                    }
+                                }
+
+                                // Set location from session
+                                if let loc = session.location, !loc.isEmpty {
+                                    location = loc
+                                }
+                            }
+                        }
+
+                        if selectedSession != nil {
+                            Text("Fields auto-populated from session")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
+                    }
+                }
+
                 // Basic information section
                 Section(header: Text("Basic Information")) {
                     // School picker
@@ -44,6 +102,7 @@ struct CreateSportsShootView: View {
                             Text(school.value).tag(school as School?)
                         }
                     }
+                    .disabled(linkToSession && selectedSession != nil)
                     
                     // Season type picker
                     Picker("Season/Type", selection: $seasonType) {
@@ -52,7 +111,7 @@ struct CreateSportsShootView: View {
                         }
                     }
                     
-                    TextField("Sport Name", text: $sportName)
+                    TextField("Sport Name (Optional)", text: $sportName)
                     DatePicker("Shoot Date", selection: $shootDate, displayedComponents: .date)
                     TextField("Location", text: $location)
                     TextField("Photographer", text: $photographer)
@@ -66,7 +125,13 @@ struct CreateSportsShootView: View {
                 
                 // Create button section
                 Section {
-                    Button(action: createSportsShoot) {
+                    Button(action: {
+                        print("Create button tapped")
+                        print("Selected School: \(selectedSchool?.value ?? "nil")")
+                        print("Sport Name: '\(sportName)'")
+                        print("isLoading: \(isLoading)")
+                        createSportsShoot()
+                    }) {
                         if isLoading {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle())
@@ -77,7 +142,14 @@ struct CreateSportsShootView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .disabled(isLoading || selectedSchool == nil || sportName.isEmpty)
+                    .disabled(isLoading || selectedSchool == nil)
+
+                    // Debug info
+                    if selectedSchool == nil {
+                        Text("Required: School")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
                 }
             }
             .navigationTitle("New Sports Shoot")
@@ -103,6 +175,7 @@ struct CreateSportsShootView: View {
             }
             .onAppear {
                 loadSchools()
+                loadSessions()
             }
         }
     }
@@ -115,9 +188,9 @@ struct CreateSportsShootView: View {
             return
         }
         
-        guard let school = selectedSchool, !sportName.isEmpty else {
+        guard let school = selectedSchool else {
             alertTitle = "Error"
-            alertMessage = "School and sport name are required."
+            alertMessage = "School is required."
             showAlert = true
             return
         }
@@ -148,7 +221,7 @@ struct CreateSportsShootView: View {
         let docRef = db.collection("sportsJobs").document(newShoot.id)
         
         // Convert to Firestore data
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "schoolName": newShoot.schoolName,
             "schoolId": newShoot.schoolId ?? "",
             "sportName": newShoot.sportName,
@@ -160,36 +233,68 @@ struct CreateSportsShootView: View {
             "groupImages": [],  // Empty group images initially
             "additionalNotes": newShoot.additionalNotes,
             "organizationID": newShoot.organizationID,
-            "createdAt": Timestamp(date: newShoot.createdAt),
-            "updatedAt": Timestamp(date: newShoot.updatedAt),
+            "createdAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp(),
             "isArchived": false
         ]
+
+        // Add sessionId if linking to a session
+        if linkToSession, let sessionId = selectedSession?.id {
+            data["sessionId"] = sessionId
+        }
         
         docRef.setData(data) { error in
             DispatchQueue.main.async {
                 isLoading = false
-                
+
                 if let error = error {
                     alertTitle = "Error"
                     alertMessage = "Failed to create sports shoot: \(error.localizedDescription)"
+                    showAlert = true
                 } else {
+                    // If linked to a session, update the session's hasSportsJob flag
+                    if self.linkToSession, let sessionId = self.selectedSession?.id {
+                        db.collection("sessions").document(sessionId).updateData([
+                            "hasSportsJob": true
+                        ]) { sessionError in
+                            if let sessionError = sessionError {
+                                print("Warning: Failed to update session flag: \(sessionError.localizedDescription)")
+                            }
+                        }
+                    }
+
                     alertTitle = "Success"
                     alertMessage = "Sports shoot created successfully."
+                    showAlert = true
                 }
-                
-                showAlert = true
             }
         }
     }
     
     private func loadSchools() {
         guard !storedUserOrganizationID.isEmpty else { return }
-        
+
         Task {
             do {
                 schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
             } catch {
                 print("Error loading schools: \(error)")
+            }
+        }
+    }
+
+    private func loadSessions() {
+        guard !storedUserOrganizationID.isEmpty else { return }
+
+        SportsShootService.shared.fetchUpcomingSessions(forOrganization: storedUserOrganizationID) { result in
+            switch result {
+            case .success(let fetchedSessions):
+                DispatchQueue.main.async {
+                    self.sessions = fetchedSessions
+                    print("Loaded \(fetchedSessions.count) upcoming sessions")
+                }
+            case .failure(let error):
+                print("Error loading sessions: \(error)")
             }
         }
     }

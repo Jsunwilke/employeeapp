@@ -861,8 +861,59 @@ class SportsShootService {
         }
     }
     
+    // MARK: - Session Integration
+
+    // Fetch upcoming sessions for sports job creation
+    func fetchUpcomingSessions(forOrganization orgID: String, completion: @escaping (Result<[Session], Error>) -> Void) {
+        print("Fetching upcoming sessions for sports job creation")
+
+        let now = Date()
+        let twoWeeksFromNow = Calendar.current.date(byAdding: .weekOfYear, value: 2, to: now) ?? now
+
+        // Format dates for Firestore query
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let startDateStr = dateFormatter.string(from: now)
+        let endDateStr = dateFormatter.string(from: twoWeeksFromNow)
+
+        db.collection("sessions")
+            .whereField("organizationID", isEqualTo: orgID)
+            .whereField("date", isGreaterThanOrEqualTo: startDateStr)
+            .whereField("date", isLessThanOrEqualTo: endDateStr)
+            .order(by: "date")
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error fetching sessions: \(error.localizedDescription)")
+                    completion(.failure(error))
+                    return
+                }
+
+                guard let documents = snapshot?.documents else {
+                    completion(.success([]))
+                    return
+                }
+
+                // Convert documents to Session objects and filter
+                let sessions = documents.compactMap { doc -> Session? in
+                    let data = doc.data()
+                    // Filter out sessions that already have sports jobs
+                    let hasSportsJob = data["hasSportsJob"] as? Bool ?? false
+                    if hasSportsJob {
+                        return nil // Skip sessions that already have sports jobs
+                    }
+                    // Use the existing Session initializer that takes a data dictionary
+                    return Session(id: doc.documentID, data: data)
+                }
+
+                let availableSessions = sessions
+
+                print("Found \(availableSessions.count) available sessions for sports jobs")
+                completion(.success(availableSessions))
+            }
+    }
+
     // MARK: - Archive Management
-    
+
     // Archive a sports shoot
     func archiveSportsShoot(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
         let docRef = db.collection(sportsShootsCollection).document(id)
