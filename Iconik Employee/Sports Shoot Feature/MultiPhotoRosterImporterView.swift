@@ -594,10 +594,13 @@ struct MultiPhotoRosterImporterView: View {
                     return updatedEntry
                 }
             }
-            
+
+            // Note: Entries are already sorted alphabetically and have sequential IDs assigned
+            // by ClaudeRosterService, so we don't need to sort or reassign IDs here
+
             // Store the results
             extractedRostersByImage[index] = entries
-            
+
             // Add to the complete list
             allExtractedRosters.append(contentsOf: entries)
             

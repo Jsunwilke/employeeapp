@@ -13,16 +13,26 @@ import FirebaseFirestore
 // Service to handle AI processing of roster images
 class ClaudeRosterService {
     static let shared = ClaudeRosterService()
-    
+
     // Flag for debugging
     private let debugMode = true
+
+    // Initialize and clear any old cached API keys from UserDefaults
+    init() {
+        // Clear the old cached key from UserDefaults to force fresh retrieval from Info.plist/Config.xcconfig
+        UserDefaults.standard.removeObject(forKey: "CLAUDE_API_KEY")
+        if debugMode {
+            print("Cleared cached CLAUDE_API_KEY from UserDefaults")
+        }
+    }
     
     // Claude API key from Info.plist (compiled from Config.xcconfig)
     private var apiKey: String {
         // First check Info.plist for the API key (compiled from Config.xcconfig)
         if let infoPlistKey = Bundle.main.object(forInfoDictionaryKey: "CLAUDE_API_KEY") as? String,
            !infoPlistKey.isEmpty,
-           !infoPlistKey.contains("YOUR-API-KEY-HERE") {
+           !infoPlistKey.contains("YOUR-API-KEY-HERE"),
+           !infoPlistKey.contains("$(") {  // Check that variable substitution worked
             if debugMode {
                 print("Using API key from Info.plist: \(infoPlistKey.prefix(10))...")
             }
@@ -30,9 +40,10 @@ class ClaudeRosterService {
         }
         
         // Fallback to UserDefaults for existing installations
-        if let key = UserDefaults.standard.string(forKey: "CLAUDE_API_KEY"), 
+        if let key = UserDefaults.standard.string(forKey: "CLAUDE_API_KEY"),
            !key.isEmpty,
-           !key.contains("YOUR-API-KEY-HERE") {
+           !key.contains("YOUR-API-KEY-HERE"),
+           !key.contains("$(") {  // Check that variable substitution worked
             if debugMode {
                 print("Using API key from UserDefaults: \(key.prefix(10))...")
             }
@@ -40,8 +51,9 @@ class ClaudeRosterService {
         }
         
         // Try to load from environment (development only)
-        if let envKey = ProcessInfo.processInfo.environment["CLAUDE_API_KEY"], 
-           !envKey.isEmpty {
+        if let envKey = ProcessInfo.processInfo.environment["CLAUDE_API_KEY"],
+           !envKey.isEmpty,
+           !envKey.contains("$(") {  // Check that variable substitution worked
             if debugMode {
                 print("Using API key from Environment: \(envKey.prefix(10))...")
             }
@@ -54,7 +66,9 @@ class ClaudeRosterService {
             print("No API key found in Info.plist or UserDefaults. Will try to fetch from Firestore.")
         }
         
-        if let cachedKey = self.cachedAPIKey, !cachedKey.isEmpty {
+        if let cachedKey = self.cachedAPIKey,
+           !cachedKey.isEmpty,
+           !cachedKey.contains("$(") {  // Check that variable substitution worked
             if debugMode {
                 print("Using cached API key: \(cachedKey.prefix(10))...")
             }
@@ -116,7 +130,7 @@ class ClaudeRosterService {
     }
     
     // Claude model to use
-    private let modelName = "claude-3-5-sonnet-20241022"  // Latest Claude 3.5 Sonnet model
+    private let modelName = "claude-sonnet-4-5-20250929"  // Latest Claude Sonnet 4.5 model
     
     // Get the next available Subject ID from existing roster
     func getNextAvailableSubjectID(existingRoster: [RosterEntry]) -> Int {
@@ -498,7 +512,7 @@ class ClaudeRosterService {
                        let text = firstContent["text"] as? String {
                         
                         // Parse the JSON text to extract roster entries
-                        self.parseJsonToRosterEntries(jsonString: text, completion: completion)
+                        self.parseJsonToRosterEntries(jsonString: text, startingSubjectID: startingSubjectID, completion: completion)
                     } else {
                         let error = NSError(domain: "ClaudeRosterService", code: 106,
                                             userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
@@ -523,7 +537,7 @@ class ClaudeRosterService {
     }
     
     // Parse JSON string to roster entries
-    private func parseJsonToRosterEntries(jsonString: String, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
+    private func parseJsonToRosterEntries(jsonString: String, startingSubjectID: Int, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Extract JSON from the response if it's wrapped in code blocks
         var cleanedJsonString = jsonString
         if let jsonStartRange = jsonString.range(of: "```json"),
@@ -551,7 +565,14 @@ class ClaudeRosterService {
             // Try to decode as direct array first
             do {
                 let entries = try decoder.decode([ClaudeRosterEntry].self, from: jsonData)
-                let rosterEntries = entries.map { self.convertToRosterEntry($0) }
+                var rosterEntries = entries.map { self.convertToRosterEntry($0) }
+                // Sort alphabetically by lastName (which contains the full name)
+                // Since names are in format "FIRSTNAME LASTNAME", this will sort by first name
+                rosterEntries.sort { $0.lastName < $1.lastName }
+                // Reassign Subject IDs sequentially after sorting
+                for (index, _) in rosterEntries.enumerated() {
+                    rosterEntries[index].firstName = String(startingSubjectID + index)
+                }
                 DispatchQueue.main.async {
                     completion(.success(rosterEntries))
                 }
@@ -559,7 +580,14 @@ class ClaudeRosterService {
                 // If direct decoding fails, try to decode with a root container
                 do {
                     let container = try decoder.decode(ClaudeResponseContainer.self, from: jsonData)
-                    let rosterEntries = container.entries.map { self.convertToRosterEntry($0) }
+                    var rosterEntries = container.entries.map { self.convertToRosterEntry($0) }
+                    // Sort alphabetically by lastName (which contains the full name)
+                    // Since names are in format "FIRSTNAME LASTNAME", this will sort by first name
+                    rosterEntries.sort { $0.lastName < $1.lastName }
+                    // Reassign Subject IDs sequentially after sorting
+                    for (index, _) in rosterEntries.enumerated() {
+                        rosterEntries[index].firstName = String(startingSubjectID + index)
+                    }
                     DispatchQueue.main.async {
                         completion(.success(rosterEntries))
                     }

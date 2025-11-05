@@ -486,20 +486,20 @@ struct ShiftDetailView: View {
                   message: Text(successMessage),
                   dismissButton: .default(Text("OK")))
         }
-        .actionSheet(isPresented: $showingMapsOptions) {
-            ActionSheet(
-                title: Text("Get Directions"),
-                message: Text("Choose a maps application"),
-                buttons: [
-                    .default(Text("Apple Maps")) {
-                        openInAppleMaps()
-                    },
-                    .default(Text("Google Maps")) {
-                        openInGoogleMaps()
-                    },
-                    .cancel()
-                ]
-            )
+        .confirmationDialog(
+            "Get Directions",
+            isPresented: $showingMapsOptions,
+            titleVisibility: .visible
+        ) {
+            Button("Apple Maps") {
+                openInAppleMaps()
+            }
+            Button("Google Maps") {
+                openInGoogleMaps()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Choose a maps application")
         }
         .sheet(isPresented: $isShowingMessageComposer) {
             messageComposerView

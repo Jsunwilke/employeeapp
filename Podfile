@@ -129,4 +129,25 @@ post_install do |installer|
       puts "Fixed gRPC template syntax in #{grpc_cpp_basic_seq_path}"
     end
   end
+
+  # Include Config.xcconfig in Pods xcconfig files so our custom variables are available
+  target_xcconfigs = [
+    "Pods/Target Support Files/Pods-Iconik Employee/Pods-Iconik Employee.debug.xcconfig",
+    "Pods/Target Support Files/Pods-Iconik Employee/Pods-Iconik Employee.release.xcconfig"
+  ]
+
+  target_xcconfigs.each do |xcconfig_path|
+    if File.exist?(xcconfig_path)
+      config_content = File.read(xcconfig_path)
+      # Remove old incorrect include if it exists
+      config_content.gsub!(/^#include\? "\.\.\/\.\.\/Config\.xcconfig"\n/, '')
+      # Only add the include if it's not already there
+      unless config_content.include?('#include? "../../../Config.xcconfig"')
+        # Add the include at the beginning of the file
+        config_content = '#include? "../../../Config.xcconfig"' + "\n" + config_content
+        File.write(xcconfig_path, config_content)
+        puts "Added Config.xcconfig include to #{xcconfig_path}"
+      end
+    end
+  end
 end

@@ -291,7 +291,14 @@ struct RosterPhotoImporterView: View {
                 
                 switch result {
                 case .success(let roster):
-                    extractedRoster = roster
+                    // Sort the roster alphabetically by full name (stored in lastName field)
+                    // Since names are in format "FIRSTNAME LASTNAME", this sorts by first name
+                    var sortedRoster = roster.sorted { $0.lastName < $1.lastName }
+                    // Reassign Subject IDs sequentially after sorting
+                    for (index, _) in sortedRoster.enumerated() {
+                        sortedRoster[index].firstName = String(nextSubjectID + index)
+                    }
+                    extractedRoster = sortedRoster
                 case .failure(let error):
                     errorMessage = "Failed to extract roster: \(error.localizedDescription)"
                     showingErrorAlert = true
