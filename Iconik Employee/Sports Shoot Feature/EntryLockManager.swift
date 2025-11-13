@@ -27,8 +27,8 @@ class EntryLockManager {
     private let db = Firestore.firestore()
     private var isOnline = true
     
-    // Lock expiration time in seconds (5 minutes to prevent premature cleanup)
-    private let lockExpirationTime: TimeInterval = 300
+    // Lock expiration time in seconds (30 seconds to prevent blocking)
+    private let lockExpirationTime: TimeInterval = 30
     
     // Initialize and listen for network status changes
     private init() {

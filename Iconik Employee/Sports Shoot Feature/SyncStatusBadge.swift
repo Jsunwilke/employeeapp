@@ -3,90 +3,85 @@
 //  Iconik Employee
 //
 //  Created by administrator on 5/18/25.
-//  Updated to fix UI flashing issues and improve performance
+//  Updated to use BackgroundSyncService for visual sync feedback
 
 import SwiftUI
 
 // A component to display the sync status badge for sports shoots
 struct SyncStatusBadge: View {
     let shootID: String
-    
-    // Use state instead of observed object to reduce unnecessary refreshes
-    @State private var status: OfflineManager.CacheStatus = .notCached
-    @State private var isOnline: Bool = true
-    
+
+    @ObservedObject private var syncService = BackgroundSyncService.shared
+    @State private var pendingCount: Int = 0
+    @State private var isCached: Bool = false
+    @State private var rotationAngle: Double = 0
+
     // Timer to control refresh frequency
     @State private var timer: Timer? = nil
-    
+
     var body: some View {
         statusIcon
             .onAppear {
-                // Initial status update
                 updateStatus()
-                
-                // Set up a less aggressive timer (5 seconds instead of 2)
                 setupTimer()
             }
             .onDisappear {
-                // Clean up timer when view disappears
                 timer?.invalidate()
                 timer = nil
             }
     }
-    
+
     private var statusIcon: some View {
         Group {
-            switch status {
-            case .notCached:
-                if isOnline {
-                    EmptyView()  // No badge for uncached shoots when online
-                } else {
-                    // When offline, show that this shoot is not available
-                    Image(systemName: "icloud.slash")
-                        .foregroundColor(.red)
-                        .transition(.opacity) // Smooth transition to prevent harsh flashing
-                }
-            case .cached:
-                Image(systemName: "icloud.and.arrow.down.fill")
-                    .foregroundColor(.blue)
-                    .transition(.opacity)
-            case .modified:
+            if syncService.isSyncing && pendingCount > 0 {
+                // Actively syncing - use rotation animation
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .foregroundColor(.green)
+                    .rotationEffect(.degrees(rotationAngle))
+                    .onAppear {
+                        withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
+                            rotationAngle = 360
+                        }
+                    }
+                    .onDisappear {
+                        rotationAngle = 0
+                    }
+            } else if pendingCount > 0 {
+                // Has pending changes waiting to sync
                 Image(systemName: "icloud.and.arrow.up")
                     .foregroundColor(.orange)
-                    .transition(.opacity)
-            case .syncing:
-                Image(systemName: "arrow.clockwise")
-                    .foregroundColor(.green)
-                    .transition(.opacity)
-            case .error:
+            } else if !syncService.lastSyncSuccess {
+                // Last sync had errors
                 Image(systemName: "exclamationmark.icloud")
                     .foregroundColor(.red)
-                    .transition(.opacity)
+            } else if isCached {
+                // Fully synced and cached
+                Image(systemName: "icloud.and.arrow.down.fill")
+                    .foregroundColor(.blue)
+            } else {
+                EmptyView()
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: status) // Add animation to smooth transitions
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.3), value: syncService.isSyncing)
+        .animation(.easeInOut(duration: 0.3), value: pendingCount)
     }
-    
+
     private func setupTimer() {
-        // Use a longer interval to reduce flashing (5 seconds)
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
-            // Only update if the view is visible (parent is responsible for removing when not visible)
+        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
             updateStatus()
         }
     }
-    
+
     private func updateStatus() {
-        // Get status from the offline manager - using a method that doesn't trigger UI updates
-        let newStatus = OfflineManager.shared.cacheStatusForShoot(id: shootID)
-        let isCurrentlyOnline = OfflineManager.shared.isDeviceOnline()
-        
-        // Only update if something actually changed to avoid unnecessary UI refreshes
-        if status != newStatus || isOnline != isCurrentlyOnline {
-            // Update status with animation to prevent flashing
+        let newPendingCount = PendingSyncManager.shared.pendingChangeCount(for: shootID)
+        let newIsCached = LocalSportsShootRepository.shared.isFullyCached(shootId: shootID)
+
+        if pendingCount != newPendingCount || isCached != newIsCached {
             withAnimation {
-                status = newStatus
-                isOnline = isCurrentlyOnline
+                pendingCount = newPendingCount
+                isCached = newIsCached
             }
         }
     }

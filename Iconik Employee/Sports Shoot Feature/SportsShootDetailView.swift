@@ -12,7 +12,7 @@ import Combine
 
 struct SportsShootDetailView: View {
     let shootID: String
-    
+
     // State management
     @State private var sportsShoot: SportsShoot?
     @State private var isLoading = true
@@ -20,9 +20,12 @@ struct SportsShootDetailView: View {
     @State private var showingErrorAlert = false
     @State private var showingPermissionWarning = false
     @State private var selectedTab = 0 // 0 = Athletes, 1 = Groups
-    
+
     // Network status
     @State private var isOnline = true
+
+    // Background sync service for visual feedback
+    @ObservedObject private var syncService = BackgroundSyncService.shared
     
     // States for roster management
     @State private var showingAddRosterEntry = false
@@ -56,7 +59,11 @@ struct SportsShootDetailView: View {
     
     // Track lock timestamps for force unlock feature
     @State private var lockTimestamps: [String: Date] = [:]
-    
+
+    // Sync notification
+    @State private var showSyncNotification = false
+    @State private var syncNotificationMessage = ""
+
     // Environment
     // @Environment(\.presentationMode) var presentationMode // Removed - using NavigationLink
     @Environment(\.scenePhase) var scenePhase
@@ -149,6 +156,26 @@ struct SportsShootDetailView: View {
                     colorForGroup: colorForGroup
                 )
             }
+
+            // Sync notification toast
+            if showSyncNotification {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text(syncNotificationMessage)
+                            .font(.subheadline)
+                            .foregroundColor(.white)
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.8))
+                    .cornerRadius(10)
+                    .padding(.bottom, 50)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                .animation(.spring(), value: showSyncNotification)
+            }
         }
         .navigationTitle(sportsShoot?.schoolName ?? "Sports Shoot")
         .navigationBarTitleDisplayMode(.inline)
@@ -173,30 +200,53 @@ struct SportsShootDetailView: View {
                     }) {
                         Label("Import Paper Rosters", systemImage: "doc.viewfinder")
                     }
-                    
+
                     Button(action: {
                         showingImportExport = true
                     }) {
                         Label("Import/Export CSV", systemImage: "square.and.arrow.up.on.square")
                     }
-                    
+
+                    // Show sync status and pending change count
                     if let shoot = sportsShoot {
-                        if OfflineManager.shared.isShootCached(id: shoot.id) {
+                        let pendingCount = PendingSyncManager.shared.pendingChangeCount(for: shoot.id)
+
+                        if pendingCount > 0 {
                             Button(action: {
-                                OfflineManager.shared.syncShoot(shootID: shoot.id)
+                                Task {
+                                    await BackgroundSyncService.shared.syncNow()
+                                }
                             }) {
-                                Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                                if syncService.isSyncing {
+                                    Label("Syncing...", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                                } else {
+                                    Label("Sync \(pendingCount) pending change\(pendingCount == 1 ? "" : "s")", systemImage: "arrow.triangle.2.circlepath")
+                                }
                             }
-                        } else {
-                            Button(action: {
-                                cacheShootForOffline()
-                            }) {
-                                Label("Make Available Offline", systemImage: "arrow.down.to.line")
-                            }
+                            .disabled(syncService.isSyncing || !isOnline)
+                        }
+
+                        // Show offline status
+                        if LocalSportsShootRepository.shared.isFullyCached(shootId: shoot.id) {
+                            Label("Available Offline", systemImage: "checkmark.circle.fill")
+                                .foregroundColor(.green)
                         }
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    // Show badge if there are pending changes
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "ellipsis.circle")
+
+                        if let shoot = sportsShoot {
+                            let pendingCount = PendingSyncManager.shared.pendingChangeCount(for: shoot.id)
+                            if pendingCount > 0 {
+                                Circle()
+                                    .fill(Color.orange)
+                                    .frame(width: 8, height: 8)
+                                    .offset(x: 4, y: -4)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -224,36 +274,74 @@ struct SportsShootDetailView: View {
         .onReceive(lockRefreshTimer) { _ in
             refreshLocks()
         }
+        .onChange(of: syncService.isSyncing) { isSyncing in
+            // Show notification when sync completes
+            if !isSyncing && syncService.lastSyncAt != nil {
+                let pendingCount = syncService.pendingChangeCount
+                if syncService.lastSyncSuccess && pendingCount == 0 {
+                    syncNotificationMessage = "All changes synced successfully"
+                    showSyncNotification = true
+
+                    // Auto-dismiss after 3 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        showSyncNotification = false
+                    }
+                }
+            }
+        }
         .onChange(of: editingValues) { newValues in
-            // Auto-save when the text changes
+            // Auto-save when the text changes - LOCAL-FIRST APPROACH
             if let entryID = currentlyEditingEntry,
                let newValue = newValues[entryID],
                let shoot = sportsShoot,
                let entry = shoot.roster.first(where: { $0.id == entryID }),
                newValue != (lastSavedValues[entryID] ?? entry.imageNumbers) {
-                
+
                 // Cancel any existing debounce task
                 debounceTask?.cancel()
-                
+
                 // Create a new debounce task with a 0.5-second delay
                 let task = DispatchWorkItem {
                     var updatedEntry = entry
                     updatedEntry.imageNumbers = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                    
-                    SportsShootService.shared.updateRosterEntry(shootID: shoot.id, entry: updatedEntry) { result in
-                        switch result {
-                        case .success:
-                            // Update the lastSavedValue to prevent redundant saves
-                            lastSavedValues[entryID] = newValue
-                            
-                            // Refresh the shoot data
-                            refreshSportsShoot()
-                        case .failure(let error):
-                            print("Autosave error: \(error.localizedDescription)")
+
+                    // LOCAL-FIRST: Save to local repository immediately (always succeeds)
+                    if LocalSportsShootRepository.shared.updateRosterEntry(shootId: shoot.id, entry: updatedEntry) {
+                        // Update the lastSavedValue to prevent redundant saves
+                        lastSavedValues[entryID] = newValue
+
+                        // Queue change for background sync
+                        let changeData: [String: Any] = [
+                            "firstName": updatedEntry.firstName,
+                            "lastName": updatedEntry.lastName,
+                            "teacher": updatedEntry.teacher,
+                            "group": updatedEntry.group,
+                            "email": updatedEntry.email,
+                            "phone": updatedEntry.phone,
+                            "imageNumbers": updatedEntry.imageNumbers,
+                            "notes": updatedEntry.notes
+                        ]
+
+                        PendingSyncManager.shared.queueChange(
+                            shootId: shoot.id,
+                            entryId: updatedEntry.id,
+                            changeType: .updateEntry,
+                            data: changeData
+                        )
+
+                        // Update in-memory state directly (don't reload entire shoot)
+                        if var currentShoot = self.sportsShoot,
+                           let index = currentShoot.roster.firstIndex(where: { $0.id == entryID }) {
+                            currentShoot.roster[index] = updatedEntry
+                            self.sportsShoot = currentShoot
                         }
+
+                        print("✓ Saved locally and queued for sync")
+                    } else {
+                        print("❌ Local save failed - this should never happen!")
                     }
                 }
-                
+
                 // Schedule the new task
                 debounceTask = task
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
@@ -1193,32 +1281,81 @@ struct SportsShootDetailView: View {
     }
     
     private func loadSportsShoot() {
-        isLoading = true
-        
+        // Try local cache first (instant load)
+        if let cachedShoot = LocalSportsShootRepository.shared.getShoot(id: shootID) {
+            // Load instantly from cache - no spinner!
+            self.sportsShoot = cachedShoot
+            self.isLoading = false
+
+            // If online, fetch updates in background
+            if isOnline {
+                fetchAndUpdateFromFirestore()
+            }
+        } else {
+            // Not in cache - must fetch from Firestore
+            if !isOnline {
+                // Show error: "Shoot Not Available Offline"
+                self.isLoading = false
+                self.errorMessage = "Shoot Not Available Offline\n\nThis shoot hasn't been downloaded yet. Please connect to the internet to open it."
+                self.showingErrorAlert = true
+                return
+            }
+
+            // Show loading and fetch from Firestore
+            isLoading = true
+            fetchAndUpdateFromFirestore()
+        }
+    }
+
+    private func fetchAndUpdateFromFirestore() {
         SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
             DispatchQueue.main.async {
                 self.isLoading = false
-                
+
                 switch result {
                 case .success(let shoot):
+                    // Save to local repository (auto-cache on open)
+                    if LocalSportsShootRepository.shared.saveShoot(shoot) {
+                        LocalSportsShootRepository.shared.markFullyCached(shootId: shoot.id)
+                        print("✓ Auto-cached shoot for offline use")
+                    }
+
+                    // Update UI
                     self.sportsShoot = shoot
+
                 case .failure(let error):
-                    self.errorMessage = "Failed to load sports shoot: \(error.localizedDescription)"
-                    self.showingErrorAlert = true
+                    // Only show error if we don't have a cached version
+                    if self.sportsShoot == nil {
+                        self.errorMessage = "Failed to load sports shoot: \(error.localizedDescription)"
+                        self.showingErrorAlert = true
+                    } else {
+                        print("Background refresh failed (using cached data): \(error.localizedDescription)")
+                    }
                 }
             }
         }
     }
     
     private func refreshSportsShoot() {
-        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let updatedShoot):
-                    self.sportsShoot = updatedShoot
-                case .failure(let error):
-                    self.errorMessage = "Failed to refresh: \(error.localizedDescription)"
-                    self.showingErrorAlert = true
+        // Load from local cache immediately (instant)
+        if let cachedShoot = LocalSportsShootRepository.shared.getShoot(id: shootID) {
+            self.sportsShoot = cachedShoot
+        }
+
+        // If online, also refresh from Firestore in background
+        if isOnline {
+            SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let updatedShoot):
+                        // Update local cache
+                        _ = LocalSportsShootRepository.shared.saveShoot(updatedShoot)
+                        // Update UI
+                        self.sportsShoot = updatedShoot
+                    case .failure(let error):
+                        print("Background refresh failed (using cached data): \(error.localizedDescription)")
+                        // Don't show error - we already have cached data
+                    }
                 }
             }
         }
@@ -1228,7 +1365,17 @@ struct SportsShootDetailView: View {
         let networkMonitor = NetworkMonitor.shared
         networkMonitor.startMonitoring { isConnected in
             DispatchQueue.main.async {
+                let wasOnline = self.isOnline
                 self.isOnline = isConnected
+
+                // Release lock when going offline to prevent blocking other users
+                if wasOnline && !isConnected {
+                    if let entryID = self.currentlyEditingEntry,
+                       let shoot = self.sportsShoot {
+                        print("📡 Going offline - releasing lock for entry \(entryID)")
+                        self.releaseLockWithoutClearingState(shootID: shoot.id, entryID: entryID)
+                    }
+                }
             }
         }
     }
@@ -1262,19 +1409,6 @@ struct SportsShootDetailView: View {
     
     private func refreshLocks() {
         EntryLockManager.shared.cleanupStaleLocks(shootID: shootID)
-    }
-    
-    private func cacheShootForOffline() {
-        SportsShootService.shared.cacheShootForOffline(id: shootID) { success in
-            DispatchQueue.main.async {
-                if success {
-                    self.errorMessage = "This shoot is now available offline"
-                } else {
-                    self.errorMessage = "Failed to save for offline use. Please try again."
-                }
-                self.showingErrorAlert = true
-            }
-        }
     }
     
     // MARK: - Editing Functions
@@ -1389,32 +1523,75 @@ struct SportsShootDetailView: View {
     }
     
     // MARK: - Delete Functions
-    
+
     private func deleteRosterEntry(shoot: SportsShoot, id: String) {
-        SportsShootService.shared.deleteRosterEntry(shootID: shoot.id, entryID: id) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    self.refreshSportsShoot()
-                case .failure(let error):
-                    self.errorMessage = "Failed to delete athlete: \(error.localizedDescription)"
-                    self.showingErrorAlert = true
-                }
-            }
+        // LOCAL-FIRST: Delete from local repository immediately
+        guard let entry = shoot.roster.first(where: { $0.id == id }) else {
+            return
+        }
+
+        // Create a temporary updated shoot with the entry removed
+        var updatedShoot = shoot
+        updatedShoot.roster.removeAll { $0.id == id }
+
+        // Save updated shoot to local repository
+        if LocalSportsShootRepository.shared.saveShoot(updatedShoot) {
+            // Queue delete for background sync
+            let changeData: [String: Any] = [
+                "deletedEntryId": id,
+                "firstName": entry.firstName,
+                "lastName": entry.lastName
+            ]
+
+            PendingSyncManager.shared.queueChange(
+                shootId: shoot.id,
+                entryId: id,
+                changeType: .deleteEntry,
+                data: changeData
+            )
+
+            // Refresh UI from local cache (instant)
+            refreshSportsShoot()
+
+            print("✓ Entry deleted locally and queued for sync")
+        } else {
+            self.errorMessage = "Failed to delete athlete locally"
+            self.showingErrorAlert = true
         }
     }
     
     private func deleteGroupImage(shoot: SportsShoot, id: String) {
-        SportsShootService.shared.deleteGroupImage(shootID: shoot.id, groupID: id) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    self.refreshSportsShoot()
-                case .failure(let error):
-                    self.errorMessage = "Failed to delete group: \(error.localizedDescription)"
-                    self.showingErrorAlert = true
-                }
-            }
+        // LOCAL-FIRST: Delete from local repository immediately
+        guard let groupImage = shoot.groupImages.first(where: { $0.id == id }) else {
+            return
+        }
+
+        // Create a temporary updated shoot with the group removed
+        var updatedShoot = shoot
+        updatedShoot.groupImages.removeAll { $0.id == id }
+
+        // Save updated shoot to local repository
+        if LocalSportsShootRepository.shared.saveShoot(updatedShoot) {
+            // Queue delete for background sync
+            let changeData: [String: Any] = [
+                "deletedGroupId": id,
+                "description": groupImage.description
+            ]
+
+            PendingSyncManager.shared.queueChange(
+                shootId: shoot.id,
+                entryId: id,
+                changeType: .deleteEntry, // Using deleteEntry for group deletion too
+                data: changeData
+            )
+
+            // Refresh UI from local cache (instant)
+            refreshSportsShoot()
+
+            print("✓ Group deleted locally and queued for sync")
+        } else {
+            self.errorMessage = "Failed to delete group locally"
+            self.showingErrorAlert = true
         }
     }
     

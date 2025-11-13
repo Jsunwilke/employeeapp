@@ -1043,9 +1043,10 @@ struct SportsShootListView: View {
         let onSyncNow: () -> Void
         let onMakeAvailableOffline: () -> Void
         var isInsideNavigationLink: Bool = false // New parameter to control Button wrapper
-        
-        // Use state to avoid redrawing the entire row on every status check
-        @State private var syncStatus: OfflineManager.CacheStatus = .notCached
+
+        // Use state to track offline status
+        @State private var isFullyCached: Bool = false
+        @State private var pendingChangeCount: Int = 0
         @State private var isOnline: Bool = true
         
         var body: some View {
@@ -1106,16 +1107,17 @@ struct SportsShootListView: View {
             }
             .contextMenu {
                 // Offline related options in context menu
-                if OfflineManager.shared.isShootCached(id: shoot.id) {
+                if pendingChangeCount > 0 {
                     Button(action: onSyncNow) {
-                        Label("Sync", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                } else {
-                    Button(action: onMakeAvailableOffline) {
-                        Label("Make Available Offline", systemImage: "arrow.down.to.line")
+                        Label("Sync \(pendingChangeCount) pending change\(pendingChangeCount == 1 ? "" : "s")", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
-                
+
+                if isFullyCached {
+                    Label("Available Offline", systemImage: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                }
+
                 // Standard options
                 Button(action: onSelect) {
                     Label("View Details", systemImage: "eye")
@@ -1132,46 +1134,40 @@ struct SportsShootListView: View {
         
         private var statusBadge: some View {
             Group {
-                switch syncStatus {
-                case .notCached:
-                    if isOnline {
-                        EmptyView()  // No badge for uncached shoots when online
-                    } else {
-                        // When offline, show that this shoot is not available
-                        Image(systemName: "icloud.slash")
-                            .foregroundColor(.red)
-                            .transition(.opacity) // Smooth transition
-                    }
-                case .cached:
-                    Image(systemName: "icloud.and.arrow.down.fill")
-                        .foregroundColor(.blue)
-                        .transition(.opacity)
-                case .modified:
-                    Image(systemName: "icloud.and.arrow.up")
+                if pendingChangeCount > 0 {
+                    // Has pending changes - show orange sync indicator
+                    Image(systemName: "arrow.triangle.2.circlepath")
                         .foregroundColor(.orange)
                         .transition(.opacity)
-                case .syncing:
-                    Image(systemName: "arrow.clockwise")
+                } else if isFullyCached {
+                    // Available offline - show green checkmark
+                    Image(systemName: "arrow.down.circle.fill")
                         .foregroundColor(.green)
                         .transition(.opacity)
-                case .error:
-                    Image(systemName: "exclamationmark.icloud")
+                } else if !isOnline {
+                    // Not cached and offline - show red indicator
+                    Image(systemName: "icloud.slash")
                         .foregroundColor(.red)
                         .transition(.opacity)
+                } else {
+                    // Not cached but online - no indicator
+                    EmptyView()
                 }
             }
-            .animation(.easeInOut(duration: 0.3), value: syncStatus) // Add animation to smooth transitions
+            .animation(.easeInOut(duration: 0.3), value: isFullyCached) // Add animation to smooth transitions
         }
         
         private func updateStatus() {
-            // Get status from the offline manager
-            let newStatus = OfflineManager.shared.cacheStatusForShoot(id: shoot.id)
-            let newOnline = OfflineManager.shared.isDeviceOnline()
-            
+            // Get status from LocalSportsShootRepository and PendingSyncManager
+            let newIsFullyCached = LocalSportsShootRepository.shared.isFullyCached(shootId: shoot.id)
+            let newPendingCount = PendingSyncManager.shared.pendingChangeCount(for: shoot.id)
+            let newOnline = NetworkMonitor.shared.isConnected
+
             // Only update if status actually changed to avoid UI flashing
-            if syncStatus != newStatus || isOnline != newOnline {
+            if isFullyCached != newIsFullyCached || pendingChangeCount != newPendingCount || isOnline != newOnline {
                 withAnimation(.easeInOut(duration: 0.3)) {
-                    syncStatus = newStatus
+                    isFullyCached = newIsFullyCached
+                    pendingChangeCount = newPendingCount
                     isOnline = newOnline
                 }
             }

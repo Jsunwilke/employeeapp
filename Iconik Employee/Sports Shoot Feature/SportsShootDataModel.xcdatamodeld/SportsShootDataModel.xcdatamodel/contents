@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="22757" systemVersion="23A344" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
+    <entity name="CachedShoot" representedClassName="CachedShoot" syncable="YES" codeGenerationType="class">
+        <attribute name="id" attributeType="String"/>
+        <attribute name="schoolName" attributeType="String"/>
+        <attribute name="schoolId" optional="YES" attributeType="String"/>
+        <attribute name="sportName" attributeType="String"/>
+        <attribute name="seasonType" optional="YES" attributeType="String"/>
+        <attribute name="shootDate" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="location" attributeType="String"/>
+        <attribute name="photographer" attributeType="String"/>
+        <attribute name="additionalNotes" attributeType="String"/>
+        <attribute name="organizationID" attributeType="String"/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="isArchived" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="lastSyncedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="modifiedAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="isFullyCached" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="rawData" optional="YES" attributeType="String"/>
+        <relationship name="roster" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="CachedRosterEntry" inverseName="shoot" inverseEntity="CachedRosterEntry"/>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="id"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+    <entity name="CachedRosterEntry" representedClassName="CachedRosterEntry" syncable="YES" codeGenerationType="class">
+        <attribute name="id" attributeType="String"/>
+        <attribute name="shootId" attributeType="String"/>
+        <attribute name="lastName" attributeType="String"/>
+        <attribute name="firstName" attributeType="String"/>
+        <attribute name="teacher" attributeType="String"/>
+        <attribute name="group" attributeType="String"/>
+        <attribute name="email" attributeType="String"/>
+        <attribute name="phone" attributeType="String"/>
+        <attribute name="imageNumbers" attributeType="String"/>
+        <attribute name="notes" attributeType="String"/>
+        <attribute name="wasBlank" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="isFilledBlank" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="modifiedAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="isSynced" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <relationship name="shoot" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CachedShoot" inverseName="roster" inverseEntity="CachedShoot"/>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="id"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+    <entity name="PendingChange" representedClassName="PendingChange" syncable="YES" codeGenerationType="class">
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="shootId" attributeType="String"/>
+        <attribute name="entryId" optional="YES" attributeType="String"/>
+        <attribute name="changeType" attributeType="String"/>
+        <attribute name="changeData" attributeType="String"/>
+        <attribute name="attemptCount" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="lastAttemptAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="priority" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+    </entity>
+</model>

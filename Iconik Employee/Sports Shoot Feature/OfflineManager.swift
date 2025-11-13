@@ -638,6 +638,20 @@ class OfflineManager {
                 if !localEntry.imageNumbers.isEmpty && remoteEntry.imageNumbers.isEmpty {
                     mergedShoot.roster[remoteIndex] = localEntry
                 }
+                // If both have image numbers, intelligently merge them
+                else if !localEntry.imageNumbers.isEmpty && !remoteEntry.imageNumbers.isEmpty {
+                    var mergedEntry = remoteEntry
+                    mergedEntry.imageNumbers = ImageNumbersMerger.mergeImageNumbers(
+                        local: localEntry.imageNumbers,
+                        remote: remoteEntry.imageNumbers
+                    )
+                    mergedEntry.notes = ImageNumbersMerger.mergeNotes(
+                        local: localEntry.notes,
+                        remote: remoteEntry.notes
+                    )
+                    mergedShoot.roster[remoteIndex] = mergedEntry
+                    print("✓ Merged imageNumbers for entry \(localEntry.id): \(mergedEntry.imageNumbers)")
+                }
                 // If fields have been updated in both, prefer local for now (since local changes are newest)
                 else if !entryHasConflict(localEntry: localEntry, remoteEntry: remoteEntry) {
                     mergedShoot.roster[remoteIndex] = localEntry
@@ -657,6 +671,16 @@ class OfflineManager {
                 // If local group has image numbers and remote doesn't, use local
                 if !localGroup.imageNumbers.isEmpty && remoteGroup.imageNumbers.isEmpty {
                     mergedShoot.groupImages[remoteIndex] = localGroup
+                }
+                // If both have image numbers, intelligently merge them
+                else if !localGroup.imageNumbers.isEmpty && !remoteGroup.imageNumbers.isEmpty {
+                    var mergedGroup = remoteGroup
+                    mergedGroup.imageNumbers = ImageNumbersMerger.mergeImageNumbers(
+                        local: localGroup.imageNumbers,
+                        remote: remoteGroup.imageNumbers
+                    )
+                    mergedShoot.groupImages[remoteIndex] = mergedGroup
+                    print("✓ Merged imageNumbers for group \(localGroup.id): \(mergedGroup.imageNumbers)")
                 }
                 // If fields have been updated in both, prefer local for now (since local changes are newest)
                 else if !groupHasConflict(localGroup: localGroup, remoteGroup: remoteGroup) {
