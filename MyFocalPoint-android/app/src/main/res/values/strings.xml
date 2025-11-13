@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MyFocalPoint</string>
+
+    <!-- Tab labels -->
+    <string name="tab_shifts">Shifts</string>
+    <string name="tab_sports">Sports</string>
+    <string name="tab_chat">Chat</string>
+    <string name="tab_profile">Profile</string>
+
+    <!-- Common -->
+    <string name="loading">Loading…</string>
+    <string name="error">Error</string>
+    <string name="retry">Retry</string>
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="delete">Delete</string>
+    <string name="confirm">Confirm</string>
+
+    <!-- Auth -->
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="sign_out">Sign out</string>
+
+    <!-- Shifts -->
+    <string name="shift_list_title">My Shifts</string>
+    <string name="create_shift">Create Shift</string>
+    <string name="shift_details">Shift Details</string>
+    <string name="get_directions">Get Directions</string>
+
+    <!-- Sports -->
+    <string name="import_roster">Import Roster</string>
+    <string name="scan_roster">Scan Roster</string>
+    <string name="upload_roster">Upload Roster</string>
+    <string name="multi_photo_import">Import Photos</string>
+    <string name="sports_jobs">Sports Jobs</string>
+
+    <!-- Chat -->
+    <string name="chat_list_title">Messages</string>
+    <string name="send_message">Send</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_chat">Chat Messages</string>
+    <string name="notification_channel_shifts">Shift Updates</string>
+    <string name="notification_channel_general">General</string>
+</resources>

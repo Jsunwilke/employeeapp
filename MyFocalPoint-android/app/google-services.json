@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "157275128489",
+    "project_id": "focal-point-c452c",
+    "storage_bucket": "focal-point-c452c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:157275128489:android:a3c1d909a559da25f7dfb8",
+        "android_client_info": {
+          "package_name": "com.my.focalpoint"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "157275128489-3b3iepc5apq3pp1plmilqq2thh6l56n0.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDWYdYFl8ZbeMiUu2emKjw8a1XHLXnV4q4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "157275128489-3b3iepc5apq3pp1plmilqq2thh6l56n0.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "157275128489-h0fqkuicjpupilr7cqo56fjoj2thmda7.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "Iconik.Iconik-Employee"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
