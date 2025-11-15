@@ -13,16 +13,17 @@ enum DashboardWidget: String, CaseIterable, Identifiable, Transferable, Codable 
     case hours = "hours"
     case mileage = "mileage"
     case shifts = "shifts"
-    
+    case tasks = "tasks"
+
     // iPad widgets (job tasks)
     case sportsRosters = "sportsRosters"
     case classGroups = "classGroups"
     case photoshootNotes = "photoshootNotes"
-    
+
     var id: String { self.rawValue }
-    
+
     // Device-specific widget lists
-    static var iPhoneWidgets: [DashboardWidget] = [.hours, .mileage, .shifts]
+    static var iPhoneWidgets: [DashboardWidget] = [.hours, .mileage, .shifts, .tasks]
     static var iPadWidgets: [DashboardWidget] = [.sportsRosters, .classGroups, .photoshootNotes]
     
     static var transferRepresentation: some TransferRepresentation {
@@ -74,7 +75,8 @@ class MainEmployeeViewModel: ObservableObject {
         FeatureItem(id: "sportsShoot", title: "Sports Shoots", systemImage: "sportscourt", description: "Manage sports shoot rosters and images"),
         FeatureItem(id: "yearbookChecklists", title: "Yearbook Checklists", systemImage: "list.clipboard", description: "Track yearbook photo requirements"),
         FeatureItem(id: "classGroups", title: "Class Groups", systemImage: "person.3", description: "Track class photos by grade and teacher"),
-        FeatureItem(id: "training", title: "Training", systemImage: "graduationcap.fill", description: "View your training photos and feedback")
+        FeatureItem(id: "training", title: "Training", systemImage: "graduationcap.fill", description: "View your training photos and feedback"),
+        FeatureItem(id: "tasks", title: "Tasks", systemImage: "checklist", description: "Manage team tasks and to-dos")
     ]
     
     private let employeeOrderKey = "employeeFeatureOrder"
@@ -647,7 +649,9 @@ struct MainEmployeeView: View {
                         selectedSession = session
                     }
                 )
-            
+            case .tasks:
+                TasksWidget(tabBarManager: tabBarManager)
+
             // iPad widgets
             case .sportsRosters:
                 SportsRostersWidget(tabBarManager: tabBarManager)
@@ -788,6 +792,8 @@ struct MainEmployeeView: View {
             GalleryCreatorView()
         case "jobBoxTracker":
             ManagerJobBoxTrackerView()
+        case "tasks":
+            TasksMainView()
         default:
             homeView
         }

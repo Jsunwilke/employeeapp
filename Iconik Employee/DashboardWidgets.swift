@@ -1853,3 +1853,247 @@ struct PhotoshootNotesWidget: View {
         }
     }
 }
+
+// MARK: - Tasks Widget
+struct TasksWidget: View {
+    @StateObject private var viewModel = TasksViewModel()
+    @ObservedObject var tabBarManager: TabBarManager
+    @State private var showingCreateTask = false
+    @State private var selectedTask: TaskItem? = nil
+
+    private var urgentTasks: [TaskItem] {
+        // Get all incomplete tasks, sorted with urgent first, limit to 5
+        viewModel.tasks
+            .filter { $0.status != .completed }
+            .sorted { lhs, rhs in
+                // Sort overdue first, then by priority, then by due date
+                if lhs.isOverdue != rhs.isOverdue {
+                    return lhs.isOverdue
+                }
+                if lhs.priority != rhs.priority {
+                    return lhs.priority.sortOrder > rhs.priority.sortOrder
+                }
+                if let lhsDue = lhs.dueDate, let rhsDue = rhs.dueDate {
+                    return lhsDue < rhsDue
+                }
+                return lhs.createdAt > rhs.createdAt
+            }
+            .prefix(5)
+            .map { $0 }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack(spacing: 8) {
+                Image(systemName: "checklist")
+                    .font(.title3)
+                    .foregroundColor(.green)
+                    .background(
+                        Circle()
+                            .fill(Color.green.opacity(0.2))
+                            .frame(width: 28, height: 28)
+                    )
+                Text("Tasks")
+                    .font(.headline)
+
+                Spacer()
+
+                // Create Task button
+                Button(action: {
+                    showingCreateTask = true
+                }) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.green)
+                }
+
+                // View All button
+                Button(action: {
+                    tabBarManager.selectedTab = "tasks"
+                }) {
+                    Text("View All")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
+            }
+
+            // Task previews or empty state
+            if viewModel.isLoading && viewModel.tasks.isEmpty {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                        .padding(.vertical, 20)
+                    Spacer()
+                }
+            } else if urgentTasks.isEmpty {
+                // Empty state
+                VStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 36))
+                        .foregroundColor(.green.opacity(0.5))
+                    Text("No tasks")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("You're all caught up!")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+            } else {
+                // Task list
+                VStack(spacing: 12) {
+                    ForEach(urgentTasks) { task in
+                        TaskPreviewRow(
+                            task: task,
+                            onToggleComplete: {
+                                viewModel.toggleTaskCompletion(task)
+                            }
+                        )
+                        .onTapGesture {
+                            selectedTask = task
+                        }
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(.systemGray5), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+        .onAppear {
+            viewModel.loadTasks()
+        }
+        .onDisappear {
+            viewModel.stopListening()
+        }
+        .sheet(isPresented: $showingCreateTask) {
+            CreateTaskView(onTaskCreated: { newTask in
+                viewModel.createTask(newTask)
+                showingCreateTask = false
+            })
+        }
+        .sheet(item: $selectedTask) { task in
+            TaskDetailView(task: task, onTaskUpdated: { updatedTask in
+                viewModel.updateTask(updatedTask)
+            })
+        }
+    }
+}
+
+// MARK: - Task Preview Row
+struct TaskPreviewRow: View {
+    let task: TaskItem
+    let onToggleComplete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Checkbox
+            Button(action: onToggleComplete) {
+                Image(systemName: task.status == .completed ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundColor(task.status == .completed ? .green : .gray)
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            // Priority color bar
+            Rectangle()
+                .fill(priorityColor)
+                .frame(width: 3)
+
+            VStack(alignment: .leading, spacing: 4) {
+                // Title
+                Text(task.title)
+                    .font(.body)
+                    .lineLimit(1)
+
+                // Due date and metadata
+                HStack(spacing: 12) {
+                    // Status badge
+                    Text(task.status.displayName)
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(statusColor.opacity(0.2))
+                        .foregroundColor(statusColor)
+                        .cornerRadius(4)
+
+                    // Due date
+                    if let dueDate = task.dueDate {
+                        HStack(spacing: 4) {
+                            Image(systemName: task.isOverdue ? "exclamationmark.triangle.fill" : "calendar")
+                                .font(.caption2)
+                            Text(relativeDateString(from: dueDate))
+                                .font(.caption)
+                        }
+                        .foregroundColor(task.isOverdue ? .red : .secondary)
+                    }
+
+                    // Subtasks progress
+                    if !task.subtasks.isEmpty {
+                        let completed = task.subtasks.filter { $0.completed }.count
+                        HStack(spacing: 4) {
+                            Image(systemName: "checklist")
+                                .font(.caption2)
+                            Text("\(completed)/\(task.subtasks.count)")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Spacer()
+
+            // Priority indicator (for urgent/high)
+            if task.priority == .urgent || task.priority == .high {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundColor(priorityColor)
+                    .font(.title3)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(Color(.systemGray6).opacity(0.5))
+        .cornerRadius(8)
+    }
+
+    private var priorityColor: Color {
+        switch task.priority {
+        case .low: return .gray
+        case .medium: return .blue
+        case .high: return .orange
+        case .urgent: return .red
+        }
+    }
+
+    private var statusColor: Color {
+        switch task.status {
+        case .todo: return .gray
+        case .inProgress: return .blue
+        case .onHold: return .orange
+        case .completed: return .green
+        case .cancelled: return .red
+        }
+    }
+
+    private func relativeDateString(from date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) {
+            return "Today"
+        } else if calendar.isDateInTomorrow(date) {
+            return "Tomorrow"
+        } else if calendar.isDateInYesterday(date) {
+            return "Yesterday"
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .short
+            return formatter.string(from: date)
+        }
+    }
+}
