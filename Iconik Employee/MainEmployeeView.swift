@@ -532,6 +532,7 @@ struct MainEmployeeView: View {
                 }
             }
             .navigationBarTitle("", displayMode: .inline)
+            .navigationBarBackButtonHidden(true)
             .toolbar {
                 toolbarContent
             }
@@ -803,13 +804,10 @@ struct MainEmployeeView: View {
     
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // Left toolbar: optional logo
+        // Left toolbar: back to home button (only shown when not on home)
         ToolbarItem(placement: .navigationBarLeading) {
             if tabBarManager.selectedTab == "home" || tabBarManager.selectedTab == "" {
-                Image("employeeStaff")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(height: 44)
+                EmptyView()
             } else {
                 Button(action: {
                     tabBarManager.selectedTab = "home"
@@ -837,13 +835,13 @@ struct MainEmployeeView: View {
                                 ProgressView()
                             case .success(let image):
                                 image.resizable()
-                                    .scaledToFill()
-                                    .frame(width: 40, height: 40)
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 28, height: 28)
                                     .clipShape(Circle())
                             case .failure(_):
                                 Image(systemName: "person.crop.circle.badge.exclam")
                                     .resizable()
-                                    .frame(width: 40, height: 40)
+                                    .frame(width: 28, height: 28)
                             @unknown default:
                                 EmptyView()
                             }
@@ -851,7 +849,7 @@ struct MainEmployeeView: View {
                     } else {
                         Image(systemName: "person.crop.circle")
                             .resizable()
-                            .frame(width: 40, height: 40)
+                            .frame(width: 28, height: 28)
                             .foregroundColor(.gray)
                     }
                     Menu {
@@ -1219,7 +1217,7 @@ struct WidgetDropDelegate: DropDelegate {
             widgetOrder.move(fromOffsets: IndexSet(integer: fromIndex),
                            toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex)
         }
-        
+
         onReorder()
     }
 }
