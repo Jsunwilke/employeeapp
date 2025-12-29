@@ -7,8 +7,7 @@
 
 
 import Foundation
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 // Enum for possible job box status values
 enum JobBoxStatus: String {
@@ -19,59 +18,59 @@ enum JobBoxStatus: String {
     case unknown = "Unknown"
 }
 
-// Model for job box data
-struct JobBox: Identifiable {
+// Model for job box data - Supabase compatible
+struct JobBox: Identifiable, Codable {
     let id: String
-    let shiftUid: String
-    let status: JobBoxStatus
-    let scannedBy: String
-    let timestamp: Date
-    
+    let shift_uid: String
+    let status: String
+    let photographer: String
+    let timestamp: Date?
+
     // New fields from updated schema
-    let boxNumber: String
-    let organizationID: String
-    let school: String
-    let schoolId: String
-    let userId: String
-    
-    init(id: String, data: [String: Any]) {
-        self.id = id
-        self.shiftUid = data["shiftUid"] as? String ?? ""
-        
-        if let statusString = data["status"] as? String {
-            self.status = JobBoxStatus(rawValue: statusString) ?? .unknown
-        } else {
-            self.status = .unknown
-        }
-        
-        // Map the 'photographer' field to scannedBy
-        self.scannedBy = data["photographer"] as? String ?? ""
-        
-        if let timestamp = data["timestamp"] as? Timestamp {
-            self.timestamp = timestamp.dateValue()
-        } else {
-            self.timestamp = Date()
-        }
-        
-        // New fields
-        self.boxNumber = data["boxNumber"] as? String ?? ""
-        self.organizationID = data["organizationID"] as? String ?? ""
-        self.school = data["school"] as? String ?? ""
-        self.schoolId = data["schoolId"] as? String ?? ""
-        self.userId = data["userId"] as? String ?? ""
-        
-        // DEBUG: Print all fields when initializing a JobBox
-        print("DEBUG-JOBBOX-INIT - Created JobBox: id=\(id), shiftUid=\(self.shiftUid), status=\(self.status.rawValue), scannedBy=\(self.scannedBy), boxNumber=\(self.boxNumber)")
+    let box_number: String?
+    let organization_id: String
+    let school: String?
+    let school_id: String?
+    let user_id: String?
+
+    // Computed properties for backward compatibility
+    var shiftUid: String { shift_uid }
+    var scannedBy: String { photographer }
+    var boxNumber: String { box_number ?? "" }
+    var organizationID: String { organization_id }
+    var schoolId: String { school_id ?? "" }
+    var userId: String { user_id ?? "" }
+
+    var jobBoxStatus: JobBoxStatus {
+        JobBoxStatus(rawValue: status) ?? .unknown
+    }
+
+    var timestampDate: Date {
+        timestamp ?? Date()
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case shift_uid
+        case status
+        case photographer
+        case timestamp
+        case box_number
+        case organization_id
+        case school
+        case school_id
+        case user_id
     }
 }
 
-// Service to interact with job box data in Firestore
+// Service to interact with job box data in Supabase
 class JobBoxService {
     // Singleton instance
     static let shared = JobBoxService()
-    
-    private let db = Firestore.firestore()
-    
+
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
+    private var activeChannels: [String: RealtimeChannelV2] = [:]
+
     private init() {}
     
     // Generate a custom shift ID using the same formula as the other app
@@ -103,53 +102,87 @@ class JobBoxService {
     }
     
     // Listen for job box updates for a specific shift
-    func listenForJobBoxes(forShift event: ICSEvent, organizationID: String, completion: @escaping ([JobBox]) -> Void) -> ListenerRegistration? {
+    func listenForJobBoxes(forShift event: ICSEvent, organizationID: String, completion: @escaping ([JobBox]) -> Void) -> ListenerRegistrationWrapper {
         print("DEBUG-JOBBOX-LISTEN - ===== LISTENER SETUP START =====")
         print("DEBUG-JOBBOX-LISTEN - Event ID (Session ID): '\(event.id)'")
         print("DEBUG-JOBBOX-LISTEN - School Name: '\(event.schoolName)'")
         print("DEBUG-JOBBOX-LISTEN - Organization ID: '\(organizationID)'")
-        
+
         // Use the event ID (which is the session ID) as the shiftUid
         let shiftUid = event.id
         print("DEBUG-JOBBOX-LISTEN - Using shiftUid: '\(shiftUid)'")
-        
-        // Set up a listener for job boxes with the matching shift UID and organization
-        print("DEBUG-JOBBOX-LISTEN - Setting up Firestore listener for collection 'jobBoxes' where shiftUid = '\(shiftUid)' AND organizationID = '\(organizationID)'")
-        
-        return db.collection("jobBoxes")
-            .whereField("shiftUid", isEqualTo: shiftUid)
-            .whereField("organizationID", isEqualTo: organizationID)
-            .addSnapshotListener { snapshot, error in
-                print("DEBUG-JOBBOX-LISTEN - Snapshot listener triggered")
-                
-                if let error = error {
-                    print("ERROR-JOBBOX-LISTEN - Error listening for job boxes: \(error.localizedDescription)")
+
+        // Initial fetch from Supabase
+        Task {
+            do {
+                let jobBoxes: [JobBox] = try await supabase
+                    .from("job_boxes")
+                    .select()
+                    .eq("shift_uid", value: shiftUid)
+                    .eq("organization_id", value: organizationID.lowercased())
+                    .execute()
+                    .value
+
+                print("DEBUG-JOBBOX-LISTEN - Found \(jobBoxes.count) job box documents")
+
+                await MainActor.run {
+                    completion(jobBoxes)
+                }
+            } catch {
+                print("ERROR-JOBBOX-LISTEN - Error fetching job boxes: \(error.localizedDescription)")
+                await MainActor.run {
                     completion([])
-                    return
                 }
-                
-                guard let documents = snapshot?.documents else {
-                    print("DEBUG-JOBBOX-LISTEN - No job box documents found for shiftUid: '\(shiftUid)'")
-                    completion([])
-                    return
-                }
-                
-                print("DEBUG-JOBBOX-LISTEN - Found \(documents.count) job box documents")
-                
-                // Convert documents to JobBox objects
-                let jobBoxes = documents.map { document -> JobBox in
-                    print("DEBUG-JOBBOX-LISTEN - Processing document ID: \(document.documentID)")
-                    print("DEBUG-JOBBOX-LISTEN - Document data: \(document.data())")
-                    
-                    let jobBox = JobBox(id: document.documentID, data: document.data())
-                    return jobBox
-                }
-                
-                print("DEBUG-JOBBOX-LISTEN - Returning \(jobBoxes.count) job boxes to completion handler")
-                print("DEBUG-JOBBOX-LISTEN - ===== LISTENER SETUP END =====")
-                
-                completion(jobBoxes)
             }
+        }
+
+        // Set up realtime subscription
+        let channelKey = "jobbox_\(shiftUid)_\(organizationID)"
+        let channel = supabase.channel(channelKey)
+
+        let changeStream = channel.postgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: "job_boxes",
+            filter: "shift_uid=eq.\(shiftUid)"
+        )
+
+        Task {
+            for await change in changeStream {
+                print("DEBUG-JOBBOX-LISTEN - Realtime change detected")
+                // Re-fetch all job boxes on any change
+                do {
+                    let jobBoxes: [JobBox] = try await supabase
+                        .from("job_boxes")
+                        .select()
+                        .eq("shift_uid", value: shiftUid)
+                        .eq("organization_id", value: organizationID.lowercased())
+                        .execute()
+                        .value
+
+                    await MainActor.run {
+                        completion(jobBoxes)
+                    }
+                } catch {
+                    print("ERROR-JOBBOX-LISTEN - Error re-fetching job boxes: \(error.localizedDescription)")
+                }
+            }
+        }
+
+        Task {
+            await channel.subscribe()
+            print("DEBUG-JOBBOX-LISTEN - Subscribed to realtime channel: \(channelKey)")
+        }
+
+        activeChannels[channelKey] = channel
+        print("DEBUG-JOBBOX-LISTEN - ===== LISTENER SETUP END =====")
+
+        return ListenerRegistrationWrapper {
+            Task {
+                await channel.unsubscribe()
+                self.activeChannels.removeValue(forKey: channelKey)
+            }
+        }
     }
     
     // Process a job box notification payload
@@ -179,23 +212,27 @@ class JobBoxService {
     
     // Register device token for push notifications
     func registerDeviceToken(_ deviceToken: Data) {
-        guard let userId = Auth.auth().currentUser?.uid else {
+        guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
             print("ERROR-JOBBOX-TOKEN - Cannot register device token: No user is signed in")
             return
         }
-        
+
         // Convert token to string format
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
         print("DEBUG-JOBBOX-TOKEN - Registering device token for user \(userId): \(tokenString)")
-        
-        // Store the token in Firestore
-        db.collection("users").document(userId).updateData([
-            "fcmToken": tokenString
-        ]) { error in
-            if let error = error {
-                print("ERROR-JOBBOX-TOKEN - Error registering device token: \(error.localizedDescription)")
-            } else {
+
+        // Store the token in Supabase
+        Task {
+            do {
+                try await supabase
+                    .from("users")
+                    .update(["fcm_token": tokenString])
+                    .eq("id", value: userId.lowercased())
+                    .execute()
+
                 print("DEBUG-JOBBOX-TOKEN - Successfully registered device token for job box notifications")
+            } catch {
+                print("ERROR-JOBBOX-TOKEN - Error registering device token: \(error.localizedDescription)")
             }
         }
     }
@@ -203,69 +240,64 @@ class JobBoxService {
     // DEBUG: Query all job boxes to check for any matching records
     func debugQueryAllJobBoxes(completion: @escaping ([JobBox]) -> Void) {
         print("DEBUG-JOBBOX-QUERY - Querying all job boxes in the collection")
-        
-        db.collection("jobBoxes")
-            .limit(to: 20)  // Limit to avoid retrieving too many records
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    print("ERROR-JOBBOX-QUERY - Error querying job boxes: \(error.localizedDescription)")
-                    completion([])
-                    return
-                }
-                
-                guard let documents = snapshot?.documents else {
-                    print("DEBUG-JOBBOX-QUERY - No job box documents found at all")
-                    completion([])
-                    return
-                }
-                
-                print("DEBUG-JOBBOX-QUERY - Found \(documents.count) job box documents in the collection")
-                
+
+        Task {
+            do {
+                let jobBoxes: [JobBox] = try await supabase
+                    .from("job_boxes")
+                    .select()
+                    .limit(20)
+                    .execute()
+                    .value
+
+                print("DEBUG-JOBBOX-QUERY - Found \(jobBoxes.count) job box documents in the collection")
+
                 // Print the shiftUid of each document for debugging
-                documents.forEach { document in
-                    if let shiftUid = document.data()["shiftUid"] as? String {
-                        print("DEBUG-JOBBOX-QUERY - Document ID: \(document.documentID), shiftUid: '\(shiftUid)'")
-                    } else {
-                        print("DEBUG-JOBBOX-QUERY - Document ID: \(document.documentID), missing shiftUid field")
-                    }
+                jobBoxes.forEach { jobBox in
+                    print("DEBUG-JOBBOX-QUERY - Document ID: \(jobBox.id), shiftUid: '\(jobBox.shiftUid)'")
                 }
-                
-                let jobBoxes = documents.map { JobBox(id: $0.documentID, data: $0.data()) }
-                completion(jobBoxes)
+
+                await MainActor.run {
+                    completion(jobBoxes)
+                }
+            } catch {
+                print("ERROR-JOBBOX-QUERY - Error querying job boxes: \(error.localizedDescription)")
+                await MainActor.run {
+                    completion([])
+                }
             }
+        }
     }
-    
+
     // DEBUG: Query job boxes using partial matching
     func debugQueryJobBoxesByPartialShiftID(partialID: String, completion: @escaping ([JobBox]) -> Void) {
         print("DEBUG-JOBBOX-PARTIAL - Querying job boxes with partial shiftUid: '\(partialID)'")
-        
-        db.collection("jobBoxes")
-            .whereField("shiftUid", isGreaterThanOrEqualTo: partialID)
-            .whereField("shiftUid", isLessThanOrEqualTo: partialID + "\u{f8ff}")  // Unicode high value for prefix search
-            .limit(to: 20)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    print("ERROR-JOBBOX-PARTIAL - Error querying job boxes: \(error.localizedDescription)")
+
+        Task {
+            do {
+                let jobBoxes: [JobBox] = try await supabase
+                    .from("job_boxes")
+                    .select()
+                    .like("shift_uid", pattern: "\(partialID)%")
+                    .limit(20)
+                    .execute()
+                    .value
+
+                print("DEBUG-JOBBOX-PARTIAL - Found \(jobBoxes.count) job box documents with partial ID: '\(partialID)'")
+
+                jobBoxes.forEach { jobBox in
+                    print("DEBUG-JOBBOX-PARTIAL - Document ID: \(jobBox.id), shiftUid: '\(jobBox.shiftUid)'")
+                }
+
+                await MainActor.run {
+                    completion(jobBoxes)
+                }
+            } catch {
+                print("ERROR-JOBBOX-PARTIAL - Error querying job boxes: \(error.localizedDescription)")
+                await MainActor.run {
                     completion([])
-                    return
                 }
-                
-                guard let documents = snapshot?.documents else {
-                    print("DEBUG-JOBBOX-PARTIAL - No job box documents found with partial ID: '\(partialID)'")
-                    completion([])
-                    return
-                }
-                
-                print("DEBUG-JOBBOX-PARTIAL - Found \(documents.count) job box documents with partial ID: '\(partialID)'")
-                
-                documents.forEach { document in
-                    if let shiftUid = document.data()["shiftUid"] as? String {
-                        print("DEBUG-JOBBOX-PARTIAL - Document ID: \(document.documentID), shiftUid: '\(shiftUid)'")
-                    }
-                }
-                
-                let jobBoxes = documents.map { JobBox(id: $0.documentID, data: $0.data()) }
-                completion(jobBoxes)
             }
+        }
     }
 }

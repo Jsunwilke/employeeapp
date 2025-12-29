@@ -1,9 +1,8 @@
 import SwiftUI
-import FirebaseFirestore
 
 struct ClassGroupJobDetailView: View {
     let jobId: String
-    
+
     @State private var job: ClassGroupJob?
     @State private var isLoading = true
     @State private var showingAddGroup = false
@@ -12,9 +11,10 @@ struct ClassGroupJobDetailView: View {
     @State private var showingErrorAlert = false
     @State private var showingDeleteConfirmation = false
     @State private var groupToDelete: IndexSet?
-    
+    @State private var listenerWrapper: ListenerRegistrationWrapper?
+
     private let service = ClassGroupJobService.shared
-    
+
     var body: some View {
         VStack(spacing: 0) {
             if isLoading {
@@ -28,7 +28,7 @@ struct ClassGroupJobDetailView: View {
                         .fontWeight(.bold)
                         .foregroundColor(.primary)
                         .multilineTextAlignment(.center)
-                    
+
                     Text(job.jobType == "classGroups" ? "Class Groups" : "Class Candids")
                         .font(.headline)
                         .foregroundColor(.secondary)
@@ -36,7 +36,7 @@ struct ClassGroupJobDetailView: View {
                 .padding(.horizontal)
                 .padding(.top, 20)
                 .padding(.bottom, 16)
-                
+
                 if job.classGroups.isEmpty {
                     emptyStateView
                 } else {
@@ -93,7 +93,7 @@ struct ClassGroupJobDetailView: View {
         } message: {
             Text(errorMessage)
         }
-        .alert("Delete \(job?.jobType == "classGroups" ? "Class Group" : "Class Candid")?", 
+        .alert("Delete \(job?.jobType == "classGroups" ? "Class Group" : "Class Candid")?",
                isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
@@ -107,23 +107,26 @@ struct ClassGroupJobDetailView: View {
         .onAppear {
             loadJob()
         }
+        .onDisappear {
+            listenerWrapper?.remove()
+        }
     }
-    
+
     private var emptyStateView: some View {
         VStack(spacing: 20) {
             Image(systemName: job?.jobType == "classGroups" ? "camera.viewfinder" : "camera")
                 .font(.system(size: 60))
                 .foregroundColor(.gray)
-            
+
             Text("No \(job?.jobType == "classGroups" ? "Class Groups" : "Class Candids") Added")
                 .font(.headline)
-            
+
             Text("Tap the + button to add \(job?.jobType == "classGroups" ? "class groups" : "class candids") as you photograph them")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
-            
+
             Button(action: {
                 showingAddGroup = true
             }) {
@@ -134,47 +137,41 @@ struct ClassGroupJobDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    
+
     private func loadJob() {
         isLoading = true
-        
-        // Listen for real-time updates to this specific job
-        let db = Firestore.firestore()
-        db.collection("classGroupJobs").document(jobId)
-            .addSnapshotListener { snapshot, error in
-                if let error = error {
+
+        // Use service to subscribe to job updates via Supabase realtime
+        listenerWrapper = service.subscribeToJobUpdates(jobId: jobId) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let updatedJob):
+                    self.job = updatedJob
+                    self.isLoading = false
+                case .failure(let error):
                     self.errorMessage = "Failed to load job: \(error.localizedDescription)"
                     self.showingErrorAlert = true
                     self.isLoading = false
-                    return
                 }
-                
-                guard let snapshot = snapshot, snapshot.exists else {
-                    self.job = nil
-                    self.isLoading = false
-                    return
-                }
-                
-                self.job = ClassGroupJob(from: snapshot)
-                self.isLoading = false
             }
+        }
     }
-    
+
     private func refreshJob() {
         // The real-time listener will automatically update
     }
-    
+
     private func deleteGroups(at offsets: IndexSet) {
         groupToDelete = offsets
         showingDeleteConfirmation = true
     }
-    
+
     private func performDelete(at offsets: IndexSet) {
         guard let job = job else { return }
-        
+
         for index in offsets {
             let group = job.classGroups[index]
-            
+
             service.deleteClassGroup(fromJobId: jobId, classGroupId: group.id) { result in
                 switch result {
                 case .success:
@@ -196,9 +193,9 @@ struct ClassGroupDetailRowView: View {
     let schoolName: String
     let onEdit: () -> Void
     let onSlate: () -> Void
-    
+
     @State private var showingSlate = false
-    
+
     var body: some View {
         HStack(spacing: 12) {
             // Main content with background
@@ -208,7 +205,7 @@ struct ClassGroupDetailRowView: View {
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(.primary)
                     .fixedSize(horizontal: false, vertical: true)
-                
+
                 // Image numbers or status
                 if classGroup.hasImages {
                     Text("Images: \(classGroup.imageNumbers)")
@@ -221,7 +218,7 @@ struct ClassGroupDetailRowView: View {
                         .font(.system(size: 16))
                         .foregroundColor(.gray)
                 }
-                
+
                 // Notes indicator (only if has notes)
                 if !classGroup.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     HStack(spacing: 4) {
@@ -239,7 +236,7 @@ struct ClassGroupDetailRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.systemGray6))
             .cornerRadius(10)
-            
+
             // Action buttons
             HStack(spacing: 8) {
                 // Edit button
@@ -252,7 +249,7 @@ struct ClassGroupDetailRowView: View {
                         .cornerRadius(8)
                 }
                 .buttonStyle(BorderlessButtonStyle())
-                
+
                 // Slate button
                 Button(action: {
                     showingSlate = true

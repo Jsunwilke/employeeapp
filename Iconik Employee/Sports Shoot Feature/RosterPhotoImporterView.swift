@@ -7,8 +7,6 @@
 
 import SwiftUI
 import UIKit
-import Firebase
-import FirebaseFirestore
 
 struct RosterPhotoImporterView: View {
     let shootID: String

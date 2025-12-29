@@ -1,6 +1,4 @@
 import Foundation
-import FirebaseFirestore
-import FirebaseAuth
 
 class PayPeriodService: ObservableObject {
     static let shared = PayPeriodService()
@@ -47,17 +45,17 @@ class PayPeriodService: ObservableObject {
                 if let organization = try await organizationService.getOrganization(organizationID: orgID) {
                     
                     await MainActor.run {
-                        self.payPeriodSettings = organization.payPeriodSettings
+                        self.payPeriodSettings = organization.pay_period_settings
                         self.cachedOrganizationID = orgID
                         self.isLoading = false
-                        
-                        if organization.payPeriodSettings != nil {
-                            print("✅ PayPeriodService: Loaded pay period settings - Type: \(organization.payPeriodSettings!.type), Start: \(organization.payPeriodSettings!.startDate)")
+
+                        if let settings = organization.pay_period_settings {
+                            print("✅ PayPeriodService: Loaded pay period settings - Type: \(settings.type ?? "unknown"), Start: \(settings.startDate ?? "not set")")
                         } else {
                             print("⚠️ PayPeriodService: No pay period settings found for organization")
                         }
-                        
-                        completion(organization.payPeriodSettings != nil)
+
+                        completion(organization.pay_period_settings != nil)
                     }
                 } else {
                     await MainActor.run {
@@ -106,8 +104,9 @@ class PayPeriodService: ObservableObject {
         dateFormatter.timeZone = TimeZone.current
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         
-        guard let referenceDate = dateFormatter.date(from: activeSettings.startDate) else {
-            print("❌ PayPeriodService: Invalid start date format: \(activeSettings.startDate)")
+        guard let startDateStr = activeSettings.startDate,
+              let referenceDate = dateFormatter.date(from: startDateStr) else {
+            print("❌ PayPeriodService: Invalid start date format: \(activeSettings.startDate ?? "nil")")
             return getDefaultPayPeriod(for: date)
         }
         
@@ -116,7 +115,8 @@ class PayPeriodService: ObservableObject {
         
         // Calculate period length based on type
         let periodLength: Int
-        switch activeSettings.type.lowercased() {
+        let typeStr = activeSettings.type?.lowercased() ?? "bi-weekly"
+        switch typeStr {
         case "weekly":
             periodLength = 7
         case "bi-weekly", "biweekly":
@@ -125,7 +125,7 @@ class PayPeriodService: ObservableObject {
             // For monthly, we need different logic
             return getMonthlyPayPeriod(for: date, startDay: calendar.component(.day, from: referenceDate))
         default:
-            print("⚠️ PayPeriodService: Unknown period type: \(activeSettings.type), defaulting to bi-weekly")
+            print("⚠️ PayPeriodService: Unknown period type: \(typeStr), defaulting to bi-weekly")
             periodLength = 14
         }
         
@@ -154,7 +154,7 @@ class PayPeriodService: ObservableObject {
         }
         
         print("📅 PayPeriodService: Calculated pay period from \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
-        print("   - Reference date: \(activeSettings.startDate)")
+        print("   - Reference date: \(startDateStr)")
         print("   - Target date: \(dateFormatter.string(from: date))")
         print("   - Days since reference: \(daysSinceReference)")
         print("   - Periods elapsed: \(periodsElapsed)")
@@ -246,11 +246,12 @@ class PayPeriodService: ObservableObject {
     
     // Get period length in days
     func getPeriodLength() -> Int {
-        guard let settings = payPeriodSettings else {
+        guard let settings = payPeriodSettings,
+              let typeStr = settings.type?.lowercased() else {
             return 14 // Default bi-weekly
         }
-        
-        switch settings.type.lowercased() {
+
+        switch typeStr {
         case "weekly":
             return 7
         case "bi-weekly", "biweekly":

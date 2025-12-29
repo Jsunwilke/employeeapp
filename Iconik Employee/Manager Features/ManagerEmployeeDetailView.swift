@@ -8,9 +8,6 @@
 //
 
 import SwiftUI
-import Firebase
-import FirebaseFirestore
-import FirebaseAuth
 
 struct ManagerDailyRecord: Identifiable {
     let id: String
@@ -18,97 +15,75 @@ struct ManagerDailyRecord: Identifiable {
     let schoolName: String
     let totalMileage: Double
     let photoURLs: [String]
+
+    /// Create from DailyJobReport
+    init(from report: DailyJobReport) {
+        self.id = report.id
+        self.date = report.date
+        self.schoolName = report.school_or_destination ?? "Unknown"
+        self.totalMileage = report.total_mileage
+        self.photoURLs = report.photo_urls ?? []
+    }
+
+    /// Direct initializer
+    init(id: String, date: Date, schoolName: String, totalMileage: Double, photoURLs: [String]) {
+        self.id = id
+        self.date = date
+        self.schoolName = schoolName
+        self.totalMileage = totalMileage
+        self.photoURLs = photoURLs
+    }
 }
 
 class ManagerEmployeeDetailViewModel: ObservableObject {
     @Published var records: [ManagerDailyRecord] = []
     @Published var totalPeriodMileage: Double = 0.0
     @Published var errorMessage: String? = nil
-    
+
     let employeeName: String
     let periodStart: Date
     let periodEnd: Date
-    
+    let organizationID: String
+
     private let calendar = Calendar.current
-    
-    init(employeeName: String, periodStart: Date) {
+
+    init(employeeName: String, periodStart: Date, organizationID: String) {
         self.employeeName = employeeName
         self.periodStart  = periodStart
+        self.organizationID = organizationID
         // A 14-day window
         self.periodEnd    = calendar.date(byAdding: .day, value: 13, to: periodStart) ?? periodStart
     }
-    
+
     func loadRecords() {
-        // Get current user's organization ID
-        guard let currentUser = Auth.auth().currentUser else {
-            self.errorMessage = "Not authenticated"
+        guard !organizationID.isEmpty else {
+            self.errorMessage = "User organization not found"
             return
         }
-        
-        let db = Firestore.firestore()
-        
-        // First get the user's organization ID
-        db.collection("users").document(currentUser.uid).getDocument { [weak self] userDoc, error in
-            if let error = error {
-                DispatchQueue.main.async {
-                    self?.errorMessage = "Error getting user data: \(error.localizedDescription)"
-                }
-                return
-            }
-            
-            guard let userData = userDoc?.data(),
-                  let organizationID = userData["organizationID"] as? String else {
-                DispatchQueue.main.async {
-                    self?.errorMessage = "User organization not found"
-                }
-                return
-            }
-            
-            // Now query with organization ID
-            db.collection("dailyJobReports")
-                .whereField("organizationID", isEqualTo: organizationID)
-                .whereField("yourName", isEqualTo: self?.employeeName ?? "")
-                .whereField("date", isGreaterThanOrEqualTo: self?.periodStart ?? Date())
-                .whereField("date", isLessThanOrEqualTo: self?.periodEnd ?? Date())
-                .getDocuments { [weak self] snapshot, error in
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self?.errorMessage = "Error loading records: \(error.localizedDescription)"
-                    }
-                    return
-                }
-                guard let docs = snapshot?.documents, let self = self else { return }
-                
-                var tempRecords: [ManagerDailyRecord] = []
-                var totalMiles: Double = 0.0
-                
-                for doc in docs {
-                    let data = doc.data()
-                    guard let ts = data["date"] as? Timestamp else { continue }
-                    
-                    let dateVal = ts.dateValue()
-                    let school  = data["schoolOrDestination"] as? String ?? "Unknown"
-                    let miles   = data["totalMileage"] as? Double ?? 0.0
-                    let photoURLs = data["photoURLs"] as? [String] ?? []
-                    totalMiles += miles
-                    
-                    tempRecords.append(
-                        ManagerDailyRecord(
-                            id: doc.documentID,
-                            date: dateVal,
-                            schoolName: school,
-                            totalMileage: miles,
-                            photoURLs: photoURLs
-                        )
-                    )
-                }
-                
-                // Sort descending by date
-                tempRecords.sort { $0.date > $1.date }
-                
-                DispatchQueue.main.async {
+
+        Task {
+            do {
+                let reports = try await DailyJobReportService.shared.getReports(
+                    yourName: self.employeeName,
+                    organizationID: self.organizationID,
+                    startDate: self.periodStart,
+                    endDate: self.periodEnd
+                )
+
+                await MainActor.run {
+                    // Convert to ManagerDailyRecord and calculate totals
+                    var tempRecords = reports.map { ManagerDailyRecord(from: $0) }
+                    let totalMiles = tempRecords.reduce(0.0) { $0 + $1.totalMileage }
+
+                    // Sort descending by date
+                    tempRecords.sort { $0.date > $1.date }
+
                     self.records = tempRecords
                     self.totalPeriodMileage = totalMiles
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Error loading records: \(error.localizedDescription)"
                 }
             }
         }
@@ -123,9 +98,15 @@ class ManagerEmployeeDetailViewModel: ObservableObject {
 
 struct ManagerEmployeeDetailView: View {
     @StateObject private var viewModel: ManagerEmployeeDetailViewModel
-    
+
     init(employeeName: String, periodStart: Date) {
-        let vm = ManagerEmployeeDetailViewModel(employeeName: employeeName, periodStart: periodStart)
+        // Get organization ID from UserDefaults (same as @AppStorage)
+        let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        let vm = ManagerEmployeeDetailViewModel(
+            employeeName: employeeName,
+            periodStart: periodStart,
+            organizationID: organizationID
+        )
         _viewModel = StateObject(wrappedValue: vm)
     }
     

@@ -7,8 +7,6 @@
 
 
 import SwiftUI
-import Firebase
-import FirebaseFirestore
 
 struct AddGroupImageView: View {
     let shootID: String

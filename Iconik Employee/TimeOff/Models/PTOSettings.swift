@@ -30,7 +30,7 @@ struct PTOSettings: Codable {
         maxBanking: 40.0
     )
     
-    // Initialize from Firestore data
+    // Initialize from dictionary data
     init(from data: [String: Any]?) {
         guard let data = data else {
             self = PTOSettings.defaultSettings

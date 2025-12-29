@@ -1,6 +1,5 @@
 import Foundation
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 // Model for roster entry (individual subject)
 struct RosterEntry: Identifiable, Codable, Hashable {
@@ -60,7 +59,7 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         self.isFilledBlank = dictionary["isFilledBlank"] as? Bool ?? false
     }
     
-    // Convert to dictionary for Firestore
+    // Convert to dictionary for database storage
     func toDictionary() -> [String: Any] {
         return [
             "id": id,
@@ -119,7 +118,7 @@ struct GroupImage: Identifiable, Codable, Hashable {
         self.teamLevel = dictionary["teamLevel"] as? String
     }
     
-    // Convert to dictionary for Firestore
+    // Convert to dictionary for database storage
     func toDictionary() -> [String: Any] {
         var dict: [String: Any] = [
             "id": id,
@@ -219,65 +218,101 @@ struct SportsShoot: Identifiable, Codable {
         isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
     }
     
-    // Create from a Firestore document
-    init?(from document: DocumentSnapshot) {
-        guard let data = document.data() else { return nil }
-        
-        self.id = document.documentID
-        self.schoolName = data["schoolName"] as? String ?? "Unknown School"
-        self.sportName = data["sportName"] as? String ?? "Unknown Sport"
-        self.shootDate = (data["shootDate"] as? Timestamp)?.dateValue() ?? Date()
-        self.location = data["location"] as? String ?? ""
-        self.photographer = data["photographer"] as? String ?? ""
-        self.additionalNotes = data["additionalNotes"] as? String ?? ""
-        self.organizationID = data["organizationID"] as? String ?? ""
-        self.createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-        self.updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-        self.isArchived = data["isArchived"] as? Bool ?? false
-        
-        // Parse roster entries with field mapping
-        self.roster = []
-        if let rosterData = data["roster"] as? [[String: Any]] {
-            for entryData in rosterData {
-                if let entry = RosterEntry(from: entryData) {
-                    self.roster.append(entry)
-                }
-            }
-        }
-        
-        // Parse group images
-        self.groupImages = []
-        if let groupData = data["groupImages"] as? [[String: Any]] {
-            for groupDict in groupData {
-                if let group = GroupImage(from: groupDict) {
-                    self.groupImages.append(group)
-                }
-            }
-        }
+}
+
+// Supabase-compatible model for sports shoots
+struct SupabaseSportsShoot: Codable {
+    let id: String
+    let school_name: String?
+    let school_id: String?
+    let sport_name: String?
+    let season_type: String?
+    let shoot_date: Date?
+    let location: String?
+    let photographer: String?
+    let roster: [RosterEntry]?
+    let group_images: [GroupImage]?
+    let additional_notes: String?
+    let organization_id: String
+    let created_at: Date?
+    let updated_at: Date?
+    let is_archived: Bool?
+
+    func toSportsShoot() -> SportsShoot {
+        SportsShoot(
+            id: id,
+            schoolName: school_name ?? "Unknown School",
+            schoolId: school_id,
+            sportName: sport_name ?? "Unknown Sport",
+            seasonType: season_type,
+            shootDate: shoot_date ?? Date(),
+            location: location ?? "",
+            photographer: photographer ?? "",
+            roster: roster ?? [],
+            groupImages: group_images ?? [],
+            additionalNotes: additional_notes ?? "",
+            organizationID: organization_id,
+            createdAt: created_at ?? Date(),
+            updatedAt: updated_at ?? Date(),
+            isArchived: is_archived ?? false
+        )
+    }
+}
+
+// MARK: - Supabase Update Payloads
+// These structs are used for type-safe Supabase updates
+
+private struct RosterUpdatePayload: Encodable {
+    let roster: [RosterEntry]
+    let updated_at: String
+
+    init(roster: [RosterEntry]) {
+        self.roster = roster
+        self.updated_at = Date().ISO8601Format()
+    }
+}
+
+private struct GroupImagesUpdatePayload: Encodable {
+    let group_images: [GroupImage]
+    let updated_at: String
+
+    init(groupImages: [GroupImage]) {
+        self.group_images = groupImages
+        self.updated_at = Date().ISO8601Format()
+    }
+}
+
+private struct ArchiveUpdatePayload: Encodable {
+    let is_archived: Bool
+    let updated_at: String
+
+    init(isArchived: Bool) {
+        self.is_archived = isArchived
+        self.updated_at = Date().ISO8601Format()
     }
 }
 
 // Service class for managing Sports Shoots
 class SportsShootService {
     static let shared = SportsShootService()
-    private let db = Firestore.firestore()
-    private let sportsShootsCollection = "sportsJobs"
-    
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
+    private let sportsShootsCollection = "sports_jobs"
+
     // Network monitor for connectivity tracking
     private let networkMonitor = NetworkMonitor()
     private var isOnline = true
-    
+
     // Initialize the service
     private init() {
         // Start monitoring network status
         networkMonitor.startMonitoring { [weak self] isConnected in
             self?.isOnline = isConnected
-            
+
             // If we just came online, sync modified shoots
             if isConnected {
                 OfflineManager.shared.syncModifiedShoots()
             }
-            
+
             // Notify listeners about network status change
             NotificationCenter.default.post(
                 name: NSNotification.Name("SportsShootServiceNetworkStatusChanged"),
@@ -285,10 +320,10 @@ class SportsShootService {
                 userInfo: ["isOnline": isConnected]
             )
         }
-        
+
         // Initialize the isOnline property with the current status
         isOnline = networkMonitor.getCurrentConnectionStatus()
-        
+
         // Also listen for network status changes from OfflineManager
         NotificationCenter.default.addObserver(
             self,
@@ -297,518 +332,462 @@ class SportsShootService {
             object: nil
         )
     }
-    
+
     @objc private func networkStatusChanged(_ notification: Notification) {
         if let isOnline = notification.userInfo?["isOnline"] as? Bool {
             self.isOnline = isOnline
         }
     }
-    
+
     // Public method to check if device is online
     func isDeviceOnline() -> Bool {
         return isOnline
     }
     
     // MARK: - Fetch
-    
+
     func fetchSportsShoot(id: String, completion: @escaping (Result<SportsShoot, Error>) -> Void) {
         print("Fetching sports shoot with ID: \(id)")
-        
+
         // Check if we are offline
         if !isOnline {
             print("Device is offline, using cached data...")
-            
-            // Try to load from cache
+
             if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
                 completion(.success(cachedShoot))
                 return
             } else {
-                // No cached data available
                 let userInfo = [NSLocalizedDescriptionKey: "Shoot not found in cache and device is offline"]
                 let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
                 completion(.failure(error))
                 return
             }
         }
-        
-        // We're online, fetch from Firestore
-        db.collection(sportsShootsCollection).document(id).getDocument { [weak self] snapshot, error in
-            if let error = error {
-                print("Error fetching document: \(error.localizedDescription)")
-                
-                // Try to load from cache as fallback
-                if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
-                    completion(.success(cachedShoot))
-                } else {
-                    completion(.failure(error))
+
+        // We're online, fetch from Supabase
+        Task {
+            do {
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from(sportsShootsCollection)
+                    .select()
+                    .eq("id", value: id.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let supabaseShoot = shoots.first else {
+                    // Try cache as fallback
+                    if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
+                        await MainActor.run { completion(.success(cachedShoot)) }
+                    } else {
+                        let userInfo = [NSLocalizedDescriptionKey: "Sports shoot not found"]
+                        let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
+                        await MainActor.run { completion(.failure(error)) }
+                    }
+                    return
                 }
-                return
-            }
-            
-            guard let snapshot = snapshot, snapshot.exists else {
-                print("Document does not exist")
-                let userInfo = [NSLocalizedDescriptionKey: "Sports shoot not found"]
-                let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
-                completion(.failure(error))
-                return
-            }
-            
-            if let sportsShoot = SportsShoot(from: snapshot) {
+
+                let sportsShoot = supabaseShoot.toSportsShoot()
+
                 // Cache the shoot for offline use
                 OfflineManager.shared.cacheShoot(sportsShoot) { _ in
-                    // Just log the result, don't block the completion
                     print("Cached shoot \(id) for offline use")
                 }
-                
-                completion(.success(sportsShoot))
-            } else {
-                let userInfo = [NSLocalizedDescriptionKey: "Failed to parse sports shoot data"]
-                let error = NSError(domain: "SportsShootService", code: -2, userInfo: userInfo)
-                completion(.failure(error))
+
+                await MainActor.run {
+                    completion(.success(sportsShoot))
+                }
+            } catch {
+                print("Error fetching document: \(error.localizedDescription)")
+                // Try to load from cache as fallback
+                if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
+                    await MainActor.run { completion(.success(cachedShoot)) }
+                } else {
+                    await MainActor.run { completion(.failure(error)) }
+                }
             }
         }
     }
     
     func fetchAllSportsShoots(forOrganization orgID: String, completion: @escaping (Result<[SportsShoot], Error>) -> Void) {
         print("Fetching all sports shoots for organization: \(orgID)")
-        
-        // Make sure we're not querying with an empty orgID
+
         guard !orgID.isEmpty else {
             let userInfo = [NSLocalizedDescriptionKey: "Organization ID is required"]
             let error = NSError(domain: "SportsShootService", code: -2, userInfo: userInfo)
             completion(.failure(error))
             return
         }
-        
+
         // Check if we are offline - if so, use cached data
         if !isOnline {
             print("Device is offline, using cached data...")
             var cachedShoots: [SportsShoot] = []
-            
-            // Fetch cached shoots from offline manager
-            // This is a simplification - in a real app, you'd need to also store
-            // all cached shoot IDs per organization for more complex offline flow
-            // For now, we'll just look through all cached shoots (simple approach)
+
             let fileManager = FileManager.default
             let cachesDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("sportsShootCache")
-            
+
             do {
                 let fileURLs = try fileManager.contentsOfDirectory(at: cachesDir, includingPropertiesForKeys: nil)
-                
+
                 for fileURL in fileURLs {
                     if fileURL.pathExtension == "json" && fileURL.lastPathComponent != "cachedShoots.json" && fileURL.lastPathComponent != "modifiedShoots.json" {
-                        // Extract ID from filename
                         let shootID = fileURL.deletingPathExtension().lastPathComponent
-                        
+
                         if let shoot = OfflineManager.shared.loadCachedShoot(id: shootID),
                            shoot.organizationID == orgID {
                             cachedShoots.append(shoot)
                         }
                     }
                 }
-                
-                // Sort by date descending
+
                 cachedShoots.sort { $0.shootDate > $1.shootDate }
-                
                 completion(.success(cachedShoots))
             } catch {
                 print("Error reading cached shoots: \(error.localizedDescription)")
                 completion(.failure(error))
             }
-            
+
             return
         }
-        
-        // We're online, fetch from Firestore
-        db.collection(sportsShootsCollection)
-            .whereField("organizationID", isEqualTo: orgID)
-            .order(by: "shootDate", descending: true)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    print("Error fetching documents: \(error.localizedDescription)")
-                    completion(.failure(error))
-                    return
-                }
-                
-                guard let documents = snapshot?.documents else {
-                    print("No documents found in collection")
-                    completion(.success([]))
-                    return
-                }
-                
-                print("Found \(documents.count) documents")
-                
-                var sportsShoots: [SportsShoot] = []
-                
-                for document in documents {
-                    if let sportsShoot = SportsShoot(from: document) {
-                        sportsShoots.append(sportsShoot)
-                    }
-                }
-                
+
+        // We're online, fetch from Supabase
+        Task {
+            do {
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from(sportsShootsCollection)
+                    .select()
+                    .eq("organization_id", value: orgID.lowercased())
+                    .order("shoot_date", ascending: false)
+                    .execute()
+                    .value
+
+                print("Found \(shoots.count) documents")
+
+                let sportsShoots = shoots.map { $0.toSportsShoot() }
+
                 print("Successfully processed \(sportsShoots.count) sports shoots")
-                completion(.success(sportsShoots))
+                await MainActor.run {
+                    completion(.success(sportsShoots))
+                }
+            } catch {
+                print("Error fetching documents: \(error.localizedDescription)")
+                await MainActor.run {
+                    completion(.failure(error))
+                }
             }
+        }
     }
     
     // MARK: - Update
-    
+
     // Update roster entry with field mapping
     func updateRosterEntry(shootID: String, entry: RosterEntry, completion: @escaping (Result<Void, Error>) -> Void) {
         // Check if we are offline
         if !isOnline {
             print("Device is offline, updating cached shoot...")
-            
-            // Update the shoot in cache
             OfflineManager.shared.updateRosterEntryOffline(shootID: shootID, entry: entry, completion: completion)
             return
         }
-        
-        // We're online, update in Firestore
-        let docRef = db.collection(sportsShootsCollection).document(shootID)
-        
-        // First remove the old entry
-        docRef.getDocument { [weak self] snapshot, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-            
-            guard let self = self, let snapshot = snapshot, snapshot.exists else {
-                let userInfo = [NSLocalizedDescriptionKey: "Sports shoot not found"]
-                let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
-                completion(.failure(error))
-                return
-            }
-            
-            // Find the index of the existing entry to replace
-            if let rosterData = snapshot.data()?["roster"] as? [[String: Any]],
-               let index = rosterData.firstIndex(where: { ($0["id"] as? String) == entry.id }) {
-                
-                // Store the existing entry to remove
-                let existingEntry = rosterData[index]
-                
-                // Remove the existing entry
-                docRef.updateData([
-                    "roster": FieldValue.arrayRemove([existingEntry]),
-                    "updatedAt": FieldValue.serverTimestamp()
-                ]) { error in
-                    if let error = error {
-                        completion(.failure(error))
-                        return
-                    }
-                    
-                    // Add the updated entry
-                    let entryDict = entry.toDictionary()
-                    
-                    docRef.updateData([
-                        "roster": FieldValue.arrayUnion([entryDict]),
-                        "updatedAt": FieldValue.serverTimestamp()
-                    ]) { error in
-                        if let error = error {
-                            completion(.failure(error))
-                        } else {
-                            // Update succeeded, update the cached version too
-                            if let shoot = SportsShoot(from: snapshot) {
-                                var updatedShoot = shoot
-                                if let idx = updatedShoot.roster.firstIndex(where: { $0.id == entry.id }) {
-                                    updatedShoot.roster[idx] = entry
-                                } else {
-                                    updatedShoot.roster.append(entry)
-                                }
-                                
-                                // Cache the updated shoot
-                                OfflineManager.shared.cacheShoot(updatedShoot) { _ in }
-                            }
-                            
-                            completion(.success(()))
-                        }
-                    }
+
+        // We're online, fetch current shoot, update roster, and save
+        Task {
+            do {
+                // Fetch current shoot
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from(sportsShootsCollection)
+                    .select()
+                    .eq("id", value: shootID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let currentShoot = shoots.first else {
+                    let userInfo = [NSLocalizedDescriptionKey: "Sports shoot not found"]
+                    let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
+                    await MainActor.run { completion(.failure(error)) }
+                    return
                 }
-            } else {
-                // If entry doesn't exist yet, just add it
-                self.addRosterEntry(shootID: shootID, entry: entry, completion: completion)
+
+                // Update the roster
+                var updatedRoster = currentShoot.roster ?? []
+                if let idx = updatedRoster.firstIndex(where: { $0.id == entry.id }) {
+                    updatedRoster[idx] = entry
+                } else {
+                    updatedRoster.append(entry)
+                }
+
+                // Save updated roster to Supabase
+                try await supabase
+                    .from(sportsShootsCollection)
+                    .update(RosterUpdatePayload(roster: updatedRoster))
+                    .eq("id", value: shootID.lowercased())
+                    .execute()
+
+                // Cache the updated shoot
+                var sportsShoot = currentShoot.toSportsShoot()
+                sportsShoot.roster = updatedRoster
+                sportsShoot.updatedAt = Date()
+                OfflineManager.shared.cacheShoot(sportsShoot) { _ in }
+
+                await MainActor.run { completion(.success(())) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
             }
         }
     }
     
     // Update group image
     func updateGroupImage(shootID: String, groupImage: GroupImage, completion: @escaping (Result<Void, Error>) -> Void) {
-        // Check if we are offline
         if !isOnline {
             print("Device is offline, updating cached shoot...")
-            
-            // Update the shoot in cache
             OfflineManager.shared.updateGroupImageOffline(shootID: shootID, group: groupImage, completion: completion)
             return
         }
-        
-        // We're online, update in Firestore
-        let docRef = db.collection(sportsShootsCollection).document(shootID)
-        
-        // First remove the old group
-        docRef.getDocument { [weak self] snapshot, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-            
-            guard let self = self, let snapshot = snapshot, snapshot.exists else {
-                let userInfo = [NSLocalizedDescriptionKey: "Sports shoot not found"]
-                let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
-                completion(.failure(error))
-                return
-            }
-            
-            // Find the index of the existing group to replace
-            if let groupData = snapshot.data()?["groupImages"] as? [[String: Any]],
-               let index = groupData.firstIndex(where: { ($0["id"] as? String) == groupImage.id }) {
-                
-                // Store the existing group to remove
-                let existingGroup = groupData[index]
-                
-                // Remove the existing group
-                docRef.updateData([
-                    "groupImages": FieldValue.arrayRemove([existingGroup]),
-                    "updatedAt": FieldValue.serverTimestamp()
-                ]) { error in
-                    if let error = error {
-                        completion(.failure(error))
-                        return
-                    }
-                    
-                    // Add the updated group
-                    let groupDict = groupImage.toDictionary()
-                    
-                    docRef.updateData([
-                        "groupImages": FieldValue.arrayUnion([groupDict]),
-                        "updatedAt": FieldValue.serverTimestamp()
-                    ]) { error in
-                        if let error = error {
-                            completion(.failure(error))
-                        } else {
-                            // Update succeeded, update the cached version too
-                            if let shoot = SportsShoot(from: snapshot) {
-                                var updatedShoot = shoot
-                                if let idx = updatedShoot.groupImages.firstIndex(where: { $0.id == groupImage.id }) {
-                                    updatedShoot.groupImages[idx] = groupImage
-                                } else {
-                                    updatedShoot.groupImages.append(groupImage)
-                                }
-                                
-                                // Cache the updated shoot
-                                OfflineManager.shared.cacheShoot(updatedShoot) { _ in }
-                            }
-                            
-                            completion(.success(()))
-                        }
-                    }
+
+        Task {
+            do {
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from(sportsShootsCollection)
+                    .select()
+                    .eq("id", value: shootID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let currentShoot = shoots.first else {
+                    let userInfo = [NSLocalizedDescriptionKey: "Sports shoot not found"]
+                    let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
+                    await MainActor.run { completion(.failure(error)) }
+                    return
                 }
-            } else {
-                // If group doesn't exist yet, just add it
-                self.addGroupImage(shootID: shootID, groupImage: groupImage, completion: completion)
+
+                var updatedGroupImages = currentShoot.group_images ?? []
+                if let idx = updatedGroupImages.firstIndex(where: { $0.id == groupImage.id }) {
+                    updatedGroupImages[idx] = groupImage
+                } else {
+                    updatedGroupImages.append(groupImage)
+                }
+
+                try await supabase
+                    .from(sportsShootsCollection)
+                    .update(GroupImagesUpdatePayload(groupImages: updatedGroupImages))
+                    .eq("id", value: shootID.lowercased())
+                    .execute()
+
+                var sportsShoot = currentShoot.toSportsShoot()
+                sportsShoot.groupImages = updatedGroupImages
+                sportsShoot.updatedAt = Date()
+                OfflineManager.shared.cacheShoot(sportsShoot) { _ in }
+
+                await MainActor.run { completion(.success(())) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
             }
         }
     }
-    
+
     // Add a new roster entry with field mapping
     func addRosterEntry(shootID: String, entry: RosterEntry, completion: @escaping (Result<Void, Error>) -> Void) {
-        // Check if we are offline
         if !isOnline {
             print("Device is offline, updating cached shoot...")
-            
-            // Add the entry to the cached shoot
             OfflineManager.shared.addRosterEntryOffline(shootID: shootID, entry: entry, completion: completion)
             return
         }
-        
-        // We're online, update in Firestore
-        let docRef = db.collection(sportsShootsCollection).document(shootID)
-        
-        // Convert to dictionary for Firestore
-        let entryDict = entry.toDictionary()
-        
-        docRef.updateData([
-            "roster": FieldValue.arrayUnion([entryDict]),
-            "updatedAt": FieldValue.serverTimestamp()
-        ]) { [weak self] error in
-            if let error = error {
-                completion(.failure(error))
-            } else {
-                // Update succeeded, update the cached version too
-                self?.fetchSportsShoot(id: shootID) { _ in
-                    // Just refresh the cache, don't need to handle result
+
+        Task {
+            do {
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from(sportsShootsCollection)
+                    .select()
+                    .eq("id", value: shootID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let currentShoot = shoots.first else {
+                    let error = NSError(domain: "SportsShootService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sports shoot not found"])
+                    await MainActor.run { completion(.failure(error)) }
+                    return
                 }
-                
-                completion(.success(()))
+
+                var updatedRoster = currentShoot.roster ?? []
+                updatedRoster.append(entry)
+
+                try await supabase
+                    .from(sportsShootsCollection)
+                    .update(RosterUpdatePayload(roster: updatedRoster))
+                    .eq("id", value: shootID.lowercased())
+                    .execute()
+
+                await MainActor.run { completion(.success(())) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
             }
         }
     }
-    
+
     // Batch add multiple roster entries
     func batchAddRosterEntries(shootID: String, entries: [RosterEntry], completion: @escaping (Bool, Error?) -> Void) {
-        // Check if we are offline
         if !isOnline {
             print("Device is offline, cannot batch add entries")
             let error = NSError(domain: "SportsShootService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot batch add entries while offline"])
             completion(false, error)
             return
         }
-        
-        // We're online, update in Firestore
-        let docRef = db.collection(sportsShootsCollection).document(shootID)
-        
-        // Convert all entries to dictionaries for Firestore
-        let entryDicts = entries.map { $0.toDictionary() }
-        
-        // Use batch operation for better performance
-        docRef.updateData([
-            "roster": FieldValue.arrayUnion(entryDicts),
-            "updatedAt": FieldValue.serverTimestamp()
-        ]) { [weak self] error in
-            if let error = error {
-                completion(false, error)
-            } else {
-                // Update succeeded, update the cached version too
-                self?.fetchSportsShoot(id: shootID) { _ in
-                    // Just refresh the cache, don't need to handle result
+
+        Task {
+            do {
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from(sportsShootsCollection)
+                    .select()
+                    .eq("id", value: shootID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let currentShoot = shoots.first else {
+                    let error = NSError(domain: "SportsShootService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sports shoot not found"])
+                    await MainActor.run { completion(false, error) }
+                    return
                 }
-                
-                completion(true, nil)
+
+                var updatedRoster = currentShoot.roster ?? []
+                updatedRoster.append(contentsOf: entries)
+
+                try await supabase
+                    .from(sportsShootsCollection)
+                    .update(RosterUpdatePayload(roster: updatedRoster))
+                    .eq("id", value: shootID.lowercased())
+                    .execute()
+
+                await MainActor.run { completion(true, nil) }
+            } catch {
+                await MainActor.run { completion(false, error) }
             }
         }
     }
-    
+
     // Add a new group image
     func addGroupImage(shootID: String, groupImage: GroupImage, completion: @escaping (Result<Void, Error>) -> Void) {
-        // Check if we are offline
         if !isOnline {
             print("Device is offline, updating cached shoot...")
-            
-            // Add the group to the cached shoot
             OfflineManager.shared.addGroupImageOffline(shootID: shootID, group: groupImage, completion: completion)
             return
         }
-        
-        // We're online, update in Firestore
-        let docRef = db.collection(sportsShootsCollection).document(shootID)
-        
-        // Convert to dictionary for Firestore
-        let groupDict = groupImage.toDictionary()
-        
-        docRef.updateData([
-            "groupImages": FieldValue.arrayUnion([groupDict]),
-            "updatedAt": FieldValue.serverTimestamp()
-        ]) { [weak self] error in
-            if let error = error {
-                completion(.failure(error))
-            } else {
-                // Update succeeded, update the cached version too
-                self?.fetchSportsShoot(id: shootID) { _ in
-                    // Just refresh the cache, don't need to handle result
+
+        Task {
+            do {
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from(sportsShootsCollection)
+                    .select()
+                    .eq("id", value: shootID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let currentShoot = shoots.first else {
+                    let error = NSError(domain: "SportsShootService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sports shoot not found"])
+                    await MainActor.run { completion(.failure(error)) }
+                    return
                 }
-                
-                completion(.success(()))
+
+                var updatedGroupImages = currentShoot.group_images ?? []
+                updatedGroupImages.append(groupImage)
+
+                try await supabase
+                    .from(sportsShootsCollection)
+                    .update(GroupImagesUpdatePayload(groupImages: updatedGroupImages))
+                    .eq("id", value: shootID.lowercased())
+                    .execute()
+
+                await MainActor.run { completion(.success(())) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
             }
         }
     }
-    
+
     // Delete roster entry
     func deleteRosterEntry(shootID: String, entryID: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        // Check if we are offline
         if !isOnline {
             print("Device is offline, updating cached shoot...")
-            
-            // Delete the entry from the cached shoot
             OfflineManager.shared.deleteRosterEntryOffline(shootID: shootID, entryID: entryID, completion: completion)
             return
         }
-        
-        // We're online, fetch the shoot from Firestore
-        fetchSportsShoot(id: shootID) { result in
-            switch result {
-            case .success(let shoot):
-                guard let entryToRemove = shoot.roster.first(where: { $0.id == entryID }) else {
-                    let userInfo = [NSLocalizedDescriptionKey: "Entry not found"]
-                    let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
-                    completion(.failure(error))
+
+        Task {
+            do {
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from(sportsShootsCollection)
+                    .select()
+                    .eq("id", value: shootID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let currentShoot = shoots.first else {
+                    let error = NSError(domain: "SportsShootService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sports shoot not found"])
+                    await MainActor.run { completion(.failure(error)) }
                     return
                 }
-                
-                // Convert to dictionary for Firestore
-                let entryDict = entryToRemove.toDictionary()
-                let docRef = self.db.collection(self.sportsShootsCollection).document(shootID)
-                
-                docRef.updateData([
-                    "roster": FieldValue.arrayRemove([entryDict]),
-                    "updatedAt": FieldValue.serverTimestamp()
-                ]) { [weak self] error in
-                    if let error = error {
-                        completion(.failure(error))
-                    } else {
-                        // Update succeeded, update the cached version too
-                        self?.fetchSportsShoot(id: shootID) { _ in
-                            // Just refresh the cache, don't need to handle result
-                        }
-                        
-                        completion(.success(()))
-                    }
-                }
-                
-            case .failure(let error):
-                completion(.failure(error))
+
+                var updatedRoster = currentShoot.roster ?? []
+                updatedRoster.removeAll(where: { $0.id == entryID })
+
+                try await supabase
+                    .from(sportsShootsCollection)
+                    .update(RosterUpdatePayload(roster: updatedRoster))
+                    .eq("id", value: shootID.lowercased())
+                    .execute()
+
+                await MainActor.run { completion(.success(())) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
             }
         }
     }
-    
+
     // Delete group image
     func deleteGroupImage(shootID: String, groupID: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        // Check if we are offline
         if !isOnline {
             print("Device is offline, updating cached shoot...")
-            
-            // Delete the group from the cached shoot
             OfflineManager.shared.deleteGroupImageOffline(shootID: shootID, groupID: groupID, completion: completion)
             return
         }
-        
-        // We're online, fetch the shoot from Firestore
-        fetchSportsShoot(id: shootID) { result in
-            switch result {
-            case .success(let shoot):
-                guard let groupToRemove = shoot.groupImages.first(where: { $0.id == groupID }) else {
-                    let userInfo = [NSLocalizedDescriptionKey: "Group not found"]
-                    let error = NSError(domain: "SportsShootService", code: -1, userInfo: userInfo)
-                    completion(.failure(error))
+
+        Task {
+            do {
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from(sportsShootsCollection)
+                    .select()
+                    .eq("id", value: shootID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let currentShoot = shoots.first else {
+                    let error = NSError(domain: "SportsShootService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sports shoot not found"])
+                    await MainActor.run { completion(.failure(error)) }
                     return
                 }
-                
-                // Convert to dictionary for Firestore
-                let groupDict = groupToRemove.toDictionary()
-                let docRef = self.db.collection(self.sportsShootsCollection).document(shootID)
-                
-                docRef.updateData([
-                    "groupImages": FieldValue.arrayRemove([groupDict]),
-                    "updatedAt": FieldValue.serverTimestamp()
-                ]) { [weak self] error in
-                    if let error = error {
-                        completion(.failure(error))
-                    } else {
-                        // Update succeeded, update the cached version too
-                        self?.fetchSportsShoot(id: shootID) { _ in
-                            // Just refresh the cache, don't need to handle result
-                        }
-                        
-                        completion(.success(()))
-                    }
-                }
-                
-            case .failure(let error):
-                completion(.failure(error))
+
+                var updatedGroupImages = currentShoot.group_images ?? []
+                updatedGroupImages.removeAll(where: { $0.id == groupID })
+
+                try await supabase
+                    .from(sportsShootsCollection)
+                    .update(GroupImagesUpdatePayload(groupImages: updatedGroupImages))
+                    .eq("id", value: shootID.lowercased())
+                    .execute()
+
+                await MainActor.run { completion(.success(())) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
             }
         }
     }
-    
+
     // MARK: - Offline Helpers
     
     // Check sync status for a shoot
@@ -870,61 +849,43 @@ class SportsShootService {
         let now = Date()
         let twoWeeksFromNow = Calendar.current.date(byAdding: .weekOfYear, value: 2, to: now) ?? now
 
-        // Format dates for Firestore query
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
         let startDateStr = dateFormatter.string(from: now)
         let endDateStr = dateFormatter.string(from: twoWeeksFromNow)
 
-        db.collection("sessions")
-            .whereField("organizationID", isEqualTo: orgID)
-            .whereField("date", isGreaterThanOrEqualTo: startDateStr)
-            .whereField("date", isLessThanOrEqualTo: endDateStr)
-            .order(by: "date")
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    print("Error fetching sessions: \(error.localizedDescription)")
-                    completion(.failure(error))
-                    return
-                }
+        Task {
+            do {
+                // Use SessionService to fetch sessions
+                let sessions = try await SessionService.shared.fetchSessions(organizationID: orgID.lowercased())
 
-                guard let documents = snapshot?.documents else {
-                    completion(.success([]))
-                    return
-                }
-
-                // Convert documents to Session objects and filter
-                let sessions = documents.compactMap { doc -> Session? in
-                    let data = doc.data()
-                    // Filter out sessions that already have sports jobs
-                    let hasSportsJob = data["hasSportsJob"] as? Bool ?? false
-                    if hasSportsJob {
-                        return nil // Skip sessions that already have sports jobs
-                    }
-                    // Use the existing Session initializer that takes a data dictionary
-                    return Session(id: doc.documentID, data: data)
-                }
-
-                let availableSessions = sessions
+                // Filter for upcoming sessions that don't have sports jobs
+                let availableSessions = sessions.filter { session in
+                    guard let sessionDate = session.startDate else { return false }
+                    return sessionDate >= now && sessionDate <= twoWeeksFromNow && !session.hasSportsJob
+                }.sorted { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) }
 
                 print("Found \(availableSessions.count) available sessions for sports jobs")
-                completion(.success(availableSessions))
+                await MainActor.run { completion(.success(availableSessions)) }
+            } catch {
+                print("Error fetching sessions: \(error.localizedDescription)")
+                await MainActor.run { completion(.failure(error)) }
             }
+        }
     }
 
     // MARK: - Archive Management
 
     // Archive a sports shoot
     func archiveSportsShoot(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        let docRef = db.collection(sportsShootsCollection).document(id)
-        
-        docRef.updateData([
-            "isArchived": true,
-            "updatedAt": FieldValue.serverTimestamp()
-        ]) { error in
-            if let error = error {
-                completion(.failure(error))
-            } else {
+        Task {
+            do {
+                try await supabase
+                    .from(sportsShootsCollection)
+                    .update(ArchiveUpdatePayload(isArchived: true))
+                    .eq("id", value: id.lowercased())
+                    .execute()
+
                 // Update cached version if exists
                 if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
                     var updatedShoot = cachedShoot
@@ -932,22 +893,24 @@ class SportsShootService {
                     updatedShoot.updatedAt = Date()
                     OfflineManager.shared.cacheShoot(updatedShoot) { _ in }
                 }
-                completion(.success(()))
+
+                await MainActor.run { completion(.success(())) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
             }
         }
     }
-    
+
     // Unarchive a sports shoot
     func unarchiveSportsShoot(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        let docRef = db.collection(sportsShootsCollection).document(id)
-        
-        docRef.updateData([
-            "isArchived": false,
-            "updatedAt": FieldValue.serverTimestamp()
-        ]) { error in
-            if let error = error {
-                completion(.failure(error))
-            } else {
+        Task {
+            do {
+                try await supabase
+                    .from(sportsShootsCollection)
+                    .update(ArchiveUpdatePayload(isArchived: false))
+                    .eq("id", value: id.lowercased())
+                    .execute()
+
                 // Update cached version if exists
                 if let cachedShoot = OfflineManager.shared.loadCachedShoot(id: id) {
                     var updatedShoot = cachedShoot
@@ -955,7 +918,10 @@ class SportsShootService {
                     updatedShoot.updatedAt = Date()
                     OfflineManager.shared.cacheShoot(updatedShoot) { _ in }
                 }
-                completion(.success(()))
+
+                await MainActor.run { completion(.success(())) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
             }
         }
     }

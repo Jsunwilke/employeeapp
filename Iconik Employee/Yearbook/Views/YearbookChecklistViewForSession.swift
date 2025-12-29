@@ -138,10 +138,7 @@ struct YearbookChecklistViewForSession: View {
                 
                 // Store organizationId for use in year selection
                 self.organizationId = orgId
-                
-                // DEBUG: List all yearbook lists
-                try? await YearbookShootListService.shared.debugGetAllYearbookLists(organizationId: orgId)
-                
+
                 // Get available years for this school
                 let years = try await YearbookShootListService.shared.getAvailableYears(schoolId: schoolId, organizationId: orgId)
                 

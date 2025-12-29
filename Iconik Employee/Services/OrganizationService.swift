@@ -1,6 +1,5 @@
 import Foundation
-import FirebaseFirestore
-import FirebaseAuth
+import Supabase
 
 // Session type definition from organization
 struct SessionTypeDefinition: Identifiable {
@@ -9,102 +8,147 @@ struct SessionTypeDefinition: Identifiable {
     let color: String  // Hex color string
 }
 
-// Pay Period Settings model
+// Pay Period Settings model - matches the JSON structure in database
+// Structure: {"type": "bi-weekly", "config": {"start_date": "2024-12-29"}, "is_active": true}
 struct PayPeriodSettings: Codable {
-    let startDate: String
-    let type: String // "bi-weekly", "weekly", "monthly"
-    let isActive: Bool
-}
+    let type: String? // "bi-weekly", "weekly", "monthly"
+    let config: PayPeriodConfig?
+    let is_active: Bool?
 
-// Organization model
-struct Organization: Codable {
-    let id: String
-    let name: String
-    let sessionTypes: [SessionType]?
-    let sessionOrderColors: [String]?
-    let enableSessionPublishing: Bool?
-    let payPeriodSettings: PayPeriodSettings?
-    
-    enum CodingKeys: String, CodingKey {
-        case id
-        case name
-        case sessionTypes
-        case sessionOrderColors
-        case enableSessionPublishing
-        case payPeriodSettings
+    // Backward compatibility computed properties
+    var startDate: String? { config?.start_date }
+    var isActive: Bool { is_active ?? false }
+
+    struct PayPeriodConfig: Codable {
+        let start_date: String?
     }
 }
 
+// Organization model (snake_case for Supabase)
+// JSONB fields are decoded as native Swift types (Supabase returns native JSONB)
+struct Organization: Codable {
+    let id: String
+    let name: String?
+    let session_types: [SessionType]?  // Native JSONB array
+    let session_order_colors: [String]?  // Native JSONB array
+    let enable_session_publishing: Bool?
+    let pay_period_settings: PayPeriodSettings?  // Native JSONB object
+    let address: AnyJSON?  // JSONB object - flexible type
+    let coordinates: String?  // Format: "lat,lng"
+    let created_at: String?  // ISO8601 string
+    let updated_at: String?  // ISO8601 string
+
+    // Backward compatibility computed properties
+    var enableSessionPublishing: Bool? { enable_session_publishing }
+
+    // Extract address string from JSONB object
+    var addressString: String? {
+        guard let address = address else { return nil }
+        // If it's a string, return it directly
+        if case .string(let str) = address { return str }
+        // If it's an object, try to get a "formatted" or "full" key, or convert to string
+        if case .object(let dict) = address {
+            if case .string(let formatted) = dict["formatted"] { return formatted }
+            if case .string(let full) = dict["full"] { return full }
+            if case .string(let street) = dict["street"] { return street }
+        }
+        return nil
+    }
+}
+
+@MainActor
 class OrganizationService: ObservableObject {
     static let shared = OrganizationService()
-    private let db = Firestore.firestore()
-    
+    private let supabase = SupabaseManager.shared.client
+
     @Published var sessionTypes: [SessionTypeDefinition] = []
     @Published var organizationAddress: String = ""
     @Published var organizationCoordinates: String = ""  // Format: "lat,lng"
     @Published var organizationHasPublishing: Bool = false
-    private var organizationListener: ListenerRegistration?
-    
+    private var organizationChannel: RealtimeChannelV2?
+
     private init() {}
     
     // Start listening to organization data for session types
     func startListeningToOrganization(organizationID: String) {
         print("🏢 Starting to listen to organization: \(organizationID)")
-        // Remove existing listener if any
-        organizationListener?.remove()
-        
-        organizationListener = db.collection("organizations").document(organizationID)
-            .addSnapshotListener { [weak self] snapshot, error in
-                if let error = error {
-                    print("Error fetching organization: \(error)")
-                    return
-                }
-                
-                guard let data = snapshot?.data() else {
-                    print("No organization data found")
-                    return
-                }
-                
-                // Parse session types
-                if let sessionTypesData = data["sessionTypes"] as? [[String: Any]] {
-                    self?.sessionTypes = sessionTypesData.compactMap { typeData in
-                        guard let id = typeData["id"] as? String,
-                              let name = typeData["name"] as? String,
-                              let color = typeData["color"] as? String else {
-                            return nil
-                        }
-                        return SessionTypeDefinition(id: id, name: name, color: color)
-                    }
-                    print("🎨 Loaded \(self?.sessionTypes.count ?? 0) session types: \(self?.sessionTypes.map { $0.name } ?? [])")
-                } else {
-                    print("No sessionTypes found in organization data")
-                    self?.sessionTypes = []
-                }
-                
-                // Parse organization address and coordinates
-                if let address = data["address"] as? String {
-                    self?.organizationAddress = address
-                    print("🏢 Organization address: \(address)")
-                }
-                
-                if let coordinates = data["coordinates"] as? String {
-                    self?.organizationCoordinates = coordinates
-                    print("📍 Organization coordinates: \(coordinates)")
-                } else if let location = data["location"] as? [String: Any],
-                          let lat = location["latitude"] as? Double,
-                          let lng = location["longitude"] as? Double {
-                    self?.organizationCoordinates = "\(lat),\(lng)"
-                    print("📍 Organization coordinates: \(lat),\(lng)")
-                }
-                
-                // Parse publishing setting
-                if let enablePublishing = data["enableSessionPublishing"] as? Bool {
-                    self?.organizationHasPublishing = enablePublishing
-                    print("📝 Organization has publishing: \(enablePublishing)")
-                } else {
-                    self?.organizationHasPublishing = false
-                }
+
+        // Remove existing channel if any
+        if let channel = organizationChannel {
+            Task {
+                await supabase.removeChannel(channel)
             }
+        }
+
+        // Create a new channel for this organization
+        let channel = supabase.channel("organization-\(organizationID)")
+
+        // Set up postgres change listener
+        _ = channel.onPostgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: "organizations",
+            filter: "id=eq.\(organizationID)"
+        ) { [weak self] _ in
+            // Refetch organization data when changes are detected
+            Task { @MainActor in
+                guard let self = self else { return }
+                await self.fetchAndUpdateOrganization(organizationID: organizationID)
+            }
+        }
+
+        // Subscribe to the channel
+        Task {
+            await channel.subscribe()
+        }
+
+        // Store the channel reference
+        self.organizationChannel = channel
+
+        // Initial fetch
+        Task {
+            await fetchAndUpdateOrganization(organizationID: organizationID)
+        }
+    }
+
+    // Helper to fetch and update organization data
+    private func fetchAndUpdateOrganization(organizationID: String) async {
+        do {
+            guard let org = try await getOrganization(organizationID: organizationID) else {
+                print("No organization data found")
+                return
+            }
+
+            // Get session types from JSONB (native array from Supabase)
+            if let sessionTypesArray = org.session_types {
+                self.sessionTypes = sessionTypesArray.map { type in
+                    SessionTypeDefinition(id: type.id, name: type.name, color: type.color)
+                }
+                print("🎨 Loaded \(self.sessionTypes.count) session types: \(self.sessionTypes.map { $0.name })")
+            } else {
+                print("No sessionTypes found in organization data")
+                self.sessionTypes = []
+            }
+
+            // Update organization address
+            if let address = org.addressString {
+                self.organizationAddress = address
+                print("🏢 Organization address: \(address)")
+            }
+
+            // Update organization coordinates
+            if let coordinates = org.coordinates {
+                self.organizationCoordinates = coordinates
+                print("📍 Organization coordinates: \(coordinates)")
+            }
+
+            // Update publishing setting
+            self.organizationHasPublishing = org.enable_session_publishing ?? false
+            print("📝 Organization has publishing: \(self.organizationHasPublishing)")
+
+        } catch {
+            print("Error fetching organization: \(error.localizedDescription)")
+        }
     }
     
     // Get session type by ID or name (for backward compatibility)
@@ -126,71 +170,25 @@ class OrganizationService: ObservableObject {
     
     // Get organization by ID
     func getOrganization(organizationID: String) async throws -> Organization? {
-        let doc = try await db.collection("organizations").document(organizationID).getDocument()
-        
-        guard doc.exists, var data = doc.data() else {
-            print("❌ OrganizationService: Document doesn't exist or has no data for org \(organizationID)")
-            return nil
+        // Query organization from Supabase (Codable handles JSONB automatically)
+        let orgs: [Organization] = try await supabase
+            .from("organizations")
+            .select()
+            .eq("id", value: organizationID)
+            .limit(1)
+            .execute()
+            .value
+
+        if orgs.isEmpty {
+            print("❌ OrganizationService: No organization found for id \(organizationID)")
         }
-        
-        data["id"] = doc.documentID
-        
-        // Parse session types if available
-        var sessionTypes: [SessionType]? = nil
-        if let sessionTypesData = data["sessionTypes"] as? [[String: Any]] {
-            sessionTypes = sessionTypesData.compactMap { typeData in
-                guard let id = typeData["id"] as? String,
-                      let name = typeData["name"] as? String,
-                      let color = typeData["color"] as? String else {
-                    return nil
-                }
-                let order = typeData["order"] as? Int ?? 0
-                return SessionType(id: id, name: name, color: color, order: order)
-            }
-        }
-        
-        // Parse pay period settings if available
-        var payPeriodSettings: PayPeriodSettings? = nil
-        if let payPeriodData = data["payPeriodSettings"] as? [String: Any] {
-            // Get startDate from nested config object
-            let startDate = (payPeriodData["config"] as? [String: Any])?["startDate"] as? String
-            let type = payPeriodData["type"] as? String
-            
-            // Handle isActive as either Bool or Int
-            let isActive: Bool
-            if let boolValue = payPeriodData["isActive"] as? Bool {
-                isActive = boolValue
-            } else if let intValue = payPeriodData["isActive"] as? Int {
-                isActive = intValue == 1
-            } else if let intValue = payPeriodData["isActive"] as? NSNumber {
-                isActive = intValue.boolValue
-            } else {
-                isActive = false
-            }
-            
-            if let startDate = startDate,
-               let type = type {
-                payPeriodSettings = PayPeriodSettings(
-                    startDate: startDate,
-                    type: type,
-                    isActive: isActive
-                )
-            }
-        }
-        
-        return Organization(
-            id: doc.documentID,
-            name: data["name"] as? String ?? "",
-            sessionTypes: sessionTypes,
-            sessionOrderColors: data["sessionOrderColors"] as? [String],
-            enableSessionPublishing: data["enableSessionPublishing"] as? Bool,
-            payPeriodSettings: payPeriodSettings
-        )
+
+        return orgs.first
     }
     
     // Get organization session types
     func getOrganizationSessionTypes(organization: Organization) -> [SessionType] {
-        var customTypes = organization.sessionTypes ?? []
+        var customTypes = organization.session_types ?? []
         
         // Add order field to types that don't have it
         customTypes = customTypes.enumerated().map { index, type in
@@ -216,21 +214,28 @@ class OrganizationService: ObservableObject {
         return customTypes.sorted { lhs, rhs in
             if lhs.id == "other" { return false }
             if rhs.id == "other" { return true }
-            return lhs.order < rhs.order
+            return (lhs.order ?? 0) < (rhs.order ?? 0)
         }
     }
     
     // Enable session publishing for organization
     func enableSessionPublishing(organizationID: String) async throws {
-        try await db.collection("organizations").document(organizationID).updateData([
-            "enableSessionPublishing": true
-        ])
+        try await supabase
+            .from("organizations")
+            .update(["enable_session_publishing": AnyJSON.bool(true)])
+            .eq("id", value: organizationID)
+            .execute()
+
         print("✅ Enabled session publishing for organization: \(organizationID)")
     }
-    
+
     // Stop listening
     func stopListening() {
-        organizationListener?.remove()
-        organizationListener = nil
+        if let channel = organizationChannel {
+            Task {
+                await supabase.removeChannel(channel)
+            }
+            organizationChannel = nil
+        }
     }
 }

@@ -1,9 +1,14 @@
 import Foundation
-import GoogleSignIn
-import GoogleAPIClientForREST
+// import GoogleSignIn - REMOVED: Not compatible with Supabase auth flow
+// import GoogleAPIClientForREST - REMOVED: Not compatible with Supabase auth flow
 import UIKit
 
 /// Service class that handles the business logic for the Gallery Creator feature
+///
+/// NOTE: Google Sheets integration is currently DISABLED due to removal of GoogleSignIn SDK.
+/// The Captura gallery creation still works, but Google Sheets creation/update functionality
+/// will fail. To re-enable, implement OAuth using a different approach (e.g., Supabase OAuth +
+/// server-side Google API calls, or implement a web-based OAuth flow).
 class GalleryCreatorService {
     // MARK: - Shared Instance
     static let shared = GalleryCreatorService()
@@ -11,18 +16,10 @@ class GalleryCreatorService {
     // MARK: - Properties
     private let capturaTokenURL = "https://api.imagequix.com/api/oauth/token"
     private var createGalleryURL: String = ""
-    
+
     // API credentials will be fetched from CapturaAPIKeyManager
     private var capturaCredentials: CapturaAPIKeyManager.CapturaCredentials?
-    
-    // Updated to use a fallback template mechanism
-    private let templateSheetID = "1fT6I_U1Ag1lluo1mzO-qfRVCLzouwSadZBQFHI6jcxM"
-    private let fallbackTemplateSheetID = "1oTZnq5KEGdpMxZeg56c9kNzHb3l-PW8XboIbqcZ9MUk" // Add a fallback template
-    
-    // Target folders for the Google Sheet
-    private let primaryFolderID = "1bNNkQsqUYwk-XuoS_yP1trJkBgJ6axFF"
-    private let fallbackFolderID = "1oKoJr4R9SKeqbo59LjpKcL5nRDKhFF7M"
-    
+
     // Debug flag - set to true for verbose logging
     private let debug = true
     
@@ -74,43 +71,18 @@ class GalleryCreatorService {
                     switch capturaResult {
                     case .success(let galleryID):
                         self.debugLog("Successfully created Captura gallery with ID: \(galleryID)")
-                        // Captura gallery created successfully, now create Google Sheet
-                        self.authenticateWithGoogle { authResult in
-                            switch authResult {
-                            case .success:
-                                self.debugLog("Successfully authenticated with Google")
-                                self.createGoogleSheet(title: newTitle) { copyResult in
-                                    switch copyResult {
-                                    case .success(let sheetID):
-                                        self.debugLog("Successfully created Google Sheet with ID: \(sheetID)")
-                                        self.updateGoogleSheet(spreadsheetID: sheetID, title: galleryName, eventDate: eventDateString) { updateResult in
-                                            switch updateResult {
-                                            case .success:
-                                                self.debugLog("Successfully updated Google Sheet")
-                                                let result = GalleryCreationResult(
-                                                    capturaGalleryID: galleryID,
-                                                    googleSheetID: sheetID
-                                                )
-                                                completion(.success(result))
-                                                
-                                            case .failure(let error):
-                                                // Created sheet but failed to update it
-                                                self.debugLog("Failed to update Google Sheet: \(error.localizedDescription)")
-                                                completion(.failure(error))
-                                            }
-                                        }
-                                        
-                                    case .failure(let error):
-                                        self.debugLog("Failed to create Google Sheet: \(error.localizedDescription)")
-                                        completion(.failure(error))
-                                    }
-                                }
-                                
-                            case .failure(let error):
-                                self.debugLog("Failed to authenticate with Google: \(error.localizedDescription)")
-                                completion(.failure(error))
-                            }
-                        }
+                        // NOTE: Google Sheets integration disabled - GoogleSignIn SDK removed
+                        self.debugLog("⚠️ Google Sheets integration is disabled. Only Captura gallery created.")
+                        let result = GalleryCreationResult(
+                            capturaGalleryID: galleryID,
+                            googleSheetID: nil // No Google Sheet created
+                        )
+                        completion(.success(result))
+
+                        // DISABLED: Google Sheets creation (requires GoogleSignIn SDK)
+                        // self.authenticateWithGoogle { authResult in
+                        //     ... Google Sheets code removed ...
+                        // }
                         
                     case .failure(let error):
                         self.debugLog("Failed to create Captura gallery: \(error.localizedDescription)")
@@ -312,397 +284,6 @@ class GalleryCreatorService {
         }.resume()
     }
     
-    // MARK: - Google API Methods
-    
-    private func authenticateWithGoogle(completion: @escaping (Result<Void, GalleryCreatorError>) -> Void) {
-        debugLog("Authenticating with Google...")
-        
-        // Get the current user if already signed in
-        if GIDSignIn.sharedInstance.currentUser != nil {
-            debugLog("User already signed in to Google")
-            completion(.success(()))
-            return
-        }
-        
-        // No user signed in, need to show the sign-in UI
-        DispatchQueue.main.async {
-            // Find a UIViewController to present from
-            guard let rootViewController = self.topViewController() else {
-                self.debugLog("Cannot find root view controller for Google sign-in")
-                completion(.failure(.googleAuthError))
-                return
-            }
-            
-            // Updated method to use the correct Google Sign-In API
-            // This matches the API used in your version of the Google Sign-In SDK
-            GIDSignIn.sharedInstance.signIn(withPresenting: rootViewController) { signInResult, error in
-                if let error = error {
-                    self.debugLog("Google sign-in error: \(error.localizedDescription)")
-                    completion(.failure(.googleAuthError))
-                    return
-                }
-                
-                guard signInResult != nil else {
-                    self.debugLog("No sign-in result")
-                    completion(.failure(.googleAuthError))
-                    return
-                }
-                
-                self.debugLog("Google sign-in successful")
-                completion(.success(()))
-            }
-        }
-    }
-    
-    // Helper method to find the top most view controller
-    private func topViewController() -> UIViewController? {
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let rootViewController = windowScene.windows.first?.rootViewController else {
-            return nil
-        }
-        
-        var topController = rootViewController
-        while let presentedController = topController.presentedViewController {
-            topController = presentedController
-        }
-        
-        return topController
-    }
-    
-    // Modified: Enhanced method that attempts to create a new sheet and copy it to the specified folder
-    private func createGoogleSheet(title: String, completion: @escaping (Result<String, GalleryCreatorError>) -> Void) {
-        debugLog("Creating Google Sheet with title: \(title)")
-        
-        guard let user = GIDSignIn.sharedInstance.currentUser else {
-            debugLog("No Google user available")
-            completion(.failure(.googleAuthError))
-            return
-        }
-        
-        // Create a Drive service using the authenticated user's credentials
-        let service = GTLRDriveService()
-        service.authorizer = user.fetcherAuthorizer
-        
-        // First try to copy from the template and move to primary folder
-        copyGoogleSheet(service: service, templateID: templateSheetID, title: title) { [weak self] result in
-            guard let self = self else { return }
-            
-            switch result {
-            case .success(let fileID):
-                // Successfully copied the template, now move to primary folder
-                self.moveFileToFolder(service: service, fileID: fileID, folderID: self.primaryFolderID) { moveResult in
-                    switch moveResult {
-                    case .success(let movedFileID):
-                        // Successfully moved to primary folder
-                        self.debugLog("Successfully moved sheet to primary folder")
-                        completion(.success(movedFileID))
-                        
-                    case .failure:
-                        // Failed to move to primary folder, try fallback folder
-                        self.debugLog("Failed to move to primary folder, trying fallback folder")
-                        self.moveFileToFolder(service: service, fileID: fileID, folderID: self.fallbackFolderID) { fallbackMoveResult in
-                            switch fallbackMoveResult {
-                            case .success(let fallbackMovedFileID):
-                                // Successfully moved to fallback folder
-                                self.debugLog("Successfully moved sheet to fallback folder")
-                                completion(.success(fallbackMovedFileID))
-                                
-                            case .failure:
-                                // Failed to move to either folder, return original file ID
-                                self.debugLog("Failed to move to any folder, returning original file ID")
-                                completion(.success(fileID))
-                            }
-                        }
-                    }
-                }
-                
-            case .failure:
-                // If first template fails, try the fallback template
-                self.debugLog("Primary template copy failed, trying fallback template")
-                self.copyGoogleSheet(service: service, templateID: self.fallbackTemplateSheetID, title: title) { [weak self] fallbackResult in
-                    guard let self = self else { return }
-                    
-                    switch fallbackResult {
-                    case .success(let fallbackFileID):
-                        // Successfully copied the fallback template, now try to move it
-                        self.moveFileToFolder(service: service, fileID: fallbackFileID, folderID: self.primaryFolderID) { moveResult in
-                            switch moveResult {
-                            case .success(let movedFileID):
-                                self.debugLog("Successfully moved fallback sheet to primary folder")
-                                completion(.success(movedFileID))
-                                
-                            case .failure:
-                                // Try fallback folder
-                                self.moveFileToFolder(service: service, fileID: fallbackFileID, folderID: self.fallbackFolderID) { fallbackMoveResult in
-                                    switch fallbackMoveResult {
-                                    case .success(let fallbackMovedFileID):
-                                        self.debugLog("Successfully moved fallback sheet to fallback folder")
-                                        completion(.success(fallbackMovedFileID))
-                                        
-                                    case .failure:
-                                        // Return original file ID
-                                        self.debugLog("Failed to move fallback sheet to any folder")
-                                        completion(.success(fallbackFileID))
-                                    }
-                                }
-                            }
-                        }
-                        
-                    case .failure:
-                        // If fallback template also fails, create a new spreadsheet from scratch
-                        self.debugLog("Fallback template copy failed, creating new spreadsheet")
-                        self.createNewGoogleSheet(service: service, title: title) { newFileResult in
-                            switch newFileResult {
-                            case .success(let newFileID):
-                                // Try to move the new sheet to primary folder
-                                self.moveFileToFolder(service: service, fileID: newFileID, folderID: self.primaryFolderID) { moveResult in
-                                    switch moveResult {
-                                    case .success(let movedFileID):
-                                        self.debugLog("Successfully moved new sheet to primary folder")
-                                        completion(.success(movedFileID))
-                                        
-                                    case .failure:
-                                        // Try fallback folder
-                                        self.moveFileToFolder(service: service, fileID: newFileID, folderID: self.fallbackFolderID) { fallbackMoveResult in
-                                            switch fallbackMoveResult {
-                                            case .success(let fallbackMovedFileID):
-                                                self.debugLog("Successfully moved new sheet to fallback folder")
-                                                completion(.success(fallbackMovedFileID))
-                                                
-                                            case .failure:
-                                                // Return original file ID
-                                                self.debugLog("Failed to move new sheet to any folder")
-                                                completion(.success(newFileID))
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                            case .failure(let error):
-                                self.debugLog("Failed to create new spreadsheet: \(error.localizedDescription)")
-                                completion(.failure(error))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // Simple copy operation
-    private func copyGoogleSheet(service: GTLRDriveService, templateID: String, title: String, completion: @escaping (Result<String, GalleryCreatorError>) -> Void) {
-        // Create a request to copy the template file
-        let copyFile = GTLRDrive_File()
-        copyFile.name = title
-        
-        let query = GTLRDriveQuery_FilesCopy.query(withObject: copyFile, fileId: templateID)
-        query.fields = "id"
-        
-        debugLog("Sending Google Drive copy request for template: \(templateID)")
-        
-        service.executeQuery(query) { [weak self] (ticket, response, error) in
-            guard let self = self else { return }
-            
-            if let error = error {
-                self.debugLog("Error copying template: \(error.localizedDescription)")
-                completion(.failure(.googleSheetError))
-                return
-            }
-            
-            guard let response = response as? GTLRDrive_File,
-                  let fileID = response.identifier else {
-                self.debugLog("Invalid response when copying template")
-                completion(.failure(.invalidResponse))
-                return
-            }
-            
-            self.debugLog("Successfully copied template with ID: \(fileID)")
-            completion(.success(fileID))
-        }
-    }
-    
-    // Create a new blank spreadsheet
-    private func createNewGoogleSheet(service: GTLRDriveService, title: String, completion: @escaping (Result<String, GalleryCreatorError>) -> Void) {
-        debugLog("Creating new blank Google Sheet with title: \(title)")
-        
-        // Create a new file object for a Google Sheet
-        let newFile = GTLRDrive_File()
-        newFile.name = title
-        newFile.mimeType = "application/vnd.google-apps.spreadsheet"
-        
-        let query = GTLRDriveQuery_FilesCreate.query(withObject: newFile, uploadParameters: nil)
-        query.fields = "id"
-        
-        service.executeQuery(query) { [weak self] (ticket, response, error) in
-            guard let self = self else { return }
-            
-            if let error = error {
-                self.debugLog("Error creating new sheet: \(error.localizedDescription)")
-                completion(.failure(.googleSheetError))
-                return
-            }
-            
-            guard let response = response as? GTLRDrive_File,
-                  let fileID = response.identifier else {
-                self.debugLog("Invalid response when creating new sheet")
-                completion(.failure(.invalidResponse))
-                return
-            }
-            
-            self.debugLog("Successfully created new sheet with ID: \(fileID)")
-            completion(.success(fileID))
-        }
-    }
-    
-    // Move a file to a specific folder
-    private func moveFileToFolder(service: GTLRDriveService, fileID: String, folderID: String, completion: @escaping (Result<String, GalleryCreatorError>) -> Void) {
-        // First, get the current parents of the file
-        let getQuery = GTLRDriveQuery_FilesGet.query(withFileId: fileID)
-        getQuery.fields = "parents"
-        
-        service.executeQuery(getQuery) { [weak self] (ticket, response, error) in
-            guard let self = self else { return }
-            
-            if let error = error {
-                self.debugLog("Error getting file parents: \(error.localizedDescription)")
-                completion(.failure(.googleSheetError))
-                return
-            }
-            
-            guard let file = response as? GTLRDrive_File,
-                  let parents = file.parents else {
-                self.debugLog("File has no parents or couldn't get file info")
-                completion(.failure(.invalidResponse))
-                return
-            }
-            
-            // Now move the file to the specified folder
-            let updateFile = GTLRDrive_File()
-            let updateQuery = GTLRDriveQuery_FilesUpdate.query(withObject: updateFile, fileId: fileID, uploadParameters: nil)
-            updateQuery.addParents = folderID
-            updateQuery.removeParents = parents.joined(separator: ",")
-            
-            service.executeQuery(updateQuery) { [weak self] (ticket, response, error) in
-                guard let self = self else { return }
-                
-                if let error = error {
-                    self.debugLog("Error moving file to folder: \(error.localizedDescription)")
-                    completion(.failure(.googleSheetError))
-                    return
-                }
-                
-                guard let updatedFile = response as? GTLRDrive_File,
-                      let updatedFileID = updatedFile.identifier else {
-                    self.debugLog("Invalid response when moving file")
-                    completion(.failure(.invalidResponse))
-                    return
-                }
-                
-                self.debugLog("Successfully moved file to folder: \(folderID)")
-                completion(.success(updatedFileID))
-            }
-        }
-    }
-    
-    // Updated method to populate cells in the Blank Sports Roster template
-    private func updateGoogleSheet(spreadsheetID: String, title: String, eventDate: String, completion: @escaping (Result<Void, GalleryCreatorError>) -> Void) {
-        debugLog("Updating Google Sheet with ID: \(spreadsheetID), title: \(title), date: \(eventDate)")
-        
-        guard let user = GIDSignIn.sharedInstance.currentUser else {
-            debugLog("No Google user available")
-            completion(.failure(.googleAuthError))
-            return
-        }
-        
-        // Create a Sheets service using the authenticated user's credentials
-        let service = GTLRSheetsService()
-        service.authorizer = user.fetcherAuthorizer
-        
-        // Convert the event date to MM-DD-YY format for the sheet
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        let parsedDate = dateFormatter.date(from: eventDate) ?? Date()
-        
-        dateFormatter.dateFormat = "M-d-yy"
-        let formattedDate = dateFormatter.string(from: parsedDate)
-        
-        // Get the sheets in the spreadsheet to identify the right sheet to update
-        let getQuery = GTLRSheetsQuery_SpreadsheetsGet.query(withSpreadsheetId: spreadsheetID)
-        
-        service.executeQuery(getQuery) { [weak self] (ticket, response, error) in
-            guard let self = self else { return }
-            
-            if let error = error {
-                self.debugLog("Error retrieving spreadsheet info: \(error.localizedDescription)")
-                completion(.failure(.googleSheetError))
-                return
-            }
-            
-            guard let spreadsheet = response as? GTLRSheets_Spreadsheet,
-                  let sheets = spreadsheet.sheets else {
-                self.debugLog("Invalid spreadsheet structure")
-                completion(.failure(.invalidResponse))
-                return
-            }
-            
-            // Check if we have the Photographer sheet or Sheet1 - otherwise use the first sheet
-            var targetSheetName = "Sheet1" // Default sheet name
-            
-            for sheet in sheets {
-                if let properties = sheet.properties, let sheetName = properties.title {
-                    // Look for "Sheet1" or "Photographer" in the sheet titles
-                    if sheetName == "Sheet1" || sheetName == "Photographer" {
-                        targetSheetName = sheetName
-                        break
-                    }
-                }
-            }
-            
-            if sheets.isEmpty {
-                self.debugLog("No sheets found in the spreadsheet")
-                completion(.failure(.googleSheetError))
-                return
-            } else if targetSheetName.isEmpty, let firstSheet = sheets.first, let properties = firstSheet.properties, let sheetName = properties.title {
-                // Use the first sheet if we couldn't find Sheet1 or Photographer
-                targetSheetName = sheetName
-            }
-            
-            self.debugLog("Using sheet: \(targetSheetName) for updates")
-            
-            // Create value ranges to update the relevant cells
-            // For "Job name" - update cell B7 (this is where the gallery name will go)
-            let jobNameVR = GTLRSheets_ValueRange()
-            jobNameVR.range = "\(targetSheetName)!B7"
-            jobNameVR.values = [[title]]
-            
-            // For "Event Date" - update cell B9 (this is where the date will go)
-            let dateVR = GTLRSheets_ValueRange()
-            dateVR.range = "\(targetSheetName)!B9"
-            dateVR.values = [[formattedDate]]
-            
-            // Batch update the values
-            let batchUpdateRequest = GTLRSheets_BatchUpdateValuesRequest()
-            batchUpdateRequest.data = [jobNameVR, dateVR]
-            batchUpdateRequest.valueInputOption = "USER_ENTERED" // Use USER_ENTERED to enable date formatting
-            
-            let batchQuery = GTLRSheetsQuery_SpreadsheetsValuesBatchUpdate.query(
-                withObject: batchUpdateRequest,
-                spreadsheetId: spreadsheetID
-            )
-            
-            service.executeQuery(batchQuery) { (ticket, response, error) in
-                if let error = error {
-                    self.debugLog("Error updating spreadsheet values: \(error.localizedDescription)")
-                    completion(.failure(.googleSheetError))
-                    return
-                }
-                
-                self.debugLog("Successfully updated spreadsheet with job name and date")
-                completion(.success(()))
-            }
-        }
-    }
-    
     // MARK: - Debug Helper
     
     private func debugLog(_ message: String) {
@@ -717,7 +298,7 @@ class GalleryCreatorService {
 /// Result of a successful gallery creation
 struct GalleryCreationResult {
     let capturaGalleryID: String
-    let googleSheetID: String
+    let googleSheetID: String? // Optional - nil when Google Sheets integration is disabled
 }
 
 /// Errors that can occur during gallery creation
@@ -729,11 +310,8 @@ enum GalleryCreatorError: Error {
     case jsonParsingError
     case jsonSerializationError
     case capturaError
-    case googleAuthError
-    case googleSheetError
-    case folderAccessError
     case missingCredentials
-    
+
     var localizedDescription: String {
         switch self {
         case .invalidURL:
@@ -750,12 +328,6 @@ enum GalleryCreatorError: Error {
             return "Error creating request"
         case .capturaError:
             return "Error with Captura service"
-        case .googleAuthError:
-            return "Google authentication error"
-        case .googleSheetError:
-            return "Error creating or updating Google Sheet"
-        case .folderAccessError:
-            return "Error accessing Google Drive folder"
         case .missingCredentials:
             return "Captura API credentials not configured. Please add them in Settings."
         }

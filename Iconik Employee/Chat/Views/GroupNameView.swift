@@ -127,13 +127,13 @@ struct GroupNameView_Previews: PreviewProvider {
             selectedUsers: [
                 ChatUser(
                     id: "1",
-                    organizationID: "org1",
-                    firstName: "John",
-                    lastName: "Doe",
+                    organization_id: "org1",
+                    first_name: "John",
+                    last_name: "Doe",
                     email: "john@example.com",
-                    displayName: nil,
-                    photoURL: nil,
-                    isActive: true
+                    display_name: nil,
+                    photo_url: nil,
+                    is_active: true
                 )
             ],
             onComplete: { _ in }

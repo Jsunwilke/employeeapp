@@ -1,8 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseAuth
-import FirebaseFirestore
-import FirebaseStorage
 import CoreLocation
 import MapKit
 import Combine
@@ -69,7 +65,6 @@ struct DailyJobReportView: View {
     @State private var selectedDateSessions: [Session] = []
     @State private var isLoadingSchedule: Bool = false
     @State private var scheduleError: String = ""
-    @State private var scheduleListener: ListenerRegistration?
     
     // ------------------------------------------------------------------
     // Other report fields
@@ -270,13 +265,22 @@ struct DailyJobReportView: View {
             self.keyboardHeight = height
         }
         .onDisappear {
-            // Clean up real-time listener
-            scheduleListener?.remove()
+            // No cleanup needed for Supabase
         }
         .alert("Permission Error", isPresented: $showPermissionError) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Unable to access daily job reports. Please contact your administrator.")
+        }
+        .alert("Error", isPresented: Binding(
+            get: { !errorMessage.isEmpty },
+            set: { if !$0 { errorMessage = "" } }
+        )) {
+            Button("OK", role: .cancel) {
+                errorMessage = ""
+            }
+        } message: {
+            Text(errorMessage)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -1049,39 +1053,67 @@ struct DailyJobReportView: View {
     // MARK: - Load Schedule for Default School Selection
     
     func loadScheduleForDate(_ date: Date) {
+        print("📋 loadScheduleForDate called for date: \(date)")
         isLoadingSchedule = true
         scheduleError = ""
         selectedDateSessions = []
-        
-        // Remove any existing listener
-        scheduleListener?.remove()
-        
+
+        // Supabase uses async/await, no listener to stop
+
         // Create date range for the selected day
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-        
+
         // Get current user ID for filtering
         guard let currentUserID = UserManager.shared.getCurrentUserID() else {
             print("🔐 Cannot filter sessions: no current user ID")
             self.isLoadingSchedule = false
             return
         }
-        
-        // Load sessions from Firestore with real-time updates
-        scheduleListener = sessionService.listenForSessions { sessions in
+        print("📋 Current user ID: \(currentUserID)")
+
+        // Get current user email for fallback matching
+        let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail")
+
+        let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        guard !organizationID.isEmpty else {
+            print("❌ Cannot load sessions: no organization ID")
+            self.isLoadingSchedule = false
+            return
+        }
+        print("📋 Organization ID: \(organizationID), calling startListeningToSessions...")
+
+        // Load sessions from Supabase with real-time updates
+        sessionService.startListeningToSessions(
+            organizationID: organizationID,
+            includeUnpublished: false  // Regular users see only published
+        ) { sessions in
             DispatchQueue.main.async {
-                
+                print("📋 DailyJobReportView: Received \(sessions.count) total sessions")
+                print("📋 Looking for sessions on: \(startOfDay) to \(endOfDay)")
+                print("📋 Current user ID: \(currentUserID), email: \(currentUserEmail ?? "nil")")
+
                 // Filter sessions for the selected date where current user is assigned
                 let sessionsForDay = sessions.filter { session in
-                    guard let sessionDate = session.startDate else { return false }
+                    guard let sessionDate = session.startDate else {
+                        print("📋 Session \(session.id) has no startDate (date: \(session.date), time: \(session.start_time))")
+                        return false
+                    }
                     let isSelectedDay = sessionDate >= startOfDay && sessionDate < endOfDay
-                    let isUserAssigned = session.isUserAssigned(userID: currentUserID)
+                    let isUserAssigned = session.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail)
+
+                    if isSelectedDay {
+                        print("📋 Session on selected day: \(session.schoolName) - photographers: \(session.photographers.map { "\($0.id):\($0.name)" })")
+                        print("   isUserAssigned: \(isUserAssigned)")
+                    }
+
                     return isSelectedDay && isUserAssigned
                 }
-                
+
+                print("📋 Filtered to \(sessionsForDay.count) sessions for user on this day")
                 self.selectedDateSessions = sessionsForDay
-                
+
                 // Check if we have completed a report for this date and school already
                 self.checkExistingReports { completedSchools in
                     // Try to set the default school from schedule
@@ -1093,52 +1125,40 @@ struct DailyJobReportView: View {
     }
     
     func checkExistingReports(completion: @escaping ([String]) -> Void) {
-        // Get start and end of the selected day for Firestore query
+        // Get start and end of the selected day
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: reportDate)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-        
-        // Query Firestore for reports on this date by this user
+
         // Get the selected photographer's name
         guard let photographer = photographers.first(where: { $0.id == selectedPhotographerId }) else {
             completion([])
             return
         }
-        
-        let db = Firestore.firestore()
-        db.collection("dailyJobReports")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .whereField("yourName", isEqualTo: photographer.firstName)
-            .whereField("date", isGreaterThanOrEqualTo: startOfDay)
-            .whereField("date", isLessThanOrEqualTo: endOfDay)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    print("Error checking existing reports: \(error.localizedDescription)")
-                    
-                    // Check if it's a permission error
-                    if (error as NSError).code == 7 || error.localizedDescription.contains("Missing or insufficient permissions") {
-                        DispatchQueue.main.async {
-                            self.showPermissionError = true
-                        }
-                    }
-                    
-                    completion([])
-                    return
-                }
-                
-                guard let documents = snapshot?.documents else {
-                    completion([])
-                    return
-                }
-                
+
+        Task {
+            do {
+                // Query Supabase for reports on this date by this photographer
+                let reports = try await DailyJobReportService.shared.getReports(
+                    yourName: photographer.firstName,
+                    organizationID: storedUserOrganizationID,
+                    startDate: startOfDay,
+                    endDate: endOfDay
+                )
+
                 // Extract school names from completed reports
-                let schoolNames = documents.compactMap { doc -> String? in
-                    let data = doc.data()
-                    return data["schoolOrDestination"] as? String
+                let schoolNames = reports.compactMap { $0.school_or_destination }
+
+                await MainActor.run {
+                    completion(schoolNames)
                 }
-                
-                completion(schoolNames)
+            } catch {
+                print("Error checking existing reports: \(error.localizedDescription)")
+                await MainActor.run {
+                    completion([])
+                }
             }
+        }
     }
     
     func setDefaultSchoolFromSchedule(completedSchools: [String]) {
@@ -1225,93 +1245,118 @@ struct DailyJobReportView: View {
     func loadOrganizationPhotographers() {
         guard !storedUserOrganizationID.isEmpty else {
             print("No organizationID in AppStorage.")
+            errorMessage = "Unable to load photographers: not signed in or organization not found"
             return
         }
-        let db = Firestore.firestore()
-        db.collection("users")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    self.errorMessage = error.localizedDescription
-                    return
-                }
-                guard let docs = snapshot?.documents else { return }
-                var photogs: [PhotographerOption] = []
-                for doc in docs {
-                    let data = doc.data()
-                    if let fname = data["firstName"] as? String {
-                        let lname = data["lastName"] as? String ?? ""
+
+        Task {
+            do {
+                let members = try await TeamService.shared.getTeamMembers(organizationID: storedUserOrganizationID)
+
+                await MainActor.run {
+                    var photogs: [PhotographerOption] = []
+                    for member in members {
                         let photographer = PhotographerOption(
-                            id: doc.documentID,
-                            firstName: fname,
-                            lastName: lname
+                            id: member.id,
+                            firstName: member.firstName,
+                            lastName: member.lastName ?? ""
                         )
                         photogs.append(photographer)
                     }
+                    photogs.sort { $0.displayName.lowercased() < $1.displayName.lowercased() }
+                    self.photographers = photogs
+
+                    // Try to find and select the current user
+                    if let currentUser = photogs.first(where: {
+                        $0.firstName == self.storedUserFirstName &&
+                        $0.lastName == self.storedUserLastName
+                    }) {
+                        self.selectedPhotographerId = currentUser.id
+                    } else if let first = photogs.first {
+                        self.selectedPhotographerId = first.id
+                    }
                 }
-                photogs.sort { $0.displayName.lowercased() < $1.displayName.lowercased() }
-                self.photographers = photogs
-                
-                // Try to find and select the current user
-                if let currentUser = photogs.first(where: { 
-                    $0.firstName == self.storedUserFirstName && 
-                    $0.lastName == self.storedUserLastName 
-                }) {
-                    self.selectedPhotographerId = currentUser.id
-                } else if let first = photogs.first {
-                    self.selectedPhotographerId = first.id
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
                 }
             }
+        }
     }
     
     // MARK: - Load Schools
     func loadSchools() {
-        let db = Firestore.firestore()
-        db.collection("schools")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .getDocuments { snapshot, error in
-                if let error = error {
+        guard !storedUserOrganizationID.isEmpty else {
+            print("No organizationID in AppStorage - cannot load schools.")
+            errorMessage = "Unable to load schools: not signed in or organization not found"
+            return
+        }
+
+        Task {
+            do {
+                let schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
+
+                await MainActor.run {
+                    // Convert School models to SchoolItem
+                    var temp: [SchoolItem] = []
+                    for school in schools {
+                        // Build address from available fields
+                        var addressComponents: [String] = []
+                        if let street = school.street, !street.isEmpty {
+                            addressComponents.append(street)
+                        }
+                        if let city = school.city, !city.isEmpty {
+                            addressComponents.append(city)
+                        }
+                        if let state = school.state, !state.isEmpty {
+                            addressComponents.append(state)
+                        }
+                        if let zip = school.zip, !zip.isEmpty {
+                            addressComponents.append(zip)
+                        }
+                        let address = addressComponents.isEmpty ? school.value : addressComponents.joined(separator: ", ")
+
+                        temp.append(SchoolItem(
+                            id: school.id,
+                            name: school.value,
+                            address: address,
+                            coordinates: school.coordinates
+                        ))
+                    }
+                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
+
+                    // Only update schoolOptions if the data actually changed to prevent re-renders
+                    if !areSchoolListsEqual(self.schoolOptions, temp) {
+                        self.schoolOptions = temp
+                    }
+
+                    // Now that we have schools loaded, check if we need to set defaults
+                    if let note = self.selectedPhotoshootNote,
+                       let match = temp.first(where: { $0.name == note.school }) {
+                        if !self.selectedSchools.isEmpty {
+                            self.selectedSchools[0] = match
+                        }
+                    } else if let first = temp.first {
+                        if self.selectedSchools[0] == nil {
+                            self.selectedSchools[0] = first
+                        }
+                    }
+
+                    // Try to set school from schedule
+                    if self.isLoadingSchedule == false && !self.selectedDateSessions.isEmpty {
+                        self.checkExistingReports { completedSchools in
+                            self.setDefaultSchoolFromSchedule(completedSchools: completedSchools)
+                        }
+                    }
+
+                    self.calculateMultiStopMileage()
+                }
+            } catch {
+                await MainActor.run {
                     self.errorMessage = error.localizedDescription
-                    return
                 }
-                guard let docs = snapshot?.documents else { return }
-                var temp: [SchoolItem] = []
-                for doc in docs {
-                    let data = doc.data()
-                    if let value = data["value"] as? String,
-                       let address = data["schoolAddress"] as? String {
-                        let coordinates = data["coordinates"] as? String
-                        temp.append(SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates))
-                    }
-                }
-                temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                
-                // Only update schoolOptions if the data actually changed to prevent re-renders
-                if !areSchoolListsEqual(self.schoolOptions, temp) {
-                    self.schoolOptions = temp
-                }
-                
-                // Now that we have schools loaded, check if we need to set defaults
-                if let note = self.selectedPhotoshootNote,
-                   let match = temp.first(where: { $0.name == note.school }) {
-                    if !self.selectedSchools.isEmpty {
-                        self.selectedSchools[0] = match
-                    }
-                } else if let first = temp.first {
-                    if self.selectedSchools[0] == nil {
-                        self.selectedSchools[0] = first
-                    }
-                }
-                
-                // Try to set school from schedule
-                if self.isLoadingSchedule == false && !self.selectedDateSessions.isEmpty {
-                    self.checkExistingReports { completedSchools in
-                        self.setDefaultSchoolFromSchedule(completedSchools: completedSchools)
-                    }
-                }
-                
-                self.calculateMultiStopMileage()
             }
+        }
     }
     
     // MARK: - Helper Functions
@@ -1525,117 +1570,139 @@ struct DailyJobReportView: View {
     }
     
     func submitReport() {
-        guard let user = Auth.auth().currentUser else {
+        guard let currentUserId = UserManager.shared.getCurrentUserIDUnified() else {
             errorMessage = "User not signed in."
             return
         }
         isSubmitting = true
         errorMessage = ""
-        
+
         let mileage = Double(totalMileage) ?? calculatedMileage
         var photoURLs: [String] = []
-        
+
         func finishSubmission() {
             let jobDescriptionArray = Array(selectedJobDescriptions)
             let extraItemsArray = Array(selectedExtraItems)
             let combinedSchoolNames = selectedSchools.compactMap { $0?.name }.joined(separator: ", ")
-            
+
             // Include photo URLs from the selected photoshoot note if available
             if let note = selectedPhotoshootNote {
                 photoURLs.append(contentsOf: note.photoURLs)
             }
-            
-            let db = Firestore.firestore()
-            let reportData: [String: Any] = [
-                "organizationID": storedUserOrganizationID,
-                "date": reportDate,
-                "yourName": photographers.first(where: { $0.id == selectedPhotographerId })?.firstName ?? "",
-                "userId": user.uid,  // New field for user ID
-                "photoshootNoteID": selectedPhotoshootNote?.id.uuidString ?? "",
-                "photoshootNoteText": selectedPhotoshootNote?.noteText ?? "",
-                "schoolOrDestination": combinedSchoolNames,
-                "totalMileage": mileage,
-                "jobDescriptions": jobDescriptionArray,
-                "extraItems": extraItemsArray,
-                "cardsScannedChoice": cardsScannedChoice,
-                "jobBoxAndCameraCards": jobBoxAndCameraCards,
-                "sportsBackgroundShot": sportsBackgroundShot,
-                "jobDescriptionText": jobDescription,
-                "photoURLs": photoURLs,
-                "timestamp": FieldValue.serverTimestamp()
-            ]
-            
-            db.collection("dailyJobReports").addDocument(data: reportData) { error in
-                self.isSubmitting = false
-                if let error = error {
-                    self.errorMessage = error.localizedDescription
-                } else {
-                    if let selectedNote = self.selectedPhotoshootNote,
-                       let index = self.photoshootNotes.firstIndex(of: selectedNote) {
-                        self.photoshootNotes.remove(at: index)
-                        self.savePhotoshootNotes()
+
+            let yourName = photographers.first(where: { $0.id == selectedPhotographerId })?.firstName ?? ""
+
+            // Create DailyJobReport for Supabase
+            let report = DailyJobReport(
+                id: UUID().uuidString,
+                organizationID: storedUserOrganizationID,
+                userId: currentUserId,
+                date: reportDate,
+                yourName: yourName,
+                schoolOrDestination: combinedSchoolNames.isEmpty ? nil : combinedSchoolNames,
+                totalMileage: mileage,
+                jobDescriptions: jobDescriptionArray.isEmpty ? nil : jobDescriptionArray,
+                extraItems: extraItemsArray.isEmpty ? nil : extraItemsArray,
+                cardsScannedChoice: cardsScannedChoice.isEmpty ? nil : cardsScannedChoice,
+                jobBoxAndCameraCards: jobBoxAndCameraCards.isEmpty ? nil : jobBoxAndCameraCards,
+                sportsBackgroundShot: sportsBackgroundShot.isEmpty ? nil : sportsBackgroundShot,
+                jobDescriptionText: jobDescription.isEmpty ? nil : jobDescription,
+                photoshootNoteID: selectedPhotoshootNote?.id.uuidString,
+                photoshootNoteText: selectedPhotoshootNote?.noteText,
+                photoURLs: photoURLs.isEmpty ? nil : photoURLs,
+                reportType: "standard"
+            )
+
+            Task {
+                do {
+                    _ = try await DailyJobReportService.shared.createReport(report)
+
+                    await MainActor.run {
+                        self.isSubmitting = false
+
+                        if let selectedNote = self.selectedPhotoshootNote,
+                           let index = self.photoshootNotes.firstIndex(of: selectedNote) {
+                            self.photoshootNotes.remove(at: index)
+                            self.savePhotoshootNotes()
+                        }
+
+                        // Post notification to show toast on main view
+                        NotificationCenter.default.post(name: Notification.Name("ShowReportSuccessToast"), object: nil)
+
+                        // Return to home tab
+                        self.tabBarManager.selectedTab = "home"
                     }
-                    
-                    // Post notification to show toast on main view
-                    NotificationCenter.default.post(name: Notification.Name("ShowReportSuccessToast"), object: nil)
-                    
-                    // Return to home tab
-                    self.tabBarManager.selectedTab = "home"
+                } catch {
+                    await MainActor.run {
+                        self.isSubmitting = false
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             }
         }
-        
+
         guard !selectedImages.isEmpty else {
+            print("📋 No photos to upload, submitting report directly")
             finishSubmission()
             return
         }
-        
+
         guard !storedUserOrganizationID.isEmpty else {
             errorMessage = "Cannot upload photos: no organization ID found"
             finishSubmission()
             return
         }
-        
-        let storageRef = Storage.storage().reference()
-        let dispatchGroup = DispatchGroup()
-        
-        for image in selectedImages {
-            dispatchGroup.enter()
-            if let imageData = image.jpegData(compressionQuality: 0.8) {
-                // Updated path to include organization ID
-                let fileName = "dailyReports/\(storedUserOrganizationID)/\(user.uid)/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
-                let imageRef = storageRef.child(fileName)
-                
-                // Set metadata with content type
-                let metadata = StorageMetadata()
-                metadata.contentType = "image/jpeg"
-                
-                imageRef.putData(imageData, metadata: metadata) { _, error in
-                    if let error = error {
-                        DispatchQueue.main.async {
-                            self.errorMessage = "Upload error: \(error.localizedDescription)"
-                        }
-                        dispatchGroup.leave()
-                        return
-                    }
-                    imageRef.downloadURL { url, error in
-                        if let error = error {
-                            DispatchQueue.main.async {
-                                self.errorMessage = "URL error: \(error.localizedDescription)"
-                            }
-                        } else if let urlString = url?.absoluteString {
-                            photoURLs.append(urlString)
-                        }
-                        dispatchGroup.leave()
+
+        print("📸 Starting upload of \(selectedImages.count) photo(s) to Supabase Storage...")
+
+        // Upload photos to Supabase Storage
+        Task {
+            let supabase = SupabaseManager.shared.client
+
+            for (index, image) in selectedImages.enumerated() {
+                print("📸 Processing photo \(index + 1) of \(selectedImages.count)...")
+
+                guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+                    print("❌ Photo \(index + 1): Failed to convert UIImage to JPEG data")
+                    continue
+                }
+
+                print("📸 Photo \(index + 1): Created JPEG data (\(imageData.count) bytes)")
+
+                // Create unique file path: orgId/userId/timestamp_uuid.jpg
+                let fileName = "\(storedUserOrganizationID)/\(currentUserId)/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
+                print("📸 Photo \(index + 1): Uploading to path: \(fileName)")
+
+                do {
+                    // Upload to Supabase Storage bucket "daily-reports" (private bucket)
+                    // File extension .jpg tells Supabase the content type
+                    _ = try await supabase.storage
+                        .from("daily-reports")
+                        .upload(path: fileName, file: imageData)
+
+                    print("📸 Photo \(index + 1): Upload complete, getting signed URL...")
+
+                    // Get a signed URL for the uploaded file (valid for 1 year)
+                    let signedURL = try await supabase.storage
+                        .from("daily-reports")
+                        .createSignedURL(path: fileName, expiresIn: 31536000) // 1 year in seconds
+
+                    print("✅ Photo \(index + 1): Upload successful: \(signedURL.absoluteString.prefix(80))...")
+                    photoURLs.append(signedURL.absoluteString)
+
+                } catch {
+                    print("❌ Photo \(index + 1): Supabase Storage upload failed: \(error.localizedDescription)")
+                    await MainActor.run {
+                        self.errorMessage = "Upload error: \(error.localizedDescription)"
                     }
                 }
-            } else {
-                dispatchGroup.leave()
             }
-        }
-        
-        dispatchGroup.notify(queue: .main) {
-            finishSubmission()
+
+            print("📸 Photo upload complete. \(photoURLs.count) URL(s) ready for report")
+
+            await MainActor.run {
+                finishSubmission()
+            }
         }
     }
 }

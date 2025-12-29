@@ -1,6 +1,5 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
+import Supabase
 import Combine
 
 // State management class to handle objectWillChange notifications
@@ -174,8 +173,9 @@ struct SportsShootListView: View {
     // Track if view is visible to optimize timers
     @State private var isViewVisible = false
     
-    // Firestore listener reference
-    @State private var shootListener: ListenerRegistration?
+    // Supabase realtime listener reference
+    @State private var shootListener: ListenerRegistrationWrapper?
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
     
     // Sync statuses refresh timer - using a longer interval to prevent flickering
     let syncStatusTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -893,8 +893,8 @@ struct SportsShootListView: View {
                 .onAppear {
                     setupOrientationNotification()
                     
-                    // Set up a real-time listener for Firestore updates
-                    setupFirestoreListeners()
+                    // Set up a real-time listener for updates
+                    setupRealtimeListeners()
                     
                     // Clean up stale locks immediately on view load
                     if let shootID = viewModel.selectedShoot?.id {
@@ -905,7 +905,7 @@ struct SportsShootListView: View {
                     // Remove orientation notification observer
                     NotificationCenter.default.removeObserver(self, name: UIDevice.orientationDidChangeNotification, object: nil)
                     
-                    // Remove Firestore listener
+                    // Remove realtime listener
                     shootListener?.remove()
                     shootListener = nil
                     
@@ -918,7 +918,7 @@ struct SportsShootListView: View {
                 .onChange(of: shoot.id) { newShootID in
                     // When the selected shoot changes, set up listeners for the new shoot
                     print("Selected shoot changed to: \(newShootID)")
-                    setupFirestoreListeners()
+                    setupRealtimeListeners()
                     
                     // Clean up stale locks for the new shoot
                     EntryLockManager.shared.cleanupStaleLocks(shootID: newShootID)
@@ -2467,10 +2467,10 @@ struct SportsShootListView: View {
                                 }
                             }
                             
-                            // MARK: - Firestore Listeners
-                            
-                            // Set up Firestore listeners for real-time updates
-                            private func setupFirestoreListeners() {
+                            // MARK: - Realtime Listeners
+
+                            // Set up Supabase realtime listeners for real-time updates
+                            private func setupRealtimeListeners() {
                                 // Set up lock listener
                                 setupLockListener()
                                 
@@ -2485,88 +2485,116 @@ struct SportsShootListView: View {
                                 // Remove any existing listener first
                                 shootListener?.remove()
                                 shootListener = nil
-                                
-                                let db = Firestore.firestore()
-                                
-                                // Listen for changes to the roster collection
+
                                 print("Setting up real-time listener for shoot: \(shootID)")
-                                shootListener = db.collection("sportsJobs").document(shootID)
-                                    .addSnapshotListener { documentSnapshot, error in
-                                        guard let document = documentSnapshot else {
-                                            print("Error fetching shoot document: \(error?.localizedDescription ?? "Unknown error")")
-                                            return
+
+                                // Set up Supabase realtime subscription
+                                Task {
+                                    let channelKey = "shoot_\(shootID)"
+                                    let channel = supabase.channel(channelKey)
+
+                                    // Listen for changes to this specific sports job
+                                    let changeStream = channel.postgresChange(
+                                        AnyAction.self,
+                                        schema: "public",
+                                        table: "sports_jobs",
+                                        filter: "id=eq.\(shootID)"
+                                    )
+
+                                    // Start listening for changes
+                                    Task {
+                                        for await _ in changeStream {
+                                            // Refetch the shoot data when any change occurs
+                                            await self.fetchAndUpdateShoot(shootID: shootID)
                                         }
-                                        
-                                        guard document.exists else {
-                                            print("Document no longer exists")
-                                            return
-                                        }
-                                        
-                                        // Parse the document to get the updated shoot data
-                                        guard let updatedShoot = SportsShoot(from: document) else {
-                                            print("Failed to parse shoot data from document")
-                                            if let data = document.data() {
-                                                print("Document data exists but couldn't parse. Keys: \(data.keys)")
-                                            }
-                                            return
-                                        }
-                                        
-                                        print("Successfully parsed updated shoot data")
-                                        
-                                        // Update individual roster entries without disrupting active editing
-                                        DispatchQueue.main.async {
-                                            // Update roster entries that aren't currently being edited
-                                            if var currentShoot = self.viewModel.selectedShoot {
-                                                var needsUpdate = false
-                                                
-                                                // Update roster entries
-                                                print("Checking \(updatedShoot.roster.count) roster entries for updates")
-                                                for updatedEntry in updatedShoot.roster {
-                                                    // Skip if we're currently editing this entry
-                                                    if self.viewModel.currentlyEditingEntry == updatedEntry.id {
-                                                        print("Skipping update for entry \(updatedEntry.id) - currently editing")
-                                                        continue
-                                                    }
-                                                    
-                                                    // Find and update the entry in our local roster
-                                                    if let index = currentShoot.roster.firstIndex(where: { $0.id == updatedEntry.id }) {
-                                                        let currentImageNumbers = currentShoot.roster[index].imageNumbers
-                                                        let updatedImageNumbers = updatedEntry.imageNumbers
-                                                        
-                                                        if currentImageNumbers != updatedImageNumbers {
-                                                            currentShoot.roster[index] = updatedEntry
-                                                            needsUpdate = true
-                                                            print("✅ Updated image numbers for entry \(updatedEntry.id): '\(currentImageNumbers)' -> '\(updatedImageNumbers)'")
-                                                        }
-                                                    } else {
-                                                        print("⚠️ Could not find entry \(updatedEntry.id) in local roster")
-                                                    }
-                                                }
-                                                
-                                                // Also update group images
-                                                if currentShoot.groupImages != updatedShoot.groupImages {
-                                                    currentShoot.groupImages = updatedShoot.groupImages
-                                                    needsUpdate = true
-                                                }
-                                                
-                                                // Apply updates if needed
-                                                if needsUpdate {
-                                                    print("📱 Applying updates to UI")
-                                                    self.viewModel.selectedShoot = currentShoot
-                                                    
-                                                    // Also update in the main list
-                                                    if let listIndex = self.viewModel.sportsShoots.firstIndex(where: { $0.id == shootID }) {
-                                                        self.viewModel.sportsShoots[listIndex] = currentShoot
-                                                    }
-                                                    
-                                                    // Force UI update
-                                                    self.viewModel.objectWillChange.send()
-                                                } else {
-                                                    print("No updates needed")
-                                                }
+                                    }
+
+                                    await channel.subscribe()
+
+                                    // Store wrapper for cleanup
+                                    await MainActor.run {
+                                        shootListener = ListenerRegistrationWrapper {
+                                            Task {
+                                                await channel.unsubscribe()
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            // Helper to fetch and update shoot data
+                            private func fetchAndUpdateShoot(shootID: String) async {
+                                do {
+                                    // Fetch the updated shoot from Supabase using existing service
+                                    let updatedShoot = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<SportsShoot, Error>) in
+                                        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
+                                            switch result {
+                                            case .success(let shoot):
+                                                continuation.resume(returning: shoot)
+                                            case .failure(let error):
+                                                continuation.resume(throwing: error)
+                                            }
+                                        }
+                                    }
+
+                                    print("Successfully fetched updated shoot data")
+
+                                    // Update individual roster entries without disrupting active editing
+                                    await MainActor.run {
+                                        // Update roster entries that aren't currently being edited
+                                        if var currentShoot = self.viewModel.selectedShoot {
+                                            var needsUpdate = false
+
+                                            // Update roster entries
+                                            print("Checking \(updatedShoot.roster.count) roster entries for updates")
+                                            for updatedEntry in updatedShoot.roster {
+                                                // Skip if we're currently editing this entry
+                                                if self.viewModel.currentlyEditingEntry == updatedEntry.id {
+                                                    print("Skipping update for entry \(updatedEntry.id) - currently editing")
+                                                    continue
+                                                }
+
+                                                // Find and update the entry in our local roster
+                                                if let index = currentShoot.roster.firstIndex(where: { $0.id == updatedEntry.id }) {
+                                                    let currentImageNumbers = currentShoot.roster[index].imageNumbers
+                                                    let updatedImageNumbers = updatedEntry.imageNumbers
+
+                                                    if currentImageNumbers != updatedImageNumbers {
+                                                        currentShoot.roster[index] = updatedEntry
+                                                        needsUpdate = true
+                                                        print("✅ Updated image numbers for entry \(updatedEntry.id): '\(currentImageNumbers)' -> '\(updatedImageNumbers)'")
+                                                    }
+                                                } else {
+                                                    print("⚠️ Could not find entry \(updatedEntry.id) in local roster")
+                                                }
+                                            }
+
+                                            // Also update group images
+                                            if currentShoot.groupImages != updatedShoot.groupImages {
+                                                currentShoot.groupImages = updatedShoot.groupImages
+                                                needsUpdate = true
+                                            }
+
+                                            // Apply updates if needed
+                                            if needsUpdate {
+                                                print("📱 Applying updates to UI")
+                                                self.viewModel.selectedShoot = currentShoot
+
+                                                // Also update in the main list
+                                                if let listIndex = self.viewModel.sportsShoots.firstIndex(where: { $0.id == shootID }) {
+                                                    self.viewModel.sportsShoots[listIndex] = currentShoot
+                                                }
+
+                                                // Force UI update
+                                                self.viewModel.objectWillChange.send()
+                                            } else {
+                                                print("No updates needed")
+                                            }
+                                        }
+                                    }
+                                } catch {
+                                    print("Error fetching shoot document: \(error.localizedDescription)")
+                                }
                             }
                             
                             // Helper to check if we're currently editing
@@ -2592,7 +2620,7 @@ struct SportsShootListView: View {
                             }
                             
                             private func acquireLock(shootID: String, entryID: String) {
-                                let editorID = Auth.auth().currentUser?.uid ?? UUID().uuidString
+                                let editorID = UserManager.shared.getCurrentUserIDUnified() ?? UUID().uuidString
                                 let editorName = currentEditorIdentifier // Uses device-specific identifier
                                 
                                 print("Attempting to acquire lock: \(entryID)")
@@ -2614,8 +2642,8 @@ struct SportsShootListView: View {
                             }
                             
                             private func releaseLock(shootID: String, entryID: String) {
-                                let editorID = Auth.auth().currentUser?.uid ?? ""
-                                
+                                let editorID = UserManager.shared.getCurrentUserIDUnified() ?? ""
+
                                 print("Attempting to release lock: \(entryID)")
                                 EntryLockManager.shared.releaseLock(shootID: shootID, entryID: entryID, editorID: editorID) { success in
                                     DispatchQueue.main.async {
@@ -2641,7 +2669,7 @@ struct SportsShootListView: View {
                             // Save the current editing entry if it has changed
                             private func saveCurrentEditingEntry() {
                                 // Check authentication first
-                                guard Auth.auth().currentUser != nil else {
+                                guard UserManager.shared.getCurrentUserIDUnified() != nil else {
                                     print("📝 Save error: User not authenticated")
                                     viewModel.errorMessage = "You must be signed in to save changes"
                                     viewModel.showingErrorAlert = true
@@ -2660,8 +2688,8 @@ struct SportsShootListView: View {
                                 updatedEntry.imageNumbers = viewModel.editingImageNumber.trimmingCharacters(in: .whitespacesAndNewlines)
                                 
                                 print("📝 Saving current entry: '\(updatedEntry.imageNumbers)' for entry \(entryID) (was: '\(currentEntry.imageNumbers)')")
-                                print("📝 User: \(Auth.auth().currentUser?.uid ?? "unknown"), OrgID: \(storedUserOrganizationID)")
-                                
+                                print("📝 User: \(UserManager.shared.getCurrentUserIDUnified() ?? "unknown"), OrgID: \(storedUserOrganizationID)")
+
                                 SportsShootService.shared.updateRosterEntry(shootID: shootID, entry: updatedEntry) { result in
                                     DispatchQueue.main.async {
                                         switch result {

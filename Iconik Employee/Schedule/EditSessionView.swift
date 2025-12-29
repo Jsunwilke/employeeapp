@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 
 struct EditSessionView: View {
     let session: Session
@@ -46,16 +45,15 @@ struct EditSessionView: View {
                             formData: $formData,
                             schools: schoolService.schools,
                             teamMembers: teamService.teamMembers,
-                            sessionTypes: organizationService.getOrganizationSessionTypes(
-                                organization: Organization(
-                                    id: organizationID,
-                                    name: "",
-                                    sessionTypes: organizationService.sessionTypes.map { SessionType(id: $0.id, name: $0.name, color: $0.color, order: 0) },
-                                    sessionOrderColors: nil,
-                                    enableSessionPublishing: nil,
-                                    payPeriodSettings: nil
-                                )
-                            ),
+                            sessionTypes: {
+                                // Convert SessionTypeDefinition array to SessionType array with proper ordering
+                                var types = organizationService.sessionTypes.map { SessionType(id: $0.id, name: $0.name, color: $0.color, order: 0) }
+                                // Ensure "Other" is available
+                                if !types.contains(where: { $0.id == "other" }) {
+                                    types.append(SessionType(id: "other", name: "Other", color: "#000000", order: 9999))
+                                }
+                                return types
+                            }(),
                             isEditing: true
                         )
                         .disabled(isLoading)
@@ -128,12 +126,10 @@ struct EditSessionView: View {
         
         // Extract photographer IDs and notes
         for photographer in session.photographers {
-            if let photographerId = photographer["id"] as? String {
-                formData.photographerIds.insert(photographerId)
-                
-                if let notes = photographer["notes"] as? String, !notes.isEmpty {
-                    formData.photographerNotes[photographerId] = notes
-                }
+            formData.photographerIds.insert(photographer.id)
+
+            if let notes = photographer.notes, !notes.isEmpty {
+                formData.photographerNotes[photographer.id] = notes
             }
         }
         
@@ -185,6 +181,20 @@ struct EditSessionView: View {
 
 struct EditSessionView_Previews: PreviewProvider {
     static var previews: some View {
-        EditSessionView(session: Session(id: "preview", data: [:]))
+        EditSessionView(session: Session(
+            id: "preview",
+            organization_id: "org123",
+            school_id: "school123",
+            school_name: "Sample School",
+            date: "2024-01-15",
+            start_time: "09:00",
+            end_time: "12:00",
+            session_types: ["sports"],
+            photographers: [],
+            status: "scheduled",
+            session_color: "#3b82f6",
+            is_published: true,
+            created_at: Date()
+        ))
     }
 }

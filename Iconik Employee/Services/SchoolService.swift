@@ -1,53 +1,57 @@
 import Foundation
-import FirebaseFirestore
+import Supabase
 
+@MainActor
 class SchoolService: ObservableObject {
     static let shared = SchoolService()
-    private let db = Firestore.firestore()
-    
+    private let supabase = SupabaseManager.shared.client
+
     @Published var schools: [School] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
-    
+
     private init() {}
+
+    // MARK: - Decoder Error Helper
+    private func describeDecodingError(_ error: Error) -> String {
+        guard let decodingError = error as? DecodingError else {
+            return error.localizedDescription
+        }
+        switch decodingError {
+        case .keyNotFound(let key, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "Missing field '\(key.stringValue)' at: \(path.isEmpty ? "root" : path)"
+        case .typeMismatch(let type, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "Type mismatch for \(type) at: \(path.isEmpty ? "root" : path) - \(context.debugDescription)"
+        case .valueNotFound(let type, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "Null value for \(type) at: \(path.isEmpty ? "root" : path)"
+        case .dataCorrupted(let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "Corrupted data at: \(path.isEmpty ? "root" : path) - \(context.debugDescription)"
+        @unknown default:
+            return error.localizedDescription
+        }
+    }
     
     // MARK: - Get Schools for Organization
     func getSchools(organizationID: String) async throws -> [School] {
-        let query = db.collection("schools")
-            .whereField("organizationID", isEqualTo: organizationID)
-        
-        let snapshot = try await query.getDocuments(source: .server)
-        
-        let schools = snapshot.documents.compactMap { doc -> School? in
-            var data = doc.data()
-            data["id"] = doc.documentID
-            
-            // Convert Firestore timestamps to dates
-            if let createdTimestamp = data["createdAt"] as? Timestamp {
-                data["createdAt"] = createdTimestamp.dateValue()
-            }
-            if let updatedTimestamp = data["updatedAt"] as? Timestamp {
-                data["updatedAt"] = updatedTimestamp.dateValue()
-            }
-            
-            // Ensure required fields exist
-            guard let organizationID = data["organizationID"] as? String,
-                  let value = data["value"] as? String else {
-                return nil
-            }
-            
-            return School(
-                id: doc.documentID,
-                organizationID: organizationID,
-                value: value,
-                isActive: data["isActive"] as? Bool ?? true,
-                createdAt: data["createdAt"] as? Date,
-                updatedAt: data["updatedAt"] as? Date
-            )
+        do {
+            // Query schools from Supabase (Codable handles snake_case automatically)
+            let schools: [School] = try await supabase
+                .from("schools")
+                .select()
+                .eq("organization_id", value: organizationID)
+                .execute()
+                .value
+
+            // Sort alphabetically by name
+            return schools.sorted { $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending }
+        } catch {
+            print("❌ SchoolService decode error: \(describeDecodingError(error))")
+            throw error
         }
-        
-        // Sort alphabetically by name
-        return schools.sorted { $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending }
     }
     
     // MARK: - Load Schools with Loading State
@@ -68,34 +72,147 @@ class SchoolService: ObservableObject {
     
     // MARK: - Get School by ID
     func getSchool(schoolId: String) async throws -> School? {
-        let doc = try await db.collection("schools").document(schoolId).getDocument()
-        
-        guard doc.exists, var data = doc.data() else {
-            return nil
+        // Query single school from Supabase by ID
+        let schools: [School] = try await supabase
+            .from("schools")
+            .select()
+            .eq("id", value: schoolId)
+            .limit(1)
+            .execute()
+            .value
+
+        return schools.first
+    }
+
+    // MARK: - Create School
+    func createSchool(
+        organizationID: String,
+        name: String,
+        address: String,
+        coordinates: String,
+        street: String? = nil,
+        city: String? = nil,
+        state: String? = nil,
+        zip: String? = nil,
+        contactName: String? = nil,
+        contactEmail: String? = nil,
+        contactPhone: String? = nil,
+        notes: String? = nil
+    ) async throws -> School {
+        isLoading = true
+        errorMessage = nil
+
+        defer { isLoading = false }
+
+        // Build the school data dictionary
+        var schoolData: [String: AnyJSON] = [
+            "organization_id": .string(organizationID),
+            "name": .string(name),
+            "address": .string(address),
+            "coordinates": .string(coordinates),
+            "is_active": .bool(true)
+        ]
+
+        // Add optional fields if provided
+        if let street = street { schoolData["street"] = .string(street) }
+        if let city = city { schoolData["city"] = .string(city) }
+        if let state = state { schoolData["state"] = .string(state) }
+        if let zip = zip { schoolData["zip"] = .string(zip) }
+        if let contactName = contactName { schoolData["contact_name"] = .string(contactName) }
+        if let contactEmail = contactEmail { schoolData["contact_email"] = .string(contactEmail) }
+        if let contactPhone = contactPhone { schoolData["contact_phone"] = .string(contactPhone) }
+        if let notes = notes { schoolData["notes"] = .string(notes) }
+
+        do {
+            let school: School = try await supabase
+                .from("schools")
+                .insert(schoolData)
+                .select()
+                .single()
+                .execute()
+                .value
+
+            return school
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
         }
-        
-        data["id"] = doc.documentID
-        
-        // Convert Firestore timestamps to dates
-        if let createdTimestamp = data["createdAt"] as? Timestamp {
-            data["createdAt"] = createdTimestamp.dateValue()
+    }
+
+    // MARK: - Update School
+    func updateSchool(
+        schoolId: String,
+        name: String? = nil,
+        address: String? = nil,
+        coordinates: String? = nil,
+        street: String? = nil,
+        city: String? = nil,
+        state: String? = nil,
+        zip: String? = nil,
+        contactName: String? = nil,
+        contactEmail: String? = nil,
+        contactPhone: String? = nil,
+        notes: String? = nil,
+        isActive: Bool? = nil
+    ) async throws {
+        isLoading = true
+        errorMessage = nil
+
+        defer { isLoading = false }
+
+        // Build update data with only provided fields
+        var updateData: [String: AnyJSON] = [:]
+
+        if let name = name { updateData["name"] = .string(name) }
+        if let address = address { updateData["address"] = .string(address) }
+        if let coordinates = coordinates { updateData["coordinates"] = .string(coordinates) }
+        if let street = street { updateData["street"] = .string(street) }
+        if let city = city { updateData["city"] = .string(city) }
+        if let state = state { updateData["state"] = .string(state) }
+        if let zip = zip { updateData["zip"] = .string(zip) }
+        if let contactName = contactName { updateData["contact_name"] = .string(contactName) }
+        if let contactEmail = contactEmail { updateData["contact_email"] = .string(contactEmail) }
+        if let contactPhone = contactPhone { updateData["contact_phone"] = .string(contactPhone) }
+        if let notes = notes { updateData["notes"] = .string(notes) }
+        if let isActive = isActive { updateData["is_active"] = .bool(isActive) }
+
+        guard !updateData.isEmpty else { return }
+
+        do {
+            try await supabase
+                .from("schools")
+                .update(updateData)
+                .eq("id", value: schoolId)
+                .execute()
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
         }
-        if let updatedTimestamp = data["updatedAt"] as? Timestamp {
-            data["updatedAt"] = updatedTimestamp.dateValue()
+    }
+
+    // MARK: - Update Location Photos
+    // Note: locationPhotos stored as JSONB array in Supabase
+    func updateLocationPhotos(schoolId: String, photos: [[String: String]]) async throws {
+        isLoading = true
+        errorMessage = nil
+
+        defer { isLoading = false }
+
+        do {
+            // Convert to AnyJSON array
+            let photosJSON: [AnyJSON] = photos.map { dict in
+                let jsonDict: [String: AnyJSON] = dict.mapValues { .string($0) }
+                return .object(jsonDict)
+            }
+
+            try await supabase
+                .from("schools")
+                .update(["location_photos": AnyJSON.array(photosJSON)])
+                .eq("id", value: schoolId)
+                .execute()
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
         }
-        
-        guard let organizationID = data["organizationID"] as? String,
-              let value = data["value"] as? String else {
-            return nil
-        }
-        
-        return School(
-            id: doc.documentID,
-            organizationID: organizationID,
-            value: value,
-            isActive: data["isActive"] as? Bool ?? true,
-            createdAt: data["createdAt"] as? Date,
-            updatedAt: data["updatedAt"] as? Date
-        )
     }
 }

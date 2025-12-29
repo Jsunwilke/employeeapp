@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 
 struct PTOBalanceView: View {
     @StateObject private var ptoService = PTOService.shared
@@ -11,7 +10,7 @@ struct PTOBalanceView: View {
     @State private var projectedBalance = 0.0
     
     private var userId: String? {
-        Auth.auth().currentUser?.uid
+        UserManager.shared.getCurrentUserIDUnified()
     }
     
     private var organizationId: String? {
@@ -195,22 +194,28 @@ struct PTOBalanceView: View {
             isLoading = false
             return
         }
-        
+
         isLoading = true
         errorMessage = ""
-        
-        // Load PTO balance
-        ptoService.getPTOBalance(userId: userId, organizationID: orgId) { balance in
-            DispatchQueue.main.async {
-                self.ptoBalance = balance
-                self.calculateProjectedBalance()
-                
-                // Load settings after balance
-                self.ptoService.getPTOSettings(organizationID: orgId) { settings in
-                    DispatchQueue.main.async {
-                        self.ptoSettings = settings
-                        self.isLoading = false
-                    }
+
+        Task {
+            do {
+                // Load PTO balance
+                let balance = try await ptoService.getPTOBalance(userId: userId, organizationID: orgId)
+
+                // Load settings
+                let settings = try await ptoService.getPTOSettings(organizationID: orgId)
+
+                await MainActor.run {
+                    self.ptoBalance = balance
+                    self.ptoSettings = settings
+                    self.calculateProjectedBalance()
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Failed to load PTO data: \(error.localizedDescription)"
+                    self.isLoading = false
                 }
             }
         }

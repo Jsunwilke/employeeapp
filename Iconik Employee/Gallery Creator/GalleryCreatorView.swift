@@ -1,7 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// A view for creating galleries in both Captura and Google Sheets
+/// A view for creating galleries in Captura
+/// Note: Google Sheets integration is currently disabled
 struct GalleryCreatorView: View {
     // Use the view model
     @StateObject private var viewModel = GalleryCreatorViewModel()
@@ -229,22 +230,22 @@ struct GalleryCreatorView: View {
                 }
             }
             
-            if !viewModel.googleSheetID.isEmpty {
+            if let sheetID = viewModel.googleSheetID, !sheetID.isEmpty {
                 divider
-                
+
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Google Sheet ID:")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        
-                        Text(viewModel.googleSheetID)
+
+                        Text(sheetID)
                             .font(.body)
                             .lineLimit(1)
                     }
-                    
+
                     Spacer()
-                    
+
                     Button(action: {
                         viewModel.copySheetID()
                         copiedItem = "Sheet ID"
@@ -263,17 +264,22 @@ struct GalleryCreatorView: View {
             }
             
             divider
-            
+
             // Next steps guidance
             Text("Next Steps:")
                 .font(.subheadline)
                 .fontWeight(.semibold)
                 .padding(.top, 4)
-            
-            Text("1. Open Captura and find your gallery")
-                .font(.footnote)
-            Text("2. Open the Google Sheet to prepare data")
-                .font(.footnote)
+
+            if viewModel.googleSheetID != nil {
+                Text("1. Open Captura and find your gallery")
+                    .font(.footnote)
+                Text("2. Open the Google Sheet to prepare data")
+                    .font(.footnote)
+            } else {
+                Text("Open Captura and find your gallery using the ID above")
+                    .font(.footnote)
+            }
         }
         .padding()
         .background(Color(.systemGray6))

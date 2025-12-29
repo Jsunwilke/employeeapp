@@ -1,7 +1,7 @@
 import Foundation
 
 /// Compatibility layer: ICSEvent backed by Session data
-/// This maintains backward compatibility for existing code while using Firestore sessions
+/// This maintains backward compatibility for existing code while using Supabase sessions
 struct ICSEvent: Identifiable, Equatable {
     let id: String
     let summary: String
@@ -36,7 +36,7 @@ struct ICSEvent: Identifiable, Equatable {
         
         // Create unique ID for this photographer's event
         self.id = "\(session.id)-\(photographerID)"
-        self.summary = "\(photographerName) - \(session.sessionType?.first ?? "Photographer") - \(session.schoolName)"
+        self.summary = "\(photographerName) - \(session.sessionType.first ?? "Photographer") - \(session.schoolName)"
         self.startDate = session.startDate
         self.endDate = session.endDate
         self.description = photographerNotes.isEmpty ? session.description : photographerNotes
@@ -78,13 +78,13 @@ struct ICSEvent: Identifiable, Equatable {
 }
 
 /// Compatibility layer: ICSParser that uses SessionService instead of parsing ICS files
-/// This provides the same interface but gets data from Firestore sessions
+/// This provides the same interface but gets data from Supabase sessions
 class ICSParser {
     private static let sessionService = SessionService.shared
-    
+
     // Legacy interface: parseICS now returns sessions converted to ICSEvents
     static func parseICS(from content: String) -> [ICSEvent] {
-        print("ICSParser.parseICS called - this is now a compatibility layer using Firestore sessions")
+        print("ICSParser.parseICS called - this is now a compatibility layer using Supabase sessions")
         
         // For backward compatibility, we'll return an empty array and rely on the real-time listeners
         // The actual data loading should be done through SessionService in the calling code
@@ -93,11 +93,23 @@ class ICSParser {
     
     // New method: Get current sessions as ICSEvents
     static func getCurrentSessionsAsICSEvents(completion: @escaping ([ICSEvent]) -> Void) {
-        let _ = sessionService.listenForSessions { sessions in
-            let icsEvents = sessions.map { session in
-                ICSEvent(from: session)
+        let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        guard !organizationID.isEmpty else {
+            print("❌ Cannot load sessions: no organization ID")
+            completion([])
+            return
+        }
+
+        Task { @MainActor in
+            sessionService.startListeningToSessions(
+                organizationID: organizationID,
+                includeUnpublished: false  // ICS export shows only published
+            ) { sessions in
+                let icsEvents = sessions.map { session in
+                    ICSEvent(from: session)
+                }
+                completion(icsEvents)
             }
-            completion(icsEvents)
         }
     }
     

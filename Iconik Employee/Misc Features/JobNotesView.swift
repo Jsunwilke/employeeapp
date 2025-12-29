@@ -1,6 +1,5 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 // Model for a school option
 struct SchoolOption: Identifiable, Hashable {
@@ -13,13 +12,13 @@ struct JobNotesView: View {
     // Store notes & school in AppStorage
     @AppStorage("jobNotes") var storedJobNotes: String = ""
     @AppStorage("jobNotesSchool") var storedJobNotesSchool: String = ""
-    
+
     @State private var schoolOptions: [SchoolOption] = []
     @State private var selectedSchool: SchoolOption? = nil
     @State private var notes: String = ""
-    
+
     @State private var errorMessage: String = ""
-    
+
     var body: some View {
         VStack(spacing: 16) {
                 if schoolOptions.isEmpty {
@@ -39,19 +38,19 @@ struct JobNotesView: View {
                         }
                     }
                 }
-                
+
                 TextEditor(text: $notes)
                     .border(Color.gray)
                     .frame(height: 200)
                     .onChange(of: notes) { newValue in
                         storedJobNotes = newValue
                     }
-                
+
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
                         .foregroundColor(.red)
                 }
-                
+
                 Spacer()
             }
             .padding()
@@ -61,36 +60,49 @@ struct JobNotesView: View {
             notes = storedJobNotes
         }
     }
-    
+
     func loadSchoolOptions() {
-        let db = Firestore.firestore()
-        db.collection("schools")
-            .whereField("type", isEqualTo: "school")
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    self.errorMessage = error.localizedDescription
-                    return
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                struct SchoolRecord: Decodable {
+                    let id: String
+                    let value: String?
+                    let school_address: String?
                 }
-                guard let docs = snapshot?.documents else { return }
-                
-                var temp: [SchoolOption] = []
-                for doc in docs {
-                    let data = doc.data()
-                    if let value = data["value"] as? String,
-                       let address = data["schoolAddress"] as? String {
-                        let option = SchoolOption(id: doc.documentID, value: value, schoolAddress: address)
-                        temp.append(option)
+
+                let schools: [SchoolRecord] = try await supabase
+                    .from("schools")
+                    .select("id, value, school_address")
+                    .eq("type", value: "school")
+                    .execute()
+                    .value
+
+                await MainActor.run {
+                    var temp: [SchoolOption] = []
+                    for school in schools {
+                        if let value = school.value,
+                           let address = school.school_address {
+                            let option = SchoolOption(id: school.id, value: value, schoolAddress: address)
+                            temp.append(option)
+                        }
+                    }
+                    // Sort by value
+                    temp.sort { $0.value.lowercased() < $1.value.lowercased() }
+                    self.schoolOptions = temp
+
+                    // Match the stored school if any
+                    if let match = temp.first(where: { $0.value == storedJobNotesSchool }) {
+                        self.selectedSchool = match
                     }
                 }
-                // Sort by value
-                temp.sort { $0.value.lowercased() < $1.value.lowercased() }
-                self.schoolOptions = temp
-                
-                // Match the stored school if any
-                if let match = temp.first(where: { $0.value == storedJobNotesSchool }) {
-                    self.selectedSchool = match
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
                 }
             }
+        }
     }
 }
 

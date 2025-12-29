@@ -1,7 +1,5 @@
 import Foundation
 import SwiftUI
-import FirebaseFirestore
-import FirebaseAuth
 
 @MainActor
 class YearbookShootListViewModel: ObservableObject {
@@ -14,21 +12,24 @@ class YearbookShootListViewModel: ObservableObject {
     @Published var selectedCategory: String = "All"
     @Published var showCompletedOnly = false
     @Published var showIncompleteOnly = false
-    
+
     private let service = YearbookShootListService.shared
-    private var listListener: ListenerRegistration?
-    private var organizationListener: ListenerRegistration?
+    private var listListener: ListenerRegistrationWrapper?
+    private var organizationListener: ListenerRegistrationWrapper?
     
     // Session context for integration
     var sessionContext: YearbookSessionContext?
     
     // Current user info
     private var currentUserId: String? {
-        Auth.auth().currentUser?.uid
+        UserManager.shared.getCurrentUserIDUnified()
     }
-    
+
     private var currentUserName: String? {
-        Auth.auth().currentUser?.displayName
+        let firstName = UserDefaults.standard.string(forKey: "userFirstName") ?? ""
+        let lastName = UserDefaults.standard.string(forKey: "userLastName") ?? ""
+        let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+        return fullName.isEmpty ? nil : fullName
     }
     
     // MARK: - Computed Properties

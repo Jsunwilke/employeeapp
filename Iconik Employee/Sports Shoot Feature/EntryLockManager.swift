@@ -4,27 +4,17 @@
 //
 //  Created by administrator on 5/13/25.
 //  Updated to include automatic lock expiration and permission error handling
-//
-//  FIREBASE SECURITY RULE REQUIRED:
-//  Add this rule to Firestore Security Rules for the lock system to work:
-//
-//  match /sportsJobs/{shootId}/locks/{lockId} {
-//    allow read, write: if request.auth != null && request.auth.uid != null;
-//  }
-//
-//  If this rule is not added, the lock system will automatically disable itself
-//  and allow all users to edit without locking (fallback mode).
+//  Migrated to Supabase - uses sports_job_locks table
 //
 
 
 import Foundation
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 // Class to manage entry locking functionality
 class EntryLockManager {
     static let shared = EntryLockManager()
-    private let db = Firestore.firestore()
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
     private var isOnline = true
     
     // Lock expiration time in seconds (30 seconds to prevent blocking)
@@ -79,7 +69,7 @@ class EntryLockManager {
             return
         }
         
-        // We're online, use Firestore locks with retry mechanism
+        // We're online, use Supabase locks with retry mechanism
         acquireLockWithRetry(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName, retryCount: 0, completion: completion)
     }
     
@@ -87,131 +77,116 @@ class EntryLockManager {
     private func acquireLockWithRetry(shootID: String, entryID: String, editorID: String, editorName: String, retryCount: Int, completion: @escaping (Bool) -> Void) {
         let maxRetries = 3
         let lockID = entryID
-        
-        // Add timeout for lock acquisition
-        let timeoutTask = DispatchWorkItem {
-            print("Lock acquisition timed out for \(entryID) after 10 seconds")
-            completion(false)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0, execute: timeoutTask)
-        
-        // First check if a lock already exists for this entry
-        db.collection("sportsJobs").document(shootID)
-            .collection("locks").document(lockID)
-            .getDocument { snapshot, error in
-                
-                // Cancel timeout if we got a response
-                timeoutTask.cancel()
-                
-                if let error = error {
-                    print("Error checking for existing lock: \(error.localizedDescription)")
-                    
-                    // If it's a permission error, allow the lock to be acquired (disable locking)
-                    if self.isPermissionError(error) {
-                        print("Permission error detected - allowing lock acquisition for \(entryID)")
-                        completion(true) // Allow editing by pretending lock was acquired
-                        return
-                    }
-                    
-                    // Retry on network errors
-                    if retryCount < maxRetries && self.isNetworkError(error) {
-                        let retryDelay = Double(retryCount + 1) * 1.0 // Exponential backoff
-                        print("Retrying lock acquisition for \(entryID) (attempt \(retryCount + 1)/\(maxRetries)) in \(retryDelay) seconds...")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) {
-                            self.acquireLockWithRetry(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName, retryCount: retryCount + 1, completion: completion)
-                        }
-                        return
-                    }
-                    
-                    print("Failed to acquire lock for \(entryID) after \(retryCount) retries")
-                    completion(false)
-                    return
+
+        Task {
+            do {
+                // Check for existing lock
+                struct LockRecord: Decodable {
+                    let id: String
+                    let shoot_id: String
+                    let entry_id: String
+                    let editor_id: String?
+                    let editor_name: String?
+                    let timestamp: Date?
                 }
-                
-                // If lock exists, check if it's expired or owned by this editor
-                if let snapshot = snapshot, snapshot.exists,
-                   let data = snapshot.data() {
-                    
-                    let existingEditorID = data["editorID"] as? String
-                    let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date(timeIntervalSince1970: 0)
-                    let timeSinceCreation = Date().timeIntervalSince(timestamp)
-                    
-                    // If lock is expired, we can acquire it regardless of who owned it
-                    // Or if the lock is owned by this editor, we can update it
-                    if timeSinceCreation > self.lockExpirationTime || existingEditorID == editorID {
-                        self.createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: retryCount, completion: completion)
+
+                let locks: [LockRecord] = try await supabase
+                    .from("sports_job_locks")
+                    .select()
+                    .eq("shoot_id", value: shootID)
+                    .eq("entry_id", value: lockID)
+                    .limit(1)
+                    .execute()
+                    .value
+
+                if let existingLock = locks.first {
+                    // Check if expired or owned by this editor
+                    let timeSinceCreation = Date().timeIntervalSince(existingLock.timestamp ?? Date(timeIntervalSince1970: 0))
+
+                    if timeSinceCreation > self.lockExpirationTime || existingLock.editor_id == editorID {
+                        await self.createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: retryCount, completion: completion)
                     } else {
                         print("Entry is already locked by another editor and not expired")
-                        completion(false)
+                        await MainActor.run { completion(false) }
                     }
+                } else {
+                    // No existing lock, create a new one
+                    await self.createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: retryCount, completion: completion)
+                }
+            } catch {
+                print("Error checking for existing lock: \(error.localizedDescription)")
+
+                if self.isPermissionError(error) {
+                    print("Permission error detected - allowing lock acquisition for \(entryID)")
+                    await MainActor.run { completion(true) }
                     return
                 }
-                
-                // No existing lock, so create a new one
-                self.createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: retryCount, completion: completion)
+
+                if retryCount < maxRetries && self.isNetworkError(error) {
+                    let retryDelay = Double(retryCount + 1) * 1.0
+                    print("Retrying lock acquisition for \(entryID) (attempt \(retryCount + 1)/\(maxRetries)) in \(retryDelay) seconds...")
+                    try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                    self.acquireLockWithRetry(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName, retryCount: retryCount + 1, completion: completion)
+                    return
+                }
+
+                print("Failed to acquire lock for \(entryID) after \(retryCount) retries")
+                await MainActor.run { completion(false) }
             }
+        }
     }
     
     // Helper method to create or update a lock with retry logic
-    private func createOrUpdateLockWithRetry(shootID: String, lockID: String, editorID: String, editorName: String, retryCount: Int, completion: @escaping (Bool) -> Void) {
+    private func createOrUpdateLockWithRetry(shootID: String, lockID: String, editorID: String, editorName: String, retryCount: Int, completion: @escaping (Bool) -> Void) async {
         let maxRetries = 3
-        
-        // Add timeout for lock creation
-        let timeoutTask = DispatchWorkItem {
-            print("Lock creation timed out for \(lockID) after 10 seconds")
-            completion(false)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0, execute: timeoutTask)
-        
-        // Create lock data with current timestamp
-        let lockData: [String: Any] = [
-            "entryID": lockID,
-            "editorID": editorID,
-            "editorName": editorName,
-            "timestamp": FieldValue.serverTimestamp()
-        ]
-        
-        self.db.collection("sportsJobs").document(shootID)
-            .collection("locks").document(lockID)
-            .setData(lockData) { error in
-                
-                // Cancel timeout if we got a response
-                timeoutTask.cancel()
-                
-                if let error = error {
-                    print("Error acquiring lock: \(error.localizedDescription)")
-                    
-                    // If it's a permission error, pretend the lock was acquired (disable locking)
-                    if self.isPermissionError(error) {
-                        print("Permission error detected - pretending lock acquired for \(lockID)")
-                        completion(true) // Allow editing
-                        return
-                    }
-                    
-                    // Retry on network errors
-                    if retryCount < maxRetries && self.isNetworkError(error) {
-                        let retryDelay = Double(retryCount + 1) * 1.0 // Exponential backoff
-                        print("Retrying lock creation for \(lockID) (attempt \(retryCount + 1)/\(maxRetries)) in \(retryDelay) seconds...")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) {
-                            self.createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: retryCount + 1, completion: completion)
-                        }
-                        return
-                    }
-                    
-                    print("Failed to create lock for \(lockID) after \(retryCount) retries")
-                    completion(false)
-                } else {
-                    print("Lock acquired successfully for \(lockID) by \(editorName)")
-                    completion(true)
-                }
+
+        do {
+            // Create lock data with current timestamp using upsert
+            let lockData: [String: AnyJSON] = [
+                "id": .string("\(shootID)_\(lockID)"),
+                "shoot_id": .string(shootID),
+                "entry_id": .string(lockID),
+                "editor_id": .string(editorID),
+                "editor_name": .string(editorName),
+                "timestamp": .string(Date().ISO8601Format())
+            ]
+
+            try await supabase
+                .from("sports_job_locks")
+                .upsert(lockData)
+                .execute()
+
+            print("Lock acquired successfully for \(lockID) by \(editorName)")
+            await MainActor.run { completion(true) }
+        } catch {
+            print("Error acquiring lock: \(error.localizedDescription)")
+
+            if self.isPermissionError(error) {
+                print("Permission error detected - pretending lock acquired for \(lockID)")
+                await MainActor.run { completion(true) }
+                return
             }
+
+            if retryCount < maxRetries && self.isNetworkError(error) {
+                let retryDelay = Double(retryCount + 1) * 1.0
+                print("Retrying lock creation for \(lockID) (attempt \(retryCount + 1)/\(maxRetries)) in \(retryDelay) seconds...")
+                try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                await self.createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: retryCount + 1, completion: completion)
+                return
+            }
+
+            print("Failed to create lock for \(lockID) after \(retryCount) retries")
+            await MainActor.run { completion(false) }
+        }
     }
     
     // Helper method to create or update a lock (legacy method for backward compatibility)
     private func createOrUpdateLock(shootID: String, lockID: String, editorID: String, editorName: String, completion: @escaping (Bool) -> Void) {
-        createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: 0, completion: completion)
+        Task {
+            await createOrUpdateLockWithRetry(shootID: shootID, lockID: lockID, editorID: editorID, editorName: editorName, retryCount: 0, completion: completion)
+        }
     }
-    
+
     // Release a lock
     func releaseLock(shootID: String, entryID: String, editorID: String, completion: ((Bool) -> Void)? = nil) {
         // If we're offline, use local locks
@@ -221,95 +196,59 @@ class EntryLockManager {
             completion?(true)
             return
         }
-        
-        // We're online, use Firestore locks
-        let lockID = entryID
-        
-        // Create a retry mechanism for network failures
-        var retryCount = 0
-        let maxRetries = 2
-        
-        func attemptRelease() {
-            // First verify that the lock is owned by this editor
-            db.collection("sportsJobs").document(shootID)
-                .collection("locks").document(lockID)
-                .getDocument { snapshot, error in
-                    
-                    if let error = error {
-                        print("Error checking lock ownership: \(error.localizedDescription)")
-                        
-                        // Handle permission errors by pretending release succeeded
-                        if self.isPermissionError(error) {
-                            print("Permission error detected - pretending lock released for \(entryID)")
-                            completion?(true) // Pretend success
-                            return
-                        }
-                        
-                        // Retry on network errors
-                        if retryCount < maxRetries && self.isNetworkError(error) {
-                            retryCount += 1
-                            print("Retrying lock release (attempt \(retryCount + 1))...")
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                                attemptRelease()
-                            }
-                            return
-                        }
-                        
-                        completion?(false)
+
+        // We're online, use Supabase locks
+        let lockID = "\(shootID)_\(entryID)"
+
+        Task {
+            do {
+                // Check if lock exists and is owned by this editor
+                struct LockRecord: Decodable {
+                    let editor_id: String?
+                }
+
+                let locks: [LockRecord] = try await supabase
+                    .from("sports_job_locks")
+                    .select("editor_id")
+                    .eq("id", value: lockID)
+                    .limit(1)
+                    .execute()
+                    .value
+
+                if let existingLock = locks.first {
+                    // Check ownership
+                    if existingLock.editor_id != editorID {
+                        print("Lock is owned by another editor, cannot release")
+                        await MainActor.run { completion?(false) }
                         return
                     }
-                    
-                    // Only delete if lock exists and is owned by this editor
-                    if let snapshot = snapshot, snapshot.exists,
-                       let data = snapshot.data(),
-                       let existingEditorID = data["editorID"] as? String {
-                        
-                        // If owned by someone else, don't release
-                        if existingEditorID != editorID {
-                            print("Lock is owned by another editor, cannot release")
-                            completion?(false)
-                            return
-                        }
-                        
-                        // Delete the lock
-                        self.db.collection("sportsJobs").document(shootID)
-                            .collection("locks").document(lockID)
-                            .delete { error in
-                                if let error = error {
-                                    print("Error releasing lock: \(error.localizedDescription)")
-                                    
-                                    // Handle permission errors by pretending delete succeeded
-                                    if self.isPermissionError(error) {
-                                        print("Permission error detected - pretending lock deleted for \(entryID)")
-                                        completion?(true) // Pretend success
-                                        return
-                                    }
-                                    
-                                    // Retry on network errors
-                                    if retryCount < maxRetries && self.isNetworkError(error) {
-                                        retryCount += 1
-                                        print("Retrying lock release (attempt \(retryCount + 1))...")
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                                            attemptRelease()
-                                        }
-                                        return
-                                    }
-                                    
-                                    completion?(false)
-                                } else {
-                                    print("Lock released successfully for \(entryID)")
-                                    completion?(true)
-                                }
-                            }
-                    } else {
-                        // Lock doesn't exist, consider it released
-                        print("No lock exists to release for \(entryID)")
-                        completion?(true)
-                    }
+
+                    // Delete the lock
+                    try await supabase
+                        .from("sports_job_locks")
+                        .delete()
+                        .eq("id", value: lockID)
+                        .execute()
+
+                    print("Lock released successfully for \(entryID)")
+                    await MainActor.run { completion?(true) }
+                } else {
+                    // Lock doesn't exist, consider it released
+                    print("No lock exists to release for \(entryID)")
+                    await MainActor.run { completion?(true) }
                 }
+            } catch {
+                print("Error releasing lock: \(error.localizedDescription)")
+
+                if self.isPermissionError(error) {
+                    print("Permission error detected - pretending lock released for \(entryID)")
+                    await MainActor.run { completion?(true) }
+                    return
+                }
+
+                await MainActor.run { completion?(false) }
+            }
         }
-        
-        attemptRelease()
     }
     
     // Helper to check if error is network-related
@@ -322,16 +261,16 @@ class EntryLockManager {
             return true
         }
         
-        // Check common Firebase network error codes
+        // Check common network error codes
         let networkErrorCodes = [
-            14, // Network unavailable (Firebase)
+            14, // Network unavailable
             -1009, // No internet connection
             -1001, // Request timed out
             -1004, // Could not connect to server
             -1005, // Network connection lost
             -1006, // DNS lookup failed
             -1011, // Bad server response
-            8 // Deadline exceeded (Firebase)
+            8 // Deadline exceeded
         ]
         
         if networkErrorCodes.contains(nsError.code) {
@@ -368,156 +307,182 @@ class EntryLockManager {
             }
             return
         }
-        
-        // We're online, use Firestore locks with timeout
-        let lockID = entryID
-        
-        // Add timeout for lock check
-        let timeoutTask = DispatchWorkItem {
-            print("Lock check timed out for \(entryID) after 8 seconds")
-            completion(false, nil) // Assume not locked on timeout
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0, execute: timeoutTask)
-        
-        db.collection("sportsJobs").document(shootID)
-            .collection("locks").document(lockID)
-            .getDocument { snapshot, error in
-                
-                // Cancel timeout if we got a response
-                timeoutTask.cancel()
-                
-                if let error = error {
-                    print("Error checking lock: \(error.localizedDescription)")
-                    
-                    // If it's a permission error, disable locking (allow editing)
-                    if self.isPermissionError(error) {
-                        print("Permission error detected - disabling lock for entry \(entryID)")
-                        completion(false, nil) // Not locked, allow editing
-                    } else if self.isNetworkError(error) {
-                        print("Network error detected while checking lock for \(entryID) - assuming not locked")
-                        completion(false, nil) // Assume not locked on network errors
-                    } else {
-                        completion(false, nil)
-                    }
-                    return
+
+        // We're online, use Supabase locks
+        let lockID = "\(shootID)_\(entryID)"
+
+        Task {
+            do {
+                struct LockRecord: Decodable {
+                    let editor_name: String?
+                    let timestamp: Date?
                 }
-                
-                if let snapshot = snapshot, snapshot.exists, let data = snapshot.data() {
+
+                let locks: [LockRecord] = try await supabase
+                    .from("sports_job_locks")
+                    .select("editor_name, timestamp")
+                    .eq("id", value: lockID)
+                    .limit(1)
+                    .execute()
+                    .value
+
+                if let lock = locks.first {
                     // Check if the lock has expired
-                    // Handle nil timestamp (serverTimestamp not yet resolved)
-                    if let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() {
+                    if let timestamp = lock.timestamp {
                         let timeSinceCreation = Date().timeIntervalSince(timestamp)
-                        
+
                         if timeSinceCreation > self.lockExpirationTime {
                             // Lock has expired
                             print("Lock has expired for \(entryID)")
-                            completion(false, nil)
-                            
-                            // Only remove if significantly expired (2x timeout) to avoid race conditions
+                            await MainActor.run { completion(false, nil) }
+
+                            // Only remove if significantly expired
                             if timeSinceCreation > (self.lockExpirationTime * 2) {
-                                self.db.collection("sportsJobs").document(shootID)
-                                    .collection("locks").document(lockID)
-                                    .delete { error in
-                                        if let error = error {
-                                            print("Error removing expired lock: \(error.localizedDescription)")
-                                        }
-                                    }
+                                try? await supabase
+                                    .from("sports_job_locks")
+                                    .delete()
+                                    .eq("id", value: lockID)
+                                    .execute()
                             }
                         } else {
                             // Entry is locked and not expired
-                            let editorName = data["editorName"] as? String
-                            completion(true, editorName)
+                            await MainActor.run { completion(true, lock.editor_name) }
                         }
                     } else {
-                        // No timestamp yet - treat as locked (new lock)
-                        let editorName = data["editorName"] as? String
-                        completion(true, editorName)
+                        // No timestamp - treat as locked (new lock)
+                        await MainActor.run { completion(true, lock.editor_name) }
                     }
                 } else {
                     // Entry is not locked
-                    completion(false, nil)
+                    await MainActor.run { completion(false, nil) }
                 }
+            } catch {
+                print("Error checking lock: \(error.localizedDescription)")
+                await MainActor.run { completion(false, nil) }
             }
+        }
     }
     
     // Dictionary to keep track of active lock listeners per shoot
     private var lockListeners: [String: [([String: String]) -> Void]] = [:]
+
+    // Store realtime channels for each shoot
+    private var realtimeChannels: [String: RealtimeChannelV2] = [:]
     
     // Set up a listener for locks on a specific shoot
     func listenForLocks(shootID: String, completion: @escaping ([String: String]) -> Void) {
         print("Setting up lock listener for shoot: \(shootID)")
-        
+
         // Store the completion handler
         if lockListeners[shootID] == nil {
             lockListeners[shootID] = []
         }
         lockListeners[shootID]?.append(completion)
-        
+
         // If we're offline, use local locks
         if !isOnline {
             let localLocks = OfflineManager.shared.getLocalLocks(shootID: shootID)
             completion(localLocks)
             return
         }
-        
-        // We're online, add a Firestore listener
-        db.collection("sportsJobs").document(shootID)
-            .collection("locks")
-            .addSnapshotListener { [weak self] snapshot, error in
-                guard let self = self else { return }
-                
-                if let error = error {
-                    print("Error listening for locks: \(error.localizedDescription)")
-                    return
-                }
-                
-                var locks: [String: String] = [:]
-                
-                if let documents = snapshot?.documents {
-                    print("Received \(documents.count) lock documents")
-                    for doc in documents {
-                        let data = doc.data()
-                        
-                        // Check if the lock has expired
-                        // Handle serverTimestamp properly - it might be nil for newly created locks
-                        let timestamp = (data["timestamp"] as? Timestamp)?.dateValue()
-                        
-                        if let entryID = data["entryID"] as? String,
-                           let editorName = data["editorName"] as? String {
-                            
-                            // If timestamp is nil, this is a newly created lock - don't expire it
-                            if let timestamp = timestamp {
-                                let timeSinceCreation = Date().timeIntervalSince(timestamp)
-                                
-                                // Add grace period: only expire locks that are 2x the expiration time
-                                // This prevents race conditions with newly created locks
-                                if timeSinceCreation > (self.lockExpirationTime * 2) {
-                                    print("Lock for entry \(entryID) by \(editorName) is expired (\(Int(timeSinceCreation))s old) - removing")
-                                    // Delete expired lock
-                                    doc.reference.delete { error in
-                                        if let error = error {
-                                            print("Error deleting expired lock: \(error.localizedDescription)")
-                                        } else {
-                                            print("Successfully deleted expired lock for \(entryID)")
-                                        }
-                                    }
-                                } else {
-                                    // Lock is valid
-                                    locks[entryID] = editorName
-                                    print("Lock for entry \(entryID) by \(editorName) (age: \(Int(timeSinceCreation))s)")
-                                }
-                            } else {
-                                // No timestamp yet (serverTimestamp pending) - treat as valid lock
-                                locks[entryID] = editorName
-                                print("Lock for entry \(entryID) by \(editorName) (new lock)")
-                            }
-                        }
-                    }
-                }
-                
-                // Notify all listeners
-                self.NotifyLockListeners(shootID: shootID, locks: locks)
+
+        // We're online, set up Supabase realtime listener
+        Task {
+            // First, fetch initial lock data
+            await fetchAndNotifyLocks(shootID: shootID)
+
+            // Then set up realtime subscription
+            let channelKey = "locks_\(shootID)"
+
+            // Unsubscribe from existing channel if any
+            if let existingChannel = realtimeChannels[channelKey] {
+                await existingChannel.unsubscribe()
             }
+
+            let channel = supabase.channel(channelKey)
+
+            // Listen for changes to locks for this shoot
+            let changeStream = channel.postgresChange(
+                AnyAction.self,
+                schema: "public",
+                table: "sports_job_locks",
+                filter: "shoot_id=eq.\(shootID)"
+            )
+
+            // Start listening for changes
+            Task {
+                for await _ in changeStream {
+                    // Refetch all locks when any change occurs
+                    await self.fetchAndNotifyLocks(shootID: shootID)
+                }
+            }
+
+            await channel.subscribe()
+            realtimeChannels[channelKey] = channel
+        }
+    }
+
+    // Helper method to fetch locks and notify listeners
+    private func fetchAndNotifyLocks(shootID: String) async {
+        do {
+            struct LockRecord: Decodable {
+                let entry_id: String
+                let editor_name: String?
+                let timestamp: Date?
+            }
+
+            let locks: [LockRecord] = try await supabase
+                .from("sports_job_locks")
+                .select("entry_id, editor_name, timestamp")
+                .eq("shoot_id", value: shootID)
+                .execute()
+                .value
+
+            print("Received \(locks.count) lock documents")
+
+            var validLocks: [String: String] = [:]
+            var expiredLockIDs: [String] = []
+
+            for lock in locks {
+                guard let editorName = lock.editor_name else { continue }
+
+                // Check if the lock has expired
+                if let timestamp = lock.timestamp {
+                    let timeSinceCreation = Date().timeIntervalSince(timestamp)
+
+                    // Add grace period: only expire locks that are 2x the expiration time
+                    if timeSinceCreation > (self.lockExpirationTime * 2) {
+                        print("Lock for entry \(lock.entry_id) by \(editorName) is expired (\(Int(timeSinceCreation))s old) - removing")
+                        expiredLockIDs.append("\(shootID)_\(lock.entry_id)")
+                    } else {
+                        // Lock is valid
+                        validLocks[lock.entry_id] = editorName
+                        print("Lock for entry \(lock.entry_id) by \(editorName) (age: \(Int(timeSinceCreation))s)")
+                    }
+                } else {
+                    // No timestamp yet - treat as valid lock
+                    validLocks[lock.entry_id] = editorName
+                    print("Lock for entry \(lock.entry_id) by \(editorName) (new lock)")
+                }
+            }
+
+            // Delete expired locks
+            for lockID in expiredLockIDs {
+                try? await supabase
+                    .from("sports_job_locks")
+                    .delete()
+                    .eq("id", value: lockID)
+                    .execute()
+                print("Successfully deleted expired lock: \(lockID)")
+            }
+
+            // Notify all listeners on main thread
+            await MainActor.run {
+                self.NotifyLockListeners(shootID: shootID, locks: validLocks)
+            }
+        } catch {
+            print("Error fetching locks: \(error.localizedDescription)")
+        }
     }
     
     // Helper method to notify all listeners for a shoot
@@ -535,43 +500,52 @@ class EntryLockManager {
         if !isOnline {
             return
         }
-        
+
         // Use the provided threshold or default to our lockExpirationTime
         let cutoffTime = timeThreshold ?? lockExpirationTime
         print("Cleaning up stale locks for shoot: \(shootID) with threshold: \(cutoffTime) seconds")
-        
+
         let cutoffDate = Date().addingTimeInterval(-cutoffTime)
-        
-        db.collection("sportsJobs").document(shootID)
-            .collection("locks")
-            .whereField("timestamp", isLessThan: cutoffDate)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    print("Error getting stale locks: \(error.localizedDescription)")
-                    return
+
+        Task {
+            do {
+                struct LockRecord: Decodable {
+                    let id: String
+                    let entry_id: String?
+                    let timestamp: Date?
                 }
-                
-                guard let documents = snapshot?.documents, !documents.isEmpty else {
+
+                let staleLocks: [LockRecord] = try await supabase
+                    .from("sports_job_locks")
+                    .select("id, entry_id, timestamp")
+                    .eq("shoot_id", value: shootID)
+                    .lt("timestamp", value: cutoffDate.ISO8601Format())
+                    .execute()
+                    .value
+
+                guard !staleLocks.isEmpty else {
                     print("No stale locks found")
                     return
                 }
-                
-                print("Found \(documents.count) stale locks to clean up")
-                let batch = self.db.batch()
-                for doc in documents {
-                    let entryID = doc.data()["entryID"] as? String ?? "unknown"
+
+                print("Found \(staleLocks.count) stale locks to clean up")
+
+                // Delete each stale lock
+                for lock in staleLocks {
+                    let entryID = lock.entry_id ?? "unknown"
                     print("Removing stale lock for: \(entryID)")
-                    batch.deleteDocument(doc.reference)
+                    try await supabase
+                        .from("sports_job_locks")
+                        .delete()
+                        .eq("id", value: lock.id)
+                        .execute()
                 }
-                
-                batch.commit { error in
-                    if let error = error {
-                        print("Error cleaning up stale locks: \(error.localizedDescription)")
-                    } else {
-                        print("Deleted \(documents.count) stale locks")
-                    }
-                }
+
+                print("Deleted \(staleLocks.count) stale locks")
+            } catch {
+                print("Error cleaning up stale locks: \(error.localizedDescription)")
             }
+        }
     }
     
     // Force release a lock (admin/recovery function)
@@ -583,20 +557,36 @@ class EntryLockManager {
             completion(true)
             return
         }
-        
-        // We're online, force delete from Firestore
-        let lockID = entryID
-        
-        db.collection("sportsJobs").document(shootID)
-            .collection("locks").document(lockID)
-            .delete { error in
-                if let error = error {
-                    print("Error force releasing lock: \(error.localizedDescription)")
-                    completion(false)
-                } else {
-                    print("Lock force released successfully for \(entryID)")
-                    completion(true)
-                }
+
+        // We're online, force delete from Supabase
+        let lockID = "\(shootID)_\(entryID)"
+
+        Task {
+            do {
+                try await supabase
+                    .from("sports_job_locks")
+                    .delete()
+                    .eq("id", value: lockID)
+                    .execute()
+
+                print("Lock force released successfully for \(entryID)")
+                await MainActor.run { completion(true) }
+            } catch {
+                print("Error force releasing lock: \(error.localizedDescription)")
+                await MainActor.run { completion(false) }
             }
+        }
+    }
+
+    // Clean up realtime channel when no longer needed
+    func stopListeningForLocks(shootID: String) {
+        let channelKey = "locks_\(shootID)"
+        if let channel = realtimeChannels[channelKey] {
+            Task {
+                await channel.unsubscribe()
+            }
+            realtimeChannels.removeValue(forKey: channelKey)
+        }
+        lockListeners.removeValue(forKey: shootID)
     }
 }

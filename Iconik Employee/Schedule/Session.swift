@@ -1,288 +1,297 @@
 import Foundation
-import FirebaseFirestore
 
-struct Session: Identifiable, Equatable, Hashable {
+// MARK: - Session Photographer Model
+struct SessionPhotographer: Codable, Hashable {
     let id: String
-    let employeeName: String
-    let position: String
-    let schoolName: String
-    let startDate: Date?
-    let endDate: Date?
-    let description: String?
-    let location: String?
-    let organizationID: String
-    let createdAt: Date
-    let updatedAt: Date
-    let isPublished: Bool
-    
-    // Raw fields from Firestore
-    let date: String?
-    let startTime: String?
-    let endTime: String?
-    let sessionType: [String]?
-    let status: String?
-    let schoolId: String?
-    let sessionColor: String?  // Hex color string
-    let photographers: [[String: Any]]
-    let hasClassGroupJob: Bool
-    let hasClassCandids: Bool
-    let customSessionType: String?
-    
-    init(id: String, data: [String: Any]) {
-        self.id = id
-        
-        // Debug: Log all fields in the data
-        print("📦 Session '\(id)' data fields: \(data.keys.sorted())")
-        
-        // Parse raw Firestore fields
-        self.date = data["date"] as? String
-        self.startTime = data["startTime"] as? String
-        self.endTime = data["endTime"] as? String
-        self.sessionType = data["sessionTypes"] as? [String]
-        print("🏷️ Session '\(self.id)' sessionTypes: \(self.sessionType ?? [])")
-        self.status = data["status"] as? String
-        self.schoolId = data["schoolId"] as? String
-        self.sessionColor = data["sessionColor"] as? String
-        self.schoolName = data["schoolName"] as? String ?? ""
-        self.photographers = data["photographers"] as? [[String: Any]] ?? []
-        self.organizationID = data["organizationID"] as? String ?? ""
-        self.hasClassGroupJob = data["hasClassGroupJob"] as? Bool ?? false
-        self.hasClassCandids = data["hasClassCandids"] as? Bool ?? false
-        self.customSessionType = data["customSessionType"] as? String
-        
-        // Log the raw isPublished value for debugging
-        let rawIsPublished = data["isPublished"]
-        print("📦 Session '\(id)' isPublished raw value: \(rawIsPublished ?? "nil") (type: \(type(of: rawIsPublished)))")
-        
-        // Parse isPublished with detailed logging
-        if let boolValue = data["isPublished"] as? Bool {
-            self.isPublished = boolValue
-            print("✅ Session '\(id)' isPublished parsed as Bool: \(boolValue)")
-        } else if let intValue = data["isPublished"] as? Int {
-            self.isPublished = intValue != 0
-            print("⚠️ Session '\(id)' isPublished was Int (\(intValue)), converted to Bool: \(intValue != 0)")
-        } else if let stringValue = data["isPublished"] as? String {
-            self.isPublished = stringValue.lowercased() == "true" || stringValue == "1"
-            print("⚠️ Session '\(id)' isPublished was String ('\(stringValue)'), converted to Bool: \(self.isPublished)")
-        } else {
-            self.isPublished = true // Default to true for backward compatibility
-            print("⚠️ Session '\(id)' isPublished was nil or unknown type, defaulting to: true")
-        }
-        
-        // Extract employeeName from photographers array (use first photographer)
-        if let firstPhotographer = self.photographers.first,
-           let name = firstPhotographer["name"] as? String {
-            self.employeeName = name
-        } else {
-            self.employeeName = ""
-        }
-        
-        // Set position based on first sessionType or default
-        self.position = self.sessionType?.first ?? "Photographer"
-        
-        // Description from session-level notes field, or fallback to sessionType
-        if let sessionNotes = data["notes"] as? String, !sessionNotes.isEmpty {
-            self.description = sessionNotes
-        } else if let sessionDescription = data["description"] as? String, !sessionDescription.isEmpty {
-            self.description = sessionDescription
-        } else {
-            self.description = self.sessionType?.first
-        }
-        
-        // Location - might need to fetch from schoolId later
-        self.location = nil
-        
-        // Convert date + time strings to Date objects
-        self.startDate = Self.parseDateTime(date: self.date, time: self.startTime)
-        self.endDate = Self.parseDateTime(date: self.date, time: self.endTime)
-        
-        if let createdTimestamp = data["createdAt"] as? Timestamp {
-            self.createdAt = createdTimestamp.dateValue()
-        } else {
-            self.createdAt = Date()
-        }
-        
-        if let updatedTimestamp = data["updatedAt"] as? Timestamp {
-            self.updatedAt = updatedTimestamp.dateValue()
-        } else {
-            self.updatedAt = Date()
-        }
+    let name: String
+    let email: String?  // Can be NULL in database
+    let notes: String?  // Can be NULL in database
+}
+
+// MARK: - Created By Info Model
+struct SessionCreatedBy: Codable, Hashable {
+    let id: String
+    let name: String
+    let email: String
+}
+
+// MARK: - Session Model (Supabase)
+struct Session: Identifiable, Codable, Equatable, Hashable {
+    // MARK: - Snake_case Properties (from Supabase database)
+    let id: String
+    let organization_id: String
+    let school_id: String
+    let school_name: String
+    let date: String  // Format: YYYY-MM-DD
+    let start_time: String  // Format: HH:MM
+    let end_time: String  // Format: HH:MM
+    let session_types: [String]  // JSONB array
+    let custom_session_type: String?
+    let photographers: [SessionPhotographer]  // JSONB array
+    let notes: String?
+    let status: String
+    let session_color: String?  // Hex color string - can be NULL in database
+    let is_published: Bool
+    let is_time_off: Bool?
+    let has_class_group_job: Bool?
+    let has_class_candids: Bool?
+    let has_sports_job: Bool?
+    let created_at: Date
+    let updated_at: Date?
+    let created_by: SessionCreatedBy?
+
+    // MARK: - Backward Compatibility Computed Properties (camelCase)
+    var organizationID: String { organization_id }
+    var schoolId: String { school_id }
+    var schoolName: String { school_name }
+    var startTime: String { start_time }
+    var endTime: String { end_time }
+    var sessionType: [String] { session_types }
+    var customSessionType: String? { custom_session_type }
+    var sessionColor: String { session_color ?? "#3b82f6" }  // Default blue if NULL
+    var isPublished: Bool { is_published }
+    var isTimeOff: Bool { is_time_off ?? false }
+    var hasClassGroupJob: Bool { has_class_group_job ?? false }
+    var hasClassCandids: Bool { has_class_candids ?? false }
+    var hasSportsJob: Bool { has_sports_job ?? false }
+    var createdAt: Date { created_at }
+    var updatedAt: Date? { updated_at }
+    var createdBy: SessionCreatedBy? { created_by }
+
+    // MARK: - Computed Display Properties
+    var employeeName: String {
+        photographers.first?.name ?? ""
     }
-    
-    init(id: String = UUID().uuidString,
-         employeeName: String,
-         position: String,
-         schoolName: String,
-         startDate: Date?,
-         endDate: Date?,
-         description: String? = nil,
-         location: String? = nil,
-         organizationID: String,
-         createdAt: Date = Date(),
-         updatedAt: Date = Date(),
-         isPublished: Bool = true,
-         hasClassGroupJob: Bool = false,
-         hasClassCandids: Bool = false,
-         customSessionType: String? = nil) {
-        self.id = id
-        self.employeeName = employeeName
-        self.position = position
-        self.schoolName = schoolName
-        self.startDate = startDate
-        self.endDate = endDate
-        self.description = description
-        self.location = location
-        self.organizationID = organizationID
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-        self.isPublished = isPublished
-        
-        // Set default values for raw Firestore fields
-        self.date = nil
-        self.startTime = nil
-        self.endTime = nil
-        self.sessionType = [position]
-        self.status = "scheduled"
-        self.schoolId = nil
-        self.sessionColor = nil
-        self.photographers = []
-        self.hasClassGroupJob = hasClassGroupJob
-        self.hasClassCandids = hasClassCandids
-        self.customSessionType = customSessionType
-    }
-    
-    // Helper method to parse date + time strings into Date objects
-    static func parseDateTime(date: String?, time: String?) -> Date? {
-        print("🕐 parseDateTime called with date: '\(date ?? "nil")', time: '\(time ?? "nil")'")
-        
-        guard let dateStr = date, let timeStr = time else { 
-            print("🕐 parseDateTime: missing date or time - returning nil")
-            return nil 
+
+    var position: String {
+        // If it's an "other" type with custom session type, use that
+        if session_types.contains("other"), let custom = custom_session_type, !custom.isEmpty {
+            return custom
         }
-        
+        // Otherwise use first session type or default to "Photographer"
+        return session_types.first ?? "Photographer"
+    }
+
+    var description: String? {
+        // Use notes if available, otherwise fall back to position
+        if let notes = notes, !notes.isEmpty {
+            return notes
+        }
+        return position
+    }
+
+    var location: String? {
+        // Location might be fetched from school data - returning nil for now
+        return nil
+    }
+
+    var startDate: Date? {
+        Self.parseDateTime(date: date, time: start_time)
+    }
+
+    var endDate: Date? {
+        Self.parseDateTime(date: date, time: end_time)
+    }
+
+    // MARK: - Initializers
+
+    // Default Codable initializer works automatically for Supabase
+
+    /// Manual initializer for creating new sessions
+    init(
+        id: String = UUID().uuidString,
+        organization_id: String,
+        school_id: String,
+        school_name: String,
+        date: String,
+        start_time: String,
+        end_time: String,
+        session_types: [String],
+        custom_session_type: String? = nil,
+        photographers: [SessionPhotographer],
+        notes: String? = nil,
+        status: String = "scheduled",
+        session_color: String? = "#3b82f6",
+        is_published: Bool = true,
+        is_time_off: Bool? = nil,
+        has_class_group_job: Bool? = nil,
+        has_class_candids: Bool? = nil,
+        has_sports_job: Bool? = nil,
+        created_at: Date = Date(),
+        updated_at: Date? = nil,
+        created_by: SessionCreatedBy? = nil
+    ) {
+        self.id = id
+        self.organization_id = organization_id
+        self.school_id = school_id
+        self.school_name = school_name
+        self.date = date
+        self.start_time = start_time
+        self.end_time = end_time
+        self.session_types = session_types
+        self.custom_session_type = custom_session_type
+        self.photographers = photographers
+        self.notes = notes
+        self.status = status
+        self.session_color = session_color
+        self.is_published = is_published
+        self.is_time_off = is_time_off
+        self.has_class_group_job = has_class_group_job
+        self.has_class_candids = has_class_candids
+        self.has_sports_job = has_sports_job
+        self.created_at = created_at
+        self.updated_at = updated_at
+        self.created_by = created_by
+    }
+
+    // MARK: - Helper Methods
+
+    /// Parse date + time strings into Date object
+    static func parseDateTime(date: String, time: String) -> Date? {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
         dateFormatter.timeZone = TimeZone.current
-        
-        // Combine date and time strings
-        let dateTimeString = "\(dateStr) \(timeStr)"
-        print("🕐 parseDateTime: trying to parse '\(dateTimeString)'")
-        
-        let result = dateFormatter.date(from: dateTimeString)
-        print("🕐 parseDateTime: result = \(result?.description ?? "nil")")
-        
-        return result
+
+        let dateTimeString = "\(date) \(time)"
+        return dateFormatter.date(from: dateTimeString)
     }
-    
-    // MARK: - Helper Methods
-    
+
     /// Get the display name for the session type (handles "other" with custom type)
     func getSessionTypeDisplayName() -> String {
-        // Check if this is an "other" type with a custom name
-        if let sessionTypes = self.sessionType,
-           sessionTypes.contains("other"),
-           let customName = self.customSessionType,
-           !customName.isEmpty {
-            return customName
+        if session_types.contains("other"), let custom = custom_session_type, !custom.isEmpty {
+            return custom
         }
-        // Return the position which is based on the first sessionType
-        return self.position
+        return position
     }
-    
+
     /// Check if a user ID is assigned as a photographer for this session
-    func isUserAssigned(userID: String) -> Bool {
-        for photographer in photographers {
-            let photographerID = photographer["id"] as? String
-            if photographerID == userID {
-                return true
+    func isUserAssigned(userID: String, userEmail: String? = nil) -> Bool {
+        // Primary: Match by Supabase UUID (case-insensitive since UUIDs can vary in case)
+        let userIDLower = userID.lowercased()
+        if photographers.contains(where: { $0.id.lowercased() == userIDLower }) {
+            return true
+        }
+
+        // Fallback: Match by email (for legacy data or transition period)
+        if let email = userEmail {
+            return photographers.contains {
+                $0.email?.lowercased() == email.lowercased()
             }
         }
+
         return false
     }
-    
+
     /// Get all photographer IDs for this session
     func getPhotographerIDs() -> [String] {
-        return photographers.compactMap { photographer in
-            photographer["id"] as? String
-        }
+        photographers.map { $0.id }
     }
-    
+
     /// Get all photographer names for this session
     func getPhotographerNames() -> [String] {
-        return photographers.compactMap { photographer in
-            photographer["name"] as? String
-        }
+        photographers.map { $0.name }
     }
-    
+
     /// Get photographer info (name and notes) for a specific user ID
-    func getPhotographerInfo(for userID: String) -> (name: String, notes: String)? {
-        guard let photographer = photographers.first(where: { ($0["id"] as? String) == userID }) else {
+    func getPhotographerInfo(for userID: String) -> (name: String, notes: String?)? {
+        guard let photographer = photographers.first(where: { $0.id == userID }) else {
             return nil
         }
-        
-        let name = photographer["name"] as? String ?? ""
-        let notes = photographer["notes"] as? String ?? ""
-        return (name: name, notes: notes)
+        return (name: photographer.name, notes: photographer.notes)
     }
-    
-    var toDictionary: [String: Any] {
-        var dict: [String: Any] = [
-            "employeeName": employeeName,
-            "position": position,
-            "schoolName": schoolName,
-            "organizationID": organizationID,
-            "createdAt": Timestamp(date: createdAt),
-            "updatedAt": Timestamp(date: updatedAt)
-        ]
-        
-        if let startDate = startDate {
-            dict["startDate"] = Timestamp(date: startDate)
-        }
-        
-        if let endDate = endDate {
-            dict["endDate"] = Timestamp(date: endDate)
-        }
-        
-        if let description = description {
-            dict["description"] = description
-        }
-        
-        if let location = location {
-            dict["location"] = location
-        }
-        
-        return dict
-    }
-    
+
+    // MARK: - Equatable
     static func == (lhs: Session, rhs: Session) -> Bool {
         lhs.id == rhs.id &&
-        lhs.employeeName == rhs.employeeName &&
-        lhs.position == rhs.position &&
-        lhs.schoolName == rhs.schoolName &&
-        lhs.startDate == rhs.startDate &&
-        lhs.endDate == rhs.endDate &&
-        lhs.description == rhs.description &&
-        lhs.location == rhs.location &&
-        lhs.organizationID == rhs.organizationID &&
+        lhs.organization_id == rhs.organization_id &&
+        lhs.school_id == rhs.school_id &&
+        lhs.school_name == rhs.school_name &&
         lhs.date == rhs.date &&
-        lhs.startTime == rhs.startTime &&
-        lhs.endTime == rhs.endTime &&
-        lhs.isPublished == rhs.isPublished
+        lhs.start_time == rhs.start_time &&
+        lhs.end_time == rhs.end_time &&
+        lhs.is_published == rhs.is_published &&
+        lhs.session_color == rhs.session_color
     }
-    
+
+    // MARK: - Hashable
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
-        hasher.combine(employeeName)
-        hasher.combine(position)
-        hasher.combine(schoolName)
-        hasher.combine(startDate)
-        hasher.combine(endDate)
-        hasher.combine(description)
-        hasher.combine(location)
-        hasher.combine(organizationID)
+        hasher.combine(organization_id)
+        hasher.combine(school_id)
+        hasher.combine(school_name)
         hasher.combine(date)
-        hasher.combine(startTime)
-        hasher.combine(endTime)
-        hasher.combine(isPublished)
+        hasher.combine(start_time)
+        hasher.combine(end_time)
+        hasher.combine(is_published)
+        hasher.combine(session_color)
+    }
+}
+
+// MARK: - Custom Codable Extension for Date Handling
+extension Session {
+    enum CodingKeys: String, CodingKey {
+        case id, organization_id, school_id, school_name, date, start_time, end_time
+        case session_types, custom_session_type, photographers, notes, status
+        case session_color, is_published, is_time_off
+        case has_class_group_job, has_class_candids, has_sports_job
+        case created_at, updated_at, created_by
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(String.self, forKey: .id)
+        organization_id = try container.decode(String.self, forKey: .organization_id)
+        school_id = try container.decode(String.self, forKey: .school_id)
+        school_name = try container.decode(String.self, forKey: .school_name)
+        date = try container.decode(String.self, forKey: .date)
+        start_time = try container.decode(String.self, forKey: .start_time)
+        end_time = try container.decode(String.self, forKey: .end_time)
+        session_types = try container.decode([String].self, forKey: .session_types)
+        custom_session_type = try container.decodeIfPresent(String.self, forKey: .custom_session_type)
+        photographers = try container.decode([SessionPhotographer].self, forKey: .photographers)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        status = try container.decode(String.self, forKey: .status)
+        session_color = try container.decodeIfPresent(String.self, forKey: .session_color)
+        is_published = try container.decode(Bool.self, forKey: .is_published)
+        is_time_off = try container.decodeIfPresent(Bool.self, forKey: .is_time_off)
+        has_class_group_job = try container.decodeIfPresent(Bool.self, forKey: .has_class_group_job)
+        has_class_candids = try container.decodeIfPresent(Bool.self, forKey: .has_class_candids)
+        has_sports_job = try container.decodeIfPresent(Bool.self, forKey: .has_sports_job)
+
+        // Handle created_at - try Date first, then ISO8601 string
+        if let dateValue = try? container.decode(Date.self, forKey: .created_at) {
+            created_at = dateValue
+        } else if let dateString = try? container.decode(String.self, forKey: .created_at) {
+            // Parse ISO8601 string
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let parsed = isoFormatter.date(from: dateString) {
+                created_at = parsed
+            } else {
+                isoFormatter.formatOptions = [.withInternetDateTime]
+                created_at = isoFormatter.date(from: dateString) ?? Date()
+            }
+        } else {
+            created_at = Date()  // Fallback if NULL or missing
+        }
+
+        // Handle updated_at - same pattern but optional
+        if let dateValue = try? container.decodeIfPresent(Date.self, forKey: .updated_at) {
+            updated_at = dateValue
+        } else if let dateString = try? container.decodeIfPresent(String.self, forKey: .updated_at) {
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let parsed = isoFormatter.date(from: dateString) {
+                updated_at = parsed
+            } else {
+                isoFormatter.formatOptions = [.withInternetDateTime]
+                updated_at = isoFormatter.date(from: dateString)
+            }
+        } else {
+            updated_at = nil
+        }
+
+        created_by = try container.decodeIfPresent(SessionCreatedBy.self, forKey: .created_by)
     }
 }

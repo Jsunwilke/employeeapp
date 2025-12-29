@@ -1,23 +1,28 @@
 import Foundation
-import FirebaseFirestore
-import FirebaseAuth
+import Supabase
 import Combine
 
-// MARK: - NFC SD Tracker Extensions to FirestoreManager
+// MARK: - NFC SD Tracker Manager
+// Uses Supabase for data persistence
 
-// Singleton FirestoreManager for NFC functionality
+// Singleton manager for NFC functionality (legacy name kept for compatibility)
 class FirestoreManager: ObservableObject {
     static let shared = FirestoreManager()
-    
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
+
     private init() {}
-    
+
     // Published properties for UI updates
     @Published var isLoading = false
     @Published var loadingMessage = ""
-    
+
     // Cache for schools data to prevent unnecessary updates
     private var lastSchoolsData: [SchoolItem]?
     private let schoolsDataQueue = DispatchQueue(label: "com.iconik.schoolsdata", attributes: .concurrent)
+
+    // Store realtime channels for cleanup
+    private var photographersChannel: RealtimeChannelV2?
+    private var schoolsChannel: RealtimeChannelV2?
     
     // MARK: - Save Record (SD Card)
     func saveRecord(timestamp: Date,
@@ -30,37 +35,45 @@ class FirestoreManager: ObservableObject {
                    organizationID: String,
                    userId: String,
                    completion: @escaping (Result<String, Error>) -> Void) {
-        
+
         // Check if we're online
         if OfflineDataManager.shared.isOnline {
-            let db = Firestore.firestore()
-            
-            // Create document data
-            var documentData: [String: Any] = [
-                "cardNumber": cardNumber,
-                "school": school,
-                "status": status,
-                "photographer": photographer,
-                "userId": userId,
-                "organizationID": organizationID,
-                "timestamp": Timestamp(date: timestamp)
-            ]
-            
-            // Add upload location fields if status is "Uploaded"
-            if status.lowercased() == "uploaded" {
-                if let jasonHouse = uploadedFromJasonsHouse, !jasonHouse.isEmpty {
-                    documentData["uploadedFromJasonsHouse"] = jasonHouse
-                }
-                if let andyHouse = uploadedFromAndysHouse, !andyHouse.isEmpty {
-                    documentData["uploadedFromAndysHouse"] = andyHouse
-                }
-            }
-            
-            db.collection("records").addDocument(data: documentData) { error in
-                if let error = error {
-                    completion(.failure(error))
-                } else {
-                    completion(.success("SD card scan saved successfully"))
+            Task {
+                do {
+                    // Create record data with snake_case field names
+                    var recordData: [String: AnyJSON] = [
+                        "id": .string(UUID().uuidString.lowercased()),
+                        "card_number": .string(cardNumber),
+                        "school": .string(school),
+                        "status": .string(status),
+                        "photographer": .string(photographer),
+                        "user_id": .string(userId),
+                        "organization_id": .string(organizationID.lowercased()),
+                        "timestamp": .string(timestamp.ISO8601Format())
+                    ]
+
+                    // Add upload location fields if status is "Uploaded"
+                    if status.lowercased() == "uploaded" {
+                        if let jasonHouse = uploadedFromJasonsHouse, !jasonHouse.isEmpty {
+                            recordData["uploaded_from_jasons_house"] = .string(jasonHouse)
+                        }
+                        if let andyHouse = uploadedFromAndysHouse, !andyHouse.isEmpty {
+                            recordData["uploaded_from_andys_house"] = .string(andyHouse)
+                        }
+                    }
+
+                    try await supabase
+                        .from("records")
+                        .insert(recordData)
+                        .execute()
+
+                    await MainActor.run {
+                        completion(.success("SD card scan saved successfully"))
+                    }
+                } catch {
+                    await MainActor.run {
+                        completion(.failure(error))
+                    }
                 }
             }
         } else {
@@ -86,39 +99,75 @@ class FirestoreManager: ObservableObject {
                      value: String,
                      organizationID: String,
                      completion: @escaping (Result<[FirestoreRecord], Error>) -> Void) {
-        
+
         // Check if we're online
         if OfflineDataManager.shared.isOnline {
-            let db = Firestore.firestore()
-            var query: Query = db.collection("records").whereField("organizationID", isEqualTo: organizationID)
-            
-            if field.lowercased() != "all" {
-                query = query.whereField(field, isEqualTo: value)
-            }
-            
-            query.getDocuments { snapshot, error in
-                if let error = error {
-                    // Try to get cached data if there's an error
-                    if let cachedRecords = OfflineDataManager.shared.getCachedRecords() {
-                        let filteredRecords = self.filterCachedRecords(
-                            records: cachedRecords,
-                            field: field,
-                            value: value,
-                            organizationID: organizationID
+            Task {
+                do {
+                    // Decodable struct for Supabase response
+                    struct RecordDTO: Decodable {
+                        let id: String
+                        let card_number: String?
+                        let school: String?
+                        let status: String?
+                        let photographer: String?
+                        let user_id: String?
+                        let organization_id: String?
+                        let timestamp: Date?
+                        let uploaded_from_jasons_house: String?
+                        let uploaded_from_andys_house: String?
+                    }
+
+                    var query = supabase
+                        .from("records")
+                        .select()
+                        .eq("organization_id", value: organizationID.lowercased())
+
+                    // Add field filter if not "all"
+                    if field.lowercased() != "all" {
+                        let snakeField = self.toSnakeCase(field)
+                        query = query.eq(snakeField, value: value)
+                    }
+
+                    let recordDTOs: [RecordDTO] = try await query.execute().value
+
+                    // Convert DTOs to FirestoreRecord
+                    let records = recordDTOs.map { dto -> FirestoreRecord in
+                        FirestoreRecord(
+                            id: dto.id,
+                            timestamp: dto.timestamp ?? Date(),
+                            photographer: dto.photographer ?? "",
+                            cardNumber: dto.card_number ?? "",
+                            school: dto.school ?? "",
+                            status: dto.status ?? "",
+                            uploadedFromJasonsHouse: dto.uploaded_from_jasons_house,
+                            uploadedFromAndysHouse: dto.uploaded_from_andys_house,
+                            organizationID: dto.organization_id ?? "",
+                            userId: dto.user_id ?? ""
                         )
-                        completion(.success(filteredRecords))
-                    } else {
-                        completion(.failure(error))
                     }
-                } else if let snapshot = snapshot {
-                    let records = snapshot.documents.map { document -> FirestoreRecord in
-                        return FirestoreRecord(id: document.documentID, data: document.data())
-                    }
-                    
+
                     // Cache records for offline use
                     OfflineDataManager.shared.cacheRecords(records: records)
-                    
-                    completion(.success(records))
+
+                    await MainActor.run {
+                        completion(.success(records))
+                    }
+                } catch {
+                    // Try to get cached data if there's an error
+                    await MainActor.run {
+                        if let cachedRecords = OfflineDataManager.shared.getCachedRecords() {
+                            let filteredRecords = self.filterCachedRecords(
+                                records: cachedRecords,
+                                field: field,
+                                value: value,
+                                organizationID: organizationID
+                            )
+                            completion(.success(filteredRecords))
+                        } else {
+                            completion(.failure(error))
+                        }
+                    }
                 }
             }
         } else {
@@ -138,6 +187,14 @@ class FirestoreManager: ObservableObject {
                 completion(.failure(error))
             }
         }
+    }
+
+    // Helper to convert camelCase to snake_case
+    private func toSnakeCase(_ input: String) -> String {
+        let pattern = "([a-z])([A-Z])"
+        let regex = try? NSRegularExpression(pattern: pattern, options: [])
+        let range = NSRange(location: 0, length: input.count)
+        return regex?.stringByReplacingMatches(in: input, options: [], range: range, withTemplate: "$1_$2").lowercased() ?? input.lowercased()
     }
     
     // Helper method to filter cached records
@@ -178,52 +235,64 @@ class FirestoreManager: ObservableObject {
                         userId: String,
                         shiftUid: String? = nil,
                         completion: @escaping (Result<String, Error>) -> Void) {
-        
+
         // Check if we're online
         if OfflineDataManager.shared.isOnline {
-            let firestore = Firestore.firestore()
-            var jobBoxRef: DocumentReference?
-            
-            // Create a dictionary with all fields for Firestore
-            var documentData: [String: Any] = [
-                "boxNumber": boxNumber,
-                "school": school,
-                "status": status,
-                "photographer": photographer,
-                "userId": userId,
-                "organizationID": organizationID,
-                "timestamp": Timestamp(date: timestamp)
-            ]
-            
-            // Add optional fields if present
-            if let schoolId = schoolId {
-                documentData["schoolId"] = schoolId
-            }
-            if let shiftUid = shiftUid {
-                documentData["shiftUid"] = shiftUid
-            }
-            
-            jobBoxRef = firestore.collection("jobBoxes").addDocument(data: documentData) { error in
-                if let error = error {
-                    completion(.failure(error))
-                } else {
+            Task {
+                do {
+                    let jobBoxId = UUID().uuidString.lowercased()
+
+                    // Create job box data with snake_case field names
+                    var jobBoxData: [String: AnyJSON] = [
+                        "id": .string(jobBoxId),
+                        "box_number": .string(boxNumber),
+                        "school": .string(school),
+                        "status": .string(status),
+                        "photographer": .string(photographer),
+                        "user_id": .string(userId),
+                        "organization_id": .string(organizationID.lowercased()),
+                        "timestamp": .string(timestamp.ISO8601Format())
+                    ]
+
+                    // Add optional fields if present
+                    if let schoolId = schoolId {
+                        jobBoxData["school_id"] = .string(schoolId)
+                    }
+                    if let shiftUid = shiftUid {
+                        jobBoxData["shift_uid"] = .string(shiftUid)
+                    }
+
+                    try await supabase
+                        .from("job_boxes")
+                        .insert(jobBoxData)
+                        .execute()
+
                     // Update the session to mark it as assigned
-                    if let shiftUid = shiftUid,
-                       let jobBoxId = jobBoxRef?.documentID {
-                        firestore.collection("sessions").document(shiftUid).updateData([
-                            "hasJobBoxAssigned": true,
-                            "jobBoxRecordId": jobBoxId
-                        ]) { updateError in
-                            if let updateError = updateError {
-                                print("⚠️ Warning: Failed to update session assignment status: \(updateError)")
-                                // Still consider the job box save successful
-                            } else {
-                                print("✅ Successfully updated session \(shiftUid) with job box assignment")
-                            }
+                    if let shiftUid = shiftUid {
+                        do {
+                            let sessionUpdate: [String: AnyJSON] = [
+                                "has_job_box_assigned": .bool(true),
+                                "job_box_record_id": .string(jobBoxId)
+                            ]
+                            try await supabase
+                                .from("sessions")
+                                .update(sessionUpdate)
+                                .eq("id", value: shiftUid)
+                                .execute()
+                            print("✅ Successfully updated session \(shiftUid) with job box assignment")
+                        } catch {
+                            print("⚠️ Warning: Failed to update session assignment status: \(error)")
+                            // Still consider the job box save successful
                         }
                     }
-                    
-                    completion(.success("Job box record saved successfully"))
+
+                    await MainActor.run {
+                        completion(.success("Job box record saved successfully"))
+                    }
+                } catch {
+                    await MainActor.run {
+                        completion(.failure(error))
+                    }
                 }
             }
         } else {
@@ -253,24 +322,60 @@ class FirestoreManager: ObservableObject {
                           value: String,
                           organizationID: String,
                           completion: @escaping (Result<[JobBox], Error>) -> Void) {
-        
+
         // Check if we're online
         if OfflineDataManager.shared.isOnline {
-            let firestore = Firestore.firestore()
-            var query: Query = firestore.collection("jobBoxes").whereField("organizationID", isEqualTo: organizationID)
-            if field.lowercased() != "all" {
-                query = query.whereField(field, isEqualTo: value)
-            }
-            
-            query.getDocuments { snapshot, error in
-                if let error = error {
-                    completion(.failure(error))
-                } else if let snapshot = snapshot {
-                    let records = snapshot.documents.map { document -> JobBox in
-                        return JobBox(id: document.documentID, data: document.data())
+            Task {
+                do {
+                    // Decodable struct for Supabase response
+                    struct JobBoxDTO: Decodable {
+                        let id: String
+                        let box_number: String?
+                        let school: String?
+                        let school_id: String?
+                        let status: String?
+                        let photographer: String?
+                        let user_id: String?
+                        let organization_id: String?
+                        let timestamp: Date?
+                        let shift_uid: String?
                     }
-                    
-                    completion(.success(records))
+
+                    var query = supabase
+                        .from("job_boxes")
+                        .select()
+                        .eq("organization_id", value: organizationID.lowercased())
+
+                    if field.lowercased() != "all" {
+                        let snakeField = self.toSnakeCase(field)
+                        query = query.eq(snakeField, value: value)
+                    }
+
+                    let jobBoxDTOs: [JobBoxDTO] = try await query.execute().value
+
+                    // Convert DTOs to JobBox
+                    let records = jobBoxDTOs.map { dto -> JobBox in
+                        JobBox(
+                            id: dto.id,
+                            shift_uid: dto.shift_uid ?? "",
+                            status: dto.status ?? "",
+                            photographer: dto.photographer ?? "",
+                            timestamp: dto.timestamp,
+                            box_number: dto.box_number,
+                            organization_id: dto.organization_id ?? "",
+                            school: dto.school,
+                            school_id: dto.school_id,
+                            user_id: dto.user_id
+                        )
+                    }
+
+                    await MainActor.run {
+                        completion(.success(records))
+                    }
+                } catch {
+                    await MainActor.run {
+                        completion(.failure(error))
+                    }
                 }
             }
         } else {
@@ -284,186 +389,201 @@ class FirestoreManager: ObservableObject {
     
     // MARK: - Listen for Photographers
     func listenForPhotographers(inOrgID orgID: String, completion: @escaping ([String]) -> Void) {
-        let db = Firestore.firestore()
-        
-        db.collection("users")
-            .whereField("organizationID", isEqualTo: orgID)
-            .whereField("isActive", isEqualTo: true)
-            .addSnapshotListener { snapshot, error in
-                if let error = error {
-                    print("Error listening for photographers: \(error)")
-                    return
+        Task {
+            // First, fetch initial data
+            await fetchAndNotifyPhotographers(orgID: orgID, completion: completion)
+
+            // Then set up realtime subscription
+            let channelKey = "photographers_\(orgID)"
+
+            // Unsubscribe from existing channel if any
+            if let existingChannel = photographersChannel {
+                await existingChannel.unsubscribe()
+            }
+
+            let channel = supabase.channel(channelKey)
+
+            // Listen for changes to users for this organization
+            let changeStream = channel.postgresChange(
+                AnyAction.self,
+                schema: "public",
+                table: "users",
+                filter: "organization_id=eq.\(orgID.lowercased())"
+            )
+
+            // Start listening for changes
+            Task {
+                for await _ in changeStream {
+                    // Refetch all photographers when any change occurs
+                    await self.fetchAndNotifyPhotographers(orgID: orgID, completion: completion)
                 }
-                
-                guard let documents = snapshot?.documents else {
-                    completion([])
-                    return
-                }
-                
-                let photographers = documents.compactMap { doc -> String? in
-                    return doc.data()["firstName"] as? String
-                }.sorted()
-                
-                // Cache the photographer names
-                if let encoded = try? JSONEncoder().encode(photographers) {
-                    UserDefaults.standard.set(encoded, forKey: "photographerNames")
-                }
-                
+            }
+
+            await channel.subscribe()
+            photographersChannel = channel
+        }
+    }
+
+    // Helper method to fetch photographers and notify
+    private func fetchAndNotifyPhotographers(orgID: String, completion: @escaping ([String]) -> Void) async {
+        do {
+            struct UserDTO: Decodable {
+                let first_name: String?
+                let is_active: Bool?
+            }
+
+            let users: [UserDTO] = try await supabase
+                .from("users")
+                .select("first_name, is_active")
+                .eq("organization_id", value: orgID.lowercased())
+                .eq("is_active", value: true)
+                .execute()
+                .value
+
+            let photographers = users.compactMap { $0.first_name }.sorted()
+
+            // Cache the photographer names
+            if let encoded = try? JSONEncoder().encode(photographers) {
+                UserDefaults.standard.set(encoded, forKey: "photographerNames")
+            }
+
+            await MainActor.run {
                 completion(photographers)
             }
+        } catch {
+            print("Error fetching photographers: \(error)")
+            await MainActor.run {
+                completion([])
+            }
+        }
     }
     
     // MARK: - Listen for Schools Data
-    
+
     // Force refresh schools from server (for pull-to-refresh)
     func refreshSchoolsFromServer(forOrgID orgID: String, completion: @escaping ([SchoolItem]) -> Void) {
-        let db = Firestore.firestore()
-        
-        db.collection("schools")
-            .whereField("organizationID", isEqualTo: orgID)
-            .order(by: "value")
-            .getDocuments(source: .server) { [weak self] snapshot, error in
-                guard let self = self else { return }
-                
-                if let error = error {
-                    print("Error refreshing schools from server: \(error)")
-                    completion([])
-                    return
-                }
-                
-                guard let documents = snapshot?.documents else {
-                    completion([])
-                    return
-                }
-                
-                let schools = documents.compactMap { doc -> SchoolItem? in
-                    let data = doc.data()
-                    guard let name = data["value"] as? String else { return nil }
-                    
-                    var addressComponents: [String] = []
-                    if let street = data["street"] as? String, !street.isEmpty {
-                        addressComponents.append(street)
-                    }
-                    if let city = data["city"] as? String, !city.isEmpty {
-                        addressComponents.append(city)
-                    }
-                    if let state = data["state"] as? String, !state.isEmpty {
-                        addressComponents.append(state)
-                    }
-                    if let zipCode = data["zipCode"] as? String, !zipCode.isEmpty {
-                        addressComponents.append(zipCode)
-                    }
-                    
-                    let address = addressComponents.isEmpty ? name : addressComponents.joined(separator: ", ")
-                    let coordinates = data["coordinates"] as? String
-                    
-                    return SchoolItem(
-                        id: doc.documentID,
-                        name: name,
-                        address: address,
-                        coordinates: coordinates
-                    )
-                }
-                
-                // Update cache
-                self.lastSchoolsData = schools
-                if let encoded = try? JSONEncoder().encode(schools) {
-                    UserDefaults.standard.set(encoded, forKey: "nfcSchools")
-                }
-                
-                completion(schools)
-                print("Schools refreshed from server - \(schools.count) schools")
-            }
+        Task {
+            await fetchAndProcessSchools(orgID: orgID, completion: completion)
+            print("Schools refreshed from server")
+        }
     }
-    
+
     func listenForSchoolsData(forOrgID orgID: String, completion: @escaping ([SchoolItem]) -> Void) {
-        let db = Firestore.firestore()
-        
-        // Set up the listener - it will automatically sync from server if online
-        db.collection("schools")
-            .whereField("organizationID", isEqualTo: orgID)
-            .order(by: "value")
-            .addSnapshotListener { [weak self] snapshot, error in
-                guard let self = self else { return }
-                
-                if let error = error {
-                    print("Error listening for schools: \(error)")
-                    completion([])
-                    return
-                }
-                
-                guard let documents = snapshot?.documents else {
-                    completion([])
-                    return
-                }
-                
-                // Skip metadata-only updates
-                if let snapshot = snapshot {
-                    // Check if this is just a metadata update (no actual data changes)
-                    if snapshot.metadata.hasPendingWrites && snapshot.documentChanges.isEmpty {
-                        print("Skipping metadata-only update")
-                        return
-                    }
-                    
-                    // Don't skip cache updates - they might contain new data from server
-                    // The hasSchoolsDataChanged function below will handle duplicate prevention
-                }
-                
-                let schools = documents.compactMap { doc -> SchoolItem? in
-                    let data = doc.data()
-                    guard let name = data["value"] as? String else { return nil }
-                    
-                    // Build address from available fields (matching TemplateService pattern)
-                    var addressComponents: [String] = []
-                    if let street = data["street"] as? String, !street.isEmpty {
-                        addressComponents.append(street)
-                    }
-                    if let city = data["city"] as? String, !city.isEmpty {
-                        addressComponents.append(city)
-                    }
-                    if let state = data["state"] as? String, !state.isEmpty {
-                        addressComponents.append(state)
-                    }
-                    if let zipCode = data["zipCode"] as? String, !zipCode.isEmpty {
-                        addressComponents.append(zipCode)
-                    }
-                    
-                    let address = addressComponents.isEmpty ? name : addressComponents.joined(separator: ", ")
-                    let coordinates = data["coordinates"] as? String
-                    
-                    return SchoolItem(
-                        id: doc.documentID,
-                        name: name,
-                        address: address,
-                        coordinates: coordinates
-                    )
-                }
-                
-                // Thread-safe check if data has changed
-                self.schoolsDataQueue.async(flags: .barrier) {
-                    let oldSchools = self.lastSchoolsData
-                    let schoolsChanged = self.hasSchoolsDataChanged(oldSchools: oldSchools, newSchools: schools)
-                    
-                    if schoolsChanged {
-                        // Update the cached data
-                        self.lastSchoolsData = schools
-                        
-                        // Cache the school records to UserDefaults
-                        if let encoded = try? JSONEncoder().encode(schools) {
-                            UserDefaults.standard.set(encoded, forKey: "nfcSchools")
-                        }
-                        
-                        // Only call completion if data actually changed
-                        DispatchQueue.main.async {
-                            completion(schools)
-                        }
-                        print("Schools data updated - \(schools.count) schools")
-                    } else {
-                        // Data hasn't changed, don't trigger an update
-                        print("Schools data unchanged, skipping update")
-                    }
+        Task {
+            // First, fetch initial data
+            await fetchAndProcessSchools(orgID: orgID, completion: completion)
+
+            // Then set up realtime subscription
+            let channelKey = "schools_\(orgID)"
+
+            // Unsubscribe from existing channel if any
+            if let existingChannel = schoolsChannel {
+                await existingChannel.unsubscribe()
+            }
+
+            let channel = supabase.channel(channelKey)
+
+            // Listen for changes to schools for this organization
+            let changeStream = channel.postgresChange(
+                AnyAction.self,
+                schema: "public",
+                table: "schools",
+                filter: "organization_id=eq.\(orgID.lowercased())"
+            )
+
+            // Start listening for changes
+            Task {
+                for await _ in changeStream {
+                    // Refetch all schools when any change occurs
+                    await self.fetchAndProcessSchools(orgID: orgID, completion: completion)
                 }
             }
+
+            await channel.subscribe()
+            schoolsChannel = channel
+        }
+    }
+
+    // Helper method to fetch and process schools
+    private func fetchAndProcessSchools(orgID: String, completion: @escaping ([SchoolItem]) -> Void) async {
+        do {
+            struct SchoolDTO: Decodable {
+                let id: String
+                let value: String?
+                let street: String?
+                let city: String?
+                let state: String?
+                let zip_code: String?
+                let coordinates: String?
+            }
+
+            let schoolDTOs: [SchoolDTO] = try await supabase
+                .from("schools")
+                .select("id, value, street, city, state, zip_code, coordinates")
+                .eq("organization_id", value: orgID.lowercased())
+                .order("value")
+                .execute()
+                .value
+
+            let schools = schoolDTOs.compactMap { dto -> SchoolItem? in
+                guard let name = dto.value else { return nil }
+
+                // Build address from available fields
+                var addressComponents: [String] = []
+                if let street = dto.street, !street.isEmpty {
+                    addressComponents.append(street)
+                }
+                if let city = dto.city, !city.isEmpty {
+                    addressComponents.append(city)
+                }
+                if let state = dto.state, !state.isEmpty {
+                    addressComponents.append(state)
+                }
+                if let zipCode = dto.zip_code, !zipCode.isEmpty {
+                    addressComponents.append(zipCode)
+                }
+
+                let address = addressComponents.isEmpty ? name : addressComponents.joined(separator: ", ")
+
+                return SchoolItem(
+                    id: dto.id,
+                    name: name,
+                    address: address,
+                    coordinates: dto.coordinates
+                )
+            }
+
+            // Thread-safe check if data has changed
+            schoolsDataQueue.async(flags: .barrier) { [weak self] in
+                guard let self = self else { return }
+                let oldSchools = self.lastSchoolsData
+                let schoolsChanged = self.hasSchoolsDataChanged(oldSchools: oldSchools, newSchools: schools)
+
+                if schoolsChanged {
+                    // Update the cached data
+                    self.lastSchoolsData = schools
+
+                    // Cache the school records to UserDefaults
+                    if let encoded = try? JSONEncoder().encode(schools) {
+                        UserDefaults.standard.set(encoded, forKey: "nfcSchools")
+                    }
+
+                    // Only call completion if data actually changed
+                    DispatchQueue.main.async {
+                        completion(schools)
+                    }
+                    print("Schools data updated - \(schools.count) schools")
+                } else {
+                    // Data hasn't changed, don't trigger an update
+                    print("Schools data unchanged, skipping update")
+                }
+            }
+        } catch {
+            print("Error fetching schools: \(error)")
+            await MainActor.run {
+                completion([])
+            }
+        }
     }
     
     private func hasSchoolsDataChanged(oldSchools: [SchoolItem]?, newSchools: [SchoolItem]) -> Bool {
@@ -499,14 +619,20 @@ class FirestoreManager: ObservableObject {
     }
     
     // MARK: - Delete Operations
-    
+
     func deleteRecord(recordID: String, completion: @escaping (Result<String, Error>) -> Void) {
-        let db = Firestore.firestore()
-        
-        db.collection("records").document(recordID).delete() { error in
-            if let error = error {
-                completion(.failure(error))
-            } else {
+        Task {
+            do {
+                try await supabase
+                    .from("records")
+                    .delete()
+                    .eq("id", value: recordID)
+                    .execute()
+
+                await MainActor.run {
+                    completion(.success("Record deleted successfully"))
+                }
+            } catch {
                 // Also mark for offline deletion if needed
                 if !OfflineDataManager.shared.isOnline {
                     OfflineDataManager.shared.addPendingOperation(
@@ -515,19 +641,31 @@ class FirestoreManager: ObservableObject {
                         data: [:],
                         id: recordID
                     )
+                    await MainActor.run {
+                        completion(.success("Record marked for deletion when online"))
+                    }
+                } else {
+                    await MainActor.run {
+                        completion(.failure(error))
+                    }
                 }
-                completion(.success("Record deleted successfully"))
             }
         }
     }
-    
+
     func deleteJobBoxRecord(recordID: String, completion: @escaping (Result<String, Error>) -> Void) {
-        let db = Firestore.firestore()
-        
-        db.collection("jobBoxes").document(recordID).delete() { error in
-            if let error = error {
-                completion(.failure(error))
-            } else {
+        Task {
+            do {
+                try await supabase
+                    .from("job_boxes")
+                    .delete()
+                    .eq("id", value: recordID)
+                    .execute()
+
+                await MainActor.run {
+                    completion(.success("Job box record deleted successfully"))
+                }
+            } catch {
                 // Also mark for offline deletion if needed
                 if !OfflineDataManager.shared.isOnline {
                     OfflineDataManager.shared.addPendingOperation(
@@ -536,69 +674,106 @@ class FirestoreManager: ObservableObject {
                         data: [:],
                         id: recordID
                     )
+                    await MainActor.run {
+                        completion(.success("Job box record marked for deletion when online"))
+                    }
+                } else {
+                    await MainActor.run {
+                        completion(.failure(error))
+                    }
                 }
-                completion(.success("Job box record deleted successfully"))
             }
         }
     }
-    
+
     // Debug helper to print job box document structure
     func debugPrintJobBoxDocuments(organizationID: String) {
-        let db = Firestore.firestore()
-        
-        db.collection("jobBoxes")
-            .whereField("organizationID", isEqualTo: organizationID)
-            .limit(to: 1)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    print("❌ DEBUG: Error fetching job box documents: \(error)")
-                    return
+        Task {
+            do {
+                struct JobBoxDebug: Decodable {
+                    let id: String
+                    let box_number: String?
+                    let school: String?
+                    let status: String?
+                    let photographer: String?
+                    let timestamp: Date?
                 }
-                
-                guard let document = snapshot?.documents.first else {
+
+                let jobBoxes: [JobBoxDebug] = try await supabase
+                    .from("job_boxes")
+                    .select()
+                    .eq("organization_id", value: organizationID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let jobBox = jobBoxes.first else {
                     print("❌ DEBUG: No job box documents found")
                     return
                 }
-                
+
                 print("📦 DEBUG: Job Box Document Structure:")
-                print("Document ID: \(document.documentID)")
-                let data = document.data()
-                for (key, value) in data {
-                    print("  \(key): \(type(of: value)) = \(value)")
-                }
+                print("Document ID: \(jobBox.id)")
+                print("  box_number: \(jobBox.box_number ?? "nil")")
+                print("  school: \(jobBox.school ?? "nil")")
+                print("  status: \(jobBox.status ?? "nil")")
+                print("  photographer: \(jobBox.photographer ?? "nil")")
+                print("  timestamp: \(String(describing: jobBox.timestamp))")
+            } catch {
+                print("❌ DEBUG: Error fetching job box documents: \(error)")
             }
+        }
     }
-    
+
     // MARK: - Get Highest Box Number
     func getHighestBoxNumber(organizationID: String, completion: @escaping (Result<Int, Error>) -> Void) {
-        let db = Firestore.firestore()
-        
-        db.collection("jobBoxes")
-            .whereField("organizationID", isEqualTo: organizationID)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    completion(.failure(error))
-                    return
+        Task {
+            do {
+                struct BoxNumberDTO: Decodable {
+                    let box_number: String?
                 }
-                
-                guard let documents = snapshot?.documents else {
-                    completion(.success(3000)) // Default starting number
-                    return
+
+                let jobBoxes: [BoxNumberDTO] = try await supabase
+                    .from("job_boxes")
+                    .select("box_number")
+                    .eq("organization_id", value: organizationID.lowercased())
+                    .execute()
+                    .value
+
+                let boxNumbers = jobBoxes.compactMap { dto -> Int? in
+                    guard let boxNumberStr = dto.box_number else { return nil }
+                    return Int(boxNumberStr)
                 }
-                
-                let boxNumbers = documents.compactMap { doc -> Int? in
-                    let data = doc.data()
-                    if let boxNumberStr = data["boxNumber"] as? String {
-                        return Int(boxNumberStr)
-                    }
-                    return nil
-                }
-                
+
                 if let maxNumber = boxNumbers.max() {
-                    completion(.success(maxNumber))
+                    await MainActor.run {
+                        completion(.success(maxNumber))
+                    }
                 } else {
-                    completion(.success(3000)) // Default if no boxes found
+                    await MainActor.run {
+                        completion(.success(3000)) // Default if no boxes found
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    completion(.failure(error))
                 }
             }
+        }
+    }
+
+    // MARK: - Cleanup
+
+    func stopListening() {
+        Task {
+            if let channel = photographersChannel {
+                await channel.unsubscribe()
+                photographersChannel = nil
+            }
+            if let channel = schoolsChannel {
+                await channel.unsubscribe()
+                schoolsChannel = nil
+            }
+        }
     }
 }

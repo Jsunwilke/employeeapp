@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseFirestore
 
 struct TimeEntryDetailView: View {
     let timeEntry: TimeEntry
@@ -31,7 +30,7 @@ struct TimeEntryDetailView: View {
                                 .font(.headline)
                             
                             if timeEntry.status == "clocked-in" {
-                                Text("Currently active")
+                                Text("Currently clocked-in")
                                     .font(.caption)
                                     .foregroundColor(.green)
                             } else if TimeEntryValidator.canEditEntry(timeEntry) {
@@ -80,20 +79,18 @@ struct TimeEntryDetailView: View {
                             .fontWeight(.semibold)
                     }
                     
-                    if let createdAt = timeEntry.createdAt {
-                        HStack {
-                            Text("Created")
-                            Spacer()
-                            Text(formatDateTime(createdAt))
-                                .foregroundColor(.secondary)
-                        }
+                    HStack {
+                        Text("Created")
+                        Spacer()
+                        Text(formatDateTime(timeEntry.createdAt))
+                            .foregroundColor(.secondary)
                     }
-                    
-                    if let updatedAt = timeEntry.updatedAt, updatedAt != timeEntry.createdAt {
+
+                    if timeEntry.updatedAt != timeEntry.createdAt {
                         HStack {
                             Text("Last Modified")
                             Spacer()
-                            Text(formatDateTime(updatedAt))
+                            Text(formatDateTime(timeEntry.updatedAt))
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -197,20 +194,22 @@ struct TimeEntryDetailView: View {
     }
     
     private var isManualEntry: Bool {
-        // Manual entries have both clockInTime and clockOutTime and are not active
+        // Manual entries have both clockInTime and clockOutTime and are not clocked-in
         timeEntry.clockInTime != nil && timeEntry.clockOutTime != nil && timeEntry.status != "clocked-in"
     }
     
     // MARK: - Helper Functions
     
-    private func formatDate(_ dateString: String) -> String {
+    private func formatDate(_ dateString: String?) -> String {
+        guard let dateString = dateString else { return "N/A" }
+
         let inputFormatter = DateFormatter()
         inputFormatter.dateFormat = "yyyy-MM-dd"
-        
+
         if let date = inputFormatter.date(from: dateString) {
             return dateFormatter.string(from: date)
         }
-        
+
         return dateString
     }
     
@@ -236,7 +235,7 @@ struct TimeEntryDetailView: View {
         clockInTime: Calendar.current.date(byAdding: .hour, value: -8, to: Date()),
         clockOutTime: Calendar.current.date(byAdding: .hour, value: -2, to: Date()),
         date: "2024-07-12",
-        status: "completed",
+        status: "clocked-out",
         sessionId: "sample-session-id",
         notes: "Sample time entry for preview",
         createdAt: Calendar.current.date(byAdding: .day, value: -1, to: Date()),

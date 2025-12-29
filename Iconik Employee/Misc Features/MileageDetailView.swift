@@ -7,8 +7,7 @@
 
 
 import SwiftUI
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 struct MileageDetailView: View {
     let record: MileageReportsViewModel.MileageRecordWrapper
@@ -182,61 +181,85 @@ struct MileageDetailView: View {
         return (Double(localMileage) ?? 0.0) * 0.3
     }
     
-    // Load school options from Firestore
+    // Load school options from Supabase
     private func loadSchools() {
-        let db = Firestore.firestore()
-        db.collection("schools")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .whereField("type", isEqualTo: "school")
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    errorMessage = error.localizedDescription
-                    showingErrorAlert = true
-                    return
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                struct SchoolRecord: Decodable {
+                    let id: String
+                    let value: String?
                 }
-                guard let docs = snapshot?.documents else { return }
-                var temp: [MileageSchoolItem] = []
-                for doc in docs {
-                    let data = doc.data()
-                    if let value = data["value"] as? String {
-                        temp.append(MileageSchoolItem(id: doc.documentID, name: value))
+
+                let schools: [SchoolRecord] = try await supabase
+                    .from("schools")
+                    .select("id, value")
+                    .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                    .eq("type", value: "school")
+                    .execute()
+                    .value
+
+                await MainActor.run {
+                    var temp: [MileageSchoolItem] = []
+                    for school in schools {
+                        if let value = school.value {
+                            temp.append(MileageSchoolItem(id: school.id, name: value))
+                        }
+                    }
+                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
+                    schoolOptions = temp
+
+                    // Pre-select the matching school if possible
+                    if let matched = temp.first(where: { $0.name == record.schoolName }) {
+                        localSchoolName = matched.name
                     }
                 }
-                temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                schoolOptions = temp
-                
-                // Pre-select the matching school if possible
-                if let matched = temp.first(where: { $0.name == record.schoolName }) {
-                    localSchoolName = matched.name
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    showingErrorAlert = true
                 }
             }
+        }
     }
     
-    // Save changes to Firestore
+    // Save changes to Supabase
     private func saveChanges() {
         guard let mileage = Double(localMileage) else {
             errorMessage = "Invalid mileage value. Please enter a number."
             showingErrorAlert = true
             return
         }
-        
+
         if localSchoolName.isEmpty {
             errorMessage = "Please select a school."
             showingErrorAlert = true
             return
         }
-        
-        let db = Firestore.firestore()
-        db.collection("dailyJobReports").document(record.id).updateData([
-            "totalMileage": mileage,
-            "schoolOrDestination": localSchoolName
-        ]) { error in
-            if let error = error {
-                errorMessage = error.localizedDescription
-                showingErrorAlert = true
-            } else {
-                // Show success and dismiss
-                showingSuccessAlert = true
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                let updateData: [String: AnyJSON] = [
+                    "total_mileage": .double(mileage),
+                    "school_or_destination": .string(localSchoolName)
+                ]
+                try await supabase
+                    .from("daily_job_reports")
+                    .update(updateData)
+                    .eq("id", value: record.id.lowercased())
+                    .execute()
+
+                await MainActor.run {
+                    showingSuccessAlert = true
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    showingErrorAlert = true
+                }
             }
         }
     }

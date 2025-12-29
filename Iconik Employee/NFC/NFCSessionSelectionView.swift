@@ -13,9 +13,9 @@ struct NFCSessionSelectionView: View {
         } else {
             return sessions.filter { session in
                 session.schoolName.localizedCaseInsensitiveContains(searchText) ||
-                session.date?.contains(searchText) ?? false ||
+                session.date.contains(searchText) ||
                 session.getPhotographerNames().joined(separator: ", ").localizedCaseInsensitiveContains(searchText) ||
-                (session.sessionType?.joined(separator: ", ").localizedCaseInsensitiveContains(searchText) ?? false)
+                session.sessionType.joined(separator: ", ").localizedCaseInsensitiveContains(searchText)
             }
         }
     }
@@ -77,11 +77,11 @@ struct SessionRowView: View {
     let onTap: () -> Void
     
     private var formattedDate: String {
-        guard let dateString = session.date else { return "" }
-        
+        let dateString = session.date
+
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
-        
+
         if let date = dateFormatter.date(from: dateString) {
             dateFormatter.dateStyle = .medium
             dateFormatter.timeStyle = .none
@@ -100,9 +100,9 @@ struct SessionRowView: View {
                         Text(session.schoolName)
                             .font(.headline)
                             .foregroundColor(.primary)
-                        
-                        if let sessionTypes = session.sessionType, !sessionTypes.isEmpty {
-                            Text(sessionTypes.joined(separator: ", ").capitalized)
+
+                        if !session.sessionType.isEmpty {
+                            Text(session.sessionType.joined(separator: ", ").capitalized)
                                 .font(.caption)
                                 .foregroundColor(.blue)
                                 .padding(.horizontal, 8)
@@ -118,12 +118,10 @@ struct SessionRowView: View {
                         Text(formattedDate)
                             .font(.subheadline)
                             .foregroundColor(.primary)
-                        
-                        if let startTime = session.startTime, let endTime = session.endTime {
-                            Text("\(startTime) - \(endTime)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
+
+                        Text("\(session.startTime) - \(session.endTime)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
                 

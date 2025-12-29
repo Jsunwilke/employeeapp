@@ -284,20 +284,23 @@ struct PhotoCritiqueDetailView: View {
 struct PhotoCritiqueDetailView_Previews: PreviewProvider {
     static var previews: some View {
         PhotoCritiqueDetailView(critique: Critique(
-            organizationId: "test",
-            submitterId: "1",
-            submitterName: "John Manager",
-            submitterEmail: "john@test.com",
-            targetPhotographerId: "2",
-            targetPhotographerName: "Jane Photographer",
-            imageUrls: ["https://example.com/image1.jpg", "https://example.com/image2.jpg"],
-            thumbnailUrls: ["https://example.com/thumb1.jpg", "https://example.com/thumb2.jpg"],
-            imageUrl: "https://example.com/image1.jpg",
-            thumbnailUrl: "https://example.com/thumb1.jpg",
-            imageCount: 2,
-            managerNotes: "This is an excellent example of proper composition. Notice how the subject is positioned using the rule of thirds, and the background is properly blurred to create depth. The lighting is soft and flattering, avoiding harsh shadows.",
-            exampleType: "example",
-            status: "published"
+            id: "preview-1",
+            organization_id: "test",
+            submitter_id: "1",
+            submitter_name: "John Manager",
+            submitter_email: "john@test.com",
+            target_photographer_id: "2",
+            target_photographer_name: "Jane Photographer",
+            image_urls: ["https://example.com/image1.jpg", "https://example.com/image2.jpg"],
+            thumbnail_urls: ["https://example.com/thumb1.jpg", "https://example.com/thumb2.jpg"],
+            image_url: "https://example.com/image1.jpg",
+            thumbnail_url: "https://example.com/thumb1.jpg",
+            image_count: 2,
+            manager_notes: "This is an excellent example of proper composition. Notice how the subject is positioned using the rule of thirds, and the background is properly blurred to create depth. The lighting is soft and flattering, avoiding harsh shadows.",
+            example_type: "example",
+            status: "published",
+            created_at: Date(),
+            updated_at: Date()
         ))
     }
 }

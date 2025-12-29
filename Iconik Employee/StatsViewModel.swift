@@ -1,6 +1,5 @@
 import Foundation
-import Firebase
-import FirebaseFirestore
+import Supabase
 import SwiftUI
 import MapKit
 
@@ -75,9 +74,9 @@ class StatsViewModel: ObservableObject {
     
     // AppStorage for user organization ID (needed for filtering data)
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
-    
-    // Firestore instance
-    private let db = Firestore.firestore()
+
+    // Supabase client
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
     
     // Computed properties for summary statistics
     var totalMileage: Int {
@@ -123,17 +122,17 @@ class StatsViewModel: ObservableObject {
         isLoading = true
         errorMessage = ""
         
-        // Use real data from Firestore
+        // Use real data from Supabase
         loadRealData(timeRange: timeRange)
     }
     
     // MARK: - Real Data Implementation
     
-    // Main function to fetch real data from Firestore
+    // Main function to fetch real data from Supabase
     func loadRealData(timeRange: TimeRange) {
         // Get date range based on selected time frame
         let (startDate, endDate) = getDateRange(for: timeRange)
-        
+
         // Reset all data arrays
         mileageData = []
         locationData = []
@@ -141,467 +140,358 @@ class StatsViewModel: ObservableObject {
         photographerData = []
         weatherImpactData = []
         monthlyRevenue = []
-        
-        // Create dispatch group to track when all data is loaded
-        let group = DispatchGroup()
-        
-        // 1. Fetch mileage data
-        group.enter()
-        fetchMileageData(startDate: startDate, endDate: endDate) {
-            group.leave()
-        }
-        
-        // 2. Fetch location data
-        group.enter()
-        fetchLocationData(startDate: startDate, endDate: endDate) {
-            group.leave()
-        }
-        
-        // 3. Fetch job type data
-        group.enter()
-        fetchJobTypeData(startDate: startDate, endDate: endDate) {
-            group.leave()
-        }
-        
-        // 4. Fetch photographer data
-        group.enter()
-        fetchPhotographerData(startDate: startDate, endDate: endDate) {
-            group.leave()
-        }
-        
-        // 5. Fetch weather impact data
-        group.enter()
-        fetchWeatherImpactData(startDate: startDate, endDate: endDate) {
-            group.leave()
-        }
-        
-        // Handle completion of all data fetching
-        group.notify(queue: .main) {
-            self.isLoading = false
-            
-            // If no data was loaded, show error
-            if self.mileageData.isEmpty && self.locationData.isEmpty && self.jobTypeData.isEmpty {
-                self.errorMessage = "No data available for the selected time period"
+
+        // Use async Task to load all data
+        Task {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await self.fetchMileageDataAsync(startDate: startDate, endDate: endDate) }
+                group.addTask { await self.fetchLocationDataAsync(startDate: startDate, endDate: endDate) }
+                group.addTask { await self.fetchJobTypeDataAsync(startDate: startDate, endDate: endDate) }
+                group.addTask { await self.fetchPhotographerDataAsync(startDate: startDate, endDate: endDate) }
+                group.addTask { await self.fetchWeatherImpactDataAsync(startDate: startDate, endDate: endDate) }
+            }
+
+            await MainActor.run {
+                self.isLoading = false
+
+                // If no data was loaded, show error
+                if self.mileageData.isEmpty && self.locationData.isEmpty && self.jobTypeData.isEmpty {
+                    self.errorMessage = "No data available for the selected time period"
+                }
             }
         }
     }
     
     // MARK: - Fetch Mileage Data
-    
-    private func fetchMileageData(startDate: Date, endDate: Date, completion: @escaping () -> Void) {
+
+    private func fetchMileageDataAsync(startDate: Date, endDate: Date) async {
         // Ensure we have an organization ID
         guard !storedUserOrganizationID.isEmpty else {
-            DispatchQueue.main.async {
+            await MainActor.run {
                 self.errorMessage = "No organization ID found"
-                completion()
             }
             return
         }
-        
-        db.collection("dailyJobReports")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .whereField("date", isGreaterThanOrEqualTo: startDate)
-            .whereField("date", isLessThanOrEqualTo: endDate)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self.errorMessage = "Error fetching mileage data: \(error.localizedDescription)"
-                        completion()
-                    }
-                    return
+
+        do {
+            struct ReportRecord: Decodable {
+                let date: Date?
+                let your_name: String?
+                let total_mileage: Double?
+            }
+
+            let reports: [ReportRecord] = try await supabase
+                .from("daily_job_reports")
+                .select("date, your_name, total_mileage")
+                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .gte("date", value: startDate.ISO8601Format())
+                .lte("date", value: endDate.ISO8601Format())
+                .execute()
+                .value
+
+            guard !reports.isEmpty else { return }
+
+            // Group reports by month
+            var reportsByMonth: [String: [String: Double]] = [:]
+            let monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            let calendar = Calendar.current
+
+            for report in reports {
+                guard let date = report.date,
+                      let photographerName = report.your_name,
+                      let mileage = report.total_mileage else {
+                    continue
                 }
-                
-                guard let documents = snapshot?.documents, !documents.isEmpty else {
-                    // No documents found
-                    DispatchQueue.main.async {
-                        completion()
-                    }
-                    return
+
+                let month = calendar.component(.month, from: date) - 1
+                let monthName = monthNames[month]
+
+                if reportsByMonth[monthName] == nil {
+                    reportsByMonth[monthName] = ["John": 0, "Sarah": 0, "Mike": 0, "total": 0]
                 }
-                
-                // Group reports by month
-                var reportsByMonth: [String: [String: Double]] = [:]
-                
-                // Map month numbers to names
-                let monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                
-                // Process each document
-                for document in documents {
-                    let data = document.data()
-                    
-                    // Extract the data we need
-                    guard let dateTimestamp = data["date"] as? Timestamp,
-                          let photographerName = data["yourName"] as? String,
-                          let mileage = data["totalMileage"] as? Double else {
-                        continue
-                    }
-                    
-                    let date = dateTimestamp.dateValue()
-                    let calendar = Calendar.current
-                    let month = calendar.component(.month, from: date) - 1 // 0-based index
-                    let monthName = monthNames[month]
-                    
-                    // Initialize month data if needed
-                    if reportsByMonth[monthName] == nil {
-                        reportsByMonth[monthName] = ["John": 0, "Sarah": 0, "Mike": 0, "total": 0]
-                    }
-                    
-                    // Add mileage to the appropriate photographer
-                    if let index = reportsByMonth[monthName]?.index(forKey: photographerName) {
-                        reportsByMonth[monthName]?[photographerName, default: 0] += mileage
-                    } else {
-                        // If not one of the main photographers, just add to total
-                        reportsByMonth[monthName]?["total", default: 0] += mileage
-                    }
-                    
-                    // Always add to total
+
+                if reportsByMonth[monthName]?.index(forKey: photographerName) != nil {
+                    reportsByMonth[monthName]?[photographerName, default: 0] += mileage
+                } else {
                     reportsByMonth[monthName]?["total", default: 0] += mileage
                 }
-                
-                // Convert dictionary to array
-                var mileageResult: [MileageData] = []
-                
-                // Sort by month index
-                let sortedMonths = reportsByMonth.keys.sorted { key1, key2 in
-                    guard let index1 = monthNames.firstIndex(of: key1),
-                          let index2 = monthNames.firstIndex(of: key2) else {
-                        return false
-                    }
-                    return index1 < index2
-                }
-                
-                for month in sortedMonths {
-                    guard let monthData = reportsByMonth[month] else { continue }
-                    
-                    let item = MileageData(
-                        month: month,
-                        john: monthData["John"] ?? 0,
-                        sarah: monthData["Sarah"] ?? 0,
-                        mike: monthData["Mike"] ?? 0,
-                        total: monthData["total"] ?? 0
-                    )
-                    mileageResult.append(item)
-                }
-                
-                DispatchQueue.main.async {
-                    self.mileageData = mileageResult
-                    completion()
-                }
+
+                reportsByMonth[monthName]?["total", default: 0] += mileage
             }
+
+            // Convert dictionary to array
+            var mileageResult: [MileageData] = []
+            let sortedMonths = reportsByMonth.keys.sorted { key1, key2 in
+                guard let index1 = monthNames.firstIndex(of: key1),
+                      let index2 = monthNames.firstIndex(of: key2) else {
+                    return false
+                }
+                return index1 < index2
+            }
+
+            for month in sortedMonths {
+                guard let monthData = reportsByMonth[month] else { continue }
+
+                let item = MileageData(
+                    month: month,
+                    john: monthData["John"] ?? 0,
+                    sarah: monthData["Sarah"] ?? 0,
+                    mike: monthData["Mike"] ?? 0,
+                    total: monthData["total"] ?? 0
+                )
+                mileageResult.append(item)
+            }
+
+            await MainActor.run {
+                self.mileageData = mileageResult
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Error fetching mileage data: \(error.localizedDescription)"
+            }
+        }
     }
     
     // MARK: - Fetch Location Data
-    
-    private func fetchLocationData(startDate: Date, endDate: Date, completion: @escaping () -> Void) {
-        // Get list of all schools
-        db.collection("schools")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self.errorMessage = "Error fetching schools: \(error.localizedDescription)"
-                        completion()
-                    }
-                    return
-                }
-                
-                guard let schoolDocs = snapshot?.documents, !schoolDocs.isEmpty else {
-                    DispatchQueue.main.async {
-                        completion()
-                    }
-                    return
-                }
-                
-                // Map of school names to IDs and create initial location data
-                var schoolData: [String: LocationData] = [:]
-                for doc in schoolDocs {
-                    let data = doc.data()
-                    if let value = data["value"] as? String {
-                        let locationData = LocationData(
-                            name: value,
-                            visits: 0,
-                            mileage: 0
-                        )
-                        schoolData[value] = locationData
-                    }
-                }
-                
-                // Now fetch job reports to count visits and mileage for each school
-                self.db.collection("dailyJobReports")
-                    .whereField("organizationID", isEqualTo: self.storedUserOrganizationID)
-                    .whereField("date", isGreaterThanOrEqualTo: startDate)
-                    .whereField("date", isLessThanOrEqualTo: endDate)
-                    .getDocuments { snapshot, error in
-                        if let error = error {
-                            DispatchQueue.main.async {
-                                self.errorMessage = "Error fetching reports: \(error.localizedDescription)"
-                                completion()
-                            }
-                            return
-                        }
-                        
-                        guard let documents = snapshot?.documents else {
-                            DispatchQueue.main.async {
-                                completion()
-                            }
-                            return
-                        }
-                        
-                        // Track visited locations per day with a composite key "schoolName_dateString"
-                        var visitedLocationsPerDay = Set<String>()
-                        
-                        // Process each job report
-                        for document in documents {
-                            let data = document.data()
-                            
-                            guard let schoolName = data["schoolOrDestination"] as? String,
-                                  let mileage = data["totalMileage"] as? Double,
-                                  let dateTimestamp = data["date"] as? Timestamp else {
-                                continue
-                            }
-                            
-                            // Convert timestamp to date string (YYYY-MM-DD) for tracking unique visits
-                            let date = dateTimestamp.dateValue()
-                            let calendar = Calendar.current
-                            let components = calendar.dateComponents([.year, .month, .day], from: date)
-                            let dateString = String(format: "%04d-%02d-%02d",
-                                                    components.year ?? 0,
-                                                    components.month ?? 0,
-                                                    components.day ?? 0)
-                            
-                            // Create composite key for location+date
-                            let visitKey = "\(schoolName)_\(dateString)"
-                            
-                            // Check if we already counted a visit to this location on this day
-                            let isFirstVisitOfDay = !visitedLocationsPerDay.contains(visitKey)
-                            
-                            // Update school data
-                            if var location = schoolData[schoolName] {
-                                // Always add mileage
-                                location.mileage += mileage
-                                
-                                // Only increment visit count if it's the first visit of the day
-                                if isFirstVisitOfDay {
-                                    location.visits += 1
-                                    visitedLocationsPerDay.insert(visitKey)
-                                }
-                                
-                                schoolData[schoolName] = location
-                            } else {
-                                // School not in our list, create new entry
-                                let location = LocationData(
-                                    name: schoolName,
-                                    visits: isFirstVisitOfDay ? 1 : 0,  // Only count if first visit
-                                    mileage: mileage
-                                )
-                                
-                                if isFirstVisitOfDay {
-                                    visitedLocationsPerDay.insert(visitKey)
-                                }
-                                
-                                schoolData[schoolName] = location
-                            }
-                        }
-                        
-                        // Convert to array and sort by visits
-                        var locationResult = Array(schoolData.values)
-                        locationResult.sort { $0.visits > $1.visits }
-                        
-                        DispatchQueue.main.async {
-                            self.locationData = locationResult
-                            completion()
-                        }
-                    }
+
+    private func fetchLocationDataAsync(startDate: Date, endDate: Date) async {
+        do {
+            // Get list of all schools
+            struct SchoolRecord: Decodable {
+                let id: String
+                let value: String?
             }
+
+            let schoolDocs: [SchoolRecord] = try await supabase
+                .from("schools")
+                .select("id, value")
+                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .execute()
+                .value
+
+            guard !schoolDocs.isEmpty else { return }
+
+            // Map of school names to location data
+            var schoolData: [String: LocationData] = [:]
+            for doc in schoolDocs {
+                if let value = doc.value {
+                    schoolData[value] = LocationData(name: value, visits: 0, mileage: 0)
+                }
+            }
+
+            // Fetch job reports
+            struct ReportRecord: Decodable {
+                let school_or_destination: String?
+                let total_mileage: Double?
+                let date: Date?
+            }
+
+            let reports: [ReportRecord] = try await supabase
+                .from("daily_job_reports")
+                .select("school_or_destination, total_mileage, date")
+                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .gte("date", value: startDate.ISO8601Format())
+                .lte("date", value: endDate.ISO8601Format())
+                .execute()
+                .value
+
+            // Track visited locations per day
+            var visitedLocationsPerDay = Set<String>()
+            let calendar = Calendar.current
+
+            for report in reports {
+                guard let schoolName = report.school_or_destination,
+                      let mileage = report.total_mileage,
+                      let date = report.date else {
+                    continue
+                }
+
+                let components = calendar.dateComponents([.year, .month, .day], from: date)
+                let dateString = String(format: "%04d-%02d-%02d",
+                                        components.year ?? 0,
+                                        components.month ?? 0,
+                                        components.day ?? 0)
+
+                let visitKey = "\(schoolName)_\(dateString)"
+                let isFirstVisitOfDay = !visitedLocationsPerDay.contains(visitKey)
+
+                if var location = schoolData[schoolName] {
+                    location.mileage += mileage
+                    if isFirstVisitOfDay {
+                        location.visits += 1
+                        visitedLocationsPerDay.insert(visitKey)
+                    }
+                    schoolData[schoolName] = location
+                } else {
+                    let location = LocationData(
+                        name: schoolName,
+                        visits: isFirstVisitOfDay ? 1 : 0,
+                        mileage: mileage
+                    )
+                    if isFirstVisitOfDay {
+                        visitedLocationsPerDay.insert(visitKey)
+                    }
+                    schoolData[schoolName] = location
+                }
+            }
+
+            var locationResult = Array(schoolData.values)
+            locationResult.sort { $0.visits > $1.visits }
+
+            await MainActor.run {
+                self.locationData = locationResult
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Error fetching location data: \(error.localizedDescription)"
+            }
+        }
     }
     
     // MARK: - Fetch Job Type Data
-    
-    private func fetchJobTypeData(startDate: Date, endDate: Date, completion: @escaping () -> Void) {
-        db.collection("dailyJobReports")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .whereField("date", isGreaterThanOrEqualTo: startDate)
-            .whereField("date", isLessThanOrEqualTo: endDate)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self.errorMessage = "Error fetching job types: \(error.localizedDescription)"
-                        completion()
+
+    private func fetchJobTypeDataAsync(startDate: Date, endDate: Date) async {
+        do {
+            struct ReportRecord: Decodable {
+                let job_descriptions: [String]?
+            }
+
+            let reports: [ReportRecord] = try await supabase
+                .from("daily_job_reports")
+                .select("job_descriptions")
+                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .gte("date", value: startDate.ISO8601Format())
+                .lte("date", value: endDate.ISO8601Format())
+                .execute()
+                .value
+
+            var jobTypeCounts: [String: Int] = [:]
+
+            for report in reports {
+                if let jobDescriptions = report.job_descriptions {
+                    for jobType in jobDescriptions {
+                        jobTypeCounts[jobType, default: 0] += 1
                     }
-                    return
-                }
-                
-                guard let documents = snapshot?.documents else {
-                    DispatchQueue.main.async {
-                        completion()
-                    }
-                    return
-                }
-                
-                // Count job descriptions
-                var jobTypeCounts: [String: Int] = [:]
-                
-                for document in documents {
-                    let data = document.data()
-                    
-                    // Each report can have multiple job descriptions
-                    if let jobDescriptions = data["jobDescriptions"] as? [String] {
-                        for jobType in jobDescriptions {
-                            jobTypeCounts[jobType, default: 0] += 1
-                        }
-                    }
-                }
-                
-                // Convert to JobTypeData array
-                var jobTypeResult: [JobTypeData] = []
-                
-                for (jobType, count) in jobTypeCounts {
-                    let item = JobTypeData(
-                        name: jobType,
-                        value: Double(count)
-                    )
-                    jobTypeResult.append(item)
-                }
-                
-                // Sort by count
-                jobTypeResult.sort { $0.value > $1.value }
-                
-                DispatchQueue.main.async {
-                    self.jobTypeData = jobTypeResult
-                    completion()
                 }
             }
+
+            var jobTypeResult: [JobTypeData] = []
+            for (jobType, count) in jobTypeCounts {
+                jobTypeResult.append(JobTypeData(name: jobType, value: Double(count)))
+            }
+            jobTypeResult.sort { $0.value > $1.value }
+
+            await MainActor.run {
+                self.jobTypeData = jobTypeResult
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Error fetching job types: \(error.localizedDescription)"
+            }
+        }
     }
     
     // MARK: - Fetch Photographer Data
-    
-    private func fetchPhotographerData(startDate: Date, endDate: Date, completion: @escaping () -> Void) {
-        // First, get all users in the organization who are photographers
-        db.collection("users")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self.errorMessage = "Error fetching users: \(error.localizedDescription)"
-                        completion()
-                    }
-                    return
-                }
-                
-                guard let userDocs = snapshot?.documents, !userDocs.isEmpty else {
-                    DispatchQueue.main.async {
-                        completion()
-                    }
-                    return
-                }
-                
-                // Extract user names
-                var photographerNames: [String] = []
-                for doc in userDocs {
-                    let data = doc.data()
-                    if let firstName = data["firstName"] as? String {
-                        photographerNames.append(firstName)
-                    }
-                }
-                
-                // Now fetch job reports to count jobs and mileage for each photographer
-                self.db.collection("dailyJobReports")
-                    .whereField("organizationID", isEqualTo: self.storedUserOrganizationID)
-                    .whereField("date", isGreaterThanOrEqualTo: startDate)
-                    .whereField("date", isLessThanOrEqualTo: endDate)
-                    .getDocuments { snapshot, error in
-                        if let error = error {
-                            DispatchQueue.main.async {
-                                self.errorMessage = "Error fetching reports: \(error.localizedDescription)"
-                                completion()
-                            }
-                            return
-                        }
-                        
-                        guard let documents = snapshot?.documents else {
-                            DispatchQueue.main.async {
-                                completion()
-                            }
-                            return
-                        }
-                        
-                        // Group reports by photographer
-                        var jobsByPhotographer: [String: Int] = [:]
-                        var mileageByPhotographer: [String: Double] = [:]
-                        var timeByPhotographer: [String: [Double]] = [:]
-                        
-                        // Process each job report
-                        for document in documents {
-                            let data = document.data()
-                            
-                            guard let photographerName = data["yourName"] as? String,
-                                  let mileage = data["totalMileage"] as? Double else {
-                                continue
-                            }
-                            
-                            // Calculate job duration if start and end times are available
-                            var jobDuration: Double = 0
-                            if let startTimestamp = data["startTime"] as? Timestamp,
-                               let endTimestamp = data["endTime"] as? Timestamp {
-                                let startDate = startTimestamp.dateValue()
-                                let endDate = endTimestamp.dateValue()
-                                jobDuration = endDate.timeIntervalSince(startDate) / 3600 // hours
-                            } else {
-                                // Default to average job time if not specified
-                                jobDuration = 3.0
-                            }
-                            
-                            // Update counts
-                            jobsByPhotographer[photographerName, default: 0] += 1
-                            mileageByPhotographer[photographerName, default: 0] += mileage
-                            
-                            if timeByPhotographer[photographerName] == nil {
-                                timeByPhotographer[photographerName] = []
-                            }
-                            timeByPhotographer[photographerName]?.append(jobDuration)
-                        }
-                        
-                        // Convert to PhotographerData array
-                        var photographerResult: [PhotographerData] = []
-                        
-                        for name in photographerNames {
-                            // Skip photographers with no data
-                            guard let jobs = jobsByPhotographer[name], jobs > 0 else {
-                                continue
-                            }
-                            
-                            let miles = mileageByPhotographer[name] ?? 0
-                            
-                            // Calculate average job time
-                            let jobTimes = timeByPhotographer[name] ?? []
-                            let avgJobTime = jobTimes.isEmpty ? 3.0 : jobTimes.reduce(0, +) / Double(jobTimes.count)
-                            
-                            let item = PhotographerData(
-                                name: name,
-                                jobs: jobs,
-                                miles: miles,
-                                avgJobTime: avgJobTime
-                            )
-                            photographerResult.append(item)
-                        }
-                        
-                        // Sort by number of jobs
-                        photographerResult.sort { $0.jobs > $1.jobs }
-                        
-                        DispatchQueue.main.async {
-                            self.photographerData = photographerResult
-                            completion()
-                        }
-                    }
+
+    private func fetchPhotographerDataAsync(startDate: Date, endDate: Date) async {
+        do {
+            // First, get all users in the organization
+            struct UserRecord: Decodable {
+                let first_name: String?
             }
+
+            let userDocs: [UserRecord] = try await supabase
+                .from("users")
+                .select("first_name")
+                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .execute()
+                .value
+
+            guard !userDocs.isEmpty else { return }
+
+            var photographerNames: [String] = []
+            for doc in userDocs {
+                if let firstName = doc.first_name {
+                    photographerNames.append(firstName)
+                }
+            }
+
+            // Fetch job reports
+            struct ReportRecord: Decodable {
+                let your_name: String?
+                let total_mileage: Double?
+                let start_time: Date?
+                let end_time: Date?
+            }
+
+            let reports: [ReportRecord] = try await supabase
+                .from("daily_job_reports")
+                .select("your_name, total_mileage, start_time, end_time")
+                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .gte("date", value: startDate.ISO8601Format())
+                .lte("date", value: endDate.ISO8601Format())
+                .execute()
+                .value
+
+            var jobsByPhotographer: [String: Int] = [:]
+            var mileageByPhotographer: [String: Double] = [:]
+            var timeByPhotographer: [String: [Double]] = [:]
+
+            for report in reports {
+                guard let photographerName = report.your_name,
+                      let mileage = report.total_mileage else {
+                    continue
+                }
+
+                var jobDuration: Double = 3.0 // Default
+                if let startTime = report.start_time, let endTime = report.end_time {
+                    jobDuration = endTime.timeIntervalSince(startTime) / 3600
+                }
+
+                jobsByPhotographer[photographerName, default: 0] += 1
+                mileageByPhotographer[photographerName, default: 0] += mileage
+
+                if timeByPhotographer[photographerName] == nil {
+                    timeByPhotographer[photographerName] = []
+                }
+                timeByPhotographer[photographerName]?.append(jobDuration)
+            }
+
+            var photographerResult: [PhotographerData] = []
+
+            for name in photographerNames {
+                guard let jobs = jobsByPhotographer[name], jobs > 0 else { continue }
+
+                let miles = mileageByPhotographer[name] ?? 0
+                let jobTimes = timeByPhotographer[name] ?? []
+                let avgJobTime = jobTimes.isEmpty ? 3.0 : jobTimes.reduce(0, +) / Double(jobTimes.count)
+
+                photographerResult.append(PhotographerData(
+                    name: name,
+                    jobs: jobs,
+                    miles: miles,
+                    avgJobTime: avgJobTime
+                ))
+            }
+
+            photographerResult.sort { $0.jobs > $1.jobs }
+
+            await MainActor.run {
+                self.photographerData = photographerResult
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Error fetching photographer data: \(error.localizedDescription)"
+            }
+        }
     }
     
     // MARK: - Fetch Weather Impact Data
-    
-    private func fetchWeatherImpactData(startDate: Date, endDate: Date, completion: @escaping () -> Void) {
+
+    private func fetchWeatherImpactDataAsync(startDate: Date, endDate: Date) async {
         // Since we don't have actual weather data in the database,
         // we'll create a reasonable approximation based on seasons and known weather patterns
-        
+
         // Create mock weather impact data
         let weatherImpactResult: [WeatherImpactData] = [
             WeatherImpactData(weather: "Clear", jobs: 320, onTimeArrival: 95),
@@ -610,12 +500,10 @@ class StatsViewModel: ObservableObject {
             WeatherImpactData(weather: "Snow", jobs: 90, onTimeArrival: 70),
             WeatherImpactData(weather: "Fog", jobs: 60, onTimeArrival: 80)
         ]
-        
+
         // In a real implementation, we would analyze job reports and correlate with weather data
-        // For now, use the mock data
-        DispatchQueue.main.async {
+        await MainActor.run {
             self.weatherImpactData = weatherImpactResult
-            completion()
         }
     }
     

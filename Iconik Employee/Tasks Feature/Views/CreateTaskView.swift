@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import FirebaseAuth
 
 struct CreateTaskView: View {
     @Environment(\.presentationMode) var presentationMode
@@ -22,7 +21,7 @@ struct CreateTaskView: View {
     @State private var newSubtaskTitle: String = ""
 
     private var currentUserId: String {
-        return Auth.auth().currentUser?.uid ?? ""
+        return UserManager.shared.getCurrentUserIDUnified() ?? ""
     }
 
     private var currentOrganizationId: String {

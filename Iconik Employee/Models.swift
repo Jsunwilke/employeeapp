@@ -1,5 +1,4 @@
 import Foundation
-import FirebaseFirestore
 
 struct SchoolItem: Identifiable, Hashable, Codable, Equatable {
     let id: String
@@ -8,60 +7,64 @@ struct SchoolItem: Identifiable, Hashable, Codable, Equatable {
     let coordinates: String? // Format: "lat,lng"
 }
 
-// MARK: - Template Models
+// MARK: - Template Models (Supabase)
 
+/// Report template for Supabase - uses snake_case for database fields
 struct ReportTemplate: Codable, Identifiable {
     let id: String
+    let organization_id: String
     let name: String
-    let description: String?
-    let shootType: String
-    let organizationID: String
-    let fields: [TemplateField]
-    let isDefault: Bool
-    let isActive: Bool
-    let version: Int
-    let createdAt: Timestamp?
-    let updatedAt: Timestamp?
-    let createdBy: String
-    
-    init(id: String = UUID().uuidString, name: String, description: String? = nil, shootType: String, organizationID: String, fields: [TemplateField], isDefault: Bool = false, isActive: Bool = true, version: Int = 1, createdAt: Timestamp? = Timestamp(), updatedAt: Timestamp? = Timestamp(), createdBy: String) {
+    var description: String?
+    let shoot_type: String
+    var fields: [TemplateField]
+    var is_default: Bool
+    var is_active: Bool
+    var version: Int
+    let created_by: String
+    let created_at: Date?
+    let updated_at: Date?
+
+    // Computed properties for backward compatibility
+    var organizationID: String { organization_id }
+    var shootType: String { shoot_type }
+    var isDefault: Bool { is_default }
+    var isActive: Bool { is_active }
+    var createdBy: String { created_by }
+    var createdAt: Date? { created_at }
+    var updatedAt: Date? { updated_at }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, fields, version
+        case organization_id, shoot_type, is_default, is_active
+        case created_by, created_at, updated_at
+    }
+
+    init(
+        id: String = UUID().uuidString,
+        organizationID: String,
+        name: String,
+        description: String? = nil,
+        shootType: String,
+        fields: [TemplateField] = [],
+        isDefault: Bool = false,
+        isActive: Bool = true,
+        version: Int = 1,
+        createdBy: String,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
+    ) {
         self.id = id
+        self.organization_id = organizationID
         self.name = name
         self.description = description
-        self.shootType = shootType
-        self.organizationID = organizationID
+        self.shoot_type = shootType
         self.fields = fields
-        self.isDefault = isDefault
-        self.isActive = isActive
+        self.is_default = isDefault
+        self.is_active = isActive
         self.version = version
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-        self.createdBy = createdBy
-    }
-    
-    // Custom decoding to handle flexibility with web app data
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        
-        id = try container.decode(String.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        description = try container.decodeIfPresent(String.self, forKey: .description)
-        shootType = try container.decodeIfPresent(String.self, forKey: .shootType) ?? "general"
-        organizationID = try container.decode(String.self, forKey: .organizationID)
-        fields = try container.decodeIfPresent([TemplateField].self, forKey: .fields) ?? []
-        isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
-        isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
-        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
-        createdBy = try container.decodeIfPresent(String.self, forKey: .createdBy) ?? ""
-        
-        // Handle timestamps flexibly - they might be missing or different types
-        createdAt = try? container.decodeIfPresent(Timestamp.self, forKey: .createdAt)
-        updatedAt = try? container.decodeIfPresent(Timestamp.self, forKey: .updatedAt)
-    }
-    
-    private enum CodingKeys: String, CodingKey {
-        case id, name, description, shootType, organizationID, fields
-        case isDefault, isActive, version, createdAt, updatedAt, createdBy
+        self.created_by = createdBy
+        self.created_at = createdAt
+        self.updated_at = updatedAt
     }
 }
 
@@ -122,35 +125,238 @@ struct SmartFieldConfig: Codable {
     }
 }
 
+/// Daily Job Report for Supabase - uses snake_case for database fields
 struct DailyJobReport: Codable, Identifiable {
     let id: String
-    let organizationID: String
-    let userId: String
-    let date: String
-    let photographer: String
-    let templateId: String?
-    let templateName: String?
-    let templateVersion: Int?
-    let reportType: String
-    let smartFieldsUsed: [String]?
-    let formData: [String: AnyCodable]
-    let createdAt: Timestamp
-    let updatedAt: Timestamp
-    
-    init(id: String = UUID().uuidString, organizationID: String, userId: String, date: String, photographer: String, templateId: String? = nil, templateName: String? = nil, templateVersion: Int? = nil, reportType: String = "template", smartFieldsUsed: [String]? = nil, formData: [String: AnyCodable] = [:], createdAt: Timestamp = Timestamp(), updatedAt: Timestamp = Timestamp()) {
+    let organization_id: String
+    let user_id: String
+
+    // Report date and metadata
+    let date: Date
+    let your_name: String
+
+    // School/Location
+    var school_or_destination: String?
+
+    // Mileage
+    var total_mileage: Double
+
+    // Job details (stored as JSONB arrays in Supabase)
+    var job_descriptions: [String]?
+    var extra_items: [String]?
+
+    // Yes/No/NA selections
+    var cards_scanned_choice: String?
+    var job_box_and_camera_cards: String?
+    var sports_background_shot: String?
+
+    // Notes
+    var job_description_text: String?
+
+    // Photoshoot note reference
+    var photoshoot_note_id: String?
+    var photoshoot_note_text: String?
+
+    // Photos (stored as JSONB array in Supabase)
+    var photo_urls: [String]?
+
+    // Template reference (for template-based reports)
+    var template_id: String?
+    var template_name: String?
+    var template_version: Int?
+    var report_type: String?
+    var smart_fields_used: [String]?
+    var form_data: [String: AnyCodable]?
+
+    // Timestamps
+    let created_at: Date?
+    let updated_at: Date?
+
+    // MARK: - Computed properties for backward compatibility
+
+    var organizationID: String { organization_id }
+    var userId: String { user_id }
+    var yourName: String { your_name }
+    var schoolOrDestination: String? { school_or_destination }
+    var totalMileage: Double { total_mileage }
+    var jobDescriptions: [String] { job_descriptions ?? [] }
+    var extraItems: [String] { extra_items ?? [] }
+    var cardsScannedChoice: String? { cards_scanned_choice }
+    var jobBoxAndCameraCards: String? { job_box_and_camera_cards }
+    var sportsBackgroundShot: String? { sports_background_shot }
+    var jobDescriptionText: String? { job_description_text }
+    var photoshootNoteID: String? { photoshoot_note_id }
+    var photoshootNoteText: String? { photoshoot_note_text }
+    var photoURLs: [String] { photo_urls ?? [] }
+    var templateId: String? { template_id }
+    var templateName: String? { template_name }
+    var templateVersion: Int? { template_version }
+    var reportType: String { report_type ?? "standard" }
+    var smartFieldsUsed: [String] { smart_fields_used ?? [] }
+    var formData: [String: AnyCodable] { form_data ?? [:] }
+    var createdAt: Date? { created_at }
+    var updatedAt: Date? { updated_at }
+
+    // Legacy photographer field (maps to your_name)
+    var photographer: String { your_name }
+
+    enum CodingKeys: String, CodingKey {
+        case id, date
+        case organization_id, user_id, your_name
+        case school_or_destination, total_mileage
+        case job_descriptions, extra_items
+        case cards_scanned_choice, job_box_and_camera_cards, sports_background_shot
+        case job_description_text
+        case photoshoot_note_id, photoshoot_note_text
+        case photo_urls
+        case template_id, template_name, template_version
+        case report_type, smart_fields_used, form_data
+        case created_at, updated_at
+    }
+
+    // Custom decoder to handle Supabase date format ("2025-12-28" string instead of Date)
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        // Required fields
+        id = try container.decode(String.self, forKey: .id)
+        organization_id = try container.decode(String.self, forKey: .organization_id)
+        user_id = try container.decode(String.self, forKey: .user_id)
+        your_name = try container.decode(String.self, forKey: .your_name)
+
+        // Handle date from Supabase - can be either:
+        // 1. Simple date format: "2025-12-28"
+        // 2. Full timestamp format: "2025-12-18T18:05:00+00:00"
+        let dateString = try container.decode(String.self, forKey: .date)
+        var parsedDate: Date?
+
+        // Try simple date format first (yyyy-MM-dd)
+        let simpleDateFormatter = DateFormatter()
+        simpleDateFormatter.dateFormat = "yyyy-MM-dd"
+        simpleDateFormatter.timeZone = TimeZone.current
+        parsedDate = simpleDateFormatter.date(from: dateString)
+
+        // If that fails, try ISO8601 timestamp format
+        if parsedDate == nil {
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            parsedDate = isoFormatter.date(from: dateString)
+
+            // Try without fractional seconds
+            if parsedDate == nil {
+                isoFormatter.formatOptions = [.withInternetDateTime]
+                parsedDate = isoFormatter.date(from: dateString)
+            }
+        }
+
+        guard let finalDate = parsedDate else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .date,
+                in: container,
+                debugDescription: "Invalid date format: \(dateString). Expected yyyy-MM-dd or ISO8601"
+            )
+        }
+        date = finalDate
+
+        // Optional fields
+        school_or_destination = try container.decodeIfPresent(String.self, forKey: .school_or_destination)
+        total_mileage = try container.decodeIfPresent(Double.self, forKey: .total_mileage) ?? 0.0
+        job_descriptions = try container.decodeIfPresent([String].self, forKey: .job_descriptions)
+        extra_items = try container.decodeIfPresent([String].self, forKey: .extra_items)
+        cards_scanned_choice = try container.decodeIfPresent(String.self, forKey: .cards_scanned_choice)
+        job_box_and_camera_cards = try container.decodeIfPresent(String.self, forKey: .job_box_and_camera_cards)
+        sports_background_shot = try container.decodeIfPresent(String.self, forKey: .sports_background_shot)
+        job_description_text = try container.decodeIfPresent(String.self, forKey: .job_description_text)
+        photoshoot_note_id = try container.decodeIfPresent(String.self, forKey: .photoshoot_note_id)
+        photoshoot_note_text = try container.decodeIfPresent(String.self, forKey: .photoshoot_note_text)
+        photo_urls = try container.decodeIfPresent([String].self, forKey: .photo_urls)
+        template_id = try container.decodeIfPresent(String.self, forKey: .template_id)
+        template_name = try container.decodeIfPresent(String.self, forKey: .template_name)
+        template_version = try container.decodeIfPresent(Int.self, forKey: .template_version)
+        report_type = try container.decodeIfPresent(String.self, forKey: .report_type)
+        smart_fields_used = try container.decodeIfPresent([String].self, forKey: .smart_fields_used)
+        form_data = try container.decodeIfPresent([String: AnyCodable].self, forKey: .form_data)
+
+        // Handle timestamps (ISO8601 with time from Supabase)
+        if let createdAtString = try container.decodeIfPresent(String.self, forKey: .created_at) {
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            var parsedCreatedAt = isoFormatter.date(from: createdAtString)
+            // Try without fractional seconds if that fails
+            if parsedCreatedAt == nil {
+                isoFormatter.formatOptions = [.withInternetDateTime]
+                parsedCreatedAt = isoFormatter.date(from: createdAtString)
+            }
+            created_at = parsedCreatedAt
+        } else {
+            created_at = nil
+        }
+
+        if let updatedAtString = try container.decodeIfPresent(String.self, forKey: .updated_at) {
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            var parsedUpdatedAt = isoFormatter.date(from: updatedAtString)
+            // Try without fractional seconds if that fails
+            if parsedUpdatedAt == nil {
+                isoFormatter.formatOptions = [.withInternetDateTime]
+                parsedUpdatedAt = isoFormatter.date(from: updatedAtString)
+            }
+            updated_at = parsedUpdatedAt
+        } else {
+            updated_at = nil
+        }
+    }
+
+    init(
+        id: String = UUID().uuidString,
+        organizationID: String,
+        userId: String,
+        date: Date,
+        yourName: String,
+        schoolOrDestination: String? = nil,
+        totalMileage: Double = 0.0,
+        jobDescriptions: [String]? = nil,
+        extraItems: [String]? = nil,
+        cardsScannedChoice: String? = nil,
+        jobBoxAndCameraCards: String? = nil,
+        sportsBackgroundShot: String? = nil,
+        jobDescriptionText: String? = nil,
+        photoshootNoteID: String? = nil,
+        photoshootNoteText: String? = nil,
+        photoURLs: [String]? = nil,
+        templateId: String? = nil,
+        templateName: String? = nil,
+        templateVersion: Int? = nil,
+        reportType: String = "standard",
+        smartFieldsUsed: [String]? = nil,
+        formData: [String: AnyCodable]? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
+    ) {
         self.id = id
-        self.organizationID = organizationID
-        self.userId = userId
+        self.organization_id = organizationID
+        self.user_id = userId
         self.date = date
-        self.photographer = photographer
-        self.templateId = templateId
-        self.templateName = templateName
-        self.templateVersion = templateVersion
-        self.reportType = reportType
-        self.smartFieldsUsed = smartFieldsUsed
-        self.formData = formData
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
+        self.your_name = yourName
+        self.school_or_destination = schoolOrDestination
+        self.total_mileage = totalMileage
+        self.job_descriptions = jobDescriptions
+        self.extra_items = extraItems
+        self.cards_scanned_choice = cardsScannedChoice
+        self.job_box_and_camera_cards = jobBoxAndCameraCards
+        self.sports_background_shot = sportsBackgroundShot
+        self.job_description_text = jobDescriptionText
+        self.photoshoot_note_id = photoshootNoteID
+        self.photoshoot_note_text = photoshootNoteText
+        self.photo_urls = photoURLs
+        self.template_id = templateId
+        self.template_name = templateName
+        self.template_version = templateVersion
+        self.report_type = reportType
+        self.smart_fields_used = smartFieldsUsed
+        self.form_data = formData
+        self.created_at = createdAt
+        self.updated_at = updatedAt
     }
 }
 
@@ -282,110 +488,78 @@ struct PhotoshootNote: Identifiable, Codable, Equatable, Hashable {
 
 struct TimeEntry: Identifiable, Codable {
     let id: String
-    let userId: String
-    let organizationID: String
-    let clockInTime: Date?
-    let clockOutTime: Date?
-    let date: String
-    let status: String
-    let sessionId: String?
-    let sessionName: String?
-    let notes: String?
-    let createdAt: Date?
-    let updatedAt: Date?
-    
-    // Direct initializer for creating TimeEntry instances
-    init(id: String, userId: String, organizationID: String, clockInTime: Date? = nil, clockOutTime: Date? = nil, date: String, status: String, sessionId: String? = nil, sessionName: String? = nil, notes: String? = nil, createdAt: Date? = nil, updatedAt: Date? = nil) {
+
+    // Supabase snake_case properties (matching actual database columns)
+    let user_id: String
+    let organization_id: String
+    let start_time: Date? // Database column name
+    let end_time: Date?   // Database column name
+    let total_hours: Double?
+    let date: String? // YYYY-MM-DD format (optional, added by migration)
+    let status: String // "clocked-in" or "clocked-out"
+    let session_id: String?
+    let session_name: String? // Optional, added by migration
+    let notes: String? // Optional, added by migration
+    let created_at: Date
+    let updated_at: Date
+
+    // Backward compatibility computed properties (camelCase for iOS code)
+    var userId: String { user_id }
+    var organizationID: String { organization_id }
+    var clockInTime: Date? { start_time } // iOS uses clockInTime
+    var clockOutTime: Date? { end_time }  // iOS uses clockOutTime
+    var sessionId: String? { session_id }
+    var sessionName: String? { session_name }
+    var createdAt: Date { created_at }
+    var updatedAt: Date { updated_at }
+
+    // Coding keys for Supabase (must match database column names exactly)
+    enum CodingKeys: String, CodingKey {
+        case id
+        case user_id
+        case organization_id
+        case start_time      // DB column, not clock_in_time
+        case end_time        // DB column, not clock_out_time
+        case total_hours
+        case date
+        case status
+        case session_id
+        case session_name
+        case notes
+        case created_at
+        case updated_at
+    }
+
+    // Custom initializer for backward compatibility with camelCase parameters
+    init(
+        id: String,
+        userId: String,
+        organizationID: String,
+        clockInTime: Date?,
+        clockOutTime: Date?,
+        date: String? = nil,
+        status: String,
+        sessionId: String? = nil,
+        sessionName: String? = nil,
+        notes: String? = nil,
+        createdAt: Date?,
+        updatedAt: Date?
+    ) {
         self.id = id
-        self.userId = userId
-        self.organizationID = organizationID
-        self.clockInTime = clockInTime
-        self.clockOutTime = clockOutTime
+        self.user_id = userId
+        self.organization_id = organizationID
+        self.start_time = clockInTime
+        self.end_time = clockOutTime
+        self.total_hours = nil // Will be calculated if needed
         self.date = date
         self.status = status
-        self.sessionId = sessionId
-        self.sessionName = sessionName
+        self.session_id = sessionId
+        self.session_name = sessionName
         self.notes = notes
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
+        self.created_at = createdAt ?? Date()
+        self.updated_at = updatedAt ?? Date()
     }
-    
-    init(document: QueryDocumentSnapshot) {
-        self.id = document.documentID
-        let data = document.data()
-        
-        self.userId = data["userId"] as? String ?? ""
-        self.organizationID = data["organizationID"] as? String ?? ""
-        self.date = data["date"] as? String ?? ""
-        self.status = data["status"] as? String ?? ""
-        self.sessionId = data["sessionId"] as? String
-        self.sessionName = data["sessionName"] as? String
-        self.notes = data["notes"] as? String
-        
-        // Convert Firestore timestamps to Date objects
-        if let clockInTimestamp = data["clockInTime"] as? Timestamp {
-            self.clockInTime = clockInTimestamp.dateValue()
-        } else {
-            self.clockInTime = nil
-        }
-        
-        if let clockOutTimestamp = data["clockOutTime"] as? Timestamp {
-            self.clockOutTime = clockOutTimestamp.dateValue()
-        } else {
-            self.clockOutTime = nil
-        }
-        
-        if let createdAtTimestamp = data["createdAt"] as? Timestamp {
-            self.createdAt = createdAtTimestamp.dateValue()
-        } else {
-            self.createdAt = nil
-        }
-        
-        if let updatedAtTimestamp = data["updatedAt"] as? Timestamp {
-            self.updatedAt = updatedAtTimestamp.dateValue()
-        } else {
-            self.updatedAt = nil
-        }
-    }
-    
-    init(document: DocumentSnapshot) {
-        self.id = document.documentID
-        let data = document.data() ?? [:]
-        
-        self.userId = data["userId"] as? String ?? ""
-        self.organizationID = data["organizationID"] as? String ?? ""
-        self.date = data["date"] as? String ?? ""
-        self.status = data["status"] as? String ?? ""
-        self.sessionId = data["sessionId"] as? String
-        self.sessionName = data["sessionName"] as? String
-        self.notes = data["notes"] as? String
-        
-        // Convert Firestore timestamps to Date objects
-        if let clockInTimestamp = data["clockInTime"] as? Timestamp {
-            self.clockInTime = clockInTimestamp.dateValue()
-        } else {
-            self.clockInTime = nil
-        }
-        
-        if let clockOutTimestamp = data["clockOutTime"] as? Timestamp {
-            self.clockOutTime = clockOutTimestamp.dateValue()
-        } else {
-            self.clockOutTime = nil
-        }
-        
-        if let createdAtTimestamp = data["createdAt"] as? Timestamp {
-            self.createdAt = createdAtTimestamp.dateValue()
-        } else {
-            self.createdAt = nil
-        }
-        
-        if let updatedAtTimestamp = data["updatedAt"] as? Timestamp {
-            self.updatedAt = updatedAtTimestamp.dateValue()
-        } else {
-            self.updatedAt = nil
-        }
-    }
-    
+
     // Calculate duration in seconds
     var durationInSeconds: TimeInterval? {
         guard let clockIn = clockInTime else { return nil }
@@ -460,13 +634,13 @@ struct TimeEntryValidator {
     
     // Check if user can edit entry (30-day rule)
     static func canEditEntry(_ entry: TimeEntry, clockInOnly: Bool = false) -> Bool {
-        guard let createdAt = entry.createdAt else { return false }
-        
+        let createdAt = entry.createdAt
+
         // Allow editing for active entries (clock-in time can be edited)
         if entry.status == "clocked-in" {
             return true // Allow editing active entries
         }
-        
+
         // 30-day edit window for completed entries
         let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
         return createdAt >= thirtyDaysAgo
@@ -520,45 +694,31 @@ extension TimeInterval {
     }
 }
 
-// MARK: - NFC SD Tracker Models
+// MARK: - NFC SD Tracker Models (Supabase)
 
-import FirebaseFirestoreSwift
-
+/// Record for NFC SD card tracking stored in Supabase
+/// Note: Named FirestoreRecord for backward compatibility with existing code
 struct FirestoreRecord: Codable, Identifiable {
-    @DocumentID var id: String?
+    let id: String
     let timestamp: Date
     let photographer: String
-    let cardNumber: String
+    let card_number: String
     let school: String
     let status: String
-    let uploadedFromJasonsHouse: String?
-    let uploadedFromAndysHouse: String?
-    let organizationID: String
-    let userId: String // User ID for Firebase Auth
-    
-    // Manual initializer for Firestore data
-    init(id: String, data: [String: Any]) {
-        self.id = id
-        
-        // Handle timestamp conversion
-        if let timestamp = data["timestamp"] as? Timestamp {
-            self.timestamp = timestamp.dateValue()
-        } else {
-            self.timestamp = Date()
-        }
-        
-        self.photographer = data["photographer"] as? String ?? ""
-        self.cardNumber = data["cardNumber"] as? String ?? ""
-        self.school = data["school"] as? String ?? ""
-        self.status = data["status"] as? String ?? ""
-        self.uploadedFromJasonsHouse = data["uploadedFromJasonsHouse"] as? String
-        self.uploadedFromAndysHouse = data["uploadedFromAndysHouse"] as? String
-        self.organizationID = data["organizationID"] as? String ?? ""
-        self.userId = data["userId"] as? String ?? ""
-    }
-    
+    let uploaded_from_jasons_house: String?
+    let uploaded_from_andys_house: String?
+    let organization_id: String
+    let user_id: String
+
+    // Backward compatibility computed properties
+    var cardNumber: String { card_number }
+    var uploadedFromJasonsHouse: String? { uploaded_from_jasons_house }
+    var uploadedFromAndysHouse: String? { uploaded_from_andys_house }
+    var organizationID: String { organization_id }
+    var userId: String { user_id }
+
     // Member-wise initializer for creating new records
-    init(id: String? = nil,
+    init(id: String = UUID().uuidString,
          timestamp: Date,
          photographer: String,
          cardNumber: String,
@@ -571,64 +731,83 @@ struct FirestoreRecord: Codable, Identifiable {
         self.id = id
         self.timestamp = timestamp
         self.photographer = photographer
-        self.cardNumber = cardNumber
+        self.card_number = cardNumber
         self.school = school
         self.status = status
-        self.uploadedFromJasonsHouse = uploadedFromJasonsHouse
-        self.uploadedFromAndysHouse = uploadedFromAndysHouse
-        self.organizationID = organizationID
-        self.userId = userId
+        self.uploaded_from_jasons_house = uploadedFromJasonsHouse
+        self.uploaded_from_andys_house = uploadedFromAndysHouse
+        self.organization_id = organizationID
+        self.user_id = userId
     }
 }
 
 // JobBoxRecord removed - using existing JobBox struct from Manager Features/JobBoxStatus.swift
 
 struct DropdownRecord: Codable, Identifiable {
-    @DocumentID var id: String?
+    let id: String
     let type: String?
     let value: String
-    let organizationID: String?
+    let organization_id: String?
+
+    var organizationID: String? { organization_id }
 }
 
 // MARK: - Photo Critique Models
 
 struct Critique: Codable, Identifiable {
-    @DocumentID var id: String?
-    let organizationId: String
-    
+    let id: String
+    let organization_id: String
+
     // Submission info
-    let submitterId: String
-    let submitterName: String
-    let submitterEmail: String
-    
+    let submitter_id: String
+    let submitter_name: String
+    let submitter_email: String
+
     // Target photographer
-    let targetPhotographerId: String
-    let targetPhotographerName: String
-    
+    let target_photographer_id: String
+    let target_photographer_name: String
+
     // Images
-    let imageUrls: [String]
-    let thumbnailUrls: [String]
-    let imageUrl: String  // Backward compatibility
-    let thumbnailUrl: String
-    let imageCount: Int
-    
+    let image_urls: [String]?
+    let thumbnail_urls: [String]?
+    let image_url: String?  // Backward compatibility
+    let thumbnail_url: String?
+    let image_count: Int?
+
     // Content
-    let managerNotes: String
-    let exampleType: String  // "example" or "improvement"
+    let manager_notes: String
+    let example_type: String  // "example" or "improvement"
     let status: String
-    
+
     // Timestamps
-    @ServerTimestamp var createdAt: Date?
-    @ServerTimestamp var updatedAt: Date?
-    
+    let created_at: Date?
+    let updated_at: Date?
+
     // Computed property for display
     var isGoodExample: Bool {
-        exampleType == "example"
+        example_type == "example"
     }
-    
+
+    // Backward compatibility computed properties
+    var organizationId: String { organization_id }
+    var submitterId: String { submitter_id }
+    var submitterName: String { submitter_name }
+    var submitterEmail: String { submitter_email }
+    var targetPhotographerId: String { target_photographer_id }
+    var targetPhotographerName: String { target_photographer_name }
+    var imageUrls: [String] { image_urls ?? [] }
+    var thumbnailUrls: [String] { thumbnail_urls ?? [] }
+    var imageUrl: String { image_url ?? "" }
+    var thumbnailUrl: String { thumbnail_url ?? "" }
+    var imageCount: Int { image_count ?? 0 }
+    var managerNotes: String { manager_notes }
+    var exampleType: String { example_type }
+    var createdAt: Date? { created_at }
+    var updatedAt: Date? { updated_at }
+
     // Computed property for formatted date
     var formattedDate: String {
-        guard let createdAt = createdAt else { return "" }
+        guard let createdAt = created_at else { return "" }
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short

@@ -1,6 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseAuth
 
 struct CustomDailyReportsView: View {
     @StateObject private var templateService = TemplateService.shared

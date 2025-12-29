@@ -1,6 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
 
 struct MileageReportsView: View {
     @StateObject var viewModel: MileageReportsViewModel

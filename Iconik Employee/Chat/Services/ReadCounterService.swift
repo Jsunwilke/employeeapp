@@ -205,7 +205,7 @@ extension ReadCounterService {
         let sessionStats = getSessionStats()
         let dailyStats = getDailyStats()
         
-        var report = "📊 Firebase Read Analytics Report\n"
+        var report = "📊 Database Read Analytics Report\n"
         report += "================================\n\n"
         
         report += "Session Statistics:\n"

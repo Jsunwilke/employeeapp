@@ -2,18 +2,18 @@ import SwiftUI
 
 struct JobBoxBubbleView: View {
     let record: JobBox
-    
+
     private var formattedDate: String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-        return formatter.string(from: record.timestamp)
+        return formatter.string(from: record.timestampDate)
     }
-    
+
     private var statusColor: Color {
-        StatusColors.color(for: record.status.rawValue, isJobBox: true)
+        StatusColors.color(for: record.status, isJobBox: true)
     }
-    
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             // Status indicator
@@ -21,32 +21,32 @@ struct JobBoxBubbleView: View {
                 .fill(statusColor)
                 .frame(width: 10, height: 10)
                 .padding(.top, 6)
-            
+
             VStack(alignment: .leading, spacing: 4) {
                 // Header row
                 HStack {
-                    Text(record.status.rawValue)
+                    Text(record.status)
                         .font(.headline)
                         .foregroundColor(statusColor)
-                    
+
                     Spacer()
-                    
+
                     Text(formattedDate)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                
+
                 // Details
-                Text("School: \(record.school)")
+                Text("School: \(record.school ?? "")")
                     .font(.subheadline)
-                
+
                 Text("Photographer: \(record.scannedBy)")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                
+
                 // Show warning if left job for too long
-                if record.status == .leftJob {
-                    let timeDiff = Date().timeIntervalSince(record.timestamp)
+                if record.jobBoxStatus == .leftJob {
+                    let timeDiff = Date().timeIntervalSince(record.timestampDate)
                     if timeDiff > 43200 { // 12 hours
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle.fill")

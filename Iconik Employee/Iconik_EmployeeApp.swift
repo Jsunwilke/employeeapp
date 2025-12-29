@@ -1,24 +1,17 @@
 import SwiftUI
-import Firebase
 
 @main
 struct EmployeeAppApp: App {
     // Use PushNotificationManager as your app delegate.
     @UIApplicationDelegateAdaptor(PushNotificationManager.self) var pushManager
-    
+
     // Access the AppStorage value for app theme
     @AppStorage("appTheme") private var appTheme: String = "system"
 
     init() {
-        FirebaseApp.configure()
-
-        // Enable Firestore offline persistence for better caching and offline support
-        let settings = FirestoreSettings()
-        // Use the new cacheSettings property
-        settings.cacheSettings = PersistentCacheSettings(sizeBytes: NSNumber(value: FirestoreCacheSizeUnlimited))
-        Firestore.firestore().settings = settings
-
-        print("🔥 Firestore persistence enabled with unlimited cache")
+        // Initialize Supabase (singleton pattern - initialized on first access)
+        _ = SupabaseManager.shared
+        print("✅ Supabase initialized and ready")
 
         // Migrate existing JSON cache to CoreData (one-time migration)
         LocalSportsShootRepository.shared.migrateFromJSONCache()

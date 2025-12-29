@@ -1,6 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
 import UniformTypeIdentifiers
 
 struct CSVImportExportView: View {

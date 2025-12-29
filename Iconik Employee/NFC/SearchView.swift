@@ -303,7 +303,7 @@ struct SearchView: View {
         FirestoreManager.shared.fetchJobBoxRecords(field: "all", value: "", organizationID: orgID) { result in
             switch result {
             case .success(let records):
-                let sortedRecords = records.sorted { $0.timestamp > $1.timestamp }
+                let sortedRecords = records.sorted { $0.timestampDate > $1.timestampDate }
                 self.jobBoxSearchResults = Array(sortedRecords.prefix(50))
             case .failure(let error):
                 alertMessage = "Error fetching job box records: \(error.localizedDescription)"
@@ -386,12 +386,12 @@ struct SearchView: View {
                 case .success(let records):
                     let latestRecordsDict = Dictionary(grouping: records, by: { $0.boxNumber })
                         .compactMapValues { recs in
-                            recs.sorted { $0.timestamp > $1.timestamp }.first
+                            recs.sorted { $0.timestampDate > $1.timestampDate }.first
                         }
                     let filteredRecords = latestRecordsDict.values.filter { record in
-                        record.status.rawValue.lowercased() == searchValue.lowercased()
+                        record.status.lowercased() == searchValue.lowercased()
                     }
-                    let sortedRecords = filteredRecords.sorted { $0.timestamp > $1.timestamp }
+                    let sortedRecords = filteredRecords.sorted { $0.timestampDate > $1.timestampDate }
                     jobBoxSearchResults = sortedRecords
                     if sortedRecords.isEmpty {
                         alertMessage = "No job box records found."
@@ -407,7 +407,7 @@ struct SearchView: View {
                 isLoading = false
                 switch result {
                 case .success(let records):
-                    let sortedRecords = records.sorted { $0.timestamp > $1.timestamp }
+                    let sortedRecords = records.sorted { $0.timestampDate > $1.timestampDate }
                     jobBoxSearchResults = sortedRecords
                     if sortedRecords.isEmpty {
                         alertMessage = "No job box records found."
@@ -430,9 +430,7 @@ struct SearchView: View {
             secondaryButtonTitle: "Cancel",
             isDestructive: true,
             primaryAction: {
-                if let recordID = record.id {
-                    deleteRecord(recordID: recordID)
-                }
+                deleteRecord(recordID: record.id)
             },
             secondaryAction: {
                 // Cancel action

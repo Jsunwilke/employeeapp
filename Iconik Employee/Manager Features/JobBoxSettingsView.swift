@@ -1,6 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
 
 // Model for job box stalled timings
 struct JobBoxStalledTimings {

@@ -1,10 +1,11 @@
 import Foundation
-import FirebaseFirestore
+import Supabase
 import Combine
 import Network
 
 class OfflineDataManager: ObservableObject {
     static let shared = OfflineDataManager()
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
     
     // Published properties to track connectivity and sync status
     @Published var isOnline: Bool = true
@@ -120,86 +121,86 @@ class OfflineDataManager: ObservableObject {
     }
     
     // MARK: - Sync Operations
-    
+
     func syncPendingOperations() {
         guard isOnline && syncPending && !syncInProgress && !pendingOperations.isEmpty else {
             return
         }
-        
+
         syncInProgress = true
-        
-        // Process operations in order (first in, first out)
-        var completedOperationIndices: [Int] = []
-        let db = Firestore.firestore()
-        
-        let dispatchGroup = DispatchGroup()
-        
-        for (index, operation) in pendingOperations.enumerated() {
-            dispatchGroup.enter()
-            
-            // Convert string data back to appropriate types when possible
-            let firestoreData: [String: Any] = operation.data.mapValues { stringValue in
-                // Try to convert back to numeric types if possible
-                if let intValue = Int(stringValue) {
-                    return intValue
-                } else if let doubleValue = Double(stringValue) {
-                    return doubleValue
-                } else if stringValue.lowercased() == "true" {
-                    return true
-                } else if stringValue.lowercased() == "false" {
-                    return false
-                } else {
-                    return stringValue
+
+        Task {
+            var completedOperationIndices: [Int] = []
+
+            for (index, operation) in pendingOperations.enumerated() {
+                // Convert string data to AnyJSON format
+                var supabaseData: [String: AnyJSON] = [:]
+                for (key, stringValue) in operation.data {
+                    // Convert to snake_case
+                    let snakeKey = key.camelCaseToSnakeCase()
+
+                    // Try to convert back to appropriate types
+                    if let intValue = Int(stringValue) {
+                        supabaseData[snakeKey] = .integer(intValue)
+                    } else if let doubleValue = Double(stringValue) {
+                        supabaseData[snakeKey] = .double(doubleValue)
+                    } else if stringValue.lowercased() == "true" {
+                        supabaseData[snakeKey] = .bool(true)
+                    } else if stringValue.lowercased() == "false" {
+                        supabaseData[snakeKey] = .bool(false)
+                    } else {
+                        supabaseData[snakeKey] = .string(stringValue)
+                    }
+                }
+
+                // Map collection path to Supabase table name
+                let tableName = operation.collectionPath.camelCaseToSnakeCase()
+
+                do {
+                    switch operation.type {
+                    case .add:
+                        supabaseData["id"] = .string(UUID().uuidString.lowercased())
+                        try await supabase
+                            .from(tableName)
+                            .insert(supabaseData)
+                            .execute()
+                        completedOperationIndices.append(index)
+
+                    case .update:
+                        try await supabase
+                            .from(tableName)
+                            .update(supabaseData)
+                            .eq("id", value: operation.id)
+                            .execute()
+                        completedOperationIndices.append(index)
+
+                    case .delete:
+                        try await supabase
+                            .from(tableName)
+                            .delete()
+                            .eq("id", value: operation.id)
+                            .execute()
+                        completedOperationIndices.append(index)
+                    }
+                } catch {
+                    print("Error syncing \(operation.type) operation: \(error.localizedDescription)")
                 }
             }
-            
-            switch operation.type {
-            case .add:
-                let docRef = db.collection(operation.collectionPath).document()
-                docRef.setData(firestoreData) { error in
-                    if error == nil {
-                        completedOperationIndices.append(index)
-                    } else {
-                        print("Error syncing add operation: \(error?.localizedDescription ?? "")")
-                    }
-                    dispatchGroup.leave()
+
+            await MainActor.run {
+                // Remove completed operations (in reverse order to not affect indices)
+                for index in completedOperationIndices.sorted(by: >) {
+                    self.pendingOperations.remove(at: index)
                 }
-                
-            case .update:
-                db.collection(operation.collectionPath).document(operation.id).updateData(firestoreData) { error in
-                    if error == nil {
-                        completedOperationIndices.append(index)
-                    } else {
-                        print("Error syncing update operation: \(error?.localizedDescription ?? "")")
-                    }
-                    dispatchGroup.leave()
-                }
-                
-            case .delete:
-                db.collection(operation.collectionPath).document(operation.id).delete { error in
-                    if error == nil {
-                        completedOperationIndices.append(index)
-                    } else {
-                        print("Error syncing delete operation: \(error?.localizedDescription ?? "")")
-                    }
-                    dispatchGroup.leave()
-                }
+
+                // Update status
+                self.syncPending = !self.pendingOperations.isEmpty
+                self.syncInProgress = false
+                self.lastSyncTime = Date()
+
+                // Save updated pending operations
+                self.savePendingOperations()
             }
-        }
-        
-        dispatchGroup.notify(queue: .main) {
-            // Remove completed operations (in reverse order to not affect indices)
-            for index in completedOperationIndices.sorted(by: >) {
-                self.pendingOperations.remove(at: index)
-            }
-            
-            // Update status
-            self.syncPending = !self.pendingOperations.isEmpty
-            self.syncInProgress = false
-            self.lastSyncTime = Date()
-            
-            // Save updated pending operations
-            self.savePendingOperations()
         }
     }
     
@@ -267,5 +268,15 @@ class OfflineDataManager: ObservableObject {
             data: recordData
         )
     }
-    
+
+}
+
+// MARK: - String Extension for camelCase to snake_case conversion
+private extension String {
+    func camelCaseToSnakeCase() -> String {
+        let pattern = "([a-z])([A-Z])"
+        let regex = try? NSRegularExpression(pattern: pattern, options: [])
+        let range = NSRange(location: 0, length: self.count)
+        return regex?.stringByReplacingMatches(in: self, options: [], range: range, withTemplate: "$1_$2").lowercased() ?? self.lowercased()
+    }
 }

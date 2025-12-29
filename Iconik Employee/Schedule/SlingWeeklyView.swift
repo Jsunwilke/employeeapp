@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseFirestore
 
 enum ScheduleMode: String, CaseIterable {
     case myShifts = "My Shifts"
@@ -7,10 +6,10 @@ enum ScheduleMode: String, CaseIterable {
 }
 
 struct SlingWeeklyView: View {
-    // Session service for Firestore operations
+    // Session service for database operations
     private let sessionService = SessionService.shared
-    
-    @State private var sessions: [Session] = []  // All sessions loaded from Firestore
+
+    @State private var sessions: [Session] = []  // All sessions loaded from Supabase
     @State private var filteredSessions: [Session] = []  // Sessions for display after filtering
     @State private var errorMessage: String = ""
     @State private var isLoading: Bool = false
@@ -39,8 +38,8 @@ struct SlingWeeklyView: View {
     @State private var weatherDataBySession: [String: WeatherData] = [:] // Key is location-date
     @State private var isLoadingWeather: Bool = false
     
-    // Firestore listener
-    @State private var sessionListener: ListenerRegistration? = nil
+    // Session listener state (Supabase Realtime)
+    @State private var isListeningToSessions: Bool = false
     
     // User's first and last name from AppStorage (used in filtering "My Shifts")
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
@@ -57,7 +56,6 @@ struct SlingWeeklyView: View {
     // Time off service and data
     private let timeOffService = TimeOffService.shared
     @State private var timeOffEntries: [TimeOffCalendarEntry] = []
-    @State private var timeOffListener: ListenerRegistration? = nil
     
     // Environment for color scheme
     @Environment(\.colorScheme) var colorScheme
@@ -77,265 +75,149 @@ struct SlingWeeklyView: View {
     private let screenWidth = UIScreen.main.bounds.width
     
     var body: some View {
-        VStack(spacing: 0) {
+        let mainStack = VStack(spacing: 0) {
             // Week range and Today button header
             weekRangeHeader
                 .padding(.horizontal)
                 .padding(.top, 8)
                 .padding(.bottom, 4)
-            
+
             // Schedule mode toggle - Clickable pill
             scheduleToggle
                 .padding(.horizontal)
                 .padding(.bottom, 12)
-            
+
             if isLoading {
                 loadingView
             } else if !errorMessage.isEmpty {
                 errorView
             } else {
-                // Improved carousel with rounded corners and interactive dragging
-                ZStack {
-                    // Current week view
-                    calendarWeekView(weekOffset: weekOffset)
-                        .offset(x: offset)
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    if !isAnimating {
-                                        isDragging = true
-                                        offset = value.translation.width
-                                    }
-                                }
-                                .onEnded { value in
-                                    isDragging = false
-                                    let threshold = screenWidth * 0.3
-                                    
-                                    if value.translation.width < -threshold {
-                                        // Next week
-                                        animateToNextWeek()
-                                    } else if value.translation.width > threshold {
-                                        // Previous week
-                                        animateToPreviousWeek()
-                                    } else {
-                                        // Return to current position
-                                        withAnimation(.spring()) {
-                                            offset = 0
-                                        }
-                                    }
-                                }
-                        )
-                }
-                .frame(height: 120)
-                .padding(.horizontal)
-                
-                // Selected day header with shift count
-                if let selectedDate = selectedDay {
-                    selectedDayHeader(for: selectedDate)
-                        .padding(.horizontal)
-                        .padding(.top, 12)
-                        .padding(.bottom, 8)
-                }
-                
-                // Events list for selected day with swipe gestures
-                if let selectedDate = selectedDay {
-                    ZStack {
-                        eventsListView(for: selectedDate)
-                            .offset(x: dayOffset)
-                            .gesture(
-                                DragGesture()
-                                    .onChanged { value in
-                                        if !isAnimatingDay {
-                                            isDraggingDay = true
-                                            dayOffset = value.translation.width
-                                        }
-                                    }
-                                    .onEnded { value in
-                                        isDraggingDay = false
-                                        let threshold = screenWidth * 0.3
-                                        
-                                        if value.translation.width < -threshold {
-                                            // Swipe left - next day
-                                            animateToNextDay()
-                                        } else if value.translation.width > threshold {
-                                            // Swipe right - previous day
-                                            animateToPreviousDay()
-                                        } else {
-                                            // Snap back to center
-                                            withAnimation(.spring()) {
-                                                dayOffset = 0
-                                            }
-                                        }
-                                    }
-                            )
-                    }
-                    .clipped() // Prevent content from showing outside bounds during swipe
-                }
-                
-                Spacer() // Push content to the top
+                mainContentView
             }
         }
-        .background(Color(.systemGroupedBackground)) // Add background color to the entire view
-        .navigationTitle("Schedule")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
+
+        let styledStack = mainStack
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Schedule")
+            .navigationBarTitleDisplayMode(.inline)
+
+        let withToolbar = styledStack.toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if userRole == "admin" || userRole == "manager" {
-                    HStack {
-                        // Debug buttons
-                        #if DEBUG
-                        // Enable session publishing for organization
-                        if !organizationService.organizationHasPublishing {
-                            Button(action: {
-                                Task {
-                                    do {
-                                        let orgID = userManager.getCachedOrganizationID()
-                                        if !orgID.isEmpty {
-                                            try await organizationService.enableSessionPublishing(organizationID: orgID)
-                                        }
-                                    } catch {
-                                        print("❌ Failed to enable session publishing: \(error)")
-                                    }
-                                }
-                            }) {
-                                Image(systemName: "lock.open")
-                                    .foregroundColor(.green)
-                            }
-                        }
-                        
-                        // Create test unpublished session
-                        Button(action: {
-                            Task {
-                                do {
-                                    let orgID = userManager.getCachedOrganizationID()
-                                    if !orgID.isEmpty {
-                                        let sessionID = try await sessionService.createTestUnpublishedSession(organizationID: orgID)
-                                        print("✅ Created test unpublished session: \(sessionID)")
-                                    }
-                                } catch {
-                                    print("❌ Failed to create test session: \(error)")
-                                }
-                            }
-                        }) {
-                            Image(systemName: "testtube.2")
-                                .foregroundColor(.orange)
-                        }
-                        #endif
-                        
-                        Button(action: {
-                            showCreateSession = true
-                        }) {
-                            Image(systemName: "plus")
-                        }
+                    Button(action: {
+                        showCreateSession = true
+                    }) {
+                        Image(systemName: "plus")
                     }
                 }
             }
         }
-        .sheet(isPresented: $showCreateSession) {
-            CreateSessionView()
-        }
-        .onAppear {
-            // Initialize organization ID cache to prevent dummy listeners
-            UserManager.shared.initializeOrganizationID()
-            
-            // Start listening to organization data for session types
-            if !userManager.getCachedOrganizationID().isEmpty {
-                organizationService.startListeningToOrganization(organizationID: userManager.getCachedOrganizationID())
+
+        let withSheet = withToolbar
+            .sheet(isPresented: $showCreateSession) {
+                CreateSessionView()
             }
-            
-            // Only load sessions if we don't have any or no active listener
-            if sessions.isEmpty || sessionListener == nil {
-                loadSessions()
-            }
-            
-            // Debug: Check for unpublished sessions
-            if userRole == "admin" || userRole == "manager" {
-                debugCheckUnpublishedSessions()
-            }
-            
-            if selectedDay == nil {
-                selectedDay = Date()
-            }
-            
-            // Only load time off if we don't have an active listener
-            if timeOffListener == nil {
+
+        let withLifecycle = withSheet
+            .onAppear {
+                // Initialize organization ID cache to prevent dummy listeners
+                UserManager.shared.initializeOrganizationID()
+
+                // Start listening to organization data for session types
+                if !userManager.getCachedOrganizationID().isEmpty {
+                    organizationService.startListeningToOrganization(organizationID: userManager.getCachedOrganizationID())
+                }
+
+                // Only load sessions if we don't have any or no active listener
+                if sessions.isEmpty || !isListeningToSessions {
+                    loadSessions()
+                }
+
+                // Debug: Check for unpublished sessions
+                if userRole == "admin" || userRole == "manager" {
+                    debugCheckUnpublishedSessions()
+                }
+
+                if selectedDay == nil {
+                    selectedDay = Date()
+                }
+
+                // Load time off for the visible week
                 loadTimeOffForVisibleWeek()
             }
-        }
-        .onDisappear {
-            sessionListener?.remove()
-            timeOffListener?.remove()
-            organizationService.stopListening()
-        }
-        .onChange(of: weekOffset) { _ in
-            updateDisplayedSessions()
-            if let selectedDay = selectedDay, !isDateInVisibleWeek(selectedDay) {
-                // If selected day is no longer in visible week after a week change,
-                // select the closest date in the new week
-                self.selectedDay = getClosestVisibleDate(to: selectedDay)
+            .onDisappear {
+                // Stop Supabase realtime listener
+                let includeUnpublished = (userRole == "admin" || userRole == "manager")
+                sessionService.stopListeningToSessions(organizationID: organizationID, includeUnpublished: includeUnpublished)
+                isListeningToSessions = false
+                organizationService.stopListening()
             }
-            loadWeatherForVisibleSessions()
-            loadTimeOffForVisibleWeek()
-        }
-        .onChange(of: selectedDay) { _ in
-            loadWeatherForVisibleSessions()
-        }
-        // Handle navigation to session details
-        .background(
-            // Only create NavigationLink when we have a valid session
-            Group {
-                if let session = selectedSession {
-                    NavigationLink(
-                        destination: ShiftDetailView(session: session, allSessions: sessions, currentUserID: userManager.getCurrentUserID())
-                            .id(session.id), // Force SwiftUI to create fresh view for each session
-                        isActive: Binding(
-                            get: { 
-                                let isActive = selectedSession != nil
-                                print("🔗 NavigationLink isActive getter: \(isActive), selectedSession: \(selectedSession?.id ?? "nil")")
-                                return isActive
-                            },
-                            set: { 
-                                print("🔗 NavigationLink isActive setter: \($0)")
-                                if !$0 { 
-                                    selectedSession = nil 
-                                }
-                            }
-                        )
-                    ) { EmptyView() }
+            .onChange(of: weekOffset) { _ in
+                updateDisplayedSessions()
+                if let selectedDay = selectedDay, !isDateInVisibleWeek(selectedDay) {
+                    // If selected day is no longer in visible week after a week change,
+                    // select the closest date in the new week
+                    self.selectedDay = getClosestVisibleDate(to: selectedDay)
                 }
+                loadWeatherForVisibleSessions()
+                loadTimeOffForVisibleWeek()
             }
-        )
-        // Handle time off detail modal
-        .sheet(item: Binding<TimeOffCalendarEntry?>(
-            get: { showingTimeOffDetail ? selectedTimeOffEntry : nil },
-            set: { _ in 
-                showingTimeOffDetail = false
-                selectedTimeOffEntry = nil
+            .onChange(of: selectedDay) { _ in
+                loadWeatherForVisibleSessions()
             }
-        )) { timeOffEntry in
-            let _ = print("🟡 Time off sheet is being presented for entry: \(timeOffEntry.id)")
-            TimeOffDetailView(
-                timeOffEntry: timeOffEntry,
-                onCancel: {
-                    print("🟡 Time off sheet cancelled")
-                    showingTimeOffDetail = false
-                    selectedTimeOffEntry = nil
-                    // Clear any navigation state that might interfere
-                    selectedSession = nil
-                    // Refresh time off data
-                    loadTimeOffForVisibleWeek()
-                },
-                onDelete: {
-                    print("🟡 Time off sheet deleted")
-                    showingTimeOffDetail = false
-                    selectedTimeOffEntry = nil
-                    // Clear any navigation state that might interfere
-                    selectedSession = nil
-                    // Refresh time off data
-                    loadTimeOffForVisibleWeek()
+
+        let withNavigation = withLifecycle
+            .background(
+                Group {
+                    if let session = selectedSession {
+                        NavigationLink(
+                            destination: ShiftDetailView(session: session, allSessions: sessions, currentUserID: userManager.getCurrentUserID())
+                                .id(session.id),
+                            isActive: Binding(
+                                get: {
+                                    let isActive = selectedSession != nil
+                                    print("🔗 NavigationLink isActive getter: \(isActive), selectedSession: \(selectedSession?.id ?? "nil")")
+                                    return isActive
+                                },
+                                set: {
+                                    print("🔗 NavigationLink isActive setter: \($0)")
+                                    if !$0 {
+                                        selectedSession = nil
+                                    }
+                                }
+                            )
+                        ) { EmptyView() }
+                    }
                 }
             )
-        }
+
+        return withNavigation
+            .sheet(item: Binding<TimeOffCalendarEntry?>(
+                get: { showingTimeOffDetail ? selectedTimeOffEntry : nil },
+                set: { _ in
+                    showingTimeOffDetail = false
+                    selectedTimeOffEntry = nil
+                }
+            )) { timeOffEntry in
+                let _ = print("🟡 Time off sheet is being presented for entry: \(timeOffEntry.id)")
+                TimeOffDetailView(
+                    timeOffEntry: timeOffEntry,
+                    onCancel: {
+                        print("🟡 Time off sheet cancelled")
+                        showingTimeOffDetail = false
+                        selectedTimeOffEntry = nil
+                        selectedSession = nil
+                        loadTimeOffForVisibleWeek()
+                    },
+                    onDelete: {
+                        print("🟡 Time off sheet deleted")
+                        showingTimeOffDetail = false
+                        selectedTimeOffEntry = nil
+                        selectedSession = nil
+                        loadTimeOffForVisibleWeek()
+                    }
+                )
+            }
     }
     
     // MARK: - UI Components
@@ -635,7 +517,92 @@ struct SlingWeeklyView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    
+
+    // Main content view with calendar and events
+    private var mainContentView: some View {
+        Group {
+            // Improved carousel with rounded corners and interactive dragging
+            ZStack {
+                // Current week view
+                calendarWeekView(weekOffset: weekOffset)
+                    .offset(x: offset)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                if !isAnimating {
+                                    isDragging = true
+                                    offset = value.translation.width
+                                }
+                            }
+                            .onEnded { value in
+                                isDragging = false
+                                let threshold = screenWidth * 0.3
+
+                                if value.translation.width < -threshold {
+                                    // Next week
+                                    animateToNextWeek()
+                                } else if value.translation.width > threshold {
+                                    // Previous week
+                                    animateToPreviousWeek()
+                                } else {
+                                    // Return to current position
+                                    withAnimation(.spring()) {
+                                        offset = 0
+                                    }
+                                }
+                            }
+                    )
+            }
+            .frame(height: 120)
+            .padding(.horizontal)
+
+            // Selected day header with shift count
+            if let selectedDate = selectedDay {
+                selectedDayHeader(for: selectedDate)
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
+            }
+
+            // Events list for selected day with swipe gestures
+            if let selectedDate = selectedDay {
+                ZStack {
+                    eventsListView(for: selectedDate)
+                        .offset(x: dayOffset)
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    if !isAnimatingDay {
+                                        isDraggingDay = true
+                                        dayOffset = value.translation.width
+                                    }
+                                }
+                                .onEnded { value in
+                                    isDraggingDay = false
+                                    let threshold = screenWidth * 0.3
+
+                                    if value.translation.width < -threshold {
+                                        // Swipe left - next day
+                                        animateToNextDay()
+                                    } else if value.translation.width > threshold {
+                                        // Swipe right - previous day
+                                        animateToPreviousDay()
+                                    } else {
+                                        // Snap back to center
+                                        withAnimation(.spring()) {
+                                            dayOffset = 0
+                                        }
+                                    }
+                                }
+                        )
+                }
+                .clipped() // Prevent content from showing outside bounds during swipe
+            }
+
+            Spacer() // Push content to the top
+        }
+    }
+
     // MARK: - Animation Functions
     
     private func animateToNextWeek() {
@@ -784,7 +751,7 @@ struct SlingWeeklyView: View {
         }
         
         // Get the current user's photographer info from the session
-        private var currentUserPhotographerInfo: (name: String, notes: String)? {
+        private var currentUserPhotographerInfo: (name: String, notes: String?)? {
             guard let userID = currentUserID else { return nil }
             return session.getPhotographerInfo(for: userID)
         }
@@ -805,8 +772,8 @@ struct SlingWeeklyView: View {
             }
             
             // Add photographer-specific notes if they exist
-            if let userInfo = currentUserPhotographerInfo, !userInfo.notes.isEmpty {
-                notes.append("Personal: \(userInfo.notes)")
+            if let userInfo = currentUserPhotographerInfo, let photographerNotes = userInfo.notes, !photographerNotes.isEmpty {
+                notes.append("Personal: \(photographerNotes)")
             }
             
             return notes.joined(separator: "\n")
@@ -826,13 +793,12 @@ struct SlingWeeklyView: View {
         
         private var colorForPosition: Color {
             // First priority: use sessionColor if available
-            if let sessionColor = session.sessionColor {
-                return Color(hex: sessionColor)
+            if !session.sessionColor.isEmpty {
+                return Color(hex: session.sessionColor)
             }
-            
+
             // Second priority: try to get color from session types
-            if let sessionTypeIds = session.sessionType,
-               let firstTypeId = sessionTypeIds.first,
+            if let firstTypeId = session.sessionType.first,
                let sessionType = organizationService.getSessionType(by: firstTypeId) {
                 return Color(hex: sessionType.color)
             }
@@ -905,8 +871,8 @@ struct SlingWeeklyView: View {
                             .cornerRadius(12)
                         }
                         
-                        if let sessionTypeIds = session.sessionType {
-                            ForEach(sessionTypeIds, id: \.self) { typeId in
+                        if !session.sessionType.isEmpty {
+                            ForEach(session.sessionType, id: \.self) { typeId in
                                 let _ = print("🏷️ Looking for sessionType '\(typeId)' in \(organizationService.sessionTypes.count) types")
                                 
                                 Text(getSessionTypeDisplay(typeId: typeId).name)
@@ -1271,19 +1237,16 @@ struct SlingWeeklyView: View {
     
     private func loadTimeOffForVisibleWeek() {
         print("Loading time off for visible week...")
-        
+
         // Get the current visible week date range
         let dates = getDaysInWeek(forOffset: weekOffset)
         guard let startDate = dates.first, let endDate = dates.last else { return }
-        
-        // Remove existing listener
-        timeOffListener?.remove()
-        
-        // Set up real-time listener for the current week
-        timeOffListener = timeOffService.startListeningToCalendarTimeOff(
-            dateRange: (start: startDate, end: endDate)
-        ) { entries in
-            DispatchQueue.main.async {
+
+        Task {
+            let entries = await timeOffService.getTimeOffForCalendar(
+                dateRange: (start: startDate, end: endDate)
+            )
+            await MainActor.run {
                 self.timeOffEntries = entries
                 print("Loaded \(entries.count) time off entries for week")
             }
@@ -1301,7 +1264,7 @@ struct SlingWeeklyView: View {
         
         // Only remove existing listener if we're forcing a reload
         // Otherwise reuse the existing listener to avoid duplicate reads
-        if sessionListener == nil {
+        if !isListeningToSessions {
             // Start listening for sessions
             // Include unpublished sessions for admin/manager users
             // If organization doesn't have publishing enabled, still show all sessions to admin/manager
@@ -1310,17 +1273,28 @@ struct SlingWeeklyView: View {
             print("   - User role: \(userRole)")
             print("   - Organization has publishing: \(organizationService.organizationHasPublishing)")
             print("   - Include unpublished: \(includeUnpublished)")
-            
-            sessionListener = sessionService.listenForSessions(includeUnpublished: includeUnpublished) { sessions in
+
+            guard !organizationID.isEmpty else {
+                print("❌ Cannot load sessions: no organization ID")
+                self.isLoading = false
+                self.errorMessage = "Organization ID not found"
+                return
+            }
+
+            isListeningToSessions = true
+            sessionService.startListeningToSessions(
+                organizationID: organizationID,
+                includeUnpublished: includeUnpublished
+            ) { sessions in
                 DispatchQueue.main.async {
                     print("📊 SlingWeeklyView: Received \(sessions.count) sessions (includeUnpublished: \(includeUnpublished))")
-                    
+
                     // Debug: Count published vs unpublished
                     let publishedCount = sessions.filter { $0.isPublished }.count
                     let unpublishedCount = sessions.filter { !$0.isPublished }.count
                     print("   - Published: \(publishedCount)")
                     print("   - Unpublished: \(unpublishedCount)")
-                    
+
                     self.sessions = sessions
                     self.updateDisplayedSessions()
                     self.loadWeatherForVisibleSessions()
@@ -1349,17 +1323,20 @@ struct SlingWeeklyView: View {
         
         // Filter by user if in "My Shifts" mode
         if scheduleMode == .myShifts {
-            guard let currentUserID = userManager.getCurrentUserID() else {
+            guard let currentUserID = userManager.getCurrentUserIDUnified() else {
                 print("📊 Cannot filter sessions: no current user ID")
                 filteredSessions = []
                 return
             }
-            
+
+            // Get current user email for fallback matching
+            let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail")
+
             print("📊 Filtering for user ID: '\(currentUserID)'")
-            
+
             let originalCount = filtered.count
             filtered = filtered.filter { session in
-                session.isUserAssigned(userID: currentUserID)
+                session.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail)
             }
             print("📊 After filtering: \(filtered.count) sessions (was \(originalCount))")
         }
@@ -1482,9 +1459,12 @@ struct SlingWeeklyView: View {
             guard let currentUserID = userManager.getCurrentUserID() else {
                 return false
             }
-            
+
+            // Get current user email for fallback matching
+            let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail")
+
             sessionsToCheck = sessionsToCheck.filter { session in
-                session.isUserAssigned(userID: currentUserID)
+                session.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail)
             }
         }
         

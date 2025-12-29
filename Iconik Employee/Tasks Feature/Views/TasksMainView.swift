@@ -7,8 +7,6 @@
 //
 
 import SwiftUI
-import FirebaseAuth
-import FirebaseFirestore
 
 struct TasksMainView: View {
     @StateObject private var viewModel = TasksViewModel()
@@ -244,9 +242,7 @@ struct StatusChip: View {
         switch status {
         case .todo: return .gray
         case .inProgress: return .blue
-        case .onHold: return .orange
         case .completed: return .green
-        case .cancelled: return .red
         }
     }
 }
@@ -369,9 +365,7 @@ struct TaskRowView: View {
         switch task.status {
         case .todo: return .gray
         case .inProgress: return .blue
-        case .onHold: return .orange
         case .completed: return .green
-        case .cancelled: return .red
         }
     }
 

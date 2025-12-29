@@ -1,6 +1,4 @@
 import SwiftUI
-import FirebaseAuth
-import FirebaseFirestore
 
 struct ConversationSettingsView: View {
     let conversation: Conversation
@@ -13,9 +11,11 @@ struct ConversationSettingsView: View {
     @State private var showRemoveConfirmation = false
     @State private var showLeaveConfirmation = false
     @Environment(\.dismiss) private var dismiss
-    
-    private let currentUserId = Auth.auth().currentUser?.uid ?? ""
-    
+
+    private var currentUserId: String {
+        UserManager.shared.getCurrentUserIDUnified() ?? ""
+    }
+
     // Get participant users from organization users
     private var participantUsers: [ChatUser] {
         conversation.participants.compactMap { participantId in
@@ -220,7 +220,7 @@ struct ConversationSettingsView: View {
             HStack {
                 Text("Created")
                 Spacer()
-                Text(conversation.createdAt.dateValue(), style: .date)
+                Text(conversation.createdAt, style: .date)
                     .foregroundColor(.secondary)
             }
         }

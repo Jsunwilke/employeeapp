@@ -3,11 +3,11 @@
 //  Iconik Employee
 //
 //  Model for task comments with mentions and attachments
-//  Stored in subcollection: /tasks/{taskId}/comments/{commentId}
+//  Migrated to Supabase
 //
 
 import Foundation
-import FirebaseFirestore
+import Supabase
 
 // MARK: - Mention Model
 
@@ -67,6 +67,7 @@ struct CommentAttachment: Codable, Equatable {
 
 struct TaskComment: Identifiable, Codable {
     var id: String
+    var taskId: String
     var userId: String
     var userName: String
     var text: String
@@ -77,19 +78,21 @@ struct TaskComment: Identifiable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id
-        case userId
-        case userName
+        case taskId = "task_id"
+        case userId = "user_id"
+        case userName = "user_name"
         case text
         case mentions
         case attachments
-        case createdAt
-        case updatedAt
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
     }
 
     // MARK: - Initializer
 
     init(
         id: String = UUID().uuidString,
+        taskId: String,
         userId: String,
         userName: String,
         text: String,
@@ -99,6 +102,7 @@ struct TaskComment: Identifiable, Codable {
         updatedAt: Date = Date()
     ) {
         self.id = id
+        self.taskId = taskId
         self.userId = userId
         self.userName = userName
         self.text = text
@@ -108,77 +112,9 @@ struct TaskComment: Identifiable, Codable {
         self.updatedAt = updatedAt
     }
 
-    // MARK: - Firestore Conversion
-
-    init?(from document: DocumentSnapshot) {
-        guard let data = document.data(),
-              let userId = data["userId"] as? String,
-              let userName = data["userName"] as? String,
-              let text = data["text"] as? String,
-              let createdAtTimestamp = data["createdAt"] as? Timestamp,
-              let updatedAtTimestamp = data["updatedAt"] as? Timestamp else {
-            return nil
-        }
-
-        self.id = document.documentID
-        self.userId = userId
-        self.userName = userName
-        self.text = text
-        self.createdAt = createdAtTimestamp.dateValue()
-        self.updatedAt = updatedAtTimestamp.dateValue()
-
-        // Parse mentions
-        if let mentionsData = data["mentions"] as? [[String: Any]] {
-            self.mentions = mentionsData.compactMap { mentionDict in
-                guard let userId = mentionDict["userId"] as? String,
-                      let userName = mentionDict["userName"] as? String else {
-                    return nil
-                }
-                return CommentMention(userId: userId, userName: userName)
-            }
-        } else {
-            self.mentions = []
-        }
-
-        // Parse attachments
-        if let attachmentsData = data["attachments"] as? [[String: Any]] {
-            self.attachments = attachmentsData.compactMap { attachmentDict in
-                guard let fileName = attachmentDict["fileName"] as? String,
-                      let fileUrl = attachmentDict["fileUrl"] as? String,
-                      let fileType = attachmentDict["fileType"] as? String,
-                      let fileSize = attachmentDict["fileSize"] as? Int else {
-                    return nil
-                }
-                return CommentAttachment(
-                    fileName: fileName,
-                    fileUrl: fileUrl,
-                    fileType: fileType,
-                    fileSize: fileSize
-                )
-            }
-        } else {
-            self.attachments = []
-        }
-    }
-
-    func toFirestoreData() -> [String: Any] {
-        return [
-            "userId": userId,
-            "userName": userName,
-            "text": text,
-            "mentions": mentions.map { ["userId": $0.userId, "userName": $0.userName] },
-            "attachments": attachments.map {
-                [
-                    "fileName": $0.fileName,
-                    "fileUrl": $0.fileUrl,
-                    "fileType": $0.fileType,
-                    "fileSize": $0.fileSize
-                ]
-            },
-            "createdAt": Timestamp(date: createdAt),
-            "updatedAt": Timestamp(date: updatedAt)
-        ]
-    }
+    // MARK: - Note
+    // TaskComment uses Codable for automatic Supabase JSON encoding/decoding
+    // CodingKeys map Swift camelCase properties to Supabase snake_case fields
 
     // MARK: - Computed Properties
 

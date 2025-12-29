@@ -185,16 +185,21 @@ struct CustomClockOutView: View {
         }
         
         // Call the manual clock out function
-        timeTrackingService.clockOutManual(
-            clockOutDateTime: finalDateTime,
-            notes: notes.isEmpty ? nil : notes
-        ) { success, error in
-            if success {
-                dismiss()
-                onComplete(finalDateTime, notes.isEmpty ? nil : notes)
-            } else {
-                errorMessage = error ?? "Failed to clock out"
-                showingError = true
+        Task {
+            do {
+                try await timeTrackingService.clockOutManual(
+                    clockOutDateTime: finalDateTime,
+                    notes: notes.isEmpty ? nil : notes
+                )
+                await MainActor.run {
+                    dismiss()
+                    onComplete(finalDateTime, notes.isEmpty ? nil : notes)
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    showingError = true
+                }
             }
         }
     }

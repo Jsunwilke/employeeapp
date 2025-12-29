@@ -1,7 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseAuth
-import FirebaseFirestore
 
 struct TemplateReportListView: View {
     @StateObject private var templateService = TemplateService.shared
@@ -12,29 +9,29 @@ struct TemplateReportListView: View {
     @State private var showingReportDetail = false
     @State private var searchText = ""
     @State private var selectedFilterType: String = "All"
-    
-    @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
-    
+
     private let filterTypes = ["All", "This Week", "This Month", "Last 30 Days"]
-    
+
     private var filteredReports: [DailyJobReport] {
         let dateFiltered = filterReportsByDate()
-        
+
         if searchText.isEmpty {
             return dateFiltered
         } else {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
             return dateFiltered.filter { report in
-                report.photographer.localizedCaseInsensitiveContains(searchText) ||
-                report.templateName?.localizedCaseInsensitiveContains(searchText) == true ||
-                report.date.localizedCaseInsensitiveContains(searchText)
+                report.your_name.localizedCaseInsensitiveContains(searchText) ||
+                report.template_name?.localizedCaseInsensitiveContains(searchText) == true ||
+                formatter.string(from: report.date).localizedCaseInsensitiveContains(searchText)
             }
         }
     }
-    
+
     private var groupedReports: [String: [DailyJobReport]] {
         Dictionary(grouping: filteredReports) { report in
             // Group by template name or "Legacy Reports" for non-template reports
-            if let templateName = report.templateName {
+            if let templateName = report.template_name {
                 return templateName
             } else {
                 return "Legacy Reports"
@@ -111,12 +108,12 @@ struct TemplateReportListView: View {
                     Text("\(filteredReports.count) report\(filteredReports.count == 1 ? "" : "s")")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    
+
                     Spacer()
-                    
-                    let templateCount = filteredReports.filter { $0.reportType == "template" }.count
-                    let legacyCount = filteredReports.filter { $0.reportType != "template" }.count
-                    
+
+                    let templateCount = filteredReports.filter { $0.report_type == "template" }.count
+                    let legacyCount = filteredReports.filter { $0.report_type != "template" }.count
+
                     Text("\(templateCount) template, \(legacyCount) legacy")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -233,7 +230,7 @@ struct TemplateReportListView: View {
             
             // Reports list
             VStack(spacing: 8) {
-                ForEach(reports.sorted(by: { $0.createdAt.seconds > $1.createdAt.seconds })) { report in
+                ForEach(reports.sorted(by: { ($0.created_at ?? Date.distantPast) > ($1.created_at ?? Date.distantPast) })) { report in
                     reportCard(report)
                 }
             }
@@ -254,15 +251,15 @@ struct TemplateReportListView: View {
                         Text(formatDate(report.date))
                             .font(.headline)
                             .foregroundColor(.primary)
-                        
-                        Text("By \(report.photographer)")
+
+                        Text("By \(report.your_name)")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
-                    
+
                     Spacer()
-                    
-                    if report.reportType == "template" {
+
+                    if report.report_type == "template" {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text("TEMPLATE")
                                 .font(.caption2)
@@ -272,8 +269,8 @@ struct TemplateReportListView: View {
                                 .background(Color.blue)
                                 .foregroundColor(.white)
                                 .cornerRadius(4)
-                            
-                            if let version = report.templateVersion {
+
+                            if let version = report.template_version {
                                 Text("v\(version)")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
@@ -290,9 +287,9 @@ struct TemplateReportListView: View {
                             .cornerRadius(4)
                     }
                 }
-                
+
                 // Smart fields indicator for template reports
-                if let smartFields = report.smartFieldsUsed, !smartFields.isEmpty {
+                if let smartFields = report.smart_fields_used, !smartFields.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "sparkles")
                             .font(.caption)
@@ -302,9 +299,9 @@ struct TemplateReportListView: View {
                             .foregroundColor(.blue)
                     }
                 }
-                
+
                 // Data preview
-                let dataCount = report.formData.count
+                let dataCount = report.form_data?.count ?? 0
                 if dataCount > 0 {
                     HStack {
                         Image(systemName: "list.bullet")
@@ -313,12 +310,14 @@ struct TemplateReportListView: View {
                         Text("\(dataCount) field\(dataCount == 1 ? "" : "s") completed")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        
+
                         Spacer()
-                        
-                        Text(formatRelativeDate(report.createdAt))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+
+                        if let createdAt = report.created_at {
+                            Text(formatRelativeDate(createdAt))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
             }
@@ -330,7 +329,7 @@ struct TemplateReportListView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(report.reportType == "template" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.2), lineWidth: 1)
+                    .stroke(report.report_type == "template" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.2), lineWidth: 1)
             )
         }
         .buttonStyle(PlainButtonStyle())
@@ -339,89 +338,79 @@ struct TemplateReportListView: View {
     // MARK: - Helper Functions
     
     private func loadReports() {
-        guard !storedUserOrganizationID.isEmpty else {
+        let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+
+        guard !organizationID.isEmpty else {
             errorMessage = "No organization ID found"
             return
         }
-        
-        guard let currentUser = Auth.auth().currentUser else {
+
+        guard let currentUserId = UserManager.shared.getCurrentUserIDUnified() else {
             errorMessage = "User not signed in"
             return
         }
-        
+
         isLoading = true
         errorMessage = ""
-        
-        let db = Firestore.firestore()
-        
-        db.collection("dailyJobReports")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .whereField("userId", isEqualTo: currentUser.uid)
-            .order(by: "createdAt", descending: true)
-            .limit(to: 100) // Limit to last 100 reports for performance
-            .getDocuments { snapshot, error in
-                DispatchQueue.main.async {
+
+        Task {
+            do {
+                let fetchedReports = try await DailyJobReportService.shared.getReports(
+                    userId: currentUserId,
+                    organizationID: organizationID
+                )
+
+                await MainActor.run {
                     self.isLoading = false
-                    
-                    if let error = error {
-                        self.errorMessage = error.localizedDescription
-                        return
-                    }
-                    
-                    guard let documents = snapshot?.documents else {
-                        self.reports = []
-                        return
-                    }
-                    
-                    self.reports = documents.compactMap { doc in
-                        try? doc.data(as: DailyJobReport.self)
-                    }
+                    self.reports = fetchedReports
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = error.localizedDescription
                 }
             }
+        }
     }
     
     private func filterReportsByDate() -> [DailyJobReport] {
         let calendar = Calendar.current
         let now = Date()
-        
+
         switch selectedFilterType {
         case "This Week":
             let startOfWeek = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
             return reports.filter { report in
-                let reportDate = report.createdAt.dateValue()
+                let reportDate = report.created_at ?? report.date
                 return reportDate >= startOfWeek
             }
-            
+
         case "This Month":
             let startOfMonth = calendar.dateInterval(of: .month, for: now)?.start ?? now
             return reports.filter { report in
-                let reportDate = report.createdAt.dateValue()
+                let reportDate = report.created_at ?? report.date
                 return reportDate >= startOfMonth
             }
-            
+
         case "Last 30 Days":
             let thirtyDaysAgo = calendar.date(byAdding: .day, value: -30, to: now) ?? now
             return reports.filter { report in
-                let reportDate = report.createdAt.dateValue()
+                let reportDate = report.created_at ?? report.date
                 return reportDate >= thirtyDaysAgo
             }
-            
+
         default: // "All"
             return reports
         }
     }
     
-    private func formatDate(_ dateString: String) -> String {
-        if let date = ISO8601DateFormatter().date(from: dateString) {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            return formatter.string(from: date)
-        }
-        return dateString
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: date)
     }
-    
-    private func formatRelativeDate(_ timestamp: Timestamp) -> String {
-        let date = timestamp.dateValue()
+
+    private func formatRelativeDate(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
@@ -432,9 +421,9 @@ struct TemplateReportListView: View {
 
 struct ReportDetailView: View {
     let report: DailyJobReport
-    
+
     @Environment(\.presentationMode) var presentationMode
-    
+
     var body: some View {
         NavigationView {
             ScrollView {
@@ -445,10 +434,10 @@ struct ReportDetailView: View {
                             Text(formatDate(report.date))
                                 .font(.title2)
                                 .fontWeight(.bold)
-                            
+
                             Spacer()
-                            
-                            if report.reportType == "template" {
+
+                            if report.report_type == "template" {
                                 Text("TEMPLATE")
                                     .font(.caption)
                                     .fontWeight(.bold)
@@ -459,18 +448,18 @@ struct ReportDetailView: View {
                                     .cornerRadius(8)
                             }
                         }
-                        
-                        Text("Photographer: \(report.photographer)")
+
+                        Text("Photographer: \(report.your_name)")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        
-                        if let templateName = report.templateName {
+
+                        if let templateName = report.template_name {
                             HStack {
                                 Text("Template: \(templateName)")
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
-                                
-                                if let version = report.templateVersion {
+
+                                if let version = report.template_version {
                                     Text("v\(version)")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
@@ -478,52 +467,54 @@ struct ReportDetailView: View {
                             }
                         }
                     }
-                    
+
                     Divider()
-                    
+
                     // Form data
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("Report Data")
-                            .font(.headline)
-                        
-                        ForEach(Array(report.formData.keys.sorted()), id: \.self) { key in
-                            if let value = report.formData[key] {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(key.capitalized.replacingOccurrences(of: "_", with: " "))
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    
-                                    Text(formatFieldValue(value.value))
-                                        .font(.body)
-                                        .foregroundColor(.secondary)
-                                        .padding(.leading, 8)
+                    if let formData = report.form_data, !formData.isEmpty {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text("Report Data")
+                                .font(.headline)
+
+                            ForEach(Array(formData.keys.sorted()), id: \.self) { key in
+                                if let value = formData[key] {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(key.capitalized.replacingOccurrences(of: "_", with: " "))
+                                            .font(.subheadline)
+                                            .fontWeight(.medium)
+
+                                        Text(formatFieldValue(value.value))
+                                            .font(.body)
+                                            .foregroundColor(.secondary)
+                                            .padding(.leading, 8)
+                                    }
+                                    .padding(.vertical, 4)
                                 }
-                                .padding(.vertical, 4)
                             }
                         }
                     }
-                    
+
                     // Smart fields info
-                    if let smartFields = report.smartFieldsUsed, !smartFields.isEmpty {
+                    if let smartFields = report.smart_fields_used, !smartFields.isEmpty {
                         Divider()
-                        
+
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Smart Fields Used")
                                 .font(.headline)
-                            
+
                             ForEach(smartFields, id: \.self) { fieldId in
                                 HStack {
                                     Image(systemName: "sparkles")
                                         .foregroundColor(.blue)
                                         .font(.caption)
-                                    
+
                                     Text(fieldId.capitalized.replacingOccurrences(of: "_", with: " "))
                                         .font(.subheadline)
                                 }
                             }
                         }
                     }
-                    
+
                     Spacer(minLength: 20)
                 }
                 .padding()
@@ -537,16 +528,13 @@ struct ReportDetailView: View {
             )
         }
     }
-    
-    private func formatDate(_ dateString: String) -> String {
-        if let date = ISO8601DateFormatter().date(from: dateString) {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .full
-            return formatter.string(from: date)
-        }
-        return dateString
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .full
+        return formatter.string(from: date)
     }
-    
+
     private func formatFieldValue(_ value: Any) -> String {
         if let stringValue = value as? String {
             return stringValue

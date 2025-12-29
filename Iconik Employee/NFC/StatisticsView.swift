@@ -937,24 +937,24 @@ struct StatisticsView: View {
         
         for (_, boxRecords) in boxGroups {
             // Sort records by timestamp (oldest first)
-            let sortedRecords = boxRecords.sorted(by: { $0.timestamp < $1.timestamp })
-            
+            let sortedRecords = boxRecords.sorted(by: { $0.timestampDate < $1.timestampDate })
+
             // Find transition times between statuses
             for i in 0..<sortedRecords.count-1 {
                 let currentRecord = sortedRecords[i]
                 let nextRecord = sortedRecords[i+1]
-                
+
                 // Packed → Picked Up (Assignment time)
-                if currentRecord.status == .packed && nextRecord.status == .pickedUp {
-                    let durationHours = nextRecord.timestamp.timeIntervalSince(currentRecord.timestamp) / 3600.0
+                if currentRecord.jobBoxStatus == .packed && nextRecord.jobBoxStatus == .pickedUp {
+                    let durationHours = nextRecord.timestampDate.timeIntervalSince(currentRecord.timestampDate) / 3600.0
                     if durationHours > 0 && durationHours < 168 { // Less than a week to avoid outliers
                         assignmentTimes.append(durationHours)
                     }
                 }
-                
+
                 // Picked Up → Turned In (Completion time)
-                if currentRecord.status == .pickedUp && nextRecord.status == .turnedIn {
-                    let durationHours = nextRecord.timestamp.timeIntervalSince(currentRecord.timestamp) / 3600.0
+                if currentRecord.jobBoxStatus == .pickedUp && nextRecord.jobBoxStatus == .turnedIn {
+                    let durationHours = nextRecord.timestampDate.timeIntervalSince(currentRecord.timestampDate) / 3600.0
                     if durationHours > 0 && durationHours < 168 { // Less than a week to avoid outliers
                         completionTimes.append(durationHours)
                     }
@@ -1005,32 +1005,32 @@ struct StatisticsView: View {
             var currentLeftJobBoxes: Int = 0
             
             for (boxNumber, boxRecords) in sortedByBox {
-                let sortedRecords = boxRecords.sorted(by: { $0.timestamp < $1.timestamp })
+                let sortedRecords = boxRecords.sorted(by: { $0.timestampDate < $1.timestampDate })
                 print("DEBUG: Box #\(boxNumber) has \(sortedRecords.count) status records")
-                
+
                 // Track periods in "Left Job" status
                 var inLeftJob = false
                 var leftJobStartTime: Date?
-                
+
                 for (index, record) in sortedRecords.enumerated() {
-                    if record.status == .leftJob {
+                    if record.jobBoxStatus == .leftJob {
                         if !inLeftJob {
                             // Entering "Left Job" status
                             inLeftJob = true
-                            leftJobStartTime = record.timestamp
-                            print("DEBUG: Box #\(boxNumber) entered 'Left Job' at \(record.timestamp)")
+                            leftJobStartTime = record.timestampDate
+                            print("DEBUG: Box #\(boxNumber) entered 'Left Job' at \(record.timestampDate)")
                         }
-                        
+
                         // If this is the last record for this box and it's still in "Left Job"
                         if index == sortedRecords.count - 1 && inLeftJob {
                             currentLeftJobBoxes += 1
                             print("DEBUG: Box #\(boxNumber) is currently in 'Left Job'")
-                            
+
                             // Add the time from the start to now for current boxes still in "Left Job"
                             if let startTime = leftJobStartTime {
                                 let hoursInLeftJob = currentTime.timeIntervalSince(startTime) / 3600.0
                                 print("DEBUG: Box #\(boxNumber) has been in 'Left Job' for \(hoursInLeftJob) hours")
-                                
+
                                 // Always count current boxes, regardless of duration
                                 totalLeftJobHours += hoursInLeftJob
                                 leftJobTransitionsCount += 1
@@ -1039,10 +1039,10 @@ struct StatisticsView: View {
                     } else if inLeftJob {
                         // Transitioning out of "Left Job" status
                         inLeftJob = false
-                        print("DEBUG: Box #\(boxNumber) exited 'Left Job' to '\(record.status)' at \(record.timestamp)")
-                        
+                        print("DEBUG: Box #\(boxNumber) exited 'Left Job' to '\(record.status)' at \(record.timestampDate)")
+
                         if let startTime = leftJobStartTime {
-                            let hoursInLeftJob = record.timestamp.timeIntervalSince(startTime) / 3600.0
+                            let hoursInLeftJob = record.timestampDate.timeIntervalSince(startTime) / 3600.0
                             print("DEBUG: Box #\(boxNumber) was in 'Left Job' for \(hoursInLeftJob) hours")
                             
                             // Only count if it was in "Left Job" for at least 1 hour
@@ -1085,7 +1085,7 @@ struct StatisticsView: View {
             // Include photographers with any data about job boxes in "Left Job" status
             if leftJobTransitionsCount > 0 || currentLeftJobBoxes > 0 ||
                (debugMode && sortedByBox.contains { box, records in
-                   records.contains { $0.status == .leftJob }
+                   records.contains { $0.jobBoxStatus == .leftJob }
                }) {
                 leftJobMetrics.append(metric)
                 print("DEBUG: Added photographer '\(photographerName)' to metrics")
@@ -1190,21 +1190,21 @@ struct StatisticsView: View {
     func filterJobBoxRecordsByTimeFrame(_ records: [JobBox]) -> [JobBox] {
         let calendar = Calendar.current
         let now = Date()
-        
+
         switch selectedTimeFrame {
         case .day:
             let startOfDay = calendar.startOfDay(for: now)
-            return records.filter { calendar.isDate($0.timestamp, inSameDayAs: startOfDay) }
-            
+            return records.filter { calendar.isDate($0.timestampDate, inSameDayAs: startOfDay) }
+
         case .week:
             let startOfWeek = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now))!
-            return records.filter { $0.timestamp >= startOfWeek }
-            
+            return records.filter { $0.timestampDate >= startOfWeek }
+
         case .month:
             let components = calendar.dateComponents([.year, .month], from: now)
             let startOfMonth = calendar.date(from: components)!
-            return records.filter { $0.timestamp >= startOfMonth }
-            
+            return records.filter { $0.timestampDate >= startOfMonth }
+
         case .all:
             return records
         }
@@ -1238,17 +1238,17 @@ struct StatisticsView: View {
     func calculateJobBoxStatusDistribution(_ records: [JobBox]) {
         // Group records by box number
         let boxGroups = Dictionary(grouping: records, by: { $0.boxNumber })
-        
+
         // Get the latest status for each box
         var latestRecords: [JobBox] = []
         for (_, boxRecords) in boxGroups {
-            if let latestRecord = boxRecords.sorted(by: { $0.timestamp > $1.timestamp }).first {
+            if let latestRecord = boxRecords.sorted(by: { $0.timestampDate > $1.timestampDate }).first {
                 latestRecords.append(latestRecord)
             }
         }
-        
+
         // Count by status
-        let statusGroups = Dictionary(grouping: latestRecords, by: { $0.status.rawValue.lowercased() })
+        let statusGroups = Dictionary(grouping: latestRecords, by: { $0.status.lowercased() })
         let counts = statusGroups.mapValues { $0.count }
         
         totalJobBoxes = latestRecords.count
@@ -1323,16 +1323,16 @@ struct StatisticsView: View {
         
         for (_, boxRecords) in boxGroups {
             // Sort by timestamp (oldest first)
-            let sortedRecords = boxRecords.sorted(by: { $0.timestamp < $1.timestamp })
-            
+            let sortedRecords = boxRecords.sorted(by: { $0.timestampDate < $1.timestampDate })
+
             // Process transitions
             for i in 0..<sortedRecords.count-1 {
                 let currentRecord = sortedRecords[i]
                 let nextRecord = sortedRecords[i+1]
-                
-                let duration = nextRecord.timestamp.timeIntervalSince(currentRecord.timestamp)
-                let status = currentRecord.status.rawValue.lowercased()
-                
+
+                let duration = nextRecord.timestampDate.timeIntervalSince(currentRecord.timestampDate)
+                let status = currentRecord.status.lowercased()
+
                 if duration > 0 {
                     if statusDurations[status] == nil {
                         statusDurations[status] = []
@@ -1340,12 +1340,12 @@ struct StatisticsView: View {
                     statusDurations[status]?.append(duration)
                 }
             }
-            
+
             // For the last record, calculate time from then to now (if it's recent enough)
             if let lastRecord = sortedRecords.last {
                 let now = Date()
-                let duration = now.timeIntervalSince(lastRecord.timestamp)
-                let status = lastRecord.status.rawValue.lowercased()
+                let duration = now.timeIntervalSince(lastRecord.timestampDate)
+                let status = lastRecord.status.lowercased()
                 
                 // Only include if it's less than 30 days to avoid skewing data
                 if duration > 0 && duration < (30 * 24 * 60 * 60) {

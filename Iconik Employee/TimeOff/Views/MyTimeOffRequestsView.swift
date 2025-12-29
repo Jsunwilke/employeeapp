@@ -33,11 +33,13 @@ struct MyTimeOffRequestsView: View {
         }
         .navigationTitle("My Time Off")
         .navigationBarTitleDisplayMode(.large)
-        .onAppear {
-            timeOffService.startListeningToRequests()
+        .task {
+            await timeOffService.startListeningToRequests()
         }
         .onDisappear {
-            timeOffService.stopListening()
+            Task {
+                await timeOffService.stopListening()
+            }
         }
         .sheet(isPresented: $showingNewRequest) {
             TimeOffRequestView(timeOffService: timeOffService)
@@ -181,21 +183,25 @@ struct MyTimeOffRequestsView: View {
         }
         .listStyle(PlainListStyle())
         .refreshable {
-            timeOffService.refreshRequests()
+            await timeOffService.refreshRequests()
         }
     }
     
     // MARK: - Helper Methods
-    
+
     private func cancelRequest(_ request: TimeOffRequest) {
-        timeOffService.cancelTimeOffRequest(requestId: request.id) { success, error in
-            DispatchQueue.main.async {
-                if success {
+        Task {
+            do {
+                try await timeOffService.cancelTimeOffRequest(requestId: request.id)
+                await MainActor.run {
                     alertMessage = "Request cancelled successfully"
-                } else {
-                    alertMessage = error ?? "Failed to cancel request"
+                    showingAlert = true
                 }
-                showingAlert = true
+            } catch {
+                await MainActor.run {
+                    alertMessage = error.localizedDescription
+                    showingAlert = true
+                }
             }
         }
     }
@@ -294,36 +300,36 @@ struct TimeOffRequestCard: View {
                 }
                 
                 Spacer()
-                
+
                 HStack(spacing: 6) {
-                    Image(systemName: request.status.systemImageName)
+                    Image(systemName: request.statusEnum.systemImageName)
                         .font(.caption)
-                    Text(request.status.displayName)
+                    Text(request.statusEnum.displayName)
                         .font(.caption)
                         .fontWeight(.semibold)
                 }
                 .foregroundColor(.white)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(Color(request.status.colorName))
+                .background(Color(request.statusEnum.colorName))
                 .clipShape(Capsule())
             }
             
             // Reason and notes
             HStack {
-                Image(systemName: request.reason.systemImageName)
-                    .foregroundColor(Color(request.reason.colorName))
-                Text(request.reason.displayName)
+                Image(systemName: request.reasonEnum.systemImageName)
+                    .foregroundColor(Color(request.reasonEnum.colorName))
+                Text(request.reasonEnum.displayName)
                     .fontWeight(.medium)
                 Spacer()
             }
-            
-            if !request.notes.isEmpty {
+
+            if let notes = request.notes, !notes.isEmpty {
                 HStack {
                     Text("Notes:")
                         .fontWeight(.medium)
                         .foregroundColor(.secondary)
-                    Text(request.notes)
+                    Text(notes)
                         .foregroundColor(.primary)
                     Spacer()
                 }
@@ -331,7 +337,7 @@ struct TimeOffRequestCard: View {
             }
             
             // Approval/Denial details
-            if request.status == .approved, let approverName = request.approverName, let approvedAt = request.approvedAt {
+            if request.status == "approved", let approverName = request.approverName, let approvedAt = request.approvedAt {
                 HStack {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
@@ -343,7 +349,7 @@ struct TimeOffRequestCard: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-            } else if request.status == .underReview, let reviewerName = request.reviewerName, let reviewedAt = request.reviewedAt {
+            } else if request.status == "underReview", let reviewerName = request.reviewerName, let reviewedAt = request.reviewedAt {
                 HStack {
                     Image(systemName: "magnifyingglass.circle.fill")
                         .foregroundColor(.blue)
@@ -355,7 +361,7 @@ struct TimeOffRequestCard: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-            } else if request.status == .denied, let denierName = request.denierName, let deniedAt = request.deniedAt {
+            } else if request.status == "denied", let denierName = request.denierName, let deniedAt = request.deniedAt {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Image(systemName: "xmark.circle.fill")
@@ -368,7 +374,7 @@ struct TimeOffRequestCard: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    
+
                     if let denialReason = request.denialReason {
                         Text("Reason: \(denialReason)")
                             .font(.caption)
@@ -412,9 +418,9 @@ struct TimeOffRequestCard: View {
             }
             
             // Manager actions
-            if let onApprove = onApprove, let onDeny = onDeny, (request.status == .pending || request.status == .underReview) {
+            if let onApprove = onApprove, let onDeny = onDeny, (request.status == "pending" || request.status == "underReview") {
                 HStack(spacing: 12) {
-                    if request.status == .pending, let onReview = onReview {
+                    if request.status == "pending", let onReview = onReview {
                         Button("Put in Review") {
                             onReview()
                         }

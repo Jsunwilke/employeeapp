@@ -12,7 +12,7 @@ class GalleryCreatorViewModel: ObservableObject {
     @Published var errorMessage = ""
     @Published var successMessage = ""
     @Published var capturaGalleryID = ""
-    @Published var googleSheetID = ""
+    @Published var googleSheetID: String? = nil // Optional - Google Sheets integration disabled
     
     // MARK: - Private Properties
     private let service: GalleryCreatorService
@@ -38,7 +38,7 @@ class GalleryCreatorViewModel: ObservableObject {
         errorMessage = ""
         successMessage = ""
         capturaGalleryID = ""
-        googleSheetID = ""
+        googleSheetID = nil
         
         // Log the start of gallery creation
         print("Starting gallery creation process for: \(galleryName)")
@@ -55,7 +55,11 @@ class GalleryCreatorViewModel: ObservableObject {
                     print("Gallery creation successful!")
                     self.capturaGalleryID = galleryResult.capturaGalleryID
                     self.googleSheetID = galleryResult.googleSheetID
-                    self.successMessage = "Successfully created gallery and Google Sheet!"
+                    if galleryResult.googleSheetID != nil {
+                        self.successMessage = "Successfully created gallery and Google Sheet!"
+                    } else {
+                        self.successMessage = "Successfully created Captura gallery!"
+                    }
                     
                 case .failure(let error):
                     print("Gallery creation failed: \(error.localizedDescription)")
@@ -66,10 +70,8 @@ class GalleryCreatorViewModel: ObservableObject {
                         self.errorMessage = "Network connection error. Please check your internet connection and try again."
                     case .capturaError:
                         self.errorMessage = "Error connecting to the gallery service. Please try again later."
-                    case .googleAuthError:
-                        self.errorMessage = "Google authentication failed. Please sign in to your Google account and try again."
-                    case .googleSheetError:
-                        self.errorMessage = "Error creating Google Sheet. Please check your Google permissions and try again."
+                    case .missingCredentials:
+                        self.errorMessage = "Captura API credentials not configured. Please add them in Settings."
                     default:
                         self.errorMessage = error.localizedDescription
                     }
@@ -91,16 +93,18 @@ class GalleryCreatorViewModel: ObservableObject {
         errorMessage = ""
         successMessage = ""
         capturaGalleryID = ""
-        googleSheetID = ""
+        googleSheetID = nil
     }
-    
+
     /// Copy gallery ID to clipboard
     func copyGalleryID() {
         UIPasteboard.general.string = capturaGalleryID
     }
-    
-    /// Copy sheet ID to clipboard
+
+    /// Copy sheet ID to clipboard (if available)
     func copySheetID() {
-        UIPasteboard.general.string = googleSheetID
+        if let sheetID = googleSheetID {
+            UIPasteboard.general.string = sheetID
+        }
     }
 }

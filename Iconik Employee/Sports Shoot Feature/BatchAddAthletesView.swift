@@ -1,6 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
 
 struct BatchAddAthletesView: View {
     let shootID: String
@@ -232,7 +230,7 @@ struct BatchAddAthletesView: View {
         // Create the roster entries
         let entriesToAdd = previewEntries
         
-        // Batch save to Firestore
+        // Batch save to database
         SportsShootService.shared.batchAddRosterEntries(shootID: shootID, entries: entriesToAdd) { success, error in
             DispatchQueue.main.async {
                 isLoading = false

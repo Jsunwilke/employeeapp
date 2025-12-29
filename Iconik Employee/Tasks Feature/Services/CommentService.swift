@@ -7,21 +7,21 @@
 //
 
 import Foundation
-import FirebaseFirestore
+import Supabase
 import Combine
 
+@MainActor
 class CommentService: ObservableObject {
     static let shared = CommentService()
 
-    private let db = Firestore.firestore()
-    private let tasksCollection = "tasks"
-    private let commentsSubcollection = "comments"
+    private let supabase = SupabaseManager.shared.client
+    private let commentsTable = "task_comments"
 
     @Published var comments: [TaskComment] = []
     @Published var isLoading = false
     @Published var error: Error?
 
-    private var listeners: [String: ListenerRegistration] = [:]
+    private var channels: [String: RealtimeChannelV2] = [:]
 
     private init() {}
 
@@ -34,11 +34,11 @@ class CommentService: ObservableObject {
         userId: String,
         userName: String,
         mentions: [CommentMention] = [],
-        attachments: [CommentAttachment] = [],
-        completion: @escaping (Result<TaskComment, Error>) -> Void
-    ) {
-        let comment = TaskComment(
+        attachments: [CommentAttachment] = []
+    ) async throws -> TaskComment {
+        var comment = TaskComment(
             id: UUID().uuidString,
+            taskId: taskId,
             userId: userId,
             userName: userName,
             text: text,
@@ -48,92 +48,66 @@ class CommentService: ObservableObject {
             updatedAt: Date()
         )
 
-        let commentRef = db.collection(tasksCollection)
-            .document(taskId)
-            .collection(commentsSubcollection)
-            .document(comment.id)
+        // Insert into Supabase
+        try await supabase
+            .from(commentsTable)
+            .insert(comment)
+            .execute()
 
-        commentRef.setData(comment.toFirestoreData()) { [weak self] error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-
-            // Increment task's commentCount
-            self?.incrementCommentCount(taskId: taskId) { result in
-                switch result {
-                case .success:
-                    // Add to local state
-                    self?.comments.append(comment)
-                    completion(.success(comment))
-
-                    // TODO: Create notifications for mentions
-                    // TODO: Auto-watch task for mentioned users
-                    // TODO: Notify watchers about new comment
-                    // TODO: Log activity (COMMENT_ADDED)
-
-                case .failure(let error):
-                    // Comment was created but count increment failed
-                    print("⚠️ Comment created but count increment failed: \(error.localizedDescription)")
-                    completion(.success(comment))
-                }
-            }
+        // Increment task's commentCount
+        do {
+            try await incrementCommentCount(taskId: taskId)
+        } catch {
+            // Comment was created but count increment failed
+            print("⚠️ Comment created but count increment failed: \(error.localizedDescription)")
         }
+
+        // Add to local state
+        comments.append(comment)
+
+        // TODO: Create notifications for mentions
+        // TODO: Auto-watch task for mentioned users
+        // TODO: Notify watchers about new comment
+        // TODO: Log activity (COMMENT_ADDED)
+
+        return comment
     }
 
     // MARK: - Read Comments
 
     /// Fetch all comments for a task
-    func fetchComments(for taskId: String, completion: @escaping (Result<[TaskComment], Error>) -> Void) {
+    func fetchComments(for taskId: String) async throws -> [TaskComment] {
         isLoading = true
+        defer { isLoading = false }
 
-        db.collection(tasksCollection)
-            .document(taskId)
-            .collection(commentsSubcollection)
-            .order(by: "createdAt", descending: false)
-            .getDocuments { [weak self] snapshot, error in
-                self?.isLoading = false
+        let fetchedComments: [TaskComment] = try await supabase
+            .from(commentsTable)
+            .select()
+            .eq("task_id", value: taskId)
+            .order("created_at", ascending: true)
+            .execute()
+            .value
 
-                if let error = error {
-                    self?.error = error
-                    completion(.failure(error))
-                    return
-                }
-
-                guard let documents = snapshot?.documents else {
-                    completion(.success([]))
-                    return
-                }
-
-                let comments = documents.compactMap { TaskComment(from: $0) }
-                self?.comments = comments
-                completion(.success(comments))
-            }
+        comments = fetchedComments
+        return fetchedComments
     }
 
     /// Get a single comment by ID
-    func getComment(taskId: String, commentId: String, completion: @escaping (Result<TaskComment, Error>) -> Void) {
-        db.collection(tasksCollection)
-            .document(taskId)
-            .collection(commentsSubcollection)
-            .document(commentId)
-            .getDocument { snapshot, error in
-                if let error = error {
-                    completion(.failure(error))
-                    return
-                }
+    func getComment(taskId: String, commentId: String) async throws -> TaskComment {
+        let comments: [TaskComment] = try await supabase
+            .from(commentsTable)
+            .select()
+            .eq("id", value: commentId)
+            .eq("task_id", value: taskId)
+            .limit(1)
+            .execute()
+            .value
 
-                guard let snapshot = snapshot, snapshot.exists else {
-                    completion(.failure(NSError(domain: "CommentService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Comment not found"])))
-                    return
-                }
+        guard let comment = comments.first else {
+            throw NSError(domain: "CommentService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Comment not found"])
+        }
 
-                if let comment = TaskComment(from: snapshot) {
-                    completion(.success(comment))
-                } else {
-                    completion(.failure(NSError(domain: "CommentService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to parse comment"])))
-                }
-            }
+        return comment
     }
 
     // MARK: - Real-time Listener
@@ -143,40 +117,59 @@ class CommentService: ObservableObject {
         // Remove existing listener if any
         stopListening(taskId: taskId)
 
-        let listener = db.collection(tasksCollection)
-            .document(taskId)
-            .collection(commentsSubcollection)
-            .order(by: "createdAt", descending: false)
-            .addSnapshotListener { [weak self] snapshot, error in
-                if let error = error {
+        let channelKey = "comments-\(taskId)"
+        let channel = supabase.channel(channelKey)
+
+        _ = channel.onPostgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: commentsTable,
+            filter: "task_id=eq.\(taskId)"
+        ) { [weak self] _ in
+            Task { @MainActor in
+                do {
+                    let fetchedComments = try await self?.fetchComments(for: taskId) ?? []
+                    self?.comments = fetchedComments
+                } catch {
                     print("❌ Comment listener error: \(error.localizedDescription)")
                     self?.error = error
-                    return
                 }
-
-                guard let documents = snapshot?.documents else { return }
-
-                let comments = documents.compactMap { TaskComment(from: $0) }
-                self?.comments = comments
             }
+        }
 
-        listeners[taskId] = listener
+        Task {
+            await channel.subscribe()
+
+            // Initial fetch
+            do {
+                let fetchedComments = try await fetchComments(for: taskId)
+                comments = fetchedComments
+            } catch {
+                print("❌ Error on initial comments fetch: \(error)")
+            }
+        }
+
+        channels[taskId] = channel
     }
 
     /// Stop listening to comments for a specific task
     func stopListening(taskId: String) {
-        if let listener = listeners[taskId] {
-            listener.remove()
-            listeners.removeValue(forKey: taskId)
+        if let channel = channels[taskId] {
+            Task {
+                await channel.unsubscribe()
+            }
+            channels.removeValue(forKey: taskId)
         }
     }
 
     /// Stop all comment listeners
     func stopAllListeners() {
-        for (_, listener) in listeners {
-            listener.remove()
+        for (_, channel) in channels {
+            Task {
+                await channel.unsubscribe()
+            }
         }
-        listeners.removeAll()
+        channels.removeAll()
     }
 
     // MARK: - Update Comment
@@ -186,104 +179,75 @@ class CommentService: ObservableObject {
         taskId: String,
         commentId: String,
         text: String,
-        mentions: [CommentMention] = [],
-        completion: @escaping (Result<Void, Error>) -> Void
-    ) {
-        let updates: [String: Any] = [
-            "text": text,
-            "mentions": mentions.map { ["userId": $0.userId, "userName": $0.userName] },
-            "updatedAt": Timestamp(date: Date())
-        ]
+        mentions: [CommentMention] = []
+    ) async throws {
+        var comment = try await getComment(taskId: taskId, commentId: commentId)
+        comment.text = text
+        comment.mentions = mentions
+        comment.updatedAt = Date()
 
-        db.collection(tasksCollection)
-            .document(taskId)
-            .collection(commentsSubcollection)
-            .document(commentId)
-            .updateData(updates) { [weak self] error in
-                if let error = error {
-                    completion(.failure(error))
-                    return
-                }
+        try await supabase
+            .from(commentsTable)
+            .update(comment)
+            .eq("id", value: commentId)
+            .execute()
 
-                // Update local state
-                if let index = self?.comments.firstIndex(where: { $0.id == commentId }) {
-                    self?.comments[index].text = text
-                    self?.comments[index].mentions = mentions
-                    self?.comments[index].updatedAt = Date()
-                }
+        // Update local state
+        if let index = comments.firstIndex(where: { $0.id == commentId }) {
+            comments[index].text = text
+            comments[index].mentions = mentions
+            comments[index].updatedAt = Date()
+        }
 
-                completion(.success(()))
-
-                // TODO: Log activity (COMMENT_UPDATED)
-            }
+        // TODO: Log activity (COMMENT_UPDATED)
     }
 
     // MARK: - Delete Comment
 
     /// Delete a comment
-    func deleteComment(taskId: String, commentId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        db.collection(tasksCollection)
-            .document(taskId)
-            .collection(commentsSubcollection)
-            .document(commentId)
-            .delete { [weak self] error in
-                if let error = error {
-                    completion(.failure(error))
-                    return
-                }
+    func deleteComment(taskId: String, commentId: String) async throws {
+        try await supabase
+            .from(commentsTable)
+            .delete()
+            .eq("id", value: commentId)
+            .execute()
 
-                // Decrement task's commentCount
-                self?.decrementCommentCount(taskId: taskId) { result in
-                    switch result {
-                    case .success:
-                        // Remove from local state
-                        self?.comments.removeAll { $0.id == commentId }
-                        completion(.success(()))
+        // Decrement task's commentCount
+        do {
+            try await decrementCommentCount(taskId: taskId)
+        } catch {
+            // Comment was deleted but count decrement failed
+            print("⚠️ Comment deleted but count decrement failed: \(error.localizedDescription)")
+        }
 
-                        // TODO: Log activity (COMMENT_DELETED)
+        // Remove from local state
+        comments.removeAll { $0.id == commentId }
 
-                    case .failure(let error):
-                        // Comment was deleted but count decrement failed
-                        print("⚠️ Comment deleted but count decrement failed: \(error.localizedDescription)")
-                        self?.comments.removeAll { $0.id == commentId }
-                        completion(.success(()))
-                    }
-                }
-            }
+        // TODO: Log activity (COMMENT_DELETED)
     }
 
     // MARK: - Comment Count Management
 
     /// Increment the commentCount field on the task
-    private func incrementCommentCount(taskId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        db.collection(tasksCollection)
-            .document(taskId)
-            .updateData([
-                "commentCount": FieldValue.increment(Int64(1)),
-                "updatedAt": Timestamp(date: Date())
-            ]) { error in
-                if let error = error {
-                    completion(.failure(error))
-                } else {
-                    completion(.success(()))
-                }
-            }
+    private func incrementCommentCount(taskId: String) async throws {
+        // Get current task
+        var task = try await TaskService.shared.getTask(id: taskId)
+        task.commentCount += 1
+        task.updatedAt = Date()
+
+        // Update task
+        try await TaskService.shared.updateTask(task)
     }
 
     /// Decrement the commentCount field on the task
-    private func decrementCommentCount(taskId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        db.collection(tasksCollection)
-            .document(taskId)
-            .updateData([
-                "commentCount": FieldValue.increment(Int64(-1)),
-                "updatedAt": Timestamp(date: Date())
-            ]) { error in
-                if let error = error {
-                    completion(.failure(error))
-                } else {
-                    completion(.success(()))
-                }
-            }
+    private func decrementCommentCount(taskId: String) async throws {
+        // Get current task
+        var task = try await TaskService.shared.getTask(id: taskId)
+        task.commentCount = max(0, task.commentCount - 1)
+        task.updatedAt = Date()
+
+        // Update task
+        try await TaskService.shared.updateTask(task)
     }
 
     // MARK: - Attachment Operations
@@ -292,77 +256,47 @@ class CommentService: ObservableObject {
     func addAttachment(
         to commentId: String,
         in taskId: String,
-        attachment: CommentAttachment,
-        completion: @escaping (Result<Void, Error>) -> Void
-    ) {
-        db.collection(tasksCollection)
-            .document(taskId)
-            .collection(commentsSubcollection)
-            .document(commentId)
-            .updateData([
-                "attachments": FieldValue.arrayUnion([[
-                    "fileName": attachment.fileName,
-                    "fileUrl": attachment.fileUrl,
-                    "fileType": attachment.fileType,
-                    "fileSize": attachment.fileSize
-                ]]),
-                "updatedAt": Timestamp(date: Date())
-            ]) { error in
-                if let error = error {
-                    completion(.failure(error))
-                } else {
-                    completion(.success(()))
-                    // TODO: Log activity (ATTACHMENT_UPLOADED)
-                }
-            }
+        attachment: CommentAttachment
+    ) async throws {
+        var comment = try await getComment(taskId: taskId, commentId: commentId)
+        comment.attachments.append(attachment)
+        comment.updatedAt = Date()
+
+        try await supabase
+            .from(commentsTable)
+            .update(comment)
+            .eq("id", value: commentId)
+            .execute()
+
+        // TODO: Log activity (ATTACHMENT_UPLOADED)
     }
 
     /// Remove attachment from comment
     func removeAttachment(
         from commentId: String,
         in taskId: String,
-        attachment: CommentAttachment,
-        completion: @escaping (Result<Void, Error>) -> Void
-    ) {
-        db.collection(tasksCollection)
-            .document(taskId)
-            .collection(commentsSubcollection)
-            .document(commentId)
-            .updateData([
-                "attachments": FieldValue.arrayRemove([[
-                    "fileName": attachment.fileName,
-                    "fileUrl": attachment.fileUrl,
-                    "fileType": attachment.fileType,
-                    "fileSize": attachment.fileSize
-                ]]),
-                "updatedAt": Timestamp(date: Date())
-            ]) { error in
-                if let error = error {
-                    completion(.failure(error))
-                } else {
-                    completion(.success(()))
-                    // TODO: Delete file from Firebase Storage
-                    // TODO: Log activity (ATTACHMENT_DELETED)
-                }
-            }
+        attachment: CommentAttachment
+    ) async throws {
+        var comment = try await getComment(taskId: taskId, commentId: commentId)
+        comment.attachments.removeAll { $0.fileUrl == attachment.fileUrl }
+        comment.updatedAt = Date()
+
+        try await supabase
+            .from(commentsTable)
+            .update(comment)
+            .eq("id", value: commentId)
+            .execute()
+
+        // TODO: Delete file from Supabase Storage
+        // TODO: Log activity (ATTACHMENT_DELETED)
     }
 
     // MARK: - Utility Methods
 
     /// Get comment count for a task without fetching all comments
-    func getCommentCount(for taskId: String, completion: @escaping (Result<Int, Error>) -> Void) {
-        db.collection(tasksCollection)
-            .document(taskId)
-            .collection(commentsSubcollection)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    completion(.failure(error))
-                    return
-                }
-
-                let count = snapshot?.documents.count ?? 0
-                completion(.success(count))
-            }
+    func getCommentCount(for taskId: String) async throws -> Int {
+        let task = try await TaskService.shared.getTask(id: taskId)
+        return task.commentCount
     }
 
     /// Clear local comment state

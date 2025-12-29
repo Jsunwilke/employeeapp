@@ -7,8 +7,7 @@
 
 import Foundation
 import UIKit
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 // Service to handle AI processing of roster images
 class ClaudeRosterService {
@@ -61,9 +60,9 @@ class ClaudeRosterService {
         }
         
         // Then try the organization-level settings - this is a placeholder
-        // The actual key will be fetched asynchronously by fetchAPIKeyFromFirestore
+        // The actual key will be fetched asynchronously by fetchAPIKeyFromSupabase
         if debugMode {
-            print("No API key found in Info.plist or UserDefaults. Will try to fetch from Firestore.")
+            print("No API key found in Info.plist or UserDefaults. Will try to fetch from Supabase.")
         }
         
         if let cachedKey = self.cachedAPIKey,
@@ -79,11 +78,11 @@ class ClaudeRosterService {
         return ""
     }
     
-    // Property to cache the API key after fetching from Firestore
+    // Property to cache the API key after fetching from Supabase
     private var cachedAPIKey: String? = nil
-    
-    // Fetch API key from Firestore organization settings and return it via completion handler
-    func fetchAPIKeyFromFirestore(completion: @escaping (String?) -> Void) {
+
+    // Fetch API key from Supabase organization settings and return it via completion handler
+    func fetchAPIKeyFromSupabase(completion: @escaping (String?) -> Void) {
         guard let orgID = UserDefaults.standard.string(forKey: "userOrganizationID"),
               !orgID.isEmpty else {
             if debugMode {
@@ -92,39 +91,54 @@ class ClaudeRosterService {
             completion(nil)
             return
         }
-        
+
         if debugMode {
-            print("Fetching API key from Firestore for organization: \(orgID)")
+            print("Fetching API key from Supabase for organization: \(orgID)")
         }
-        
-        let db = Firestore.firestore()
-        db.collection("organizations").document(orgID).getDocument { [weak self] snapshot, error in
-            if let error = error {
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                struct OrgRecord: Decodable {
+                    let claude_api_key: String?
+                }
+
+                let orgs: [OrgRecord] = try await supabase
+                    .from("organizations")
+                    .select("claude_api_key")
+                    .eq("id", value: orgID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                if let apiKey = orgs.first?.claude_api_key, !apiKey.isEmpty {
+                    if self.debugMode {
+                        print("Successfully retrieved Claude API key from Supabase: \(apiKey.prefix(5))...")
+                    }
+
+                    // Store it in UserDefaults for future use
+                    UserDefaults.standard.set(apiKey, forKey: "CLAUDE_API_KEY")
+
+                    // Also cache it in memory
+                    self.cachedAPIKey = apiKey
+
+                    await MainActor.run {
+                        completion(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                } else {
+                    if self.debugMode {
+                        print("No API key found in organization settings")
+                    }
+                    await MainActor.run {
+                        completion(nil)
+                    }
+                }
+            } catch {
                 print("Error fetching org document: \(error.localizedDescription)")
-                completion(nil)
-                return
-            }
-            
-            if let data = snapshot?.data(),
-               let apiKey = data["claudeAPIKey"] as? String,
-               !apiKey.isEmpty {
-                
-                if self?.debugMode == true {
-                    print("Successfully retrieved Claude API key from Firestore: \(apiKey.prefix(5))...")
+                await MainActor.run {
+                    completion(nil)
                 }
-                
-                // Store it in UserDefaults for future use (will be replaced by Info.plist value in production)
-                UserDefaults.standard.set(apiKey, forKey: "CLAUDE_API_KEY")
-                
-                // Also cache it in memory
-                self?.cachedAPIKey = apiKey
-                
-                completion(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
-            } else {
-                if self?.debugMode == true {
-                    print("No API key found in organization settings")
-                }
-                completion(nil)
             }
         }
     }
@@ -228,8 +242,8 @@ class ClaudeRosterService {
     func extractRosterFromImage(_ image: UIImage, startingSubjectID: Int = 101, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Get and verify API key first
         if apiKey.isEmpty {
-            // Try to fetch the API key from Firestore
-            fetchAPIKeyFromFirestore { [weak self] fetchedKey in
+            // Try to fetch the API key from Supabase
+            fetchAPIKeyFromSupabase { [weak self] fetchedKey in
                 guard let self = self else { return }
                 
                 if let key = fetchedKey, !key.isEmpty {

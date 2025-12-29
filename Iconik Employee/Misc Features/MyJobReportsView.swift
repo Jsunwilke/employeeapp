@@ -3,10 +3,8 @@
 //
 
 import SwiftUI
-import FirebaseFirestore
-import FirebaseAuth
 
-// Updated JobReport struct now includes a "school" field and photo count.
+// Display model for job reports list
 struct JobReport: Identifiable {
     let id: String
     let date: Date
@@ -14,6 +12,26 @@ struct JobReport: Identifiable {
     let totalMileage: Double
     let photoCount: Int
     let photoURLs: [String]
+
+    /// Create a JobReport display model from a DailyJobReport
+    init(from report: DailyJobReport) {
+        self.id = report.id
+        self.date = report.date
+        self.school = report.school_or_destination ?? ""
+        self.totalMileage = report.total_mileage
+        self.photoURLs = report.photo_urls ?? []
+        self.photoCount = self.photoURLs.count
+    }
+
+    /// Direct initializer for testing or other uses
+    init(id: String, date: Date, school: String, totalMileage: Double, photoCount: Int, photoURLs: [String]) {
+        self.id = id
+        self.date = date
+        self.school = school
+        self.totalMileage = totalMileage
+        self.photoCount = photoCount
+        self.photoURLs = photoURLs
+    }
 }
 
 struct MyJobReportsView: View {
@@ -23,49 +41,85 @@ struct MyJobReportsView: View {
     @State private var showDeleteAlert = false
     @State private var reportToDelete: JobReport?
     @State private var isDeleting = false
-    
+    @State private var isLoading = false
+    @State private var errorMessage: String = ""
+
     var body: some View {
-        List {
-            ForEach(reports) { report in
-                NavigationLink(destination: EditDailyJobReportView(report: report)) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(report.date, style: .date)
-                                .font(.headline)
-                            Text(report.school)
-                                .font(.subheadline)
-                            HStack {
-                                Text("Mileage: \(report.totalMileage, specifier: "%.1f")")
-                                    .font(.footnote)
-                                if report.photoCount > 0 {
-                                    Spacer()
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "photo.fill")
-                                            .font(.caption)
-                                        Text("\(report.photoCount)")
-                                            .font(.caption)
-                                    }
-                                    .foregroundColor(.blue)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 2)
-                                    .background(Color.blue.opacity(0.1))
-                                    .cornerRadius(10)
-                                }
-                            }
+        ZStack {
+            if isLoading {
+                VStack {
+                    ProgressView("Loading reports...")
+                    Text("Please wait")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } else if !errorMessage.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.largeTitle)
+                        .foregroundColor(.orange)
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Button("Retry") {
+                        errorMessage = ""
+                        if let userId = userId {
+                            loadReports(userId: userId)
+                        } else if let currentUserId = UserManager.shared.getCurrentUserIDUnified() {
+                            userId = currentUserId
+                            loadReports(userId: currentUserId)
                         }
                     }
-                    .padding(.vertical, 4)
+                    .buttonStyle(.bordered)
+                }
+            } else {
+                List {
+                    ForEach(reports) { report in
+                        NavigationLink(destination: EditDailyJobReportView(report: report)) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(report.date, style: .date)
+                                        .font(.headline)
+                                    Text(report.school)
+                                        .font(.subheadline)
+                                    HStack {
+                                        Text("Mileage: \(report.totalMileage, specifier: "%.1f")")
+                                            .font(.footnote)
+                                        if report.photoCount > 0 {
+                                            Spacer()
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "photo.fill")
+                                                    .font(.caption)
+                                                Text("\(report.photoCount)")
+                                                    .font(.caption)
+                                            }
+                                            .foregroundColor(.blue)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 2)
+                                            .background(Color.blue.opacity(0.1))
+                                            .cornerRadius(10)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    .onDelete(perform: deleteReports)
                 }
             }
-            .onDelete(perform: deleteReports)
         }
         .navigationTitle("My Daily Job Reports")
         .onAppear {
-            // Get current user ID
-            if let currentUser = Auth.auth().currentUser {
-                userId = currentUser.uid
+            // Get current user ID and load reports
+            if let currentUserId = UserManager.shared.getCurrentUserIDUnified() {
+                userId = currentUserId
+                loadReports(userId: currentUserId)  // Pass directly to avoid state timing issue
+            } else {
+                errorMessage = "Unable to load reports: not signed in"
+                print("No user ID available - user may not be signed in")
             }
-            loadReports()
         }
         .alert("Delete Report", isPresented: $showDeleteAlert) {
             Button("Cancel", role: .cancel) {
@@ -84,54 +138,40 @@ struct MyJobReportsView: View {
         .disabled(isDeleting)
     }
     
-    func loadReports() {
-        let db = Firestore.firestore()
-        
-        // Build query - prefer userId if available, fallback to yourName
-        let baseCollection = db.collection("dailyJobReports")
-        let query: Query
-        
-        if let userId = userId {
-            print("Querying reports by userId: \(userId)")
-            query = baseCollection.whereField("userId", isEqualTo: userId)
-                .order(by: "date", descending: true)
-        } else if !storedUserFirstName.isEmpty {
-            print("Querying reports by yourName: \(storedUserFirstName)")
-            query = baseCollection.whereField("yourName", isEqualTo: storedUserFirstName)
-                .order(by: "date", descending: true)
-        } else {
-            print("No user ID or name available")
+    func loadReports(userId: String) {
+        let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+
+        guard !organizationID.isEmpty else {
+            errorMessage = "Unable to load reports: no organization ID"
+            print("No organization ID available")
             return
         }
-        
-        query.getDocuments { snapshot, error in
-                if let error = error {
-                    print("Error fetching reports: \(error.localizedDescription)")
-                    
-                    // More detailed error logging
-                    if (error as NSError).code == 7 { // Permission denied
-                        print("Permission denied. User ID: \(self.userId ?? "nil"), UserName: \(self.storedUserFirstName)")
-                    }
-                    return
+
+        isLoading = true
+        errorMessage = ""
+
+        Task {
+            do {
+                print("Querying reports by userId: \(userId), orgID: \(organizationID)")
+                let dailyReports = try await DailyJobReportService.shared.getReports(
+                    userId: userId,
+                    organizationID: organizationID
+                )
+
+                await MainActor.run {
+                    isLoading = false
+                    // Convert DailyJobReport to JobReport display model
+                    reports = dailyReports.map { JobReport(from: $0) }
+                    print("Loaded \(reports.count) reports")
                 }
-                guard let documents = snapshot?.documents else { return }
-                reports = documents.compactMap { doc in
-                    let data = doc.data()
-                    guard let timestamp = data["date"] as? Timestamp,
-                          let school = data["schoolOrDestination"] as? String,
-                          let totalMileage = data["totalMileage"] as? Double else { return nil }
-                    
-                    // Get photo URLs from the report
-                    let photoURLs = data["photoURLs"] as? [String] ?? []
-                    
-                    return JobReport(id: doc.documentID,
-                                     date: timestamp.dateValue(),
-                                     school: school,
-                                     totalMileage: totalMileage,
-                                     photoCount: photoURLs.count,
-                                     photoURLs: photoURLs)
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = "Failed to load reports: \(error.localizedDescription)"
+                    print("Error fetching reports: \(error.localizedDescription)")
                 }
             }
+        }
     }
     
     // Handle swipe-to-delete
@@ -141,23 +181,25 @@ struct MyJobReportsView: View {
         showDeleteAlert = true
     }
     
-    // Delete a report from Firestore
+    // Delete a report from Supabase
     func deleteReport(_ report: JobReport) {
         isDeleting = true
-        
-        let db = Firestore.firestore()
-        db.collection("dailyJobReports").document(report.id).delete { error in
-            DispatchQueue.main.async {
-                isDeleting = false
-                
-                if let error = error {
-                    print("Error deleting report: \(error.localizedDescription)")
-                    // Could show an error alert here if needed
-                } else {
+
+        Task {
+            do {
+                try await DailyJobReportService.shared.deleteReport(reportId: report.id)
+
+                await MainActor.run {
+                    isDeleting = false
                     // Remove from local array
                     reports.removeAll { $0.id == report.id }
                     reportToDelete = nil
                     print("Report deleted successfully")
+                }
+            } catch {
+                await MainActor.run {
+                    isDeleting = false
+                    print("Error deleting report: \(error.localizedDescription)")
                 }
             }
         }

@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 import WebKit  // For WKWebView in AnimatedGifView
 import PhotosUI
 import UniformTypeIdentifiers
@@ -18,9 +17,11 @@ struct MessageThreadView: View {
     @State private var isUploadingMedia = false
     @FocusState private var isMessageFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
-    
-    private let currentUserId = Auth.auth().currentUser?.uid ?? ""
-    
+
+    private var currentUserId: String {
+        UserManager.shared.getCurrentUserIDUnified() ?? ""
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Messages list

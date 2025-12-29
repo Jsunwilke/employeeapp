@@ -225,16 +225,34 @@ struct TimeEntryListView: View {
     }
     
     private func loadTimeEntries() {
+        print("🔍 [TimeEntryListView] loadTimeEntries() called")
         isLoading = true
         let dateRange = selectedDateRange.dateRange
-        
-        timeTrackingService.getTimeEntries(
-            startDate: dateRange.start,
-            endDate: dateRange.end
-        ) { entries in
-            DispatchQueue.main.async {
-                self.timeEntries = entries
-                self.isLoading = false
+        print("🔍 [TimeEntryListView]   - Date range: '\(dateRange.start)' to '\(dateRange.end)'")
+
+        Task {
+            do {
+                let entries = try await timeTrackingService.getTimeEntries(
+                    startDate: dateRange.start,
+                    endDate: dateRange.end
+                )
+
+                print("🔍 [TimeEntryListView] ✅ Loaded \(entries.count) time entries")
+                if entries.isEmpty {
+                    print("🔍 [TimeEntryListView] ⚠️ No entries found for date range - running diagnostic...")
+                    await timeTrackingService.debugTimeEntryQuery()
+                }
+
+                await MainActor.run {
+                    self.timeEntries = entries
+                    self.isLoading = false
+                }
+            } catch {
+                print("❌ [TimeEntryListView] Failed to load time entries: \(error)")
+                print("❌ [TimeEntryListView] Error details: \(error)")
+                await MainActor.run {
+                    self.isLoading = false
+                }
             }
         }
     }
@@ -260,7 +278,7 @@ struct TimeEntryRow: View {
     }
     
     private var isManualEntry: Bool {
-        // Manual entries have both clockInTime and clockOutTime and are not active
+        // Manual entries have both clockInTime and clockOutTime and are not clocked-in
         entry.clockInTime != nil && entry.clockOutTime != nil && entry.status != "clocked-in"
     }
     
@@ -411,10 +429,12 @@ struct TimeEntryRow: View {
     
     // MARK: - Helper Functions
     
-    private func formatDate(_ dateString: String) -> String {
+    private func formatDate(_ dateString: String?) -> String {
+        guard let dateString = dateString else { return "N/A" }
+
         let inputFormatter = DateFormatter()
         inputFormatter.dateFormat = "yyyy-MM-dd"
-        
+
         if let date = inputFormatter.date(from: dateString) {
             let calendar = Calendar.current
             if calendar.isDateInToday(date) {
@@ -427,7 +447,7 @@ struct TimeEntryRow: View {
                 return outputFormatter.string(from: date)
             }
         }
-        
+
         return dateString
     }
     

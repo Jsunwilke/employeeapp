@@ -1,5 +1,4 @@
 import Foundation
-import FirebaseFirestore
 
 // MARK: - Chat Cache Service Protocol
 protocol ChatCacheServiceProtocol {
@@ -7,12 +6,12 @@ protocol ChatCacheServiceProtocol {
     func setCachedConversations(_ conversations: [Conversation])
     func getCachedConversations() -> [Conversation]?
     func clearConversationsCache()
-    
+
     // Messages
     func setCachedMessages(conversationId: String, messages: [ChatMessage])
     func getCachedMessages(conversationId: String) -> [ChatMessage]?
     func appendNewMessages(conversationId: String, newMessages: [ChatMessage]) -> [ChatMessage]
-    func getLatestCachedMessageTimestamp(conversationId: String) -> Timestamp?
+    func getLatestCachedMessageTimestamp(conversationId: String) -> Date?
     func clearMessagesCache(conversationId: String)
     func clearAllMessagesCache()
     
@@ -129,7 +128,7 @@ class ChatCacheService: ChatCacheServiceProtocol {
         existingMessages.append(contentsOf: uniqueNewMessages)
         
         // Sort by timestamp
-        existingMessages.sort { $0.timestamp.dateValue() < $1.timestamp.dateValue() }
+        existingMessages.sort { $0.timestamp < $1.timestamp }
         
         // Limit to max messages
         if existingMessages.count > maxMessagesPerConversation {
@@ -142,19 +141,19 @@ class ChatCacheService: ChatCacheServiceProtocol {
         return existingMessages
     }
     
-    func getLatestCachedMessageTimestamp(conversationId: String) -> Timestamp? {
+    func getLatestCachedMessageTimestamp(conversationId: String) -> Date? {
         let key = getMessagesKey(conversationId: conversationId)
         guard let data = userDefaults.data(forKey: key),
               let cacheData = try? JSONDecoder().decode(MessageCacheData.self, from: data) else {
             return nil
         }
-        
+
         // Check cache validity
-        if cacheData.version != cacheVersion || 
+        if cacheData.version != cacheVersion ||
            Date().timeIntervalSince(cacheData.timestamp) > maxCacheAge {
             return nil
         }
-        
+
         return cacheData.latestMessageTimestamp
     }
     

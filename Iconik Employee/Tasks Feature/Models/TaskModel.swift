@@ -3,11 +3,11 @@
 //  Iconik Employee
 //
 //  Data models for Task Management System
-//  Matches Firestore schema from web implementation
+//  Migrated to Supabase
 //
 
 import Foundation
-import FirebaseFirestore
+import Supabase
 
 // MARK: - Task Type Enum
 
@@ -30,17 +30,13 @@ enum TaskType: String, Codable, CaseIterable {
 enum TaskStatus: String, Codable, CaseIterable {
     case todo = "todo"
     case inProgress = "in_progress"
-    case onHold = "on_hold"
     case completed = "completed"
-    case cancelled = "cancelled"
 
     var displayName: String {
         switch self {
         case .todo: return "To Do"
         case .inProgress: return "In Progress"
-        case .onHold: return "On Hold"
         case .completed: return "Completed"
-        case .cancelled: return "Cancelled"
         }
     }
 
@@ -48,9 +44,7 @@ enum TaskStatus: String, Codable, CaseIterable {
         switch self {
         case .todo: return "gray"
         case .inProgress: return "blue"
-        case .onHold: return "orange"
         case .completed: return "green"
-        case .cancelled: return "red"
         }
     }
 }
@@ -104,8 +98,8 @@ struct Subtask: Identifiable, Codable, Equatable {
         case id
         case title
         case completed
-        case completedAt
-        case completedBy
+        case completedAt = "completed_at"
+        case completedBy = "completed_by"
     }
 
     init(id: String = UUID().uuidString, title: String, completed: Bool = false, completedAt: Date? = nil, completedBy: String? = nil) {
@@ -128,7 +122,7 @@ struct TaskItem: Identifiable, Codable {
     // Basic Information
     var title: String
     var description: String?
-    var type: TaskType
+    var type: TaskType?
 
     // Status & Priority
     var status: TaskStatus
@@ -172,35 +166,85 @@ struct TaskItem: Identifiable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id
-        case organizationID
-        case createdBy
+        case organizationID = "organization_id"
+        case createdBy = "created_by"
         case title
         case description
         case type
         case status
         case priority
-        case assignedTo
+        case assignedTo = "assigned_to"
         case watchers
-        case createdAt
-        case updatedAt
-        case dueDate
-        case startDate
-        case completedAt
-        case completedBy
-        case estimatedHours
-        case order
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case dueDate = "due_date"
+        case startDate = "start_date"
+        case completedAt = "completed_at"
+        case completedBy = "completed_by"
+        case estimatedHours = "estimated_hours"
+        case order = "task_order"
         case subtasks
-        case commentCount
-        case timeEntryIds
-        case workflowId
-        case workflowStepId
-        case workflowName
-        case workflowStepName
-        case autoCreated
-        case syncWithWorkflow
-        case sessionId
-        case sessionName
-        case sessionDate
+        case commentCount = "comment_count"
+        case timeEntryIds = "time_entry_ids"
+        case workflowId = "workflow_id"
+        case workflowStepId = "workflow_step_id"
+        case workflowName = "workflow_name"
+        case workflowStepName = "workflow_step_name"
+        case autoCreated = "auto_created"
+        case syncWithWorkflow = "sync_with_workflow"
+        case sessionId = "session_id"
+        case sessionName = "session_name"
+        case sessionDate = "session_date"
+    }
+
+    // MARK: - Custom Decoder (Handle Missing Fields)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        // Required fields
+        id = try container.decode(String.self, forKey: .id)
+        organizationID = try container.decode(String.self, forKey: .organizationID)
+        createdBy = try container.decode(String.self, forKey: .createdBy)
+        title = try container.decode(String.self, forKey: .title)
+        status = try container.decode(TaskStatus.self, forKey: .status)
+        priority = try container.decode(TaskPriority.self, forKey: .priority)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+
+        // Optional fields with defaults
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        type = try container.decodeIfPresent(TaskType.self, forKey: .type)
+
+        // Arrays with defaults
+        assignedTo = try container.decodeIfPresent([String].self, forKey: .assignedTo) ?? []
+        watchers = try container.decodeIfPresent([String].self, forKey: .watchers) ?? []
+        subtasks = try container.decodeIfPresent([Subtask].self, forKey: .subtasks) ?? []
+        timeEntryIds = try container.decodeIfPresent([String].self, forKey: .timeEntryIds) ?? []
+
+        // Optional dates
+        dueDate = try container.decodeIfPresent(Date.self, forKey: .dueDate)
+        startDate = try container.decodeIfPresent(Date.self, forKey: .startDate)
+        completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
+        completedBy = try container.decodeIfPresent(String.self, forKey: .completedBy)
+
+        // Numbers with defaults
+        estimatedHours = try container.decodeIfPresent(Double.self, forKey: .estimatedHours) ?? 0
+        order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
+        commentCount = try container.decodeIfPresent(Int.self, forKey: .commentCount) ?? 0
+
+        // Workflow fields
+        workflowId = try container.decodeIfPresent(String.self, forKey: .workflowId)
+        workflowStepId = try container.decodeIfPresent(String.self, forKey: .workflowStepId)
+        workflowName = try container.decodeIfPresent(String.self, forKey: .workflowName)
+        workflowStepName = try container.decodeIfPresent(String.self, forKey: .workflowStepName)
+        autoCreated = try container.decodeIfPresent(Bool.self, forKey: .autoCreated)
+        syncWithWorkflow = try container.decodeIfPresent(Bool.self, forKey: .syncWithWorkflow)
+
+        // Session fields
+        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        sessionName = try container.decodeIfPresent(String.self, forKey: .sessionName)
+        sessionDate = try container.decodeIfPresent(Date.self, forKey: .sessionDate)
     }
 
     // MARK: - Initializer
@@ -269,159 +313,16 @@ struct TaskItem: Identifiable, Codable {
         self.sessionDate = sessionDate
     }
 
-    // MARK: - Firestore Conversion
-
-    init?(from document: DocumentSnapshot) {
-        guard let data = document.data(),
-              let organizationID = data["organizationID"] as? String,
-              let createdBy = data["createdBy"] as? String,
-              let title = data["title"] as? String,
-              let typeString = data["type"] as? String,
-              let type = TaskType(rawValue: typeString),
-              let statusString = data["status"] as? String,
-              let status = TaskStatus(rawValue: statusString),
-              let priorityString = data["priority"] as? String,
-              let priority = TaskPriority(rawValue: priorityString),
-              let createdAtTimestamp = data["createdAt"] as? Timestamp,
-              let updatedAtTimestamp = data["updatedAt"] as? Timestamp else {
-            return nil
-        }
-
-        self.id = document.documentID
-        self.organizationID = organizationID
-        self.createdBy = createdBy
-        self.title = title
-        self.description = data["description"] as? String
-        self.type = type
-        self.status = status
-        self.priority = priority
-        self.assignedTo = data["assignedTo"] as? [String] ?? []
-        self.watchers = data["watchers"] as? [String] ?? []
-        self.createdAt = createdAtTimestamp.dateValue()
-        self.updatedAt = updatedAtTimestamp.dateValue()
-        self.dueDate = (data["dueDate"] as? Timestamp)?.dateValue()
-        self.startDate = (data["startDate"] as? Timestamp)?.dateValue()
-        self.completedAt = (data["completedAt"] as? Timestamp)?.dateValue()
-        self.completedBy = data["completedBy"] as? String
-        self.estimatedHours = data["estimatedHours"] as? Double ?? 0
-        self.order = data["order"] as? Int ?? 0
-        self.commentCount = data["commentCount"] as? Int ?? 0
-        self.timeEntryIds = data["timeEntryIds"] as? [String] ?? []
-
-        // Parse subtasks
-        if let subtasksData = data["subtasks"] as? [[String: Any]] {
-            self.subtasks = subtasksData.compactMap { subtaskDict in
-                guard let id = subtaskDict["id"] as? String,
-                      let title = subtaskDict["title"] as? String,
-                      let completed = subtaskDict["completed"] as? Bool else {
-                    return nil
-                }
-                return Subtask(
-                    id: id,
-                    title: title,
-                    completed: completed,
-                    completedAt: (subtaskDict["completedAt"] as? Timestamp)?.dateValue(),
-                    completedBy: subtaskDict["completedBy"] as? String
-                )
-            }
-        } else {
-            self.subtasks = []
-        }
-
-        // Workflow fields
-        self.workflowId = data["workflowId"] as? String
-        self.workflowStepId = data["workflowStepId"] as? String
-        self.workflowName = data["workflowName"] as? String
-        self.workflowStepName = data["workflowStepName"] as? String
-        self.autoCreated = data["autoCreated"] as? Bool
-        self.syncWithWorkflow = data["syncWithWorkflow"] as? Bool
-
-        // Session fields
-        self.sessionId = data["sessionId"] as? String
-        self.sessionName = data["sessionName"] as? String
-        self.sessionDate = (data["sessionDate"] as? Timestamp)?.dateValue()
-    }
-
-    func toFirestoreData() -> [String: Any] {
-        var data: [String: Any] = [
-            "organizationID": organizationID,
-            "createdBy": createdBy,
-            "title": title,
-            "type": type.rawValue,
-            "status": status.rawValue,
-            "priority": priority.rawValue,
-            "assignedTo": assignedTo,
-            "watchers": watchers,
-            "createdAt": Timestamp(date: createdAt),
-            "updatedAt": Timestamp(date: updatedAt),
-            "estimatedHours": estimatedHours,
-            "order": order,
-            "commentCount": commentCount,
-            "timeEntryIds": timeEntryIds,
-            "subtasks": subtasks.map { subtask in
-                var subtaskData: [String: Any] = [
-                    "id": subtask.id,
-                    "title": subtask.title,
-                    "completed": subtask.completed
-                ]
-                if let completedAt = subtask.completedAt {
-                    subtaskData["completedAt"] = Timestamp(date: completedAt)
-                }
-                if let completedBy = subtask.completedBy {
-                    subtaskData["completedBy"] = completedBy
-                }
-                return subtaskData
-            }
-        ]
-
-        // Add optional fields
-        if let description = description {
-            data["description"] = description
-        }
-        if let dueDate = dueDate {
-            data["dueDate"] = Timestamp(date: dueDate)
-        }
-        if let startDate = startDate {
-            data["startDate"] = Timestamp(date: startDate)
-        }
-        if let completedAt = completedAt {
-            data["completedAt"] = Timestamp(date: completedAt)
-        }
-        if let completedBy = completedBy {
-            data["completedBy"] = completedBy
-        }
-        if let workflowId = workflowId {
-            data["workflowId"] = workflowId
-        }
-        if let workflowStepId = workflowStepId {
-            data["workflowStepId"] = workflowStepId
-        }
-        if let workflowName = workflowName {
-            data["workflowName"] = workflowName
-        }
-        if let workflowStepName = workflowStepName {
-            data["workflowStepName"] = workflowStepName
-        }
-        if let autoCreated = autoCreated {
-            data["autoCreated"] = autoCreated
-        }
-        if let syncWithWorkflow = syncWithWorkflow {
-            data["syncWithWorkflow"] = syncWithWorkflow
-        }
-        if let sessionId = sessionId {
-            data["sessionId"] = sessionId
-        }
-        if let sessionName = sessionName {
-            data["sessionName"] = sessionName
-        }
-        if let sessionDate = sessionDate {
-            data["sessionDate"] = Timestamp(date: sessionDate)
-        }
-
-        return data
-    }
+    // MARK: - Note
+    // Task uses Codable for automatic Supabase JSON encoding/decoding
+    // CodingKeys map Swift camelCase properties to Supabase snake_case fields
 
     // MARK: - Computed Properties
+
+    /// Task type with default value
+    var taskType: TaskType {
+        return type ?? .general
+    }
 
     /// Percentage of subtasks completed
     var subtaskProgress: Double {
@@ -433,7 +334,7 @@ struct TaskItem: Identifiable, Codable {
     /// Check if task is overdue
     var isOverdue: Bool {
         guard let dueDate = dueDate else { return false }
-        return dueDate < Date() && status != .completed && status != .cancelled
+        return dueDate < Date() && status != .completed
     }
 
     /// Check if task is assigned to a specific user

@@ -1,7 +1,5 @@
 import SwiftUI
-import Firebase
-import FirebaseAuth
-import FirebaseStorage
+import Supabase
 
 struct TemplateFormView: View {
     let template: ReportTemplate
@@ -766,50 +764,58 @@ struct TemplateFormView: View {
     }
     
     private func uploadImagesAndSubmit(formData: [String: Any]) {
-        guard let user = Auth.auth().currentUser else {
+        guard let currentUserId = UserManager.shared.getCurrentUserIDUnified() else {
             errorMessage = "User not signed in"
             isSubmitting = false
             return
         }
-        
-        let storageRef = Storage.storage().reference()
-        let dispatchGroup = DispatchGroup()
-        var photoURLs: [String] = []
-        
-        for image in selectedImages {
-            dispatchGroup.enter()
-            if let imageData = image.jpegData(compressionQuality: 0.8) {
-                let fileName = "templateReports/\(user.uid)/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
-                let imageRef = storageRef.child(fileName)
-                
-                imageRef.putData(imageData, metadata: nil) { _, error in
-                    if let error = error {
-                        DispatchQueue.main.async {
-                            self.errorMessage = "Upload error: \(error.localizedDescription)"
-                        }
-                        dispatchGroup.leave()
-                        return
-                    }
-                    imageRef.downloadURL { url, error in
-                        if let error = error {
-                            DispatchQueue.main.async {
-                                self.errorMessage = "URL error: \(error.localizedDescription)"
-                            }
-                        } else if let urlString = url?.absoluteString {
-                            photoURLs.append(urlString)
-                        }
-                        dispatchGroup.leave()
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+                var photoURLs: [String] = []
+
+                for image in selectedImages {
+                    if let imageData = image.jpegData(compressionQuality: 0.8) {
+                        // Use lowercase userId per CLAUDE.md guidelines
+                        let path = "template-reports/\(currentUserId.lowercased())/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
+
+                        print("📸 Uploading template report photo to Supabase Storage: \(path)")
+
+                        // Upload to Supabase Storage
+                        _ = try await supabase.storage
+                            .from("daily-reports")
+                            .upload(
+                                path: path,
+                                file: imageData,
+                                options: FileOptions(contentType: "image/jpeg")
+                            )
+
+                        // Get signed URL (1 year expiry for private access)
+                        let signedURL = try await supabase.storage
+                            .from("daily-reports")
+                            .createSignedURL(path: path, expiresIn: 31536000)
+
+                        photoURLs.append(signedURL.absoluteString)
+                        print("📸 Photo uploaded: \(signedURL.absoluteString.prefix(80))...")
                     }
                 }
-            } else {
-                dispatchGroup.leave()
+
+                var finalData = formData
+                finalData["photoURLs"] = photoURLs
+                print("✅ \(photoURLs.count) photo(s) uploaded to Supabase Storage")
+
+                await MainActor.run {
+                    self.submitReportData(formData: finalData)
+                }
+
+            } catch {
+                print("❌ Template photo upload failed: \(error.localizedDescription)")
+                await MainActor.run {
+                    self.errorMessage = "Upload error: \(error.localizedDescription)"
+                    self.isSubmitting = false
+                }
             }
-        }
-        
-        dispatchGroup.notify(queue: .main) {
-            var finalData = formData
-            finalData["photoURLs"] = photoURLs
-            self.submitReportData(formData: finalData)
         }
     }
     
@@ -837,10 +843,10 @@ struct TemplateFormView: View {
 struct TemplateFormView_Previews: PreviewProvider {
     static var previews: some View {
         let sampleTemplate = ReportTemplate(
+            organizationID: "test",
             name: "Sample Sports Report",
             description: "A sample template for testing",
             shootType: "sports",
-            organizationID: "test",
             fields: [
                 TemplateField(
                     type: "text",
@@ -857,7 +863,7 @@ struct TemplateFormView_Previews: PreviewProvider {
             ],
             createdBy: "test"
         )
-        
+
         TemplateFormView(template: sampleTemplate)
     }
 }

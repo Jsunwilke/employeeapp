@@ -1,179 +1,175 @@
 import Foundation
-import FirebaseFirestore
 
+/// PTO Balance model for Supabase
 struct PTOBalance: Identifiable, Codable {
     let id: String
-    let userId: String
-    let organizationID: String
-    var totalBalance: Double       // Current available PTO hours
-    var pendingBalance: Double     // Hours reserved for pending requests
-    var usedThisYear: Double      // Hours used in current year
-    var bankingBalance: Double    // Excess hours over max accrual
-    var processedPeriods: [String] // Array of processed pay periods (e.g., ["2024-01", "2024-02"])
-    let createdAt: Date
-    var lastUpdated: Date
-    
-    // Firestore initializer
-    init(id: String, data: [String: Any]) {
-        self.id = id
-        self.userId = data["userId"] as? String ?? ""
-        self.organizationID = data["organizationID"] as? String ?? ""
-        self.totalBalance = data["totalBalance"] as? Double ?? 0.0
-        self.pendingBalance = data["pendingBalance"] as? Double ?? 0.0
-        self.usedThisYear = data["usedThisYear"] as? Double ?? 0.0
-        self.bankingBalance = data["bankingBalance"] as? Double ?? 0.0
-        self.processedPeriods = data["processedPeriods"] as? [String] ?? []
-        
-        if let createdTimestamp = data["createdAt"] as? Timestamp {
-            self.createdAt = createdTimestamp.dateValue()
-        } else {
-            self.createdAt = Date()
-        }
-        
-        if let updatedTimestamp = data["lastUpdated"] as? Timestamp {
-            self.lastUpdated = updatedTimestamp.dateValue()
-        } else {
-            self.lastUpdated = Date()
-        }
+
+    // Supabase snake_case properties (matching database)
+    let user_id: String
+    let organization_id: String
+    var balance: Double              // Current available PTO hours (DB column name)
+    var pending_balance: Double      // Hours reserved for pending requests
+    var banking_balance: Double      // Excess hours over max accrual
+    var processed_periods: [String]  // Array of processed pay periods (e.g., ["2024-01", "2024-02"])
+    var year: Int                    // Year for this balance record
+    let created_at: Date
+    var updated_at: Date
+
+    // Backward compatibility computed properties (camelCase for iOS code)
+    var userId: String { user_id }
+    var organizationID: String { organization_id }
+    var totalBalance: Double {
+        get { balance }
+        set { balance = newValue }
     }
-    
+    var pendingBalance: Double {
+        get { pending_balance }
+        set { pending_balance = newValue }
+    }
+    var bankingBalance: Double {
+        get { banking_balance }
+        set { banking_balance = newValue }
+    }
+    var processedPeriods: [String] {
+        get { processed_periods }
+        set { processed_periods = newValue }
+    }
+    var createdAt: Date { created_at }
+    var lastUpdated: Date {
+        get { updated_at }
+        set { updated_at = newValue }
+    }
+
+    // Not stored in DB, calculated on client
+    var usedThisYear: Double = 0.0
+
     // Standard initializer
     init(
         userId: String,
         organizationID: String,
-        totalBalance: Double = 0.0,
+        balance: Double = 0.0,
         pendingBalance: Double = 0.0,
-        usedThisYear: Double = 0.0,
         bankingBalance: Double = 0.0,
-        processedPeriods: [String] = []
+        processedPeriods: [String] = [],
+        year: Int? = nil
     ) {
         self.id = "\(organizationID)_\(userId)"
-        self.userId = userId
-        self.organizationID = organizationID
-        self.totalBalance = totalBalance
-        self.pendingBalance = pendingBalance
-        self.usedThisYear = usedThisYear
-        self.bankingBalance = bankingBalance
-        self.processedPeriods = processedPeriods
-        self.createdAt = Date()
-        self.lastUpdated = Date()
+        self.user_id = userId
+        self.organization_id = organizationID
+        self.balance = balance
+        self.pending_balance = pendingBalance
+        self.banking_balance = bankingBalance
+        self.processed_periods = processedPeriods
+
+        // Default to current year if not specified
+        let calendar = Calendar.current
+        self.year = year ?? calendar.component(.year, from: Date())
+
+        self.created_at = Date()
+        self.updated_at = Date()
+    }
+
+    // Coding keys for Supabase (must match database column names exactly)
+    enum CodingKeys: String, CodingKey {
+        case id
+        case user_id
+        case organization_id
+        case balance
+        case pending_balance
+        case banking_balance
+        case processed_periods
+        case year
+        case created_at
+        case updated_at
     }
 }
 
 // MARK: - Computed Properties
 extension PTOBalance {
-    
+
     // Available balance (total minus pending)
     var availableBalance: Double {
-        return max(0, totalBalance - pendingBalance)
+        return max(0, balance - pending_balance)
     }
-    
-    // Total accrued (including banking)
+
+    // Total accrued (including banking) - Note: usedThisYear not stored in DB
     var totalAccrued: Double {
-        return totalBalance + bankingBalance + usedThisYear
+        return balance + banking_balance + usedThisYear
     }
-    
+
     // Check if balance needs year-end reset
     var needsYearEndReset: Bool {
         let calendar = Calendar.current
         let currentYear = calendar.component(.year, from: Date())
-        let lastUpdateYear = calendar.component(.year, from: lastUpdated)
-        return currentYear > lastUpdateYear
-    }
-}
-
-// MARK: - Firestore Conversion
-extension PTOBalance {
-    
-    // Convert to dictionary for Firestore
-    func toFirestoreData() -> [String: Any] {
-        return [
-            "userId": userId,
-            "organizationID": organizationID,
-            "totalBalance": totalBalance,
-            "pendingBalance": pendingBalance,
-            "usedThisYear": usedThisYear,
-            "bankingBalance": bankingBalance,
-            "processedPeriods": processedPeriods,
-            "createdAt": Timestamp(date: createdAt),
-            "lastUpdated": Timestamp(date: lastUpdated)
-        ]
-    }
-    
-    // Create or update document data
-    func toUpdateData() -> [String: Any] {
-        return [
-            "totalBalance": totalBalance,
-            "pendingBalance": pendingBalance,
-            "usedThisYear": usedThisYear,
-            "bankingBalance": bankingBalance,
-            "processedPeriods": processedPeriods,
-            "lastUpdated": Timestamp(date: Date())
-        ]
+        return currentYear > year
     }
 }
 
 // MARK: - Helper Methods
 extension PTOBalance {
-    
+
     // Reserve hours for a pending request
     mutating func reserveHours(_ hours: Double) -> Bool {
         if hours <= availableBalance {
-            pendingBalance += hours
-            lastUpdated = Date()
+            pending_balance += hours
+            updated_at = Date()
             return true
         }
         return false
     }
-    
+
     // Use hours when request is approved
     mutating func useHours(_ hours: Double) {
-        pendingBalance = max(0, pendingBalance - hours)
-        totalBalance = max(0, totalBalance - hours)
+        pending_balance = max(0, pending_balance - hours)
+        balance = max(0, balance - hours)
         usedThisYear += hours
-        lastUpdated = Date()
+        updated_at = Date()
     }
-    
+
     // Release hours when request is denied/cancelled
     mutating func releaseHours(_ hours: Double) {
-        pendingBalance = max(0, pendingBalance - hours)
-        lastUpdated = Date()
+        pending_balance = max(0, pending_balance - hours)
+        updated_at = Date()
     }
-    
+
     // Add accrued hours
     mutating func addAccruedHours(_ hours: Double, maxAccrual: Double, bankingEnabled: Bool, maxBanking: Double) {
-        let potentialBalance = totalBalance + hours
-        
+        let potentialBalance = balance + hours
+
         if potentialBalance <= maxAccrual {
             // Under the cap, add to balance
-            totalBalance = potentialBalance
+            balance = potentialBalance
         } else {
             // Over the cap
-            totalBalance = maxAccrual
-            
+            balance = maxAccrual
+
             if bankingEnabled {
                 // Add excess to banking
                 let excess = potentialBalance - maxAccrual
-                bankingBalance = min(bankingBalance + excess, maxBanking)
+                banking_balance = min(banking_balance + excess, maxBanking)
             }
         }
-        
-        lastUpdated = Date()
+
+        updated_at = Date()
     }
-    
+
     // Year-end reset
     mutating func performYearEndReset(rolloverLimit: Double?) {
         // Reset used hours for new year
         usedThisYear = 0
-        
+
         // Apply rollover limit if specified
         if let limit = rolloverLimit {
-            totalBalance = min(totalBalance, limit)
+            balance = min(balance, limit)
         }
-        
+
         // Clear processed periods for new year
-        processedPeriods = []
-        
-        lastUpdated = Date()
+        processed_periods = []
+
+        // Update to new year
+        let calendar = Calendar.current
+        year = calendar.component(.year, from: Date())
+
+        updated_at = Date()
     }
 }

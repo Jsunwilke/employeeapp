@@ -1,11 +1,9 @@
 import SwiftUI
-import Firebase
-import FirebaseAuth
-import FirebaseFirestore
 import MessageUI
 import MapKit
 import CoreLocation
 import UniformTypeIdentifiers
+import Supabase
 
 // Widget identifier for drag and drop
 enum DashboardWidget: String, CaseIterable, Identifiable, Transferable, Codable {
@@ -54,11 +52,14 @@ class MainEmployeeViewModel: ObservableObject {
     private let weatherService = WeatherService()
     @Published var weatherDataBySession: [String: WeatherData] = [:] // Key is location-date
     
-    // Session service for Firestore operations
+    // Session service for Supabase operations
     private let sessionService = SessionService.shared
-    
-    // Firestore listener for real-time updates
-    @Published var sessionListener: ListenerRegistration?
+
+    // Track if we have an active listener
+    @Published var hasActiveListener: Bool = false
+
+    // Organization ID for session filtering
+    private var organizationID: String = ""
     
     // Default employee features – re-orderable by the user.
     let defaultEmployeeFeatures: [FeatureItem] = [
@@ -81,7 +82,7 @@ class MainEmployeeViewModel: ObservableObject {
     
     private let employeeOrderKey = "employeeFeatureOrder"
     
-    // Removed: ICS URL no longer needed - using Firestore sessions
+    // Removed: ICS URL no longer needed - using Supabase sessions
     
     init() {
         loadEmployeeFeatureOrder()
@@ -89,7 +90,17 @@ class MainEmployeeViewModel: ObservableObject {
     
     deinit {
         // Clean up the session listener
-        sessionListener?.remove()
+        // Capture values BEFORE the Task closure to avoid capturing self
+        // This prevents recursive deallocation that was causing the crash
+        guard hasActiveListener && !organizationID.isEmpty else { return }
+
+        let orgID = organizationID
+        let service = sessionService
+
+        // Use Task with pre-captured values - service and orgID don't reference self
+        Task { @MainActor in
+            service.stopListeningToSessions(organizationID: orgID, includeUnpublished: false)
+        }
     }
     
     func loadEmployeeFeatureOrder() {
@@ -113,110 +124,94 @@ class MainEmployeeViewModel: ObservableObject {
     func saveEmployeeFeatureOrder() {
         let orderString = employeeFeatures.map { $0.id }.joined(separator: ",")
         UserDefaults.standard.set(orderString, forKey: employeeOrderKey)
-        print("Saved employee feature order: \(orderString)")
     }
-    
+
     func moveEmployeeFeatures(from source: IndexSet, to destination: Int) {
         employeeFeatures.move(fromOffsets: source, toOffset: destination)
         saveEmployeeFeatureOrder()
     }
-    
-    // Function to fetch upcoming events from Firestore
+
+    // Function to fetch upcoming events from Supabase
     func fetchUpcomingEvents(employeeName: String = "") {
         // Don't show loading if we already have sessions
         if upcomingShifts.isEmpty {
             isLoadingSchedule = true
         }
-        
+
         // Check if we already have a listener - avoid creating duplicates
-        if sessionListener != nil {
-            print("📅 MainEmployeeView: Already have active listener, skipping fetch")
+        if hasActiveListener {
             return
         }
-        
-        // Load sessions from Firestore with real-time updates
-        sessionListener = sessionService.listenForSessions { [weak self] sessions in
-            DispatchQueue.main.async {
+
+        // Get organization ID from UserDefaults
+        organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+
+        guard !organizationID.isEmpty else {
+            isLoadingSchedule = false
+            return
+        }
+
+        // Load sessions from Supabase with real-time updates
+        Task { @MainActor in
+            sessionService.startListeningToSessions(organizationID: organizationID, includeUnpublished: false) { [weak self] sessions in
                 // Get current user ID for filtering
-                guard let currentUserID = UserManager.shared.getCurrentUserID() else {
-                    print("🔐 Cannot filter sessions: no current user ID")
+                guard let currentUserID = UserManager.shared.getCurrentUserIDUnified() else {
                     self?.upcomingShifts = []
                     self?.isLoadingSchedule = false
                     return
                 }
-                
+
+                // Get current user email for fallback matching
+                let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail")
+
                 // Filter sessions for today, tomorrow, and day after tomorrow where current user is assigned
                 let calendar = Calendar.current
                 let now = Date()
                 let startOfToday = calendar.startOfDay(for: now)
                 let endOfDayAfterTomorrow = calendar.date(byAdding: .day, value: 3, to: startOfToday) ?? startOfToday
-                
-                print("📅 Date range filter: \(startOfToday) to \(endOfDayAfterTomorrow)")
-                print("📅 Current time: \(now)")
-                print("📅 Processing \(sessions.count) sessions for filtering")
-                
+
                 let userSessions = sessions.filter { session in
-                    print("📅 Checking session: \(session.schoolName)")
-                    print("📅 Raw date: \(session.date ?? "nil"), startTime: \(session.startTime ?? "nil")")
-                    print("📅 Parsed startDate: \(session.startDate?.description ?? "nil")")
-                    
-                    guard let startDate = session.startDate else { 
-                        print("❌ Session \(session.schoolName) has nil startDate - FILTERED OUT")
-                        return false 
-                    }
-                    
-                    // Check if session is within the 3-day range
-                    let isInTimeRange = startDate >= startOfToday && startDate < endOfDayAfterTomorrow
-                    print("📅 Session \(session.schoolName) time range check: \(isInTimeRange) (date: \(startDate))")
-                    
-                    if !isInTimeRange {
-                        print("❌ Session \(session.schoolName) outside time range - FILTERED OUT")
+                    guard let startDate = session.startDate else {
                         return false
                     }
-                    
+
+                    // Check if session is within the 3-day range
+                    let isInTimeRange = startDate >= startOfToday && startDate < endOfDayAfterTomorrow
+
+                    if !isInTimeRange {
+                        return false
+                    }
+
                     // For today's sessions, check if they've already ended
                     if calendar.isDateInToday(startDate) {
                         // Estimate session end time (assuming 2 hour duration if not specified)
                         let estimatedDuration: TimeInterval = 2 * 60 * 60 // 2 hours in seconds
                         let endDate = startDate.addingTimeInterval(estimatedDuration)
-                        
+
                         if endDate < now {
-                            print("❌ Session \(session.schoolName) has already ended - FILTERED OUT")
                             return false
                         }
                     }
-                    
-                    let isUserAssigned = session.isUserAssigned(userID: currentUserID)
-                    
-                    if isUserAssigned {
-                        print("✅ Session \(session.schoolName) PASSED all filters")
-                        return true
-                    } else {
-                        print("❌ Session \(session.schoolName) user not assigned - FILTERED OUT")
-                        return false
-                    }
+
+                    return session.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail)
                 }
-                
+
                 // Store all sessions for coworker data
                 self?.allSessions = sessions
-                
-                // Debug: Check what sessions were found
-                for session in userSessions {
-                    print("🎯 User session ID: \(session.id), school: \(session.schoolName)")
-                }
-                
+
                 // Sort by start date
                 let sorted = userSessions.sorted {
                     (($0.startDate ?? Date()) < ($1.startDate ?? Date()))
                 }
-                
-                print("📅 Final filtered sessions: \(sorted.count) for user \(currentUserID)")
+
                 self?.upcomingShifts = sorted
                 self?.isLoadingSchedule = false
-                
+
                 // Load weather data for upcoming shifts
                 self?.loadWeatherForSessions(sorted)
             }
+
+            hasActiveListener = true
         }
     }
     
@@ -307,8 +302,12 @@ class MainEmployeeViewModel: ObservableObject {
     
     // Cleanup method to remove listener
     func cleanup() {
-        sessionListener?.remove()
-        sessionListener = nil
+        if hasActiveListener && !organizationID.isEmpty {
+            Task { @MainActor in
+                sessionService.stopListeningToSessions(organizationID: organizationID, includeUnpublished: false)
+            }
+            hasActiveListener = false
+        }
     }
 }
 
@@ -332,7 +331,7 @@ struct CompactSessionRow: View {
     }
     
     // Get the current user's photographer info from the session
-    private var currentUserPhotographerInfo: (name: String, notes: String)? {
+    private var currentUserPhotographerInfo: (name: String, notes: String?)? {
         guard let userID = currentUserID else { return nil }
         return session.getPhotographerInfo(for: userID)
     }
@@ -459,7 +458,8 @@ struct MainEmployeeView: View {
     // Tab bar management
     @StateObject private var tabBarManager = TabBarManager.shared
     @StateObject private var chatManager = ChatManager.shared
-    
+    @StateObject private var authService = SupabaseAuthService()
+
     // Fixed manager features
     let managerFeatures: [FeatureItem] = [
         FeatureItem(id: "timeOffApprovals", title: "Time Off Approvals", systemImage: "checkmark.circle.fill", description: "Approve or deny time off requests"),
@@ -486,7 +486,7 @@ struct MainEmployeeView: View {
     // Widget order management
     @State private var widgetOrder: [DashboardWidget] = []
     @State private var draggedWidget: DashboardWidget?
-    @State private var flagListener: ListenerRegistration?
+    @State private var flagChannel: RealtimeChannelV2?
     @State private var isBannerDismissed: Bool = false
     @State private var currentListeningUserID: String? = nil
     
@@ -828,24 +828,8 @@ struct MainEmployeeView: View {
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                    if let url = URL(string: storedUserPhotoURL), !storedUserPhotoURL.isEmpty {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .empty:
-                                ProgressView()
-                            case .success(let image):
-                                image.resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 28, height: 28)
-                                    .clipShape(Circle())
-                            case .failure(_):
-                                Image(systemName: "person.crop.circle.badge.exclam")
-                                    .resizable()
-                                    .frame(width: 28, height: 28)
-                            @unknown default:
-                                EmptyView()
-                            }
-                        }
+                    if !storedUserPhotoURL.isEmpty {
+                        SupabaseAvatarView(storageURL: storedUserPhotoURL, size: 28)
                     } else {
                         Image(systemName: "person.crop.circle")
                             .resizable()
@@ -860,11 +844,15 @@ struct MainEmployeeView: View {
                             Label("Appearance", systemImage: "paintbrush")
                         }
                         Button("Logout") {
-                            do {
-                                try Auth.auth().signOut()
-                                isSignedIn = false
-                            } catch {
-                                print("Logout error: \(error.localizedDescription)")
+                            Task {
+                                do {
+                                    try await authService.signOut()
+                                    await MainActor.run {
+                                        isSignedIn = false
+                                    }
+                                } catch {
+                                    print("Logout error: \(error.localizedDescription)")
+                                }
                             }
                         }
                     } label: {
@@ -885,7 +873,7 @@ struct MainEmployeeView: View {
         loadWidgetOrder()
         
         // Check if user has changed
-        let currentUID = Auth.auth().currentUser?.uid
+        let currentUID = UserManager.shared.getCurrentUserIDUnified()
         if currentUID != currentListeningUserID {
             // User changed, update flag listener
             currentListeningUserID = currentUID
@@ -898,12 +886,10 @@ struct MainEmployeeView: View {
             
             // Initialize user organization ID for session filtering
             UserManager.shared.initializeOrganizationID()
-            
-            // Refresh time tracking service to ensure proper user setup
-            timeTrackingService.refreshUserAndStatus()
-            
-            // Initialize chat manager
+
+            // Refresh time tracking service and initialize chat manager
             Task {
+                await timeTrackingService.refreshUserAndStatus()
                 await chatManager.initialize()
             }
             
@@ -1091,73 +1077,113 @@ struct MainEmployeeView: View {
     }
     
     private func loadSchedule() {
-        let currentUserID = UserManager.shared.getCurrentUserID() ?? "unknown"
-        print("🔍 Searching for events for user ID: '\(currentUserID)'")
-        viewModel.fetchUpcomingEvents(employeeName: "") // employeeName parameter no longer used
+        viewModel.fetchUpcomingEvents(employeeName: "")
     }
-    
-    // Firebase listener for flag status
+
+    // Supabase listener for flag status
     func listenForFlagStatus() {
         // Remove previous listener if exists
-        flagListener?.remove()
-        
-        guard let currentUID = Auth.auth().currentUser?.uid else {
-            print("No current user UID.")
+        Task {
+            await flagChannel?.unsubscribe()
+        }
+
+        guard let currentUID = UserManager.shared.getCurrentUserIDUnified() else {
             return
         }
-        let db = Firestore.firestore()
-        flagListener = db.collection("users").document(currentUID)
-            .addSnapshotListener { snapshot, error in
-                if let error = error {
-                    print("Error listening for user doc changes: \(error.localizedDescription)")
-                    return
-                }
-                guard let data = snapshot?.data() else {
-                    print("No user data in snapshot.")
-                    return
-                }
-                if let boolVal = data["isFlagged"] as? Bool {
-                    self.isFlagged = boolVal
-                } else if let intVal = data["isFlagged"] as? Int {
-                    self.isFlagged = (intVal == 1)
-                } else {
-                    self.isFlagged = false
-                }
-                self.flagNote = data["flagNote"] as? String ?? ""
-                if let flaggedByID = data["flaggedBy"] as? String, !flaggedByID.isEmpty {
-                    self.loadFlaggedByName(flaggedByID: flaggedByID)
-                } else {
-                    self.flaggedByName = ""
-                }
-                if let updatedPhotoURL = data["photoURL"] as? String,
-                   !updatedPhotoURL.isEmpty,
-                   updatedPhotoURL != self.storedUserPhotoURL {
-                    self.storedUserPhotoURL = updatedPhotoURL
-                }
-                
-                // Reset banner dismissal when flag status changes
-                if self.isFlagged && !self.flagNote.isEmpty {
-                    self.isBannerDismissed = false
-                }
-                
-                // Debug logging
-                print("🚩 Flag status updated - isFlagged: \(self.isFlagged), note: '\(self.flagNote)', flaggedBy: '\(self.flaggedByName)'")
+
+        // Initial fetch
+        Task {
+            await loadFlagStatusFromSupabase(userId: currentUID)
+        }
+
+        // Set up realtime subscription
+        let supabase = SupabaseManager.shared.client
+        let channel = supabase.channel("user_flag_\(currentUID)")
+
+        let changeStream = channel.postgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: "users",
+            filter: "id=eq.\(currentUID.lowercased())"
+        )
+
+        Task {
+            for await _ in changeStream {
+                await loadFlagStatusFromSupabase(userId: currentUID)
             }
+        }
+
+        Task {
+            await channel.subscribe()
+        }
+
+        flagChannel = channel
     }
-    
-    func loadFlaggedByName(flaggedByID: String) {
-        let db = Firestore.firestore()
-        db.collection("users").document(flaggedByID).getDocument { snapshot, error in
-            if let error = error {
-                print("Error fetching flaggedBy user: \(error.localizedDescription)")
-                self.flaggedByName = ""
-                return
+
+    @MainActor
+    private func loadFlagStatusFromSupabase(userId: String) async {
+        let supabase = SupabaseManager.shared.client
+
+        do {
+            struct UserFlagData: Decodable {
+                let is_flagged: Bool?
+                let flag_note: String?
+                let flagged_by: String?
+                let photo_url: String?
             }
-            guard let data = snapshot?.data() else {
+
+            let response: UserFlagData = try await supabase
+                .from("users")
+                .select("is_flagged, flag_note, flagged_by, photo_url")
+                .eq("id", value: userId.lowercased())
+                .single()
+                .execute()
+                .value
+
+            self.isFlagged = response.is_flagged ?? false
+            self.flagNote = response.flag_note ?? ""
+
+            if let flaggedByID = response.flagged_by, !flaggedByID.isEmpty {
+                await loadFlaggedByName(flaggedByID: flaggedByID)
+            } else {
                 self.flaggedByName = ""
-                return
             }
-            self.flaggedByName = data["firstName"] as? String ?? ""
+
+            if let updatedPhotoURL = response.photo_url,
+               !updatedPhotoURL.isEmpty,
+               updatedPhotoURL != self.storedUserPhotoURL {
+                self.storedUserPhotoURL = updatedPhotoURL
+            }
+
+            // Reset banner dismissal when flag status changes
+            if self.isFlagged && !self.flagNote.isEmpty {
+                self.isBannerDismissed = false
+            }
+        } catch {
+            print("Error loading flag status: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    func loadFlaggedByName(flaggedByID: String) async {
+        let supabase = SupabaseManager.shared.client
+
+        do {
+            struct UserName: Decodable {
+                let first_name: String?
+            }
+
+            let response: UserName = try await supabase
+                .from("users")
+                .select("first_name")
+                .eq("id", value: flaggedByID.lowercased())
+                .single()
+                .execute()
+                .value
+
+            self.flaggedByName = response.first_name ?? ""
+        } catch {
+            self.flaggedByName = ""
         }
     }
     

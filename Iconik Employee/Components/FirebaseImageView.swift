@@ -2,8 +2,9 @@
 //  FirebaseImageView.swift
 //  Iconik Employee
 //
-//  A reusable component for displaying images from Firebase Storage URLs
+//  A reusable component for displaying images from storage URLs
 //  with proper error handling and loading states
+//  (Legacy name kept for compatibility)
 //
 
 import SwiftUI

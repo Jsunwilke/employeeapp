@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 
 struct ConversationListView: View {
     @StateObject private var chatManager = ChatManager.shared
@@ -9,7 +8,12 @@ struct ConversationListView: View {
     @State private var searchText = ""
     @State private var selectedConversation: Conversation?
     @State private var showErrorAlert = false
-    
+
+    // Current user ID
+    private var currentUserId: String {
+        UserManager.shared.getCurrentUserIDUnified() ?? ""
+    }
+
     // Filtered conversations based on search
     private var filteredConversations: [Conversation] {
         if searchText.isEmpty {
@@ -47,17 +51,6 @@ struct ConversationListView: View {
             .onAppear {
                 Task {
                     await chatManager.initialize()
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("didReceiveStreamChatNotification"))) { notification in
-                // Handle Stream Chat notification tap
-                if let userInfo = notification.userInfo,
-                   let channelCid = userInfo["channelCid"] as? String {
-                    print("📱 Stream Chat notification received for channel: \(channelCid)")
-                    // Navigate to the specific channel
-                    Task {
-                        await chatManager.openChannel(cid: channelCid)
-                    }
                 }
             }
             .sheet(isPresented: $showNewConversation) {
@@ -126,7 +119,7 @@ struct ConversationListView: View {
             ForEach(filteredConversations) { conversation in
                 ConversationRow(
                     conversation: conversation,
-                    currentUserId: Auth.auth().currentUser?.uid ?? ""
+                    currentUserId: currentUserId
                 )
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -138,11 +131,11 @@ struct ConversationListView: View {
                             await chatManager.togglePinConversation(conversation)
                         }
                     } label: {
-                        let isPinned = conversation.isPinned(by: Auth.auth().currentUser?.uid ?? "")
-                        Label(isPinned ? "Unpin" : "Pin", 
+                        let isPinned = conversation.isPinned(by: currentUserId)
+                        Label(isPinned ? "Unpin" : "Pin",
                               systemImage: isPinned ? "pin.slash" : "pin")
                     }
-                    .tint(conversation.isPinned(by: Auth.auth().currentUser?.uid ?? "") ? .gray : .orange)
+                    .tint(conversation.isPinned(by: currentUserId) ? .gray : .orange)
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     if conversation.type == .group {

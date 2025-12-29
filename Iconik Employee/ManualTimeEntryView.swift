@@ -225,40 +225,48 @@ struct ManualTimeEntryView: View {
     }
     
     private func loadSessionsForDate() {
-        timeTrackingService.getSessionsForDate(selectedDate) { sessions in
-            DispatchQueue.main.async {
-                self.availableSessions = sessions.sorted { session1, session2 in
-                    guard let start1 = session1.startDate,
-                          let start2 = session2.startDate else {
-                        return false
+        Task {
+            do {
+                let sessions = try await timeTrackingService.getSessionsForDate(selectedDate)
+                await MainActor.run {
+                    self.availableSessions = sessions.sorted { session1, session2 in
+                        guard let start1 = session1.startDate,
+                              let start2 = session2.startDate else {
+                            return false
+                        }
+                        return start1 < start2
                     }
-                    return start1 < start2
                 }
+            } catch {
+                print("Error loading sessions for date: \(error)")
             }
         }
     }
     
     private func createManualEntry() {
         isLoading = true
-        
+
         // Create proper date+time combinations for the service call
         let startDateTime = createDateTime(from: selectedDate, time: startTime)
         let endDateTime = createDateTime(from: selectedDate, time: endTime)
-        
-        timeTrackingService.createManualTimeEntry(
-            date: selectedDate,
-            startTime: startDateTime,
-            endTime: endDateTime,
-            sessionId: selectedSession?.id,
-            notes: notes.isEmpty ? nil : notes
-        ) { success, errorMessage in
-            DispatchQueue.main.async {
-                self.isLoading = false
-                
-                if success {
+
+        Task {
+            do {
+                try await timeTrackingService.createManualTimeEntry(
+                    date: selectedDate,
+                    startTime: startDateTime,
+                    endTime: endDateTime,
+                    sessionId: selectedSession?.id,
+                    notes: notes.isEmpty ? nil : notes
+                )
+                await MainActor.run {
+                    self.isLoading = false
                     self.presentationMode.wrappedValue.dismiss()
-                } else {
-                    self.alertMessage = errorMessage ?? "Failed to create time entry"
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                    self.alertMessage = error.localizedDescription
                     self.showingAlert = true
                 }
             }

@@ -1,18 +1,15 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
-import FirebaseFunctions
 
 /// A simple model for a user in the same organization.
 struct Photographer: Identifiable, Hashable {
-    let id: String      // User's UID (Firestore doc ID)
+    let id: String      // User's UID
     let name: String    // User's first name
 }
 
 struct FlagUserView: View {
     // Current user (flagger)'s UID.
     var currentUserID: String {
-        Auth.auth().currentUser?.uid ?? "unknown"
+        UserManager.shared.getCurrentUserIDUnified() ?? "unknown"
     }
     
     // The current user's organization, from AppStorage.
@@ -110,30 +107,27 @@ struct FlagUserView: View {
         .navigationTitle("Flag User")
     }
     
-    /// Load photographers from Firestore, excluding current user.
+    /// Load photographers from Supabase, excluding current user.
     func loadPhotographers() {
-        let db = Firestore.firestore()
-        db.collection("users")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    errorMessage = error.localizedDescription
-                    return
-                }
-                guard let docs = snapshot?.documents else { return }
-                
-                var temp: [Photographer] = []
-                for doc in docs {
-                    // Exclude self.
-                    if doc.documentID == currentUserID { continue }
-                    if let firstName = doc.data()["firstName"] as? String {
-                        let user = Photographer(id: doc.documentID, name: firstName)
-                        temp.append(user)
+        Task {
+            do {
+                let members = try await TeamService.shared.getTeamMembers(organizationID: storedUserOrganizationID)
+                await MainActor.run {
+                    // Exclude self and map to Photographer model
+                    var temp: [Photographer] = []
+                    for member in members {
+                        if member.id == currentUserID { continue }
+                        temp.append(Photographer(id: member.id, name: member.firstName))
                     }
+                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
+                    photographers = temp
                 }
-                temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                photographers = temp
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
             }
+        }
     }
     
     /// Flag the selected user by setting isFlagged to true and calling the callable function.
@@ -143,7 +137,7 @@ struct FlagUserView: View {
             errorMessage = "You don't have permission to flag users."
             return
         }
-        
+
         guard let target = selectedPhotographer else {
             errorMessage = "Please select a user to flag."
             return
@@ -154,34 +148,64 @@ struct FlagUserView: View {
         }
         errorMessage = ""
         successMessage = ""
-        
-        let db = Firestore.firestore()
-        db.collection("users").document(target.id)
-            .updateData([
-                "isFlagged": true,
-                "flagNote": flagNote,
-                "flaggedBy": currentUserID
-            ]) { error in
-                if let error = error {
+
+        Task {
+            do {
+                try await TeamService.shared.flagUser(
+                    userId: target.id,
+                    note: flagNote,
+                    flaggedBy: currentUserID
+                )
+
+                // Send push notification via Supabase Edge Function
+                await sendFlagNotification(targetId: target.id, targetName: target.name, note: flagNote)
+            } catch {
+                await MainActor.run {
                     errorMessage = error.localizedDescription
-                } else {
-                    successMessage = "\(target.name) flagged successfully."
-                    
-                    // Now call the callable Cloud Function to send the push notification.
-                    let functions = Functions.functions()
-                    functions.httpsCallable("sendFlagNotificationCallable").call([
-                        "targetUserID": target.id,
-                        "flagNote": flagNote,
-                        "flaggedBy": self.currentUserID
-                    ]) { result, error in
-                        if let error = error {
-                            print("Error calling sendFlagNotificationCallable: \(error.localizedDescription)")
-                        } else if let data = result?.data as? [String: Any] {
-                            print("Notification callable function result: \(data)")
-                        }
-                    }
                 }
             }
+        }
+    }
+
+    /// Send flag notification via Supabase Edge Function
+    private func sendFlagNotification(targetId: String, targetName: String, note: String) async {
+        do {
+            let supabase = SupabaseManager.shared.client
+
+            struct NotificationRequest: Encodable {
+                let title: String
+                let body: String
+                let type: String
+                let user_ids: [String]
+                let data: [String: String]
+            }
+
+            let request = NotificationRequest(
+                title: "You've Been Flagged",
+                body: note,
+                type: "flag_notification",
+                user_ids: [targetId.lowercased()],
+                data: [
+                    "flaggedBy": currentUserID,
+                    "note": note
+                ]
+            )
+
+            try await supabase.functions.invoke(
+                "send-notification",
+                options: .init(body: request)
+            )
+
+            await MainActor.run {
+                successMessage = "\(targetName) flagged successfully."
+            }
+        } catch {
+            print("Error sending flag notification: \(error.localizedDescription)")
+            // Still show success for the flag itself, notification is secondary
+            await MainActor.run {
+                successMessage = "\(targetName) flagged successfully."
+            }
+        }
     }
 }
 

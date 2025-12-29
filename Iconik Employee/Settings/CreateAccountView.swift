@@ -1,6 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
 import MapKit
 
 struct CreateAccountView: View {
@@ -18,13 +16,17 @@ struct CreateAccountView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var confirmPassword = ""
-    
+
     @State private var errorMessage = ""
     @State private var accountCreated = false
     @State private var showMap = false
-    
+    @State private var isLoading = false
+
     // Google Places service for address autocomplete
     @StateObject private var placesService = GooglePlacesService.shared
+
+    // Supabase auth service
+    @StateObject private var authService = SupabaseAuthService()
     
     var body: some View {
         ScrollView {
@@ -90,13 +92,19 @@ struct CreateAccountView: View {
                     .textInputAutocapitalization(.never)
                 
                 Button(action: validateAndCreateAccount) {
-                    Text("Create Account")
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(Color.green)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+                    if isLoading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    } else {
+                        Text("Create Account")
+                    }
                 }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(isLoading ? Color.gray : Color.green)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+                .disabled(isLoading)
                 
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
@@ -147,35 +155,69 @@ struct CreateAccountView: View {
     }
     
     private func createAccount() {
-        Auth.auth().createUser(withEmail: email, password: password) { authResult, error in
-            if let error = error {
-                self.errorMessage = error.localizedDescription
-                return
-            }
-            
-            guard let user = authResult?.user else { return }
-            let db = Firestore.firestore()
-            
-            let userData: [String: Any] = [
-                "organizationID": organizationID,
-                "firstName": firstName,
-                "lastName": lastName,
-                "homeAddress": coordinates,  // Store coordinates in homeAddress
-                "address": fullAddress,  // Store full formatted address
-                "city": city,
-                "state": state,
-                "zipCode": zipCode,
-                "country": "United States",
-                "email": email,
-                "role": "employee"
-            ]
-            
-            db.collection("users").document(user.uid).setData(userData) { error in
-                if let error = error {
-                    self.errorMessage = error.localizedDescription
-                } else {
-                    self.errorMessage = ""
-                    self.accountCreated = true
+        isLoading = true
+
+        Task {
+            do {
+                // Create account with Supabase Auth
+                try await authService.signUp(email: email, password: password)
+
+                guard let userId = authService.currentUserId else {
+                    await MainActor.run {
+                        errorMessage = "Failed to get user ID after signup"
+                        isLoading = false
+                    }
+                    return
+                }
+
+                // Create user profile in Supabase database
+                // Note: Using snake_case for Supabase fields
+                struct NewUserProfile: Encodable {
+                    let id: String
+                    let email: String
+                    let organization_id: String
+                    let first_name: String
+                    let last_name: String
+                    let home_address: String  // Store coordinates
+                    let address: String  // Store full formatted address
+                    let city: String
+                    let state: String
+                    let zip_code: String
+                    let country: String
+                    let role: String
+                }
+
+                let newProfile = NewUserProfile(
+                    id: userId,
+                    email: email,
+                    organization_id: organizationID,
+                    first_name: firstName,
+                    last_name: lastName,
+                    home_address: coordinates,
+                    address: fullAddress,
+                    city: city,
+                    state: state,
+                    zip_code: zipCode,
+                    country: "United States",
+                    role: "employee"
+                )
+
+                let supabase = SupabaseManager.shared.client
+                try await supabase
+                    .from("users")
+                    .insert(newProfile)
+                    .execute()
+
+                await MainActor.run {
+                    errorMessage = ""
+                    accountCreated = true
+                    isLoading = false
+                }
+
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isLoading = false
                 }
             }
         }

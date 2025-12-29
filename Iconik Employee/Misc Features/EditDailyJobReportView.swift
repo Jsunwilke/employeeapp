@@ -3,8 +3,6 @@
 //
 
 import SwiftUI
-import FirebaseFirestore
-import FirebaseAuth
 
 struct EditDailyJobReportView: View {
     let report: JobReport
@@ -77,7 +75,7 @@ struct EditDailyJobReportView: View {
         GridItem(.flexible(minimum: 100), spacing: 10)
     ]
     
-    // The list of school options loaded from Firestore
+    // The list of school options loaded from Supabase
     @State private var schoolOptions: [SchoolItem] = []
     
     var body: some View {
@@ -216,144 +214,147 @@ struct EditDailyJobReportView: View {
     }
     
     func loadReportData() {
-        let db = Firestore.firestore()
-        db.collection("dailyJobReports").document(report.id).getDocument { snapshot, error in
-            if let error = error {
-                errorMessage = error.localizedDescription
-                return
-            }
-            guard let data = snapshot?.data() else { return }
-            if let timestamp = data["date"] as? Timestamp {
-                reportDate = timestamp.dateValue()
-            }
-            if let mileage = data["totalMileage"] as? Double {
-                totalMileage = String(format: "%.1f", mileage)
-            }
-            if let notes = data["jobDescriptionText"] as? String {
-                jobNotes = notes
-            }
-            // Load the photoshoot note text if present.
-            if let noteText = data["photoshootNoteText"] as? String {
-                photoshootNoteText = noteText
-            }
-            if let jobDescs = data["jobDescriptions"] as? [String] {
-                jobDescriptions = jobDescs
-            }
-            if let extras = data["extraItems"] as? [String] {
-                extraItems = extras
-            }
-            if let cardsScanned = data["cardsScannedChoice"] as? String {
-                cardsScannedChoice = cardsScanned
-            }
-            if let boxCards = data["jobBoxAndCameraCards"] as? String {
-                jobBoxAndCameraCards = boxCards
-            }
-            if let sportsShot = data["sportsBackgroundShot"] as? String {
-                sportsBackgroundShot = sportsShot
-            }
-            if let school = data["schoolOrDestination"] as? String {
-                schoolOrDestination = school
-            }
-            // Load existing photo URLs
-            if let photoURLs = data["photoURLs"] as? [String] {
-                existingPhotoURLs = photoURLs
+        Task {
+            do {
+                // Load report from Supabase
+                if let supabaseReport = try await DailyJobReportService.shared.getReport(reportId: report.id) {
+                    await MainActor.run {
+                        reportDate = supabaseReport.date
+                        totalMileage = String(format: "%.1f", supabaseReport.total_mileage)
+                        jobNotes = supabaseReport.job_description_text ?? ""
+                        photoshootNoteText = supabaseReport.photoshoot_note_text ?? ""
+                        jobDescriptions = supabaseReport.job_descriptions ?? []
+                        extraItems = supabaseReport.extra_items ?? []
+                        cardsScannedChoice = supabaseReport.cards_scanned_choice ?? "Yes"
+                        jobBoxAndCameraCards = supabaseReport.job_box_and_camera_cards ?? "NA"
+                        sportsBackgroundShot = supabaseReport.sports_background_shot ?? "NA"
+                        schoolOrDestination = supabaseReport.school_or_destination ?? ""
+                        existingPhotoURLs = supabaseReport.photo_urls ?? []
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
             }
         }
-        
+
         loadSchools()
     }
-    
+
     func loadSchools() {
-        guard let currentUser = Auth.auth().currentUser else {
-            errorMessage = "User not signed in."
+        let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+
+        guard !organizationID.isEmpty else {
+            errorMessage = "User organization not found"
             return
         }
-        
-        let db = Firestore.firestore()
-        
-        // First get the user's organization ID
-        db.collection("users").document(currentUser.uid).getDocument { userDoc, error in
-            if let error = error {
-                self.errorMessage = "Error getting user data: \(error.localizedDescription)"
-                return
-            }
-            
-            guard let userData = userDoc?.data(),
-                  let organizationID = userData["organizationID"] as? String else {
-                self.errorMessage = "User organization not found"
-                return
-            }
-            
-            // Now query schools with organization ID filter
-            db.collection("schools")
-                .whereField("organizationID", isEqualTo: organizationID)
-                .getDocuments { snapshot, error in
-                    if let error = error {
-                        self.errorMessage = error.localizedDescription
-                        return
-                    }
-                    guard let docs = snapshot?.documents else { return }
+
+        Task {
+            do {
+                let schools = try await SchoolService.shared.getSchools(organizationID: organizationID)
+
+                await MainActor.run {
+                    // Convert School models to SchoolItem
                     var temp: [SchoolItem] = []
-                    for doc in docs {
-                        let data = doc.data()
-                        if let value = data["value"] as? String,
-                           let address = data["schoolAddress"] as? String {
-                            let coordinates = data["coordinates"] as? String
-                            temp.append(SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates))
+                    for school in schools {
+                        var addressComponents: [String] = []
+                        if let street = school.street, !street.isEmpty {
+                            addressComponents.append(street)
                         }
+                        if let city = school.city, !city.isEmpty {
+                            addressComponents.append(city)
+                        }
+                        if let state = school.state, !state.isEmpty {
+                            addressComponents.append(state)
+                        }
+                        if let zip = school.zip, !zip.isEmpty {
+                            addressComponents.append(zip)
+                        }
+                        let address = addressComponents.isEmpty ? school.value : addressComponents.joined(separator: ", ")
+
+                        temp.append(SchoolItem(
+                            id: school.id,
+                            name: school.value,
+                            address: address,
+                            coordinates: school.coordinates
+                        ))
                     }
                     temp.sort { $0.name.lowercased() < $1.name.lowercased() }
                     self.schoolOptions = temp
                 }
-        }
-    }
-    
-    func submitUpdate() {
-        guard let _ = Auth.auth().currentUser else {
-            errorMessage = "User not signed in."
-            return
-        }
-        isSubmitting = true
-        let mileageValue = Double(totalMileage) ?? 0.0
-        let updatedData: [String: Any] = [
-            "date": reportDate,
-            "totalMileage": mileageValue,
-            "jobDescriptionText": jobNotes,
-            "photoshootNoteText": photoshootNoteText, // Update photoshoot note info.
-            "jobDescriptions": jobDescriptions,
-            "extraItems": extraItems,
-            "cardsScannedChoice": cardsScannedChoice,
-            "jobBoxAndCameraCards": jobBoxAndCameraCards,
-            "sportsBackgroundShot": sportsBackgroundShot,
-            "schoolOrDestination": schoolOrDestination,
-            "timestamp": FieldValue.serverTimestamp()
-        ]
-        
-        let db = Firestore.firestore()
-        db.collection("dailyJobReports").document(report.id).updateData(updatedData) { error in
-            isSubmitting = false
-            if let error = error {
-                errorMessage = error.localizedDescription
-            } else {
-                presentationMode.wrappedValue.dismiss()
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                }
             }
         }
     }
     
+    func submitUpdate() {
+        guard let currentUserId = UserManager.shared.getCurrentUserIDUnified() else {
+            errorMessage = "User not signed in."
+            return
+        }
+        isSubmitting = true
+
+        let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        let yourName = UserDefaults.standard.string(forKey: "userFirstName") ?? ""
+        let mileageValue = Double(totalMileage) ?? 0.0
+
+        // Create updated report
+        let updatedReport = DailyJobReport(
+            id: report.id,
+            organizationID: organizationID,
+            userId: currentUserId,
+            date: reportDate,
+            yourName: yourName,
+            schoolOrDestination: schoolOrDestination.isEmpty ? nil : schoolOrDestination,
+            totalMileage: mileageValue,
+            jobDescriptions: jobDescriptions.isEmpty ? nil : jobDescriptions,
+            extraItems: extraItems.isEmpty ? nil : extraItems,
+            cardsScannedChoice: cardsScannedChoice.isEmpty ? nil : cardsScannedChoice,
+            jobBoxAndCameraCards: jobBoxAndCameraCards.isEmpty ? nil : jobBoxAndCameraCards,
+            sportsBackgroundShot: sportsBackgroundShot.isEmpty ? nil : sportsBackgroundShot,
+            jobDescriptionText: jobNotes.isEmpty ? nil : jobNotes,
+            photoshootNoteText: photoshootNoteText.isEmpty ? nil : photoshootNoteText,
+            photoURLs: existingPhotoURLs.isEmpty ? nil : existingPhotoURLs
+        )
+
+        Task {
+            do {
+                try await DailyJobReportService.shared.updateReport(updatedReport)
+
+                await MainActor.run {
+                    isSubmitting = false
+                    presentationMode.wrappedValue.dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    isSubmitting = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     func deleteReport() {
         isDeleting = true
-        
-        let db = Firestore.firestore()
-        db.collection("dailyJobReports").document(report.id).delete { error in
-            DispatchQueue.main.async {
-                isDeleting = false
-                
-                if let error = error {
-                    print("Error deleting report: \(error.localizedDescription)")
-                    errorMessage = "Failed to delete report: \(error.localizedDescription)"
-                } else {
+
+        Task {
+            do {
+                try await DailyJobReportService.shared.deleteReport(reportId: report.id)
+
+                await MainActor.run {
+                    isDeleting = false
                     print("Report deleted successfully")
                     dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    isDeleting = false
+                    print("Error deleting report: \(error.localizedDescription)")
+                    errorMessage = "Failed to delete report: \(error.localizedDescription)"
                 }
             }
         }

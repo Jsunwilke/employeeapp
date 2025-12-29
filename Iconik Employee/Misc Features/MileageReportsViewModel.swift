@@ -1,44 +1,55 @@
 import Foundation
-import FirebaseFirestore
-import FirebaseFirestoreSwift
 import SwiftUI
-import Firebase
-import FirebaseAuth
 
 class MileageReportsViewModel: ObservableObject {
     static let shared = MileageReportsViewModel()
-    
+
     @Published var currentPeriodMileage: Double = 0
     @Published var monthMileage: Double = 0
     @Published var yearMileage: Double = 0
     @Published var records: [MileageRecordWrapper] = []
-    
+
     var userName: String = ""
     var userId: String?
-    
+
     let calendar = Calendar.current
     var currentPeriodStart: Date = Date()
     var currentPeriodEnd: Date = Date()
-    
+
     private let payPeriodService = PayPeriodService.shared
-    private var mileageListener: ListenerRegistration?
     private var updateCallback: (() -> Void)?
-    
-    // Local wrapper model to hold Firestore data
+
+    // Local wrapper model to hold report data
     struct MileageRecordWrapper: Identifiable {
-        let id: String // Firestore document ID
+        let id: String
         let date: Date
         let totalMileage: Double
         let schoolName: String
+
+        /// Create from DailyJobReport
+        init(from report: DailyJobReport) {
+            self.id = report.id
+            self.date = report.date
+            self.totalMileage = report.total_mileage
+            self.schoolName = report.school_or_destination ?? ""
+        }
+
+        /// Direct initializer
+        init(id: String, date: Date, totalMileage: Double, schoolName: String) {
+            self.id = id
+            self.date = date
+            self.totalMileage = totalMileage
+            self.schoolName = schoolName
+        }
     }
     
     init(userName: String = "") {
         self.userName = userName.isEmpty ? (UserDefaults.standard.string(forKey: "userFirstName") ?? "") : userName
         
         // Get the current user's ID for more reliable filtering
-        if let currentUser = Auth.auth().currentUser {
-            self.userId = currentUser.uid
-            print("🚗 MileageReportsViewModel: Initialized with userId: \(currentUser.uid), userName: \(self.userName)")
+        if let userId = UserManager.shared.getCurrentUserIDUnified() {
+            self.userId = userId
+            print("🚗 MileageReportsViewModel: Initialized with userId: \(userId), userName: \(self.userName)")
         } else {
             print("⚠️ MileageReportsViewModel: No authenticated user, using userName: \(self.userName)")
         }
@@ -64,11 +75,7 @@ class MileageReportsViewModel: ObservableObject {
         }
     }
     
-    deinit {
-        mileageListener?.remove()
-    }
-    
-    // Add listener support for real-time updates
+    // Add callback support for updates
     func listenForMileageUpdates(completion: @escaping () -> Void) {
         self.updateCallback = completion
     }
@@ -123,7 +130,7 @@ class MileageReportsViewModel: ObservableObject {
     private func loadRecordsInternal(forPayPeriodStart payPeriodStart: Date? = nil) {
         let periodStart = payPeriodStart ?? currentPeriodStart
         let periodEnd: Date
-        
+
         if let customStart = payPeriodStart {
             // Calculate end date for custom period using PayPeriodService
             if let settings = payPeriodService.payPeriodSettings,
@@ -141,86 +148,48 @@ class MileageReportsViewModel: ObservableObject {
         } else {
             periodEnd = currentPeriodEnd
         }
-        
+
         // Log the date range we're querying
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
         dateFormatter.timeStyle = .medium
         print("🚗 Loading mileage records from \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
-        
-        let db = Firestore.firestore()
-        
-        // Build query - prefer userId if available, fallback to yourName
-        let baseCollection = db.collection("dailyJobReports")
-        let query: Query
-        
-        if let userId = userId {
-            print("🚗 Querying mileage reports by userId: \(userId)")
-            query = baseCollection.whereField("userId", isEqualTo: userId)
-                .whereField("date", isGreaterThanOrEqualTo: periodStart)
-                .whereField("date", isLessThanOrEqualTo: periodEnd)
-        } else {
-            print("🚗 Querying mileage reports by yourName: \(userName)")
-            query = baseCollection.whereField("yourName", isEqualTo: userName)
-                .whereField("date", isGreaterThanOrEqualTo: periodStart)
-                .whereField("date", isLessThanOrEqualTo: periodEnd)
+
+        guard let userId = userId else {
+            print("🚗 No userId available for mileage query")
+            return
         }
-        
-        query.getDocuments { [weak self] snapshot, error in
-                DispatchQueue.main.async {
-                    if let error = error {
-                        print("Error fetching mileage reports: \(error.localizedDescription)")
-                        
-                        // More detailed error logging
-                        if (error as NSError).code == 7 { // Permission denied
-                            print("Permission denied. User ID: \(self?.userId ?? "nil"), UserName: \(self?.userName ?? "nil")")
-                        }
-                        return
-                    }
-                    guard let documents = snapshot?.documents else { return }
-                    
+
+        Task {
+            do {
+                print("🚗 Querying mileage reports by userId: \(userId)")
+                let reports = try await DailyJobReportService.shared.getReports(
+                    userId: userId,
+                    startDate: periodStart,
+                    endDate: periodEnd
+                )
+
+                await MainActor.run {
                     // Log how many documents were found
-                    print("Found \(documents.count) reports for the period")
-                    
-                    // Convert Firestore documents to local models
-                    self?.records = documents.compactMap { doc in
-                        let data = doc.data()
-                        
-                        guard let timestamp = data["date"] as? Timestamp else {
-                            print("Missing date in document: \(doc.documentID)")
-                            return nil
-                        }
-                        let date = timestamp.dateValue()
-                        
-                        // Log each report date for debugging (commented out to reduce console spam)
-                        // let dateFormatter = DateFormatter()
-                        // dateFormatter.dateStyle = .medium
-                        // print("Report date: \(dateFormatter.string(from: date))")
-                        
-                        let mileage = data["totalMileage"] as? Double ?? 0.0
-                        
-                        // Pull the school/destination name from Firestore
-                        let schoolName = data["schoolOrDestination"] as? String ?? ""
-                        
-                        return MileageRecordWrapper(
-                            id: doc.documentID,
-                            date: date,
-                            totalMileage: mileage,
-                            schoolName: schoolName
-                        )
-                    }
-                    
+                    print("Found \(reports.count) reports for the period")
+
+                    // Convert DailyJobReport to local wrapper models
+                    self.records = reports.map { MileageRecordWrapper(from: $0) }
+
                     // Since we already filtered by date in the query, just sum all records
-                    self?.currentPeriodMileage = self?.records.reduce(0) { $0 + $1.totalMileage } ?? 0
-                    print("🚗 Pay period mileage: \(self?.currentPeriodMileage ?? 0) miles from \(self?.records.count ?? 0) records")
-                    
+                    self.currentPeriodMileage = self.records.reduce(0) { $0 + $1.totalMileage }
+                    print("🚗 Pay period mileage: \(self.currentPeriodMileage) miles from \(self.records.count) records")
+
                     // Also load month and year totals
-                    self?.loadYearAndMonthMileage()
-                    
+                    self.loadYearAndMonthMileage()
+
                     // Notify listener of update
-                    self?.updateCallback?()
+                    self.updateCallback?()
                 }
+            } catch {
+                print("Error fetching mileage reports: \(error.localizedDescription)")
             }
+        }
     }
     
     /// Calculate the mileage total for the selected period.
@@ -249,17 +218,16 @@ class MileageReportsViewModel: ObservableObject {
     ///   - total mileage for the year
     func loadYearAndMonthMileage() {
         print("🚗 Loading year and month mileage totals...")
-        let db = Firestore.firestore()
-        
+
         let currentYear = calendar.component(.year, from: Date())
-        
+
         // Start of year
         var startComps = DateComponents()
         startComps.year = currentYear
         startComps.month = 1
         startComps.day = 1
         let yearStart = calendar.date(from: startComps)!
-        
+
         // End of year - set to last second of the year
         var endComps = DateComponents()
         endComps.year = currentYear
@@ -269,71 +237,54 @@ class MileageReportsViewModel: ObservableObject {
         endComps.minute = 59
         endComps.second = 59
         let yearEnd = calendar.date(from: endComps)!
-        
+
         // Log the year range for debugging
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
         dateFormatter.timeStyle = .medium
         print("Loading year mileage from \(dateFormatter.string(from: yearStart)) to \(dateFormatter.string(from: yearEnd))")
-        
-        // Build query - prefer userId if available, fallback to yourName
-        let baseCollection = db.collection("dailyJobReports")
-        let query: Query
-        
-        if let userId = userId {
-            // print("Querying mileage reports by userId: \(userId)")
-            query = baseCollection.whereField("userId", isEqualTo: userId)
-                .whereField("date", isGreaterThanOrEqualTo: yearStart)
-                .whereField("date", isLessThanOrEqualTo: yearEnd)
-        } else {
-            // print("Querying mileage reports by yourName: \(userName)")
-            query = baseCollection.whereField("yourName", isEqualTo: userName)
-                .whereField("date", isGreaterThanOrEqualTo: yearStart)
-                .whereField("date", isLessThanOrEqualTo: yearEnd)
+
+        guard let userId = userId else {
+            print("🚗 No userId available for year/month mileage query")
+            return
         }
-        
-        query.getDocuments { [weak self] snapshot, error in
-                DispatchQueue.main.async {
-                    if let error = error {
-                        print("Error fetching yearly reports: \(error.localizedDescription)")
-                        
-                        // More detailed error logging
-                        if (error as NSError).code == 7 { // Permission denied
-                            print("Permission denied for yearly reports. User ID: \(self?.userId ?? "nil"), UserName: \(self?.userName ?? "nil")")
-                        }
-                        return
-                    }
-                    guard let documents = snapshot?.documents else { return }
-                    
+
+        Task {
+            do {
+                let reports = try await DailyJobReportService.shared.getReports(
+                    userId: userId,
+                    startDate: yearStart,
+                    endDate: yearEnd
+                )
+
+                await MainActor.run {
                     // Log how many documents were found for the year
-                    print("Found \(documents.count) reports for the year")
-                    
-                    let allRecords = documents.compactMap { doc -> (date: Date, mileage: Double)? in
-                        let data = doc.data()
-                        guard let timestamp = data["date"] as? Timestamp else { return nil }
-                        let date = timestamp.dateValue()
-                        let mileage = data["totalMileage"] as? Double ?? 0.0
-                        return (date, mileage)
-                    }
-                    
+                    print("Found \(reports.count) reports for the year")
+
+                    // Convert to tuples for processing
+                    let allRecords = reports.map { (date: $0.date, mileage: $0.total_mileage) }
+
                     // Sum mileage for the entire year
-                    self?.yearMileage = allRecords.reduce(0) { $0 + $1.mileage }
-                    
+                    self.yearMileage = allRecords.reduce(0) { $0 + $1.mileage }
+
                     // Sum mileage for the current month
-                    let currentMonth = self?.calendar.component(.month, from: Date()) ?? 1
+                    let currentMonth = self.calendar.component(.month, from: Date())
                     let monthRecords = allRecords.filter {
-                        self?.calendar.component(.month, from: $0.date) == currentMonth &&
-                        self?.calendar.component(.year, from: $0.date) == currentYear
+                        self.calendar.component(.month, from: $0.date) == currentMonth &&
+                        self.calendar.component(.year, from: $0.date) == currentYear
                     }
-                    self?.monthMileage = monthRecords.reduce(0) { $0 + $1.mileage }
-                    
-                    print("🚗 Calculated year mileage: \(self?.yearMileage ?? 0) miles from \(allRecords.count) total records")
-                    print("🚗 Calculated month mileage: \(self?.monthMileage ?? 0) miles from \(monthRecords.count) month records")
+                    self.monthMileage = monthRecords.reduce(0) { $0 + $1.mileage }
+
+                    print("🚗 Calculated year mileage: \(self.yearMileage) miles from \(allRecords.count) total records")
+                    print("🚗 Calculated month mileage: \(self.monthMileage) miles from \(monthRecords.count) month records")
                     print("🚗 Current year: \(currentYear), Current month: \(currentMonth)")
-                    
+
                     // Notify listener of update
-                    self?.updateCallback?()
+                    self.updateCallback?()
                 }
+            } catch {
+                print("Error fetching yearly reports: \(error.localizedDescription)")
             }
+        }
     }
 }

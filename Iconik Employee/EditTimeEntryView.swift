@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseFirestore
 
 struct EditTimeEntryView: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
@@ -70,7 +69,7 @@ struct EditTimeEntryView: View {
                     HStack {
                         Text("Date")
                         Spacer()
-                        Text(formatDate(timeEntry.date))
+                        Text(formatDate(timeEntry.date ?? ""))
                             .foregroundColor(.secondary)
                     }
                     
@@ -85,7 +84,7 @@ struct EditTimeEntryView: View {
                         DatePicker("Date", selection: $clockInDate, 
                                   in: ...Date(), // Cannot be in the future
                                   displayedComponents: .date)
-                            .disabled(timeEntry.status == "clocked-in") // Don't allow date change for active entries
+                            .disabled(timeEntry.status == "clocked-in") // Don't allow date change for clocked-in entries
                         
                         DatePicker("Time", selection: $clockInTime, 
                                   displayedComponents: .hourAndMinute)
@@ -133,7 +132,7 @@ struct EditTimeEntryView: View {
                     }
                     }
                     
-                    // Session selection (if available) - disabled for active entries
+                    // Session selection (if available) - disabled for clocked-in entries
                     if !availableSessions.isEmpty && timeEntry.status != "clocked-in" {
                         Section(header: Text("Associated Session")) {
                             Picker("Session", selection: $selectedSession) {
@@ -182,10 +181,10 @@ struct EditTimeEntryView: View {
                         }
                     }
                     
-                    // Show info for active entries
+                    // Show info for clocked-in entries
                     if timeEntry.status == "clocked-in" {
                         Section {
-                            Label("You can only edit the clock-in time and notes while actively clocked in", systemImage: "info.circle")
+                            Label("You can only edit the clock-in time and notes while clocked-inly clocked in", systemImage: "info.circle")
                                 .font(.caption)
                                 .foregroundColor(.blue)
                         }
@@ -301,7 +300,7 @@ struct EditTimeEntryView: View {
     }
     
     private var isValidEntry: Bool {
-        // For active entries, only validate clock-in time
+        // For clocked-in entries, only validate clock-in time
         if timeEntry.status == "clocked-in" {
             // Validate clock-in time is not in future and within 48 hours
             let validation = TimeEntryValidator.canEditActiveClockIn(timeEntry, newClockInTime: combinedClockIn)
@@ -369,44 +368,54 @@ struct EditTimeEntryView: View {
         // Parse the date from the entry's date string
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        guard let entryDate = formatter.date(from: timeEntry.date) else { return }
-        
-        timeTrackingService.getSessionsForDate(entryDate) { sessions in
-            DispatchQueue.main.async {
-                self.availableSessions = sessions.sorted { session1, session2 in
-                    guard let start1 = session1.startDate,
-                          let start2 = session2.startDate else {
-                        return false
+        guard let dateString = timeEntry.date,
+              let entryDate = formatter.date(from: dateString) else { return }
+
+        Task {
+            do {
+                let sessions = try await timeTrackingService.getSessionsForDate(entryDate)
+                await MainActor.run {
+                    self.availableSessions = sessions.sorted { session1, session2 in
+                        guard let start1 = session1.startDate,
+                              let start2 = session2.startDate else {
+                            return false
+                        }
+                        return start1 < start2
                     }
-                    return start1 < start2
+
+                    // Set selected session if it exists
+                    if let sessionId = self.timeEntry.sessionId {
+                        self.selectedSession = self.availableSessions.first { $0.id == sessionId }
+                    }
                 }
-                
-                // Set selected session if it exists
-                if let sessionId = self.timeEntry.sessionId {
-                    self.selectedSession = self.availableSessions.first { $0.id == sessionId }
-                }
+            } catch {
+                print("Error loading sessions for date: \(error)")
             }
         }
     }
     
     private func updateTimeEntry() {
         isLoading = true
-        
-        // Use combined date/time values for cross-midnight support
-        timeTrackingService.updateTimeEntry(
-            entryId: timeEntry.id,
-            startTime: combinedClockIn,
-            endTime: combinedClockOut,
-            sessionId: selectedSession?.id,
-            notes: notes.isEmpty ? nil : notes
-        ) { success, errorMessage in
-            DispatchQueue.main.async {
-                self.isLoading = false
-                
-                if success {
+
+        Task {
+            do {
+                // Use combined date/time values for cross-midnight support
+                try await timeTrackingService.updateTimeEntry(
+                    entryId: timeEntry.id,
+                    startTime: combinedClockIn,
+                    endTime: combinedClockOut,
+                    sessionId: selectedSession?.id,
+                    notes: notes.isEmpty ? nil : notes
+                )
+
+                await MainActor.run {
+                    self.isLoading = false
                     self.presentationMode.wrappedValue.dismiss()
-                } else {
-                    self.alertMessage = errorMessage ?? "Failed to update time entry"
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                    self.alertMessage = error.localizedDescription
                     self.showingAlert = true
                 }
             }
@@ -415,15 +424,19 @@ struct EditTimeEntryView: View {
     
     private func deleteTimeEntry() {
         isLoading = true
-        
-        timeTrackingService.deleteTimeEntry(entryId: timeEntry.id) { success, errorMessage in
-            DispatchQueue.main.async {
-                self.isLoading = false
-                
-                if success {
+
+        Task {
+            do {
+                try await timeTrackingService.deleteTimeEntry(entryId: timeEntry.id)
+
+                await MainActor.run {
+                    self.isLoading = false
                     self.presentationMode.wrappedValue.dismiss()
-                } else {
-                    self.alertMessage = errorMessage ?? "Failed to delete time entry"
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                    self.alertMessage = error.localizedDescription
                     self.showingAlert = true
                 }
             }
@@ -461,7 +474,7 @@ struct EditTimeEntryView: View {
         clockInTime: Calendar.current.date(byAdding: .hour, value: -8, to: Date()),
         clockOutTime: Calendar.current.date(byAdding: .hour, value: -2, to: Date()),
         date: "2024-07-12",
-        status: "completed",
+        status: "clocked-out",
         sessionId: "sample-session-id",
         notes: "Sample time entry for preview",
         createdAt: Calendar.current.date(byAdding: .day, value: -1, to: Date()),

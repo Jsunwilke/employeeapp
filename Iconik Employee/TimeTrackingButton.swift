@@ -4,6 +4,8 @@ struct TimeTrackingButton: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
     @State private var showingTimeTrackingView = false
     @State private var showingSessionSelection = false
+    @State private var showingError = false
+    @State private var errorMessage = ""
     
     var body: some View {
         Button(action: {
@@ -64,19 +66,35 @@ struct TimeTrackingButton: View {
                 }
             )
         }
-        .onAppear {
+        .task {
             // Check current status when button appears
-            timeTrackingService.checkCurrentStatus()
+            await timeTrackingService.checkCurrentStatus()
+        }
+        .alert("Clock In Failed", isPresented: $showingError) {
+            Button("OK") { }
+        } message: {
+            Text(errorMessage)
         }
     }
-    
+
     // MARK: - Helper Functions
-    
+
     private func clockIn(sessionId: String?, notes: String?) {
-        timeTrackingService.clockIn(sessionId: sessionId, notes: notes) { success, errorMessage in
-            DispatchQueue.main.async {
-                if success {
+        print("🔵 [TimeTrackingButton] clockIn called - sessionId: \(sessionId ?? "nil"), notes: \(notes ?? "nil")")
+        Task {
+            do {
+                print("🔵 [TimeTrackingButton] Calling timeTrackingService.clockIn...")
+                try await timeTrackingService.clockIn(sessionId: sessionId, notes: notes)
+                print("🔵 [TimeTrackingButton] ✅ Clock in succeeded!")
+
+                await MainActor.run {
                     showingSessionSelection = false
+                }
+            } catch {
+                print("🔵 [TimeTrackingButton] ❌ Clock in error: \(error.localizedDescription)")
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    showingError = true
                 }
             }
         }

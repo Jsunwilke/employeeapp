@@ -1,7 +1,6 @@
 import SwiftUI
 import CoreNFC
-import FirebaseFirestore
-import FirebaseAuth
+import Supabase
 
 struct ScanView: View {
     @StateObject var nfcReader = NFCReaderCoordinator()
@@ -32,8 +31,8 @@ struct ScanView: View {
     @State private var leftJobBoxes: [(JobBox, TimeInterval)] = []
     @State private var jobBoxesLoaded = false
     
-    // Firestore listener
-    @State private var jobBoxListener: ListenerRegistration?
+    // Supabase realtime listener
+    @State private var jobBoxListener: ListenerRegistrationWrapper?
     
     // Debug mode for easier testing - set to false for production
     @State private var debugMode = false
@@ -175,7 +174,7 @@ struct ScanView: View {
             setupJobBoxListener()
         }
         .onDisappear {
-            // Remove the Firestore listener when view disappears
+            // Remove the Supabase realtime listener when view disappears
             jobBoxListener?.remove()
             jobBoxListener = nil
             nfcReader.errorMessage = nil
@@ -304,84 +303,45 @@ struct ScanView: View {
         guard !orgID.isEmpty else {
             return
         }
-        
+
         print("DEBUG: Setting up real-time job box listener for org \(orgID)")
-        
-        // Get Firestore reference
-        let db = Firestore.firestore()
-        
-        // Listen for ALL job box updates in this organization
-        // This is more efficient than querying everything repeatedly
-        jobBoxListener = db.collection("jobBoxes")
-            .whereField("organizationID", isEqualTo: orgID)
-            .addSnapshotListener { snapshot, error in
-                if let error = error {
-                    print("DEBUG: Error in job box listener: \(error)")
-                    return
-                }
-                
-                guard let snapshot = snapshot else {
-                    print("DEBUG: Empty snapshot in job box listener")
-                    return
-                }
-                
+
+        // Use Supabase realtime for job box updates
+        let supabase = SupabaseManager.shared.client
+        let channelKey = "job_boxes_scan_\(orgID.lowercased())"
+        let channel = supabase.channel(channelKey)
+
+        let changeStream = channel.postgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: "job_boxes",
+            filter: "organization_id=eq.\(orgID.lowercased())"
+        )
+
+        Task {
+            for await change in changeStream {
                 print("DEBUG: Job box listener triggered - detected changes")
-                
-                // Instead of refreshing completely, we'll process the changes
-                // to determine if we need to update our left job box notifications
-                self.processJobBoxChanges(snapshot: snapshot)
+
+                await MainActor.run {
+                    // Refresh left job boxes when changes are detected
+                    self.checkForLeftJobBoxes()
+                }
             }
+        }
+
+        Task {
+            await channel.subscribe()
+        }
+
+        jobBoxListener = ListenerRegistrationWrapper {
+            Task {
+                await channel.unsubscribe()
+            }
+        }
     }
     
-    // Process snapshots to efficiently update left job box notifications
-    func processJobBoxChanges(snapshot: QuerySnapshot) {
-        let currentUserName = storedUserFirstName
-        guard !currentUserName.isEmpty else {
-            return
-        }
-        
-        // Look for document changes that might affect our left job box list
-        var needFullRefresh = false
-        var boxNumbers = Set<String>()
-        
-        // Extract box numbers from changed documents
-        for change in snapshot.documentChanges {
-            // Access the data directly without trying to decode it
-            let data = change.document.data()
-            
-            // Extract the box number directly from the document data
-            if let boxNumber = data["boxNumber"] as? String {
-                boxNumbers.insert(boxNumber)
-                
-                // If this is for the current user, we'll check more carefully
-                if let photographer = data["photographer"] as? String,
-                   photographer.lowercased() == currentUserName.lowercased() {
-                    
-                    if change.type == .added || change.type == .modified {
-                        // If a box entered or left "Left Job" status, we need a refresh
-                        if let status = data["status"] as? String,
-                           status.lowercased() == "left job" || change.type == .modified {
-                            needFullRefresh = true
-                        }
-                    } else if change.type == .removed {
-                        // If a document was deleted, we need a full refresh
-                        needFullRefresh = true
-                    }
-                }
-            }
-        }
-        
-        // If box numbers from our notification list were affected by changes,
-        // or if we determined we need a full refresh, do it now
-        let affectedNotificationBox = leftJobBoxes.contains { record, _ in
-            return boxNumbers.contains(record.boxNumber)
-        }
-        
-        if needFullRefresh || affectedNotificationBox {
-            print("DEBUG: Changes affect our notifications - refreshing left job boxes")
-            checkForLeftJobBoxes()
-        }
-    }
+    // DEPRECATED: This function is no longer used - using Supabase realtime instead
+    // Kept for reference only
     
     // Function to check for job boxes in "Left Job" status
     func checkForLeftJobBoxes() {
@@ -413,15 +373,15 @@ struct ScanView: View {
                 
                 for (boxNumber, records) in boxGroups {
                     // Get the most recent record for this box number
-                    if let mostRecent = records.sorted(by: { $0.timestamp > $1.timestamp }).first {
-                        if mostRecent.status == .leftJob {
+                    if let mostRecent = records.sorted(by: { $0.timestampDate > $1.timestampDate }).first {
+                        if mostRecent.jobBoxStatus == .leftJob {
                             // Check if this box belongs to the current user
                             if mostRecent.scannedBy.lowercased() == currentUserName.lowercased() {
                                 leftJobBoxRecords.append(mostRecent)
                                 print("DEBUG: Box #\(boxNumber) is currently in 'Left Job' status (most recent)")
                             }
                         } else {
-                            print("DEBUG: Box #\(boxNumber) is NOT in 'Left Job' status, current status: \(mostRecent.status.rawValue)")
+                            print("DEBUG: Box #\(boxNumber) is NOT in 'Left Job' status, current status: \(mostRecent.status)")
                         }
                     }
                 }
@@ -438,7 +398,7 @@ struct ScanView: View {
                 
                 // Process the boxes that are still in "Left Job" status
                 let processedRecords = leftJobBoxRecords.map { record -> (JobBox, TimeInterval) in
-                    let timeDifference = currentTime.timeIntervalSince(record.timestamp)
+                    let timeDifference = currentTime.timeIntervalSince(record.timestampDate)
                     let hoursInLeftJob = timeDifference / 3600.0
                     
                     print("DEBUG: Box #\(record.boxNumber) by \(record.scannedBy) has been in 'Left Job' for \(hoursInLeftJob) hours")
@@ -578,7 +538,7 @@ struct ScanView: View {
         }
         
         // Check if the job box was previously in "Left Job" status
-        let wasInLeftJobStatus = lastJobBoxRecord?.status == .leftJob
+        let wasInLeftJobStatus = lastJobBoxRecord?.jobBoxStatus == .leftJob
         let wasNotificationBox = leftJobBoxes.contains { record, _ in
             return record.boxNumber == boxNumber
         }
@@ -619,7 +579,7 @@ struct ScanView: View {
                     self.showingJobBoxForm = false
                     self.nfcReader.scannedCardNumber = nil
                     
-                    // No need to manually refresh since the Firestore listener
+                    // No need to manually refresh since the Supabase realtime listener
                     // will automatically pick up changes for cross-device updates
                     
                     // Then notify completion
@@ -702,18 +662,18 @@ struct ScanView: View {
         
         FirestoreManager.shared.fetchJobBoxRecords(field: "boxNumber", value: boxNumber, organizationID: orgID) { result in
             isLoading = false
-            
+
             switch result {
             case .success(let records):
-                let sortedRecords = records.sorted { $0.timestamp > $1.timestamp }
+                let sortedRecords = records.sorted { $0.timestampDate > $1.timestampDate }
                 self.lastJobBoxRecord = sortedRecords.first
-                
+
                 if let last = self.lastJobBoxRecord {
-                    self.school = last.school
+                    self.school = last.school ?? ""
                     self.schoolId = last.schoolId
-                    
+
                     // Advance the status in the job box status cycle
-                    let currentStatusString = last.status.rawValue
+                    let currentStatusString = last.status
                     if let index = jobBoxStatuses.firstIndex(where: { $0.lowercased() == currentStatusString.lowercased() }) {
                         let nextIndex = (index + 1) % jobBoxStatuses.count
                         self.status = jobBoxStatuses[nextIndex]

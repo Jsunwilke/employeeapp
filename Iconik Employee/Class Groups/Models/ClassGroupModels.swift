@@ -1,21 +1,36 @@
 import Foundation
-import FirebaseFirestore
 
 // MARK: - Class Group Job Model
 struct ClassGroupJob: Identifiable, Codable, Hashable {
     var id: String
-    var sessionId: String
-    var sessionDate: Date
-    var schoolId: String
-    var schoolName: String
-    var organizationId: String
-    var jobType: String // "classGroups" or "classCandids"
-    var classGroups: [ClassGroup]
-    var createdAt: Date
-    var updatedAt: Date
-    var createdBy: String
-    var lastModifiedBy: String
-    
+    var session_id: String
+    var session_date: Date
+    var school_id: String
+    var school_name: String
+    var organization_id: String
+    var job_type: String // "classGroups" or "classCandids"
+    var class_groups: [ClassGroup]
+    var created_at: Date
+    var updated_at: Date
+    var created_by: String
+    var last_modified_by: String
+
+    // Backward compatibility computed properties
+    var sessionId: String { session_id }
+    var sessionDate: Date { session_date }
+    var schoolId: String { school_id }
+    var schoolName: String { school_name }
+    var organizationId: String { organization_id }
+    var jobType: String { job_type }
+    var classGroups: [ClassGroup] {
+        get { class_groups }
+        set { class_groups = newValue }
+    }
+    var createdAt: Date { created_at }
+    var updatedAt: Date { updated_at }
+    var createdBy: String { created_by }
+    var lastModifiedBy: String { last_modified_by }
+
     // MARK: - Initialization
     init(
         id: String = UUID().uuidString,
@@ -32,71 +47,30 @@ struct ClassGroupJob: Identifiable, Codable, Hashable {
         lastModifiedBy: String = ""
     ) {
         self.id = id
-        self.sessionId = sessionId
-        self.sessionDate = sessionDate
-        self.schoolId = schoolId
-        self.schoolName = schoolName
-        self.organizationId = organizationId
-        self.jobType = jobType
-        self.classGroups = classGroups
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-        self.createdBy = createdBy
-        self.lastModifiedBy = lastModifiedBy
+        self.session_id = sessionId
+        self.session_date = sessionDate
+        self.school_id = schoolId
+        self.school_name = schoolName
+        self.organization_id = organizationId
+        self.job_type = jobType
+        self.class_groups = classGroups
+        self.created_at = createdAt
+        self.updated_at = updatedAt
+        self.created_by = createdBy
+        self.last_modified_by = lastModifiedBy
     }
-    
-    // MARK: - Firestore Conversion
-    init?(from document: DocumentSnapshot) {
-        guard let data = document.data() else { return nil }
-        
-        self.id = document.documentID
-        self.sessionId = data["sessionId"] as? String ?? ""
-        self.sessionDate = (data["sessionDate"] as? Timestamp)?.dateValue() ?? Date()
-        self.schoolId = data["schoolId"] as? String ?? ""
-        self.schoolName = data["schoolName"] as? String ?? ""
-        self.organizationId = data["organizationId"] as? String ?? ""
-        self.jobType = data["jobType"] as? String ?? "classGroups"
-        
-        // Parse class groups array
-        if let groupsData = data["classGroups"] as? [[String: Any]] {
-            self.classGroups = groupsData.compactMap { ClassGroup(from: $0) }
-        } else {
-            self.classGroups = []
-        }
-        
-        self.createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-        self.updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-        self.createdBy = data["createdBy"] as? String ?? ""
-        self.lastModifiedBy = data["lastModifiedBy"] as? String ?? ""
-    }
-    
-    func toFirestoreData() -> [String: Any] {
-        return [
-            "sessionId": sessionId,
-            "sessionDate": Timestamp(date: sessionDate),
-            "schoolId": schoolId,
-            "schoolName": schoolName,
-            "organizationId": organizationId,
-            "jobType": jobType,
-            "classGroups": classGroups.map { $0.toFirestoreData() },
-            "createdAt": Timestamp(date: createdAt),
-            "updatedAt": Timestamp(date: updatedAt),
-            "createdBy": createdBy,
-            "lastModifiedBy": lastModifiedBy
-        ]
-    }
-    
+
     // MARK: - Computed Properties
     var classGroupCount: Int {
-        return classGroups.count
+        return class_groups.count
     }
-    
+
     var totalImageCount: Int {
-        return classGroups.reduce(0) { $0 + $1.imageCount }
+        return class_groups.reduce(0) { $0 + $1.imageCount }
     }
-    
+
     var hasClassGroups: Bool {
-        return !classGroups.isEmpty
+        return !class_groups.isEmpty
     }
 }
 
@@ -105,9 +79,15 @@ struct ClassGroup: Identifiable, Codable, Hashable {
     var id: String
     var grade: String
     var teacher: String
-    var imageNumbers: String
+    var image_numbers: String
     var notes: String
-    
+
+    // Backward compatibility
+    var imageNumbers: String {
+        get { image_numbers }
+        set { image_numbers = newValue }
+    }
+
     init(
         id: String = UUID().uuidString,
         grade: String = "",
@@ -118,48 +98,27 @@ struct ClassGroup: Identifiable, Codable, Hashable {
         self.id = id
         self.grade = grade
         self.teacher = teacher
-        self.imageNumbers = imageNumbers
+        self.image_numbers = imageNumbers
         self.notes = notes
     }
-    
-    // MARK: - Firestore Conversion
-    init?(from dictionary: [String: Any]) {
-        guard let id = dictionary["id"] as? String else { return nil }
-        
-        self.id = id
-        self.grade = dictionary["grade"] as? String ?? ""
-        self.teacher = dictionary["teacher"] as? String ?? ""
-        self.imageNumbers = dictionary["imageNumbers"] as? String ?? ""
-        self.notes = dictionary["notes"] as? String ?? ""
-    }
-    
-    func toFirestoreData() -> [String: Any] {
-        return [
-            "id": id,
-            "grade": grade,
-            "teacher": teacher,
-            "imageNumbers": imageNumbers,
-            "notes": notes
-        ]
-    }
-    
+
     // MARK: - Computed Properties
     var displayName: String {
         return "\(grade) - \(teacher)"
     }
-    
+
     var hasImages: Bool {
-        return !imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !image_numbers.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-    
+
     var imageCount: Int {
-        let trimmed = imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = image_numbers.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return 0 }
         return trimmed.split(separator: ",").count
     }
-    
+
     var imageNumbersArray: [String] {
-        let trimmed = imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = image_numbers.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return [] }
         return trimmed.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
     }
@@ -183,7 +142,7 @@ extension ClassGroup {
         "11th Grade",
         "12th Grade"
     ]
-    
+
     static let shortGrades = [
         "Pre-K",
         "K",

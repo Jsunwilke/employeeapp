@@ -90,20 +90,23 @@ struct CritiqueGridCard: View {
 struct CritiqueGridCard_Previews: PreviewProvider {
     static var previews: some View {
         CritiqueGridCard(critique: Critique(
-            organizationId: "test",
-            submitterId: "1",
-            submitterName: "John Manager",
-            submitterEmail: "john@test.com",
-            targetPhotographerId: "2",
-            targetPhotographerName: "Jane Photographer",
-            imageUrls: ["https://example.com/image.jpg"],
-            thumbnailUrls: ["https://example.com/thumb.jpg"],
-            imageUrl: "https://example.com/image.jpg",
-            thumbnailUrl: "https://example.com/thumb.jpg",
-            imageCount: 2,
-            managerNotes: "Great composition and lighting in this shot. Notice how the subject is positioned using the rule of thirds.",
-            exampleType: "example",
-            status: "published"
+            id: "preview-1",
+            organization_id: "test",
+            submitter_id: "1",
+            submitter_name: "John Manager",
+            submitter_email: "john@test.com",
+            target_photographer_id: "2",
+            target_photographer_name: "Jane Photographer",
+            image_urls: ["https://example.com/image.jpg"],
+            thumbnail_urls: ["https://example.com/thumb.jpg"],
+            image_url: "https://example.com/image.jpg",
+            thumbnail_url: "https://example.com/thumb.jpg",
+            image_count: 2,
+            manager_notes: "Great composition and lighting in this shot. Notice how the subject is positioned using the rule of thirds.",
+            example_type: "example",
+            status: "published",
+            created_at: Date(),
+            updated_at: Date()
         ))
         .frame(width: 200)
         .padding()

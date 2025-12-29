@@ -8,6 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		4DA3DF6967B24AF9ECB29C28 /* Pods_Iconik_Employee.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 72D6A6C54BBCF2ED26D7EFAE /* Pods_Iconik_Employee.framework */; };
+		7A023CB02EFE51C70085EAD5 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CAF2EFE51C70085EAD5 /* Auth */; };
+		7A023CB22EFE51C70085EAD5 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CB12EFE51C70085EAD5 /* Functions */; };
+		7A023CB42EFE51C70085EAD5 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CB32EFE51C70085EAD5 /* PostgREST */; };
+		7A023CB62EFE51C70085EAD5 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CB52EFE51C70085EAD5 /* Realtime */; };
+		7A023CB82EFE51C70085EAD5 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CB72EFE51C70085EAD5 /* Storage */; };
+		7AD701182EFF4E4900094E9C /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 7AD701172EFF4E4900094E9C /* Supabase */; };
 		C3B8E9752DC7D5080014357D /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C3B8E9742DC7D5080014357D /* Metal.framework */; };
 /* End PBXBuildFile section */
 
@@ -39,22 +45,9 @@
 		C3B8E9742DC7D5080014357D /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		C375BF662E5FCEEB005A3625 /* Exceptions for "Iconik Employee" folder in "Iconik Employee" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Config.xcconfig,
-			);
-			target = C38974592D74DACE00F75F9F /* Iconik Employee */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		C389745C2D74DACE00F75F9F /* Iconik Employee */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				C375BF662E5FCEEB005A3625 /* Exceptions for "Iconik Employee" folder in "Iconik Employee" target */,
-			);
 			path = "Iconik Employee";
 			sourceTree = "<group>";
 		};
@@ -77,6 +70,12 @@
 			files = (
 				C3B8E9752DC7D5080014357D /* Metal.framework in Frameworks */,
 				4DA3DF6967B24AF9ECB29C28 /* Pods_Iconik_Employee.framework in Frameworks */,
+				7A023CB82EFE51C70085EAD5 /* Storage in Frameworks */,
+				7A023CB22EFE51C70085EAD5 /* Functions in Frameworks */,
+				7AD701182EFF4E4900094E9C /* Supabase in Frameworks */,
+				7A023CB62EFE51C70085EAD5 /* Realtime in Frameworks */,
+				7A023CB02EFE51C70085EAD5 /* Auth in Frameworks */,
+				7A023CB42EFE51C70085EAD5 /* PostgREST in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -149,7 +148,6 @@
 				C38974562D74DACE00F75F9F /* Sources */,
 				C38974572D74DACE00F75F9F /* Frameworks */,
 				C38974582D74DACE00F75F9F /* Resources */,
-				295FDB4CE0DFF68B062F34E7 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -237,6 +235,9 @@
 			);
 			mainGroup = C38974512D74DACE00F75F9F;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C389745B2D74DACE00F75F9F /* Products */;
 			projectDirPath = "";
@@ -274,27 +275,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		295FDB4CE0DFF68B062F34E7 /* [CP] Embed Pods Frameworks */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-Iconik Employee/Pods-Iconik Employee-frameworks-${CONFIGURATION}-input-files.xcfilelist",
-			);
-			inputPaths = (
-			);
-			name = "[CP] Embed Pods Frameworks";
-			outputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-Iconik Employee/Pods-Iconik Employee-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Iconik Employee/Pods-Iconik Employee-frameworks.sh\"\n";
-			showEnvVarsInLog = 0;
-		};
 		F18F99457B2C60CEE0674334 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -360,7 +340,7 @@
 		C389747E2D74DAD000F75F9F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReferenceAnchor = C389745C2D74DACE00F75F9F /* Iconik Employee */;
-			baseConfigurationReferenceRelativePath = Config.xcconfig;
+			baseConfigurationReferenceRelativePath = ../Config.xcconfig;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -426,7 +406,7 @@
 		C389747F2D74DAD000F75F9F /* Release */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReferenceAnchor = C389745C2D74DACE00F75F9F /* Iconik Employee */;
-			baseConfigurationReferenceRelativePath = Config.xcconfig;
+			baseConfigurationReferenceRelativePath = ../Config.xcconfig;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -494,14 +474,15 @@
 				CURRENT_PROJECT_VERSION = 20;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
 				INFOPLIST_FILE = "Iconik-Employee-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NFCReaderUsageDescription = "This app uses NFC to scan SD cards and job boxes for tracking purposes.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access to take photos for chat messages and profile pictures.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "We need your location to provide accurate weather information for your area.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "This app uses your location to provide navigation to session venues.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to record voice messages in chat.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "This app needs permission to save photos to your library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "This app needs photo library access to share images in chat and save photos.";
@@ -538,14 +519,15 @@
 				CURRENT_PROJECT_VERSION = 20;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
 				INFOPLIST_FILE = "Iconik-Employee-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NFCReaderUsageDescription = "This app uses NFC to scan SD cards and job boxes for tracking purposes.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access to take photos for chat messages and profile pictures.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "We need your location to provide accurate weather information for your area.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "This app uses your location to provide navigation to session venues.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to record voice messages in chat.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "This app needs permission to save photos to your library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "This app needs photo library access to share images in chat and save photos.";
@@ -678,6 +660,50 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		7A023CAF2EFE51C70085EAD5 /* Auth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Auth;
+		};
+		7A023CB12EFE51C70085EAD5 /* Functions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Functions;
+		};
+		7A023CB32EFE51C70085EAD5 /* PostgREST */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = PostgREST;
+		};
+		7A023CB52EFE51C70085EAD5 /* Realtime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Realtime;
+		};
+		7A023CB72EFE51C70085EAD5 /* Storage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Storage;
+		};
+		7AD701172EFF4E4900094E9C /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = C38974522D74DACE00F75F9F /* Project object */;
 }

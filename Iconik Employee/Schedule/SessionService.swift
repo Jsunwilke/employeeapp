@@ -1,575 +1,360 @@
 import Foundation
-import FirebaseFirestore
-import FirebaseAuth
 import Network
 import SwiftUI
 import Combine
+import Supabase
 
+@MainActor
 class SessionService: ObservableObject {
     // Singleton instance
     static let shared = SessionService()
-    
-    private let db = Firestore.firestore()
+
+    private let supabase = SupabaseManager.shared.client
     private let monitor = NWPathMonitor()
     private let monitorQueue = DispatchQueue(label: "NetworkMonitor")
-    
+
+    // MARK: - Decoder Error Helper
+    private func describeDecodingError(_ error: Error) -> String {
+        guard let decodingError = error as? DecodingError else {
+            return error.localizedDescription
+        }
+        switch decodingError {
+        case .keyNotFound(let key, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "Missing field '\(key.stringValue)' at: \(path.isEmpty ? "root" : path)"
+        case .typeMismatch(let type, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "Type mismatch for \(type) at: \(path.isEmpty ? "root" : path) - \(context.debugDescription)"
+        case .valueNotFound(let type, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "Null value for \(type) at: \(path.isEmpty ? "root" : path)"
+        case .dataCorrupted(let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "Corrupted data at: \(path.isEmpty ? "root" : path) - \(context.debugDescription)"
+        @unknown default:
+            return error.localizedDescription
+        }
+    }
+
     @Published var isConnected: Bool = true
     @Published var lastError: String?
     @Published var isRetrying: Bool = false
-    
+
     // Cache for sessions
     private var sessionsCache: [Session] = []
     private var lastCacheUpdate: Date?
     private let cacheValidityDuration: TimeInterval = 300 // 5 minutes
-    
-    // Track active listeners to prevent duplicates
-    private var activeListeners: [String: ListenerRegistration] = [:]
-    private let listenerQueue = DispatchQueue(label: "SessionServiceListeners")
-    
+
+    // Track active Supabase realtime channels
+    private var activeChannels: [String: RealtimeChannelV2] = [:]
+
     // Pagination support
     private let pageSize = 50
-    private var lastDocument: DocumentSnapshot?
+    private var currentPage = 0
     private var hasMorePages = true
-    
+
     private init() {
         setupNetworkMonitoring()
     }
-    
-    // MARK: - Session Retrieval
-    
-    // Listen for sessions in real-time for current user's organization
-    func listenForSessions(completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
-        return listenForSessions(includeUnpublished: false, completion: completion)
-    }
-    
-    // Listen for sessions with option to include unpublished (for admin/manager)
-    func listenForSessions(includeUnpublished: Bool, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
-        #if DEBUG
-        print("🔄 SessionService: listenForSessions called (includeUnpublished: \(includeUnpublished))")
-        #endif
-        
-        // Use cached organization ID if available, otherwise get it
+
+    // MARK: - Session Retrieval (Async/Await Pattern)
+
+    /// Fetch sessions for the current user's organization
+    func fetchSessions(includeUnpublished: Bool = false) async throws -> [Session] {
         let cachedOrgID = UserManager.shared.getCachedOrganizationID()
-        #if DEBUG
-        print("🔄 SessionService: cached org ID = '\(cachedOrgID)'")
-        #endif
-        
-        if !cachedOrgID.isEmpty {
-            #if DEBUG
-            print("🔄 SessionService: Using cached org ID")
-            #endif
-            return listenForSessionsWithOrganizationID(cachedOrgID, includeUnpublished: includeUnpublished, completion: completion)
-        } else {
-            #if DEBUG
-            print("🔄 SessionService: No cached org ID, fetching async")
-            #endif
-            
-            // Create a dummy listener that we'll replace once we have the org ID
-            var realListener: ListenerRegistration?
-            
-            // Get organization ID and then set up listener
-            UserManager.shared.getCurrentUserOrganizationID { organizationID in
-                #if DEBUG
-                print("🔄 SessionService: Async org ID fetch completed: '\(organizationID ?? "nil")'")
-                #endif
-                guard let orgID = organizationID else {
-                    #if DEBUG
-                    print("🔐 Cannot load sessions: no organization ID found")
-                    #endif
-                    completion([])
-                    return
-                }
-                
-                // Now set up the real listener with the organization ID
-                realListener = self.listenForSessionsWithOrganizationID(orgID, includeUnpublished: includeUnpublished, completion: completion)
-            }
-            
-            // Return a wrapper that will remove the real listener when called
-            return ListenerRegistrationWrapper {
-                realListener?.remove()
-            }
+
+        guard !cachedOrgID.isEmpty else {
+            throw SessionError.permissionDenied
         }
+
+        return try await fetchSessions(organizationID: cachedOrgID, includeUnpublished: includeUnpublished)
     }
-    
-    // Helper method to listen for sessions with a specific organization ID
-    private func listenForSessionsWithOrganizationID(_ organizationID: String, includeUnpublished: Bool = false, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
-        let listenerKey = "sessions-org-\(organizationID)-unpub-\(includeUnpublished)"
-        
-        // Check if we already have an active listener for this query
-        var existingListener: ListenerRegistration?
-        listenerQueue.sync {
-            existingListener = activeListeners[listenerKey]
-        }
-        
-        if existingListener != nil {
-            #if DEBUG
-            print("📅 Reusing existing listener for org: \(organizationID)")
-            #endif
-            // Return cached data immediately if available
-            if !sessionsCache.isEmpty {
-                completion(sessionsCache)
-            }
-            // Return wrapper that removes reference but doesn't actually remove the shared listener
-            return ListenerRegistrationWrapper { [weak self] in
-                self?.listenerQueue.sync {
-                    // Don't remove the actual listener as others might be using it
-                    #if DEBUG
-                    print("📅 Listener reference removed but keeping shared listener active")
-                    #endif
-                }
-            }
-        }
-        
+
+    /// Fetch sessions for a specific organization
+    func fetchSessions(organizationID: String, includeUnpublished: Bool = false) async throws -> [Session] {
         // Check cache first
         if let lastUpdate = lastCacheUpdate,
            Date().timeIntervalSince(lastUpdate) < cacheValidityDuration,
            !sessionsCache.isEmpty {
-            #if DEBUG
-            print("📅 Using cached sessions: \(sessionsCache.count) sessions")
-            #endif
-            completion(sessionsCache)
-            
-            // Return a dummy listener that does nothing when removed
-            // This prevents creating a new listener when we have valid cache
-            return ListenerRegistrationWrapper {
-                #if DEBUG
-                print("📅 Dummy listener removed (was using cache)")
-                #endif
-            }
+            print("📅 SessionService: Returning \(sessionsCache.count) cached sessions")
+            return sessionsCache
         }
-        
-        // Create new listener
-        print("📅 SessionService: Creating listener for org '\(organizationID)' (includeUnpublished: \(includeUnpublished))")
-        
-        // Create base query
-        var query = db.collection("sessions")
-            .whereField("organizationID", isEqualTo: organizationID)
-        
-        // Only add isPublished filter for non-admin/manager users
+
+        var query = supabase
+            .from("sessions")
+            .select()
+            .eq("organization_id", value: organizationID)
+
+        // Filter by published status if needed
         if !includeUnpublished {
-            query = query.whereField("isPublished", isEqualTo: true)
-            print("📅 SessionService: Filtering for published sessions only")
-        } else {
-            print("📅 SessionService: Including ALL sessions (no isPublished filter)")
+            query = query.eq("is_published", value: true)
         }
-        
-        let listener = query.addSnapshotListener { [weak self] snapshot, error in
-                if let error = error {
-                    print("🔥 SessionService Error: \(error)")
-                    print("🔥 Error code: \((error as NSError).code)")
-                    print("🔥 Error domain: \((error as NSError).domain)")
-                    
-                    // Check if it's a missing index error
-                    if error.localizedDescription.contains("index") {
-                        print("🔥 MISSING INDEX ERROR - Create composite index for: organizationID + isPublished")
+
+        do {
+            let sessions: [Session] = try await query.execute().value
+            print("📅 SessionService: Fetched \(sessions.count) sessions for org \(organizationID)")
+
+            // Update cache
+            sessionsCache = sessions
+            lastCacheUpdate = Date()
+
+            return sessions
+        } catch {
+            print("❌ SessionService decode error: \(describeDecodingError(error))")
+            throw error
+        }
+    }
+
+    /// Start listening to sessions with Supabase Realtime
+    func startListeningToSessions(organizationID: String, includeUnpublished: Bool = false, onChange: @escaping ([Session]) -> Void) {
+        let channelKey = "sessions-org-\(organizationID)-unpub-\(includeUnpublished)"
+
+        // If channel already exists and subscribed, just fetch and call callback immediately
+        if activeChannels[channelKey] != nil {
+            print("📅 SessionService: Channel already exists, fetching sessions directly...")
+            Task {
+                do {
+                    let sessions = try await fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished)
+                    print("📅 SessionService: Calling onChange callback with \(sessions.count) sessions (existing channel)")
+                    await MainActor.run {
+                        onChange(sessions)
                     }
-                    
-                    self?.handleError(error, operation: "Listening for sessions")
-                    // Return cached data on error if available
-                    if let self = self, !self.sessionsCache.isEmpty {
-                        completion(self.sessionsCache)
-                    } else {
-                        completion([])
+                } catch {
+                    print("❌ Error fetching sessions (existing channel): \(describeDecodingError(error))")
+                    await MainActor.run {
+                        onChange([])
                     }
-                    return
                 }
-                
-                // Clear any previous errors on successful data load
-                DispatchQueue.main.async {
-                    self?.lastError = nil
-                }
-                
-                guard let documents = snapshot?.documents else {
-                    completion([])
-                    return
-                }
-                
-                print("📅 Query returned \(documents.count) documents")
-                
-                let sessions = documents.map { document in
-                    let data = document.data()
-                    print("🔄 Listener update - Session ID: \(document.documentID), isPublished: \(data["isPublished"] ?? "nil")")
-                    return Session(id: document.documentID, data: data)
-                }
-                
-                // Debug: Log session details
-                print("📅 SessionService listener: Processing \(sessions.count) sessions")
-                for session in sessions {
-                    print("📅 Session: \(session.schoolName) - ID: \(session.id) - isPublished: \(session.isPublished)")
-                }
-                
-                // Update cache
-                self?.sessionsCache = sessions
-                self?.lastCacheUpdate = Date()
-                
-                print("📅 Loaded \(sessions.count) sessions for organization \(organizationID)")
-                completion(sessions)
             }
-        
-        // Store the listener
-        listenerQueue.sync {
-            activeListeners[listenerKey] = listener
+            return
         }
-        
-        // Return wrapper that properly manages the listener
-        return ListenerRegistrationWrapper { [weak self] in
-            self?.listenerQueue.sync {
-                // Only remove if this is the actual listener owner
-                if self?.activeListeners[listenerKey] != nil {
-                    self?.activeListeners[listenerKey]?.remove()
-                    self?.activeListeners.removeValue(forKey: listenerKey)
-                    #if DEBUG
-                    print("📅 Removed listener for key: \(listenerKey)")
-                    #endif
+
+        // Create new channel
+        let channel = supabase.channel(channelKey)
+
+        _ = channel.onPostgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: "sessions",
+            filter: "organization_id=eq.\(organizationID)"
+        ) { [weak self] _ in
+            Task { @MainActor in
+                do {
+                    let sessions = try await self?.fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished) ?? []
+                    onChange(sessions)
+                } catch {
+                    print("❌ Error fetching sessions after realtime update: \(error)")
+                    onChange([])
                 }
             }
         }
-    }
-    
-    // Listen for a specific session by ID
-    func listenForSession(sessionId: String, completion: @escaping (Session?) -> Void) -> ListenerRegistration {
-        return db.collection("sessions").document(sessionId)
-            .addSnapshotListener { [weak self] snapshot, error in
-                if let error = error {
-                    self?.handleError(error, operation: "Listening for session \(sessionId)")
-                    completion(nil)
-                    return
-                }
-                
-                // Clear any previous errors on successful data load
-                DispatchQueue.main.async {
-                    self?.lastError = nil
-                }
-                
-                guard let document = snapshot, document.exists,
-                      let data = document.data() else {
-                    completion(nil)
-                    return
-                }
-                
-                let session = Session(id: document.documentID, data: data)
-                
-                print("📅 Updated session \(session.schoolName) - ID: \(session.id)")
-                print("📅 Session isPublished: \(session.isPublished)")
-                print("📅 Raw data isPublished: \(data["isPublished"] ?? "nil")")
-                completion(session)
+
+        Task {
+            await channel.subscribe()
+            activeChannels[channelKey] = channel
+            print("📅 SessionService: Channel subscribed, starting initial fetch...")
+
+            // Initial fetch
+            do {
+                let sessions = try await fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished)
+                print("📅 SessionService: Calling onChange callback with \(sessions.count) sessions")
+                onChange(sessions)
+            } catch {
+                print("❌ Error on initial sessions fetch: \(describeDecodingError(error))")
+                onChange([])
             }
+        }
     }
-    
-    // Listen for sessions within a date range for current user's organization
-    func listenForSessions(from startDate: Date, to endDate: Date, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
-        return listenForSessions(from: startDate, to: endDate, includeUnpublished: false, completion: completion)
+
+    /// Stop listening to sessions
+    func stopListeningToSessions(organizationID: String, includeUnpublished: Bool = false) {
+        let channelKey = "sessions-org-\(organizationID)-unpub-\(includeUnpublished)"
+
+        if let channel = activeChannels[channelKey] {
+            Task {
+                await supabase.removeChannel(channel)
+                activeChannels.removeValue(forKey: channelKey)
+            }
+        }
     }
-    
-    // Listen for sessions within a date range with option to include unpublished
-    func listenForSessions(from startDate: Date, to endDate: Date, includeUnpublished: Bool, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
-        // Convert dates to string format for Firestore filtering
+
+    /// Fetch a single session by ID
+    func fetchSession(sessionId: String) async throws -> Session? {
+        let sessions: [Session] = try await supabase
+            .from("sessions")
+            .select()
+            .eq("id", value: sessionId)
+            .limit(1)
+            .execute()
+            .value
+
+        return sessions.first
+    }
+
+    /// Fetch sessions within a date range
+    func fetchSessions(from startDate: Date, to endDate: Date, organizationID: String, includeUnpublished: Bool = false) async throws -> [Session] {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
-        let startDateString = dateFormatter.string(from: startDate)
-        let endDateString = dateFormatter.string(from: endDate)
-        
-        let cachedOrgID = UserManager.shared.getCachedOrganizationID()
-        
-        if !cachedOrgID.isEmpty {
-            var query = db.collection("sessions")
-                .whereField("organizationID", isEqualTo: cachedOrgID)
-                .whereField("date", isGreaterThanOrEqualTo: startDateString)
-                .whereField("date", isLessThan: endDateString)
-            
-            // Only filter by isPublished if we don't want unpublished sessions
-            if !includeUnpublished {
-                query = query.whereField("isPublished", isEqualTo: true)
-            }
-            
-            return query.addSnapshotListener { [weak self] snapshot, error in
-                    if let error = error {
-                        self?.handleError(error, operation: "Listening for sessions in date range")
-                        completion([])
-                        return
-                    }
-                    
-                    // Clear any previous errors on successful data load
-                    DispatchQueue.main.async {
-                        self?.lastError = nil
-                    }
-                    
-                    guard let documents = snapshot?.documents else {
-                        completion([])
-                        return
-                    }
-                    
-                    let sessions = documents.map { document in
-                        Session(id: document.documentID, data: document.data())
-                    }
-                    
-                    completion(sessions)
-                }
-        } else {
-            // Create a dummy listener that we'll replace once we have the org ID
-            var realListener: ListenerRegistration?
-            
-            // Get organization ID first
-            UserManager.shared.getCurrentUserOrganizationID { organizationID in
-                guard let orgID = organizationID else {
-                    #if DEBUG
-                    print("🔐 Cannot load sessions: no organization ID found")
-                    #endif
-                    completion([])
-                    return
-                }
-                
-                var query = self.db.collection("sessions")
-                    .whereField("organizationID", isEqualTo: orgID)
-                    .whereField("date", isGreaterThanOrEqualTo: startDateString)
-                    .whereField("date", isLessThan: endDateString)
-                
-                // Only filter by isPublished if we don't want unpublished sessions
-                if !includeUnpublished {
-                    query = query.whereField("isPublished", isEqualTo: true)
-                }
-                
-                realListener = query.addSnapshotListener { snapshot, error in
-                        if let error = error {
-                            print("Error listening for sessions in date range: \(error.localizedDescription)")
-                            completion([])
-                            return
-                        }
-                        
-                        guard let documents = snapshot?.documents else {
-                            completion([])
-                            return
-                        }
-                        
-                        let sessions = documents.map { document in
-                            Session(id: document.documentID, data: document.data())
-                        }
-                        
-                        
-                        completion(sessions)
-                    }
-            }
-            
-            // Return a wrapper that will remove the real listener when called
-            return ListenerRegistrationWrapper {
-                realListener?.remove()
-            }
+
+        let startDateStr = dateFormatter.string(from: startDate)
+        let endDateStr = dateFormatter.string(from: endDate)
+
+        var query = supabase
+            .from("sessions")
+            .select()
+            .eq("organization_id", value: organizationID)
+            .gte("date", value: startDateStr)
+            .lte("date", value: endDateStr)
+
+        if !includeUnpublished {
+            query = query.eq("is_published", value: true)
+        }
+
+        let sessions: [Session] = try await query.execute().value
+        return sessions
+    }
+
+    /// Fetch sessions for a specific week
+    func getSessionsForWeek(startOfWeek: Date, organizationID: String) async throws -> [Session] {
+        let endOfWeek = Calendar.current.date(byAdding: .day, value: 7, to: startOfWeek) ?? startOfWeek
+
+        return try await fetchSessions(from: startOfWeek, to: endOfWeek, organizationID: organizationID, includeUnpublished: false)
+    }
+
+    /// Fetch sessions for a specific employee
+    func fetchSessions(forEmployeeName employeeName: String, organizationID: String) async throws -> [Session] {
+        // Fetch all sessions and filter client-side (Supabase doesn't support JSONB array filtering easily)
+        let allSessions = try await fetchSessions(organizationID: organizationID, includeUnpublished: false)
+
+        return allSessions.filter { session in
+            session.photographers.contains { $0.name == employeeName }
         }
     }
-    
-    // Listen for sessions for a specific employee in current user's organization
-    func listenForSessions(forEmployee employeeName: String, completion: @escaping ([Session]) -> Void) -> ListenerRegistration {
-        let cachedOrgID = UserManager.shared.getCachedOrganizationID()
-        
-        if !cachedOrgID.isEmpty {
-            return db.collection("sessions")
-                .whereField("organizationID", isEqualTo: cachedOrgID)
-                .whereField("isPublished", isEqualTo: true)
-                .whereField("employeeName", isEqualTo: employeeName)
-                .addSnapshotListener { snapshot, error in
-                    if let error = error {
-                        print("Error listening for sessions for employee: \(error.localizedDescription)")
-                        completion([])
-                        return
-                    }
-                    
-                    guard let documents = snapshot?.documents else {
-                        completion([])
-                        return
-                    }
-                    
-                    let sessions = documents.map { document in
-                        Session(id: document.documentID, data: document.data())
-                    }
-                    
-                    completion(sessions)
-                }
-        } else {
-            // Create a dummy listener that we'll replace once we have the org ID
-            var realListener: ListenerRegistration?
-            
-            UserManager.shared.getCurrentUserOrganizationID { organizationID in
-                guard let orgID = organizationID else {
-                    completion([])
-                    return
-                }
-                
-                realListener = self.db.collection("sessions")
-                    .whereField("organizationID", isEqualTo: orgID)
-                    .whereField("employeeName", isEqualTo: employeeName)
-                    .addSnapshotListener { snapshot, error in
-                        if let error = error {
-                            print("Error listening for sessions for employee: \(error.localizedDescription)")
-                            completion([])
-                            return
-                        }
-                        
-                        guard let documents = snapshot?.documents else {
-                            completion([])
-                            return
-                        }
-                        
-                        let sessions = documents.map { document in
-                            Session(id: document.documentID, data: document.data())
-                        }
-                        
-                        
-                        completion(sessions)
-                    }
-            }
-            
-            // Return a wrapper that will remove the real listener when called
-            return ListenerRegistrationWrapper {
-                realListener?.remove()
-            }
-        }
-    }
-    
-    // Get sessions for a specific week in current user's organization
-    func getSessionsForWeek(startOfWeek: Date, completion: @escaping ([Session]) -> Void) {
-        let calendar = Calendar.current
-        let endOfWeek = calendar.date(byAdding: .day, value: 7, to: startOfWeek) ?? startOfWeek
-        
-        // Convert dates to string format for Firestore filtering
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        let startDateString = dateFormatter.string(from: startOfWeek)
-        let endDateString = dateFormatter.string(from: endOfWeek)
-        
-        UserManager.shared.getCurrentUserOrganizationID { organizationID in
-            guard let orgID = organizationID else {
-                print("🔐 Cannot get sessions: no organization ID found")
-                completion([])
-                return
-            }
-            
-            self.db.collection("sessions")
-                .whereField("organizationID", isEqualTo: orgID)
-                .whereField("isPublished", isEqualTo: true)
-                .whereField("date", isGreaterThanOrEqualTo: startDateString)
-                .whereField("date", isLessThan: endDateString)
-                .getDocuments { snapshot, error in
-                    if let error = error {
-                        print("Error getting sessions for week: \(error.localizedDescription)")
-                        completion([])
-                        return
-                    }
-                    
-                    guard let documents = snapshot?.documents else {
-                        completion([])
-                        return
-                    }
-                    
-                    let sessions = documents.map { document in
-                        Session(id: document.documentID, data: document.data())
-                    }
-                    
-                    completion(sessions)
-                }
-        }
-    }
-    
-    // MARK: - Session Management
-    
-    // Validate session input
+
+    // MARK: - Session Validation
+
     func validateSessionInput(formData: SessionFormData) -> [String: String] {
         var errors: [String: String] = [:]
-        
+
+        // Validate school
         if formData.schoolId.isEmpty {
-            errors["schoolId"] = "School is required"
+            errors["school"] = "Please select a school"
         }
-        
+
+        // Validate date
         if formData.date.isEmpty {
-            errors["date"] = "Date is required"
+            errors["date"] = "Please select a date"
         }
-        
+
+        // Validate times
         if formData.startTime.isEmpty {
-            errors["startTime"] = "Start time is required"
+            errors["startTime"] = "Please select a start time"
         }
-        
+
         if formData.endTime.isEmpty {
-            errors["endTime"] = "End time is required"
+            errors["endTime"] = "Please select an end time"
         }
-        
-        if formData.sessionTypes.isEmpty {
-            errors["sessionTypes"] = "At least one session type is required"
-        }
-        
-        if formData.sessionTypes.contains("other") && formData.customSessionType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            errors["customSessionType"] = "Please specify a custom session type"
-        }
-        
-        // Validate time range
+
+        // Validate start time is before end time
         if !formData.startTime.isEmpty && !formData.endTime.isEmpty {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm"
-            
-            if let start = formatter.date(from: formData.startTime),
-               let end = formatter.date(from: formData.endTime),
-               end <= start {
-                errors["endTime"] = "End time must be after start time"
+            if formData.startTime >= formData.endTime {
+                errors["time"] = "Start time must be before end time"
             }
         }
-        
+
+        // Validate session types
+        if formData.sessionTypes.isEmpty {
+            errors["sessionTypes"] = "Please select at least one session type"
+        }
+
+        // If "other" is selected, require custom session type
+        if formData.sessionTypes.contains("other") && formData.customSessionType.isEmpty {
+            errors["customSessionType"] = "Please specify a custom session type"
+        }
+
+        // Validate photographers
+        if formData.photographerIds.isEmpty && !formData.isTimeOff {
+            errors["photographers"] = "Please select at least one photographer"
+        }
+
         return errors
     }
-    
-    // Calculate session color based on order within the day
+
+    // MARK: - Color Calculation
+
     func calculateSessionColor(organizationID: String, date: String, startTime: String, isTimeOff: Bool = false) async throws -> String {
-        // Time off sessions always get gray
+        // Time-off sessions always get gray
         if isTimeOff {
             return "#666"
         }
-        
-        // Get existing sessions for the same date
-        let query = db.collection("sessions")
-            .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("date", isEqualTo: date)
-        
-        let snapshot = try await query.getDocuments()
-        
-        // Filter out time-off sessions and convert to array
-        var existingSessions = snapshot.documents
-            .compactMap { doc -> (id: String, startTime: String, schoolId: String)? in
-                let data = doc.data()
-                guard let isTimeOff = data["isTimeOff"] as? Bool, !isTimeOff,
-                      let startTime = data["startTime"] as? String,
-                      let schoolId = data["schoolId"] as? String else { return nil }
-                return (id: doc.documentID, startTime: startTime, schoolId: schoolId)
-            }
-        
-        // Add the new session temporarily for color calculation
-        existingSessions.append((id: "temp", startTime: startTime, schoolId: ""))
-        
-        // Sort by start time, then by school ID for consistency
-        existingSessions.sort { lhs, rhs in
-            if lhs.startTime != rhs.startTime {
-                return lhs.startTime < rhs.startTime
-            }
-            return lhs.schoolId < rhs.schoolId
-        }
-        
-        // Find the index of our new session
-        let orderIndex = existingSessions.firstIndex { $0.id == "temp" } ?? 0
-        
-        // Get organization colors or use defaults
-        let organization = try await OrganizationService.shared.getOrganization(organizationID: organizationID)
-        let customColors = organization?.sessionOrderColors
-        let defaultColors = [
-            "#3b82f6", "#10b981", "#8b5cf6", "#f59e0b",
-            "#ef4444", "#06b6d4", "#8b5a3c", "#6b7280"
+
+        // Fetch organization to get color order settings
+        let organizations: [Organization] = try await supabase
+            .from("organizations")
+            .select()
+            .eq("id", value: organizationID)
+            .limit(1)
+            .execute()
+            .value
+        let organization = organizations.first
+
+        let colorOrder = organization?.session_order_colors ?? [
+            "#3b82f6", // blue
+            "#10b981", // green
+            "#8b5cf6", // purple
+            "#f59e0b", // amber
+            "#ef4444", // red
+            "#06b6d4", // cyan
+            "#8b5a3c", // brown
+            "#6b7280"  // gray
         ]
-        let colors = (customColors?.count ?? 0) >= 8 ? customColors! : defaultColors
-        
-        return colors[min(orderIndex, colors.count - 1)]
+
+        // Get existing sessions for this date (excluding time-off)
+        let existingSessions: [Session] = try await supabase
+            .from("sessions")
+            .select()
+            .eq("organization_id", value: organizationID)
+            .eq("date", value: date)
+            .execute()
+            .value
+
+        // Filter out time-off sessions and sort
+        let regularSessions = existingSessions
+            .filter { !($0.is_time_off ?? false) }
+            .sorted { lhs, rhs in
+                if lhs.start_time != rhs.start_time {
+                    return lhs.start_time < rhs.start_time
+                }
+                return lhs.school_id < rhs.school_id
+            }
+
+        // Calculate color index for new session
+        let colorIndex = regularSessions.count % colorOrder.count
+        return colorOrder[colorIndex]
     }
-    
-    // Create a new session
-    func createSession(organizationID: String, formData: SessionFormData, currentUser: FirebaseAuth.User, teamMembers: [TeamMember], schools: [School]) async throws -> String {
-        // Get organization settings
-        let organization = try await OrganizationService.shared.getOrganization(organizationID: organizationID)
-        let enablePublishing = organization?.enableSessionPublishing ?? false
-        
+
+    // MARK: - Create Session
+
+    func createSession(
+        organizationID: String,
+        formData: SessionFormData,
+        currentUserID: String,
+        currentUserName: String,
+        currentUserEmail: String,
+        teamMembers: [TeamMember],
+        schools: [School]
+    ) async throws -> String {
+        // Validate input
+        let errors = validateSessionInput(formData: formData)
+        guard errors.isEmpty else {
+            throw SessionError.invalidInput(field: errors.keys.first ?? "unknown", message: errors.values.first ?? "Invalid input")
+        }
+
+        // Get school name
+        guard let school = schools.first(where: { $0.id == formData.schoolId }) else {
+            throw SessionError.invalidInput(field: "school", message: "School not found")
+        }
+
         // Calculate session color
         let sessionColor = try await calculateSessionColor(
             organizationID: organizationID,
@@ -577,594 +362,398 @@ class SessionService: ObservableObject {
             startTime: formData.startTime,
             isTimeOff: formData.isTimeOff
         )
-        
-        // Get photographer details
-        let selectedPhotographers: [SessionPhotographer] = formData.photographerIds.compactMap { photographerId in
-            guard let member = teamMembers.first(where: { $0.id == photographerId }) else { return nil }
+
+        // Build photographers array
+        let photographers = formData.photographerIds.compactMap { photographerId -> SessionPhotographer? in
+            guard let member = teamMembers.first(where: { $0.id == photographerId }) else {
+                return nil
+            }
+
+            let notes = formData.photographerNotes[photographerId] ?? ""
+
             return SessionPhotographer(
                 id: member.id,
                 name: member.fullName,
                 email: member.email,
-                notes: formData.photographerNotes[member.id] ?? ""
+                notes: notes
             )
         }
-        
-        // Get school name
-        let schoolName = schools.first { $0.id == formData.schoolId }?.value ?? ""
-        
-        // Prepare session data
-        var sessionData: [String: Any] = [
-            "organizationID": organizationID,
-            "schoolId": formData.schoolId,
-            "schoolName": schoolName,
-            "date": formData.date,
-            "startTime": formData.startTime,
-            "endTime": formData.endTime,
-            "sessionTypes": formData.sessionTypes,
-            "notes": formData.notes,
-            "status": formData.status,
-            "sessionColor": sessionColor,
-            "createdAt": FieldValue.serverTimestamp(),
-            "createdBy": [
-                "id": currentUser.uid,
-                "name": currentUser.displayName ?? "\(currentUser.firstName ?? "") \(currentUser.lastName ?? "")",
-                "email": currentUser.email ?? ""
-            ]
-        ]
-        
-        // Add photographers array
-        sessionData["photographers"] = selectedPhotographers.map { photographer in
-            [
-                "id": photographer.id,
-                "name": photographer.name,
-                "email": photographer.email,
-                "notes": photographer.notes
-            ]
-        }
-        
-        // Add optional fields
-        if formData.sessionTypes.contains("other") {
-            sessionData["customSessionType"] = formData.customSessionType.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        
-        if formData.isTimeOff {
-            sessionData["isTimeOff"] = true
-        }
-        
-        if enablePublishing {
-            sessionData["isPublished"] = false
-        } else {
-            sessionData["isPublished"] = true
-        }
-        
+
         // Create the session
-        let docRef = try await db.collection("sessions").addDocument(data: sessionData)
-        
-        // Recalculate colors for all sessions on this date
-        try await recalculateSessionColorsForDate(
-            organizationID: organizationID,
+        let newSession = Session(
+            id: UUID().uuidString,
+            organization_id: organizationID,
+            school_id: formData.schoolId,
+            school_name: school.value,
             date: formData.date,
-            organization: organization
+            start_time: formData.startTime,
+            end_time: formData.endTime,
+            session_types: formData.sessionTypes,
+            custom_session_type: formData.sessionTypes.contains("other") ? formData.customSessionType : nil,
+            photographers: photographers,
+            notes: formData.notes.isEmpty ? nil : formData.notes,
+            status: formData.status,
+            session_color: sessionColor,
+            is_published: true,
+            is_time_off: formData.isTimeOff ? true : nil,
+            created_at: Date(),
+            created_by: SessionCreatedBy(
+                id: currentUserID,
+                name: currentUserName,
+                email: currentUserEmail
+            )
         )
-        
-        return docRef.documentID
+
+        // Insert into Supabase
+        try await supabase
+            .from("sessions")
+            .insert(newSession)
+            .execute()
+
+        // Recalculate colors for the date
+        try await recalculateSessionColorsForDate(organizationID: organizationID, date: formData.date)
+
+        print("✅ Created session: \(newSession.id)")
+        return newSession.id
     }
-    
-    // Update an existing session
-    func updateSession(sessionId: String, formData: SessionFormData, teamMembers: [TeamMember], schools: [School]) async throws {
-        // Get current session data
-        let doc = try await db.collection("sessions").document(sessionId).getDocument()
-        guard let currentData = doc.data() else {
+
+    // MARK: - Update Session
+
+    func updateSession(
+        sessionId: String,
+        formData: SessionFormData,
+        teamMembers: [TeamMember],
+        schools: [School]
+    ) async throws {
+        // Validate input
+        let errors = validateSessionInput(formData: formData)
+        guard errors.isEmpty else {
+            throw SessionError.invalidInput(field: errors.keys.first ?? "unknown", message: errors.values.first ?? "Invalid input")
+        }
+
+        // Get existing session to check if date changed
+        guard let existingSession = try await fetchSession(sessionId: sessionId) else {
             throw SessionError.notFound
         }
-        
-        let currentDate = currentData["date"] as? String ?? ""
-        let currentStartTime = currentData["startTime"] as? String ?? ""
-        let organizationID = currentData["organizationID"] as? String ?? ""
-        
-        // Check if date or time changed (affects color ordering)
-        let affectsOrdering = formData.date != currentDate || formData.startTime != currentStartTime
-        
-        // Get photographer details
-        let selectedPhotographers: [[String: Any]] = formData.photographerIds.compactMap { photographerId in
-            guard let member = teamMembers.first(where: { $0.id == photographerId }) else { return nil }
-            return [
-                "id": member.id,
-                "name": member.fullName,
-                "email": member.email,
-                "notes": formData.photographerNotes[member.id] ?? ""
-            ]
-        }
-        
+
         // Get school name
-        let schoolName = schools.first { $0.id == formData.schoolId }?.value ?? ""
-        
-        // Prepare update data
-        var updateData: [String: Any] = [
-            "schoolId": formData.schoolId,
-            "schoolName": schoolName,
-            "date": formData.date,
-            "startTime": formData.startTime,
-            "endTime": formData.endTime,
-            "sessionTypes": formData.sessionTypes,
-            "photographers": selectedPhotographers,
-            "notes": formData.notes,
-            "status": formData.status,
-            "updatedAt": FieldValue.serverTimestamp()
-        ]
-        
-        // Handle custom session type
-        if formData.sessionTypes.contains("other") {
-            updateData["customSessionType"] = formData.customSessionType.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            updateData["customSessionType"] = FieldValue.delete()
+        guard let school = schools.first(where: { $0.id == formData.schoolId }) else {
+            throw SessionError.invalidInput(field: "school", message: "School not found")
         }
-        
-        // Update the session
-        try await db.collection("sessions").document(sessionId).updateData(updateData)
-        
-        // Recalculate colors if ordering changed
-        if affectsOrdering {
-            // Recalculate for old date if date changed
-            if currentDate != formData.date {
-                try await recalculateSessionColorsForDate(
-                    organizationID: organizationID,
-                    date: currentDate
-                )
+
+        // Build photographers array
+        let photographers = formData.photographerIds.compactMap { photographerId -> SessionPhotographer? in
+            guard let member = teamMembers.first(where: { $0.id == photographerId }) else {
+                return nil
             }
-            
-            // Recalculate for new date
-            try await recalculateSessionColorsForDate(
-                organizationID: organizationID,
-                date: formData.date
+
+            let notes = formData.photographerNotes[photographerId] ?? ""
+
+            return SessionPhotographer(
+                id: member.id,
+                name: member.fullName,
+                email: member.email,
+                notes: notes
             )
         }
-    }
-    
-    // Recalculate colors for all sessions on a specific date
-    private func recalculateSessionColorsForDate(organizationID: String, date: String, organization: Organization? = nil) async throws {
-        // Get organization if not provided
-        let org: Organization?
-        if let organization = organization {
-            org = organization
+
+        // Prepare update data
+        var updateData: [String: AnyJSON] = [
+            "school_id": .string(formData.schoolId),
+            "school_name": .string(school.value),
+            "date": .string(formData.date),
+            "start_time": .string(formData.startTime),
+            "end_time": .string(formData.endTime),
+            "session_types": .array(formData.sessionTypes.map { .string($0) }),
+            "status": .string(formData.status),
+            "updated_at": .string(Date().ISO8601Format())
+        ]
+
+        // Handle photographers
+        let photographersData = try JSONEncoder().encode(photographers)
+        let photographersJSON = try JSONDecoder().decode(AnyJSON.self, from: photographersData)
+        updateData["photographers"] = photographersJSON
+
+        // Handle custom session type (set to null if not "other")
+        if formData.sessionTypes.contains("other") {
+            updateData["custom_session_type"] = .string(formData.customSessionType)
         } else {
-            org = try await OrganizationService.shared.getOrganization(organizationID: organizationID)
+            updateData["custom_session_type"] = .null
         }
-        
-        // Get all sessions for this date
-        let query = db.collection("sessions")
-            .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("date", isEqualTo: date)
-        
-        let snapshot = try await query.getDocuments()
-        
-        let allSessions = snapshot.documents.map { doc -> (id: String, data: [String: Any]) in
-            (id: doc.documentID, data: doc.data())
+
+        // Handle notes
+        if formData.notes.isEmpty {
+            updateData["notes"] = .null
+        } else {
+            updateData["notes"] = .string(formData.notes)
         }
-        
-        // Separate time off from regular sessions
-        let regularSessions = allSessions.filter { session in
-            !(session.data["isTimeOff"] as? Bool ?? false)
+
+        // Update in Supabase
+        try await supabase
+            .from("sessions")
+            .update(updateData)
+            .eq("id", value: sessionId)
+            .execute()
+
+        // Recalculate colors if date changed
+        if existingSession.date != formData.date {
+            try await recalculateSessionColorsForDate(organizationID: existingSession.organization_id, date: existingSession.date)
+            try await recalculateSessionColorsForDate(organizationID: existingSession.organization_id, date: formData.date)
+        } else {
+            try await recalculateSessionColorsForDate(organizationID: existingSession.organization_id, date: formData.date)
         }
-        let timeOffSessions = allSessions.filter { session in
-            session.data["isTimeOff"] as? Bool ?? false
+
+        print("✅ Updated session: \(sessionId)")
+    }
+
+    // MARK: - Color Recalculation
+
+    private func recalculateSessionColorsForDate(organizationID: String, date: String, organization: Organization? = nil) async throws {
+        // Fetch organization if not provided
+        let org: Organization?
+        if let providedOrg = organization {
+            org = providedOrg
+        } else {
+            let orgs: [Organization] = try await supabase
+                .from("organizations")
+                .select()
+                .eq("id", value: organizationID)
+                .limit(1)
+                .execute()
+                .value
+            org = orgs.first
         }
-        
-        // Sort regular sessions by start time, then school ID
-        let sortedRegularSessions = regularSessions.sorted { lhs, rhs in
-            let lhsStart = lhs.data["startTime"] as? String ?? ""
-            let rhsStart = rhs.data["startTime"] as? String ?? ""
-            if lhsStart != rhsStart {
-                return lhsStart < rhsStart
-            }
-            let lhsSchool = lhs.data["schoolId"] as? String ?? ""
-            let rhsSchool = rhs.data["schoolId"] as? String ?? ""
-            return lhsSchool < rhsSchool
-        }
-        
-        // Get color array
-        let customColors = org?.sessionOrderColors
-        let defaultColors = [
+
+        let colorOrder = org?.session_order_colors ?? [
             "#3b82f6", "#10b981", "#8b5cf6", "#f59e0b",
             "#ef4444", "#06b6d4", "#8b5a3c", "#6b7280"
         ]
-        let colors = (customColors?.count ?? 0) >= 8 ? customColors! : defaultColors
-        
-        // Batch update colors
-        let batch = db.batch()
-        var hasUpdates = false
-        
-        // Update regular sessions
-        for (index, session) in sortedRegularSessions.enumerated() {
-            let expectedColor = colors[min(index, colors.count - 1)]
-            let currentColor = session.data["sessionColor"] as? String
-            
-            if currentColor != expectedColor {
-                let docRef = db.collection("sessions").document(session.id)
-                batch.updateData(["sessionColor": expectedColor], forDocument: docRef)
-                hasUpdates = true
+
+        // Get all sessions for this date
+        let sessions: [Session] = try await supabase
+            .from("sessions")
+            .select()
+            .eq("organization_id", value: organizationID)
+            .eq("date", value: date)
+            .execute()
+            .value
+
+        // Separate time-off and regular sessions
+        let timeOffSessions = sessions.filter { $0.is_time_off ?? false }
+        let regularSessions = sessions
+            .filter { !($0.is_time_off ?? false) }
+            .sorted { lhs, rhs in
+                if lhs.start_time != rhs.start_time {
+                    return lhs.start_time < rhs.start_time
+                }
+                return lhs.school_id < rhs.school_id
+            }
+
+        // Update regular sessions with colors
+        for (index, session) in regularSessions.enumerated() {
+            let colorIndex = index % colorOrder.count
+            let newColor = colorOrder[colorIndex]
+
+            if session.session_color != newColor {
+                try await supabase
+                    .from("sessions")
+                    .update(["session_color": AnyJSON.string(newColor)])
+                    .eq("id", value: session.id)
+                    .execute()
             }
         }
-        
-        // Update time off sessions
+
+        // Update time-off sessions to gray
         for session in timeOffSessions {
-            let expectedColor = "#666"
-            let currentColor = session.data["sessionColor"] as? String
-            
-            if currentColor != expectedColor {
-                let docRef = db.collection("sessions").document(session.id)
-                batch.updateData(["sessionColor": expectedColor], forDocument: docRef)
-                hasUpdates = true
+            if session.session_color != "#666" {
+                try await supabase
+                    .from("sessions")
+                    .update(["session_color": AnyJSON.string("#666")])
+                    .eq("id", value: session.id)
+                    .execute()
             }
         }
-        
-        // Commit batch if there are updates
-        if hasUpdates {
-            try await batch.commit()
-        }
+
+        print("✅ Recalculated colors for \(sessions.count) sessions on \(date)")
     }
-    
-    // Delete a session
-    func deleteSession(id: String, completion: @escaping (Bool, String?) -> Void) {
-        db.collection("sessions").document(id).delete { error in
-            if let error = error {
-                completion(false, error.localizedDescription)
-            } else {
-                completion(true, nil)
-            }
+
+    // MARK: - Delete Session
+
+    func deleteSession(id: String) async throws {
+        // Get session to know which date to recalculate
+        guard let session = try await fetchSession(sessionId: id) else {
+            throw SessionError.notFound
         }
+
+        // Delete from Supabase
+        try await supabase
+            .from("sessions")
+            .delete()
+            .eq("id", value: id)
+            .execute()
+
+        // Recalculate colors for the date
+        try await recalculateSessionColorsForDate(organizationID: session.organization_id, date: session.date)
+
+        print("✅ Deleted session: \(id)")
     }
-    
-    // Fetch a single session by ID
-    func fetchSession(by sessionId: String, completion: @escaping (Session?) -> Void) {
-        guard !sessionId.isEmpty else {
-            print("⚠️ fetchSession called with empty sessionId")
-            completion(nil)
-            return
-        }
-        
-        print("🔍 Fetching session with ID: \(sessionId)")
-        
-        db.collection("sessions").document(sessionId).getDocument { snapshot, error in
-            if let error = error {
-                print("❌ Error fetching session \(sessionId): \(error.localizedDescription)")
-                completion(nil)
-                return
-            }
-            
-            guard let snapshot = snapshot else {
-                print("❌ No snapshot returned for session \(sessionId)")
-                completion(nil)
-                return
-            }
-            
-            guard snapshot.exists else {
-                print("❌ Session document \(sessionId) does not exist in Firestore")
-                completion(nil)
-                return
-            }
-            
-            guard let data = snapshot.data() else {
-                print("❌ Session \(sessionId) exists but has no data")
-                completion(nil)
-                return
-            }
-            
-            print("✅ Found session \(sessionId) with data keys: \(data.keys.sorted())")
-            
-            // Log the organization ID to check for mismatches
-            if let sessionOrgId = data["organizationID"] as? String {
-                print("📍 Session organizationID: '\(sessionOrgId)'")
-            }
-            
-            let session = Session(id: sessionId, data: data)
-            print("✅ Created session object: \(session.schoolName) - \(session.sessionType?.joined(separator: ", ") ?? "no types")")
-            completion(session)
-        }
-    }
-    
-    // Get session display name for a session ID
-    func getSessionDisplayName(for sessionId: String, completion: @escaping (String) -> Void) {
-        fetchSession(by: sessionId) { session in
-            if let session = session {
-                // Create a meaningful display name from session data
-                var displayName = session.schoolName
-                
-                // Add all session types
-                if let sessionTypes = session.sessionType, !sessionTypes.isEmpty {
-                    let typesString = sessionTypes.joined(separator: ", ")
-                    displayName += " - \(typesString)"
-                }
-                
-                // Add formatted date if available
-                if let dateString = session.date {
-                    // Convert yyyy-MM-dd to more readable format
-                    let inputFormatter = DateFormatter()
-                    inputFormatter.dateFormat = "yyyy-MM-dd"
-                    
-                    if let date = inputFormatter.date(from: dateString) {
-                        let outputFormatter = DateFormatter()
-                        outputFormatter.dateFormat = "MMM d"  // e.g., "Aug 4"
-                        let formattedDate = outputFormatter.string(from: date)
-                        displayName += " (\(formattedDate))"
-                    } else {
-                        displayName += " (\(dateString))"
-                    }
-                }
-                
-                completion(displayName)
-            } else {
-                // Fallback to session ID if session not found
-                completion(sessionId)
-            }
-        }
-    }
-    
-    // MARK: - Publishing Methods
-    
-    // Publish a single session
+
+    // MARK: - Publishing
+
     func publishSession(sessionId: String) async throws {
-        print("🚀 Publishing session: \(sessionId)")
-        
-        // First, get the current session data to log
-        let document = try await db.collection("sessions").document(sessionId).getDocument()
-        if let data = document.data() {
-            let currentIsPublished = data["isPublished"] as? Bool ?? true
-            print("🚀 Current isPublished value: \(currentIsPublished)")
-        }
-        
-        // Update the session
-        try await db.collection("sessions").document(sessionId).updateData([
-            "isPublished": true,
-            "publishedAt": FieldValue.serverTimestamp()
-        ])
-        
-        print("✅ Session published successfully: \(sessionId)")
-        
-        // Verify the update
-        let updatedDoc = try await db.collection("sessions").document(sessionId).getDocument()
-        if let data = updatedDoc.data() {
-            let newIsPublished = data["isPublished"] as? Bool ?? true
-            print("✅ Verified isPublished value after update: \(newIsPublished)")
-        }
+        try await supabase
+            .from("sessions")
+            .update([
+                "is_published": AnyJSON.bool(true),
+                "updated_at": AnyJSON.string(Date().ISO8601Format())
+            ])
+            .eq("id", value: sessionId)
+            .execute()
+
+        print("✅ Published session: \(sessionId)")
     }
-    
-    // Temporarily create an unpublished test session for debugging
-    func createTestUnpublishedSession(organizationID: String) async throws -> String {
-        let testSessionData: [String: Any] = [
-            "organizationID": organizationID,
-            "schoolId": "test-school",
-            "schoolName": "Test School - Unpublished Session",
-            "date": "2025-08-04",
-            "startTime": "09:00",
-            "endTime": "12:00",
-            "sessionTypes": ["Photography"],
-            "notes": "This is a test unpublished session for admin visibility testing",
-            "status": "scheduled",
-            "sessionColor": "#FF6B6B",
-            "isPublished": false, // Explicitly set to false
-            "createdAt": FieldValue.serverTimestamp(),
-            "createdBy": [
-                "id": "test-admin",
-                "name": "Test Admin",
-                "email": "admin@test.com"
-            ],
-            "photographers": [
-                [
-                    "id": "test-photographer",
-                    "name": "Test Photographer",
-                    "email": "photographer@test.com",
-                    "notes": "Test photographer for unpublished session"
-                ]
-            ]
-        ]
-        
-        let docRef = try await db.collection("sessions").addDocument(data: testSessionData)
-        print("🧪 Created test unpublished session with ID: \(docRef.documentID)")
-        return docRef.documentID
-    }
-    
-    // Publish all unpublished sessions for a specific date
+
     func publishSessionsForDate(organizationID: String, date: String) async throws {
-        // Get all unpublished sessions for the date
-        let query = db.collection("sessions")
-            .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("date", isEqualTo: date)
-            .whereField("isPublished", isEqualTo: false)
-        
-        let snapshot = try await query.getDocuments()
-        
-        // Batch update all sessions
-        let batch = db.batch()
-        var hasUpdates = false
-        
-        for document in snapshot.documents {
-            let docRef = db.collection("sessions").document(document.documentID)
-            batch.updateData([
-                "isPublished": true,
-                "publishedAt": FieldValue.serverTimestamp()
-            ], forDocument: docRef)
-            hasUpdates = true
-        }
-        
-        // Commit batch if there are updates
-        if hasUpdates {
-            try await batch.commit()
-        }
+        try await supabase
+            .from("sessions")
+            .update([
+                "is_published": AnyJSON.bool(true),
+                "updated_at": AnyJSON.string(Date().ISO8601Format())
+            ])
+            .eq("organization_id", value: organizationID)
+            .eq("date", value: date)
+            .execute()
+
+        print("✅ Published all sessions for date: \(date)")
     }
-    
-    // Check if there are unpublished sessions for a date
+
     func hasUnpublishedSessionsForDate(organizationID: String, date: String) async throws -> Bool {
-        let query = db.collection("sessions")
-            .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("date", isEqualTo: date)
-            .whereField("isPublished", isEqualTo: false)
-            .limit(to: 1)
-        
-        let snapshot = try await query.getDocuments()
-        return !snapshot.documents.isEmpty
+        let sessions: [Session] = try await supabase
+            .from("sessions")
+            .select()
+            .eq("organization_id", value: organizationID)
+            .eq("date", value: date)
+            .eq("is_published", value: false)
+            .limit(1)
+            .execute()
+            .value
+
+        return !sessions.isEmpty
     }
-    
-    // MARK: - Helper Methods
-    
-    // Clear the sessions cache
+
+    // MARK: - Utility Methods
+
     func clearCache() {
         sessionsCache = []
         lastCacheUpdate = nil
     }
-    
-    // Check if user has permission to manage sessions (for future admin features)
+
     func userCanManageSessions() -> Bool {
-        // For now, allow all authenticated users to read sessions
-        return Auth.auth().currentUser != nil
+        let userRole = UserDefaults.standard.string(forKey: "userRole") ?? "employee"
+        return userRole == "admin" || userRole == "manager"
     }
-    
-    // Get current connection status for UI indicators
+
     func getConnectionStatus() -> (isConnected: Bool, lastError: String?, isRetrying: Bool) {
-        return (isConnected: isConnected, lastError: lastError, isRetrying: isRetrying)
+        return (isConnected, lastError, isRetrying)
     }
-    
-    // Filter sessions by employee name (case-insensitive)
+
     func filterSessions(_ sessions: [Session], forEmployee employeeName: String) -> [Session] {
-        let trimmedName = employeeName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { return sessions }
-        
         return sessions.filter { session in
-            session.employeeName.lowercased() == trimmedName.lowercased()
+            session.photographers.contains { $0.name == employeeName }
         }
     }
-    
-    // Sort sessions by start date
+
     func sortSessionsByDate(_ sessions: [Session]) -> [Session] {
-        return sessions.sorted { (session1, session2) -> Bool in
-            guard let date1 = session1.startDate, let date2 = session2.startDate else {
-                return false
+        return sessions.sorted { lhs, rhs in
+            if lhs.date != rhs.date {
+                return lhs.date < rhs.date
             }
-            return date1 < date2
+            return lhs.start_time < rhs.start_time
         }
     }
-    
-    // Get sessions for a specific day
+
     func getSessionsForDay(_ sessions: [Session], date: Date) -> [Session] {
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: date)
-        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-        
-        return sessions.filter { session in
-            guard let sessionDate = session.startDate else { return false }
-            return sessionDate >= startOfDay && sessionDate < endOfDay
-        }
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let dateStr = dateFormatter.string(from: date)
+
+        return sessions.filter { $0.date == dateStr }
     }
-    
-    // Check if there are sessions on a specific date
+
     func hasSessions(_ sessions: [Session], on date: Date) -> Bool {
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: date)
-        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-        
-        return sessions.contains { session in
-            guard let sessionDate = session.startDate else { return false }
-            return sessionDate >= startOfDay && sessionDate < endOfDay
-        }
+        return !getSessionsForDay(sessions, date: date).isEmpty
     }
-    
-    // MARK: - Paginated Loading
-    
-    // Load sessions with pagination support
-    func loadSessionsPage(organizationID: String, completion: @escaping ([Session], Bool) -> Void) {
-        guard hasMorePages else {
-            completion([], false)
-            return
-        }
-        
-        var query = db.collection("sessions")
-            .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("isPublished", isEqualTo: true)
-            .order(by: "date", descending: true)
-            .limit(to: pageSize)
-        
-        // If we have a last document, start after it
-        if let lastDoc = lastDocument {
-            query = query.start(afterDocument: lastDoc)
-        }
-        
-        query.getDocuments { [weak self] snapshot, error in
-            if let error = error {
-                print("Error loading sessions page: \(error.localizedDescription)")
-                completion([], false)
-                return
-            }
-            
-            guard let documents = snapshot?.documents else {
-                completion([], false)
-                return
-            }
-            
-            let sessions = documents.map { document in
-                Session(id: document.documentID, data: document.data())
-            }
-            
-            // Update pagination state
-            self?.lastDocument = documents.last
-            self?.hasMorePages = documents.count == self?.pageSize
-            
-            completion(sessions, self?.hasMorePages ?? false)
-        }
+
+    func getSessionDisplayName(for session: Session) -> String {
+        return session.getSessionTypeDisplayName()
     }
-    
-    // Reset pagination state
+
+    // MARK: - Pagination
+
+    func loadSessionsPage(organizationID: String) async throws -> ([Session], Bool) {
+        let offset = currentPage * pageSize
+
+        let sessions: [Session] = try await supabase
+            .from("sessions")
+            .select()
+            .eq("organization_id", value: organizationID)
+            .order("date", ascending: false)
+            .order("start_time", ascending: false)
+            .range(from: offset, to: offset + pageSize - 1)
+            .execute()
+            .value
+
+        hasMorePages = sessions.count == pageSize
+        currentPage += 1
+
+        return (sessions, hasMorePages)
+    }
+
     func resetPagination() {
-        lastDocument = nil
+        currentPage = 0
         hasMorePages = true
     }
-    
+
     // MARK: - Network Monitoring
-    
+
     private func setupNetworkMonitoring() {
         monitor.pathUpdateHandler = { [weak self] path in
             DispatchQueue.main.async {
-                let wasConnected = self?.isConnected ?? true
                 self?.isConnected = path.status == .satisfied
-                
-                // Clear errors when connection is restored
-                if !wasConnected && path.status == .satisfied {
-                    self?.lastError = nil
-                    self?.isRetrying = false
-                }
             }
         }
         monitor.start(queue: monitorQueue)
     }
-    
-    // MARK: - Error Handling
-    
+
     private func handleError(_ error: Error, operation: String) {
-        DispatchQueue.main.async {
-            self.lastError = "\(operation): \(error.localizedDescription)"
-            print("🔥 SessionService Error - \(operation): \(error.localizedDescription)")
-            
-            // Start retry logic for network errors
-            if !self.isConnected && !self.isRetrying {
-                self.startRetryLogic()
-            }
+        print("❌ SessionService error during \(operation): \(error.localizedDescription)")
+        DispatchQueue.main.async { [weak self] in
+            self?.lastError = error.localizedDescription
         }
     }
-    
-    private func startRetryLogic() {
-        isRetrying = true
-        
-        // Retry after 5 seconds if still connected
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-            if self.isConnected && self.isRetrying {
-                self.isRetrying = false
-                self.lastError = nil
-                // Listeners will automatically reconnect when Firestore detects connectivity
-            }
-        }
-    }
-    
+
     deinit {
         monitor.cancel()
     }
 }
 
+// MARK: - Session Errors
+enum SessionError: LocalizedError {
+    case notFound
+    case invalidInput(field: String, message: String)
+    case permissionDenied
+    case networkError
+
+    var errorDescription: String? {
+        switch self {
+        case .notFound:
+            return "Session not found"
+        case .invalidInput(let field, let message):
+            return "\(field): \(message)"
+        case .permissionDenied:
+            return "You don't have permission to perform this action"
+        case .networkError:
+            return "Network error. Please check your connection"
+        }
+    }
+}

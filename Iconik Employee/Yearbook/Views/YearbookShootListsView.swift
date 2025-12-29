@@ -1,6 +1,4 @@
 import SwiftUI
-import FirebaseAuth
-import FirebaseFirestore
 
 struct YearbookShootListsView: View {
     @StateObject private var viewModel = YearbookShootListViewModel()

@@ -7,17 +7,43 @@
 
 
 import Foundation
-import Firebase
-import FirebaseFirestore
+import Supabase
 import CoreData
+
+// MARK: - Supabase Update Payload for Offline Sync
+private struct SportsShootUpdatePayload: Encodable {
+    let school_name: String
+    let sport_name: String
+    let shoot_date: String
+    let location: String
+    let photographer: String
+    let roster: [RosterEntry]
+    let group_images: [GroupImage]
+    let additional_notes: String
+    let organization_id: String
+    let updated_at: String
+
+    init(from shoot: SportsShoot) {
+        self.school_name = shoot.schoolName
+        self.sport_name = shoot.sportName
+        self.shoot_date = shoot.shootDate.ISO8601Format()
+        self.location = shoot.location
+        self.photographer = shoot.photographer
+        self.roster = shoot.roster
+        self.group_images = shoot.groupImages
+        self.additional_notes = shoot.additionalNotes
+        self.organization_id = shoot.organizationID.lowercased()
+        self.updated_at = Date().ISO8601Format()
+    }
+}
 
 // MARK: - Offline Manager for Sports Shoots
 class OfflineManager {
     static let shared = OfflineManager()
-    
+
     // File manager to handle caching
     private let fileManager = FileManager.default
-    private let db = Firestore.firestore()
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
     
     // Network status
     private var isOnline = true
@@ -495,83 +521,56 @@ class OfflineManager {
             saveModifiedShootsList()
             return
         }
-        
-        // Fetch the remote shoot
-        db.collection("sportsJobs").document(shootID).getDocument { [weak self] snapshot, error in
-            guard let self = self else { return }
-            
-            if let error = error {
+
+        // Fetch the remote shoot using Supabase
+        Task {
+            do {
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from("sports_jobs")
+                    .select()
+                    .eq("id", value: shootID)
+                    .limit(1)
+                    .execute()
+                    .value
+
+                if let remoteShoot = shoots.first?.toSportsShoot() {
+                    // Remote shoot exists, check for conflicts
+                    await self.handleShootConflicts(localShoot: localShoot, remoteShoot: remoteShoot)
+                } else {
+                    // Remote shoot doesn't exist, push local version
+                    await self.pushShootToServer(localShoot)
+                }
+            } catch {
                 print("Error fetching remote shoot: \(error.localizedDescription)")
                 // Will retry on next sync attempt
-                return
             }
-            
-            guard let snapshot = snapshot, snapshot.exists else {
-                // Remote shoot doesn't exist, push local version
-                self.pushShootToServer(localShoot)
-                return
-            }
-            
-            // Remote shoot exists, check for conflicts
-            guard let remoteShoot = SportsShoot(from: snapshot) else {
-                print("Error parsing remote shoot")
-                return
-            }
-            
-            self.handleShootConflicts(localShoot: localShoot, remoteShoot: remoteShoot)
         }
     }
     
     // Push a shoot to the server
-    private func pushShootToServer(_ shoot: SportsShoot) {
-        let docRef = db.collection("sportsJobs").document(shoot.id)
-        
-        // Convert roster entries to dictionaries
-        let rosterDicts = shoot.roster.map { $0.toDictionary() }
-        
-        // Convert group images to dictionaries
-        let groupDicts = shoot.groupImages.map { $0.toDictionary() }
-        
-        // Create document data
-        var docData: [String: Any] = [
-            "schoolName": shoot.schoolName,
-            "sportName": shoot.sportName,
-            "shootDate": Timestamp(date: shoot.shootDate),
-            "location": shoot.location,
-            "photographer": shoot.photographer,
-            "roster": rosterDicts,
-            "groupImages": groupDicts,
-            "additionalNotes": shoot.additionalNotes,
-            "organizationID": shoot.organizationID,
-            "updatedAt": Timestamp(date: Date())
-        ]
-        
-        // Set created date if it's a new document
-        if shoot.createdAt != Date(timeIntervalSince1970: 0) {
-            docData["createdAt"] = Timestamp(date: shoot.createdAt)
-        } else {
-            docData["createdAt"] = Timestamp(date: Date())
-        }
-        
-        // Set or update the document
-        docRef.setData(docData) { [weak self] error in
-            if let error = error {
-                print("Error pushing shoot to server: \(error.localizedDescription)")
-                return
-            }
-            
+    private func pushShootToServer(_ shoot: SportsShoot) async {
+        do {
+            let updateData = SportsShootUpdatePayload(from: shoot)
+
+            try await supabase
+                .from("sports_jobs")
+                .upsert(updateData)
+                .execute()
+
             // Sync successful, remove from modified list
-            self?.modifiedShoots.removeValue(forKey: shoot.id)
-            self?.saveModifiedShootsList()
+            modifiedShoots.removeValue(forKey: shoot.id)
+            saveModifiedShootsList()
+        } catch {
+            print("Error pushing shoot to server: \(error.localizedDescription)")
         }
     }
     
     // Handle conflicts between local and remote shoots
-    private func handleShootConflicts(localShoot: SportsShoot, remoteShoot: SportsShoot) {
+    private func handleShootConflicts(localShoot: SportsShoot, remoteShoot: SportsShoot) async {
         // Create lists of conflicts
         var entryConflicts: [EntryConflict] = []
         var groupConflicts: [GroupConflict] = []
-        
+
         // Check for entry conflicts
         for localEntry in localShoot.roster {
             if let remoteEntry = remoteShoot.roster.first(where: { $0.id == localEntry.id }),
@@ -579,7 +578,7 @@ class OfflineManager {
                 entryConflicts.append(EntryConflict(localEntry: localEntry, remoteEntry: remoteEntry))
             }
         }
-        
+
         // Check for group conflicts
         for localGroup in localShoot.groupImages {
             if let remoteGroup = remoteShoot.groupImages.first(where: { $0.id == localGroup.id }),
@@ -587,24 +586,26 @@ class OfflineManager {
                 groupConflicts.append(GroupConflict(localGroup: localGroup, remoteGroup: remoteGroup))
             }
         }
-        
+
         // If there are conflicts, notify the user
         if !entryConflicts.isEmpty || !groupConflicts.isEmpty {
-            NotificationCenter.default.post(
-                name: NSNotification.Name("SyncConflictsDetected"),
-                object: nil,
-                userInfo: [
-                    "shootID": localShoot.id,
-                    "entryConflicts": entryConflicts,
-                    "groupConflicts": groupConflicts,
-                    "localShoot": localShoot,
-                    "remoteShoot": remoteShoot
-                ]
-            )
+            await MainActor.run {
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("SyncConflictsDetected"),
+                    object: nil,
+                    userInfo: [
+                        "shootID": localShoot.id,
+                        "entryConflicts": entryConflicts,
+                        "groupConflicts": groupConflicts,
+                        "localShoot": localShoot,
+                        "remoteShoot": remoteShoot
+                    ]
+                )
+            }
         } else {
             // No conflicts, merge and push
             let mergedShoot = mergeShootsWithoutConflicts(localShoot: localShoot, remoteShoot: remoteShoot)
-            pushShootToServer(mergedShoot)
+            await pushShootToServer(mergedShoot)
         }
     }
     
@@ -702,78 +703,82 @@ class OfflineManager {
             completion(false)
             return
         }
-        
-        // Fetch the remote shoot
-        db.collection("sportsJobs").document(shootID).getDocument { [weak self] snapshot, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                print("Error fetching remote shoot: \(error.localizedDescription)")
-                completion(false)
-                return
-            }
-            
-            guard let snapshot = snapshot, snapshot.exists,
-                  let remoteShoot = SportsShoot(from: snapshot) else {
-                print("Error parsing remote shoot")
-                completion(false)
-                return
-            }
-            
-            // Create a new merged shoot
-            var mergedShoot = remoteShoot
-            
-            // Merge roster entries based on conflict resolution choices
-            for entry in localShoot.roster {
-                if let index = mergedShoot.roster.firstIndex(where: { $0.id == entry.id }) {
-                    // Entry exists in both - check if it has a conflict and which version to use
-                    if useLocalEntries.contains(entry.id) {
-                        // Use local version
-                        mergedShoot.roster[index] = entry
-                    }
-                    // Otherwise keep remote version which is already in mergedShoot
-                } else {
-                    // Entry only exists locally, always add it
-                    mergedShoot.roster.append(entry)
-                }
-            }
-            
-            // Merge group images based on conflict resolution choices
-            for group in localShoot.groupImages {
-                if let index = mergedShoot.groupImages.firstIndex(where: { $0.id == group.id }) {
-                    // Group exists in both - check if it has a conflict and which version to use
-                    if useLocalGroups.contains(group.id) {
-                        // Use local version
-                        mergedShoot.groupImages[index] = group
-                    }
-                    // Otherwise keep remote version which is already in mergedShoot
-                } else {
-                    // Group only exists locally, always add it
-                    mergedShoot.groupImages.append(group)
-                }
-            }
-            
-            // Push the merged shoot to the server
-            self.pushShootToServer(mergedShoot)
-            
-            // Also update the cached version
+
+        // Fetch the remote shoot using Supabase
+        Task {
             do {
-                let encoder = JSONEncoder()
-                encoder.dateEncodingStrategy = .iso8601
-                
-                let shootData = try encoder.encode(mergedShoot)
-                let shootPath = self.cachesDirectory.appendingPathComponent("\(shootID).json")
-                
-                try shootData.write(to: shootPath)
-                
-                // Remove from modified list since we've synced
-                self.modifiedShoots.removeValue(forKey: shootID)
-                self.saveModifiedShootsList()
-                
-                completion(true)
+                let shoots: [SupabaseSportsShoot] = try await supabase
+                    .from("sports_jobs")
+                    .select()
+                    .eq("id", value: shootID)
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let remoteShoot = shoots.first?.toSportsShoot() else {
+                    print("Error parsing remote shoot")
+                    await MainActor.run { completion(false) }
+                    return
+                }
+
+                // Create a new merged shoot
+                var mergedShoot = remoteShoot
+
+                // Merge roster entries based on conflict resolution choices
+                for entry in localShoot.roster {
+                    if let index = mergedShoot.roster.firstIndex(where: { $0.id == entry.id }) {
+                        // Entry exists in both - check if it has a conflict and which version to use
+                        if useLocalEntries.contains(entry.id) {
+                            // Use local version
+                            mergedShoot.roster[index] = entry
+                        }
+                        // Otherwise keep remote version which is already in mergedShoot
+                    } else {
+                        // Entry only exists locally, always add it
+                        mergedShoot.roster.append(entry)
+                    }
+                }
+
+                // Merge group images based on conflict resolution choices
+                for group in localShoot.groupImages {
+                    if let index = mergedShoot.groupImages.firstIndex(where: { $0.id == group.id }) {
+                        // Group exists in both - check if it has a conflict and which version to use
+                        if useLocalGroups.contains(group.id) {
+                            // Use local version
+                            mergedShoot.groupImages[index] = group
+                        }
+                        // Otherwise keep remote version which is already in mergedShoot
+                    } else {
+                        // Group only exists locally, always add it
+                        mergedShoot.groupImages.append(group)
+                    }
+                }
+
+                // Push the merged shoot to the server
+                await self.pushShootToServer(mergedShoot)
+
+                // Also update the cached version
+                do {
+                    let encoder = JSONEncoder()
+                    encoder.dateEncodingStrategy = .iso8601
+
+                    let shootData = try encoder.encode(mergedShoot)
+                    let shootPath = self.cachesDirectory.appendingPathComponent("\(shootID).json")
+
+                    try shootData.write(to: shootPath)
+
+                    // Remove from modified list since we've synced
+                    self.modifiedShoots.removeValue(forKey: shootID)
+                    self.saveModifiedShootsList()
+
+                    await MainActor.run { completion(true) }
+                } catch {
+                    print("Error updating cached shoot: \(error.localizedDescription)")
+                    await MainActor.run { completion(false) }
+                }
             } catch {
-                print("Error updating cached shoot: \(error.localizedDescription)")
-                completion(false)
+                print("Error fetching remote shoot: \(error.localizedDescription)")
+                await MainActor.run { completion(false) }
             }
         }
     }

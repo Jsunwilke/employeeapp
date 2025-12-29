@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import FirebaseAuth
 
 struct TaskDetailView: View {
     @Environment(\.presentationMode) var presentationMode
@@ -28,18 +27,21 @@ struct TaskDetailView: View {
     }
 
     private var currentUserId: String {
-        return Auth.auth().currentUser?.uid ?? ""
+        return UserManager.shared.getCurrentUserIDUnified() ?? ""
     }
 
     private var currentUserName: String {
-        return Auth.auth().currentUser?.displayName ?? "Unknown User"
+        let firstName = UserDefaults.standard.string(forKey: "userFirstName") ?? ""
+        let lastName = UserDefaults.standard.string(forKey: "userLastName") ?? ""
+        let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+        return fullName.isEmpty ? "Unknown User" : fullName
     }
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 // Header
-                TaskDetailHeaderView(task: editedTask, isEditing: $isEditing)
+                TaskDetailHeaderView(task: editedTask, isEditing: $isEditing, currentUserId: currentUserId)
                     .padding()
 
                 // Tab Selector
@@ -92,7 +94,9 @@ struct TaskDetailView: View {
             }
             .onAppear {
                 // Load comments when view appears
-                commentService.fetchComments(for: task.id) { _ in }
+                Task {
+                    try? await commentService.fetchComments(for: task.id)
+                }
             }
             .onDisappear {
                 commentService.stopListening(taskId: task.id)
@@ -108,16 +112,16 @@ struct TaskDetailView: View {
     private func sendComment() {
         guard !newCommentText.isEmpty else { return }
 
-        commentService.addComment(
-            to: task.id,
-            text: newCommentText,
-            userId: currentUserId,
-            userName: currentUserName
-        ) { result in
-            switch result {
-            case .success:
+        Task {
+            do {
+                try await commentService.addComment(
+                    to: task.id,
+                    text: newCommentText,
+                    userId: currentUserId,
+                    userName: currentUserName
+                )
                 newCommentText = ""
-            case .failure(let error):
+            } catch {
                 print("❌ Failed to add comment: \(error.localizedDescription)")
             }
         }
@@ -138,6 +142,7 @@ enum DetailTab: String, CaseIterable {
 struct TaskDetailHeaderView: View {
     let task: TaskItem
     @Binding var isEditing: Bool
+    let currentUserId: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -171,7 +176,7 @@ struct TaskDetailHeaderView: View {
                 Button(action: {
                     // TODO: Toggle watch
                 }) {
-                    Image(systemName: task.isWatchedBy(userId: Auth.auth().currentUser?.uid ?? "") ? "star.fill" : "star")
+                    Image(systemName: task.isWatchedBy(userId: currentUserId) ? "star.fill" : "star")
                         .foregroundColor(.yellow)
                 }
             }
@@ -225,9 +230,7 @@ struct TaskDetailHeaderView: View {
         switch task.status {
         case .todo: return .gray
         case .inProgress: return .blue
-        case .onHold: return .orange
         case .completed: return .green
-        case .cancelled: return .red
         }
     }
 }

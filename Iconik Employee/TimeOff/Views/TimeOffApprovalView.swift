@@ -15,13 +15,13 @@ struct TimeOffApprovalView: View {
     
     private var inReviewRequests: [TimeOffRequest] {
         return timeOffService.timeOffRequests
-            .filter { $0.status == .underReview }
+            .filter { $0.status == "underReview" }
             .sorted { $0.createdAt < $1.createdAt }
     }
-    
+
     private var historyRequests: [TimeOffRequest] {
         return timeOffService.timeOffRequests
-            .filter { $0.status != .pending && $0.status != .underReview }
+            .filter { $0.status != "pending" && $0.status != "underReview" }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
     
@@ -48,11 +48,13 @@ struct TimeOffApprovalView: View {
         }
         .navigationTitle("Time Off Approvals")
         .navigationBarTitleDisplayMode(.large)
-        .onAppear {
-            timeOffService.startListeningToRequests()
+        .task {
+            await timeOffService.startListeningToRequests()
         }
         .onDisappear {
-            timeOffService.stopListening()
+            Task {
+                await timeOffService.stopListening()
+            }
         }
         .alert("Deny Request", isPresented: $showingDenialDialog) {
             TextField("Reason for denial", text: $denialReason)
@@ -139,7 +141,7 @@ struct TimeOffApprovalView: View {
                 }
                 .listStyle(PlainListStyle())
                 .refreshable {
-                    timeOffService.refreshRequests()
+                    await timeOffService.refreshRequests()
                 }
             }
         }
@@ -173,7 +175,7 @@ struct TimeOffApprovalView: View {
                 }
                 .listStyle(PlainListStyle())
                 .refreshable {
-                    timeOffService.refreshRequests()
+                    await timeOffService.refreshRequests()
                 }
             }
         }
@@ -197,7 +199,7 @@ struct TimeOffApprovalView: View {
                 }
                 .listStyle(PlainListStyle())
                 .refreshable {
-                    timeOffService.refreshRequests()
+                    await timeOffService.refreshRequests()
                 }
             }
         }
@@ -276,52 +278,64 @@ struct TimeOffApprovalView: View {
     }
     
     // MARK: - Helper Methods
-    
+
     private func approveRequest(_ request: TimeOffRequest) {
-        timeOffService.approveTimeOffRequest(requestId: request.id) { success, error in
-            DispatchQueue.main.async {
-                if success {
+        Task {
+            do {
+                try await timeOffService.approveTimeOffRequest(requestId: request.id)
+                await MainActor.run {
                     alertMessage = "Request approved successfully"
-                } else {
-                    alertMessage = error ?? "Failed to approve request"
+                    showingAlert = true
                 }
-                showingAlert = true
+            } catch {
+                await MainActor.run {
+                    alertMessage = error.localizedDescription
+                    showingAlert = true
+                }
             }
         }
     }
-    
+
     private func denyRequest(_ request: TimeOffRequest) {
         guard !denialReason.trimmingCharacters(in: .whitespaces).isEmpty else {
             alertMessage = "Please provide a reason for denial"
             showingAlert = true
             return
         }
-        
-        timeOffService.denyTimeOffRequest(requestId: request.id, denialReason: denialReason) { success, error in
-            DispatchQueue.main.async {
-                if success {
+
+        Task {
+            do {
+                try await timeOffService.denyTimeOffRequest(requestId: request.id, denialReason: denialReason)
+                await MainActor.run {
                     alertMessage = "Request denied successfully"
-                } else {
-                    alertMessage = error ?? "Failed to deny request"
+                    showingAlert = true
+
+                    // Reset dialog state
+                    denialReason = ""
+                    requestToDeny = nil
                 }
-                showingAlert = true
-                
-                // Reset dialog state
-                denialReason = ""
-                requestToDeny = nil
+            } catch {
+                await MainActor.run {
+                    alertMessage = error.localizedDescription
+                    showingAlert = true
+                }
             }
         }
     }
-    
+
     private func putRequestInReview(_ request: TimeOffRequest) {
-        timeOffService.putTimeOffRequestInReview(requestId: request.id) { success, error in
-            DispatchQueue.main.async {
-                if success {
+        Task {
+            do {
+                try await timeOffService.putTimeOffRequestInReview(requestId: request.id)
+                await MainActor.run {
                     alertMessage = "Request placed in review"
-                } else {
-                    alertMessage = error ?? "Failed to put request in review"
+                    showingAlert = true
                 }
-                showingAlert = true
+            } catch {
+                await MainActor.run {
+                    alertMessage = error.localizedDescription
+                    showingAlert = true
+                }
             }
         }
     }

@@ -1,16 +1,29 @@
 import Foundation
 
 enum TimeOffReason: String, CaseIterable, Codable {
-    case vacation = "Vacation"
-    case sickLeave = "Sick Leave"
-    case personalDay = "Personal Day"
-    case familyEmergency = "Family Emergency"
-    case medicalAppointment = "Medical Appointment"
-    case other = "Other"
-    
+    case vacation = "vacation"
+    case sick = "sick"
+    case personal = "personal"
+    case emergency = "emergency"
+    case bereavement = "bereavement"
+    case other = "other"
+
     // Display string for UI
     var displayName: String {
-        return rawValue
+        switch self {
+        case .vacation:
+            return "Vacation"
+        case .sick:
+            return "Sick Leave"
+        case .personal:
+            return "Personal Day"
+        case .emergency:
+            return "Family Emergency"
+        case .bereavement:
+            return "Bereavement"
+        case .other:
+            return "Other"
+        }
     }
     
     // Icon for UI representation
@@ -18,31 +31,31 @@ enum TimeOffReason: String, CaseIterable, Codable {
         switch self {
         case .vacation:
             return "sun.max.fill"
-        case .sickLeave:
+        case .sick:
             return "cross.fill"
-        case .personalDay:
+        case .personal:
             return "person.fill"
-        case .familyEmergency:
-            return "house.fill"
-        case .medicalAppointment:
-            return "stethoscope"
+        case .emergency:
+            return "exclamationmark.triangle.fill"
+        case .bereavement:
+            return "heart.fill"
         case .other:
             return "ellipsis.circle.fill"
         }
     }
-    
+
     // Color for UI representation
     var colorName: String {
         switch self {
         case .vacation:
             return "blue"
-        case .sickLeave:
+        case .sick:
             return "red"
-        case .personalDay:
+        case .personal:
             return "green"
-        case .familyEmergency:
+        case .emergency:
             return "orange"
-        case .medicalAppointment:
+        case .bereavement:
             return "purple"
         case .other:
             return "gray"

@@ -1,200 +1,300 @@
 import Foundation
 import SwiftUI
-import Firebase
-import FirebaseAuth
-import FirebaseFirestore
+import Supabase
 import CoreLocation
 import MapKit
 
+@MainActor
 class TemplateService: ObservableObject {
     static let shared = TemplateService()
-    
+    private let supabase = SupabaseManager.shared.client
+
     @Published var templates: [ReportTemplate] = []
     @Published var isLoading = false
     @Published var errorMessage = ""
-    
-    private let db = Firestore.firestore()
+
     private let weatherService = WeatherService()
     private var schoolOptions: [SchoolItem] = []
-    
+
     // User profile data for smart fields
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     @AppStorage("userLastName") private var storedUserLastName: String = ""
     @AppStorage("userHomeAddress") private var storedUserHomeAddress: String = ""
     @AppStorage("userCoordinates") private var storedUserCoordinates: String = ""
-    
+
     private init() {}
     
     // MARK: - Template Management
-    
+
+    /// Fetch templates from Supabase for an organization
     func fetchTemplates(for organizationID: String) async throws -> [ReportTemplate] {
         print("🔍 TemplateService: Fetching templates for organizationID: \(organizationID)")
-        
-        // Try a simplified query first to see if templates exist at all
-        print("🔍 First trying simplified query (organizationID only)...")
-        let simplifiedSnapshot = try await db.collection("reportTemplates")
-            .whereField("organizationID", isEqualTo: organizationID)
-            .getDocuments()
-        
-        print("📄 Simplified query found \(simplifiedSnapshot.documents.count) documents")
-        
-        // Now try the full query (but remove ordering by createdAt since it might not exist)
-        print("🔍 Now trying full query with filters (no ordering)...")
-        var snapshot: QuerySnapshot
-        
+
         do {
-            // Try with ordering first
-            snapshot = try await db.collection("reportTemplates")
-                .whereField("organizationID", isEqualTo: organizationID)
-                .whereField("isActive", isEqualTo: true)
-                .order(by: "createdAt", descending: true)
-                .getDocuments()
-        } catch {
-            print("⚠️ Query with ordering failed: \(error)")
-            print("🔍 Trying query without ordering...")
-            // Fall back to query without ordering
-            snapshot = try await db.collection("reportTemplates")
-                .whereField("organizationID", isEqualTo: organizationID)
-                .whereField("isActive", isEqualTo: true)
-                .getDocuments()
-        }
-        
-        print("📄 TemplateService: Found \(snapshot.documents.count) documents in reportTemplates collection")
-        
-        var successfulTemplates: [ReportTemplate] = []
-        var failedDecodes = 0
-        
-        for (index, doc) in snapshot.documents.enumerated() {
-            print("📋 Document \(index + 1): ID = \(doc.documentID)")
-            let data = doc.data()
-            print("📋 Document \(index + 1) fields: \(data.keys.sorted())")
-            
-            // Log key fields to debug
-            if let orgID = data["organizationID"] as? String {
-                print("   organizationID: \(orgID)")
-            } else {
-                print("   ❌ organizationID missing or wrong type")
-            }
-            
-            if let isActive = data["isActive"] as? Bool {
-                print("   isActive: \(isActive)")
-            } else {
-                print("   ❌ isActive missing or wrong type")
-            }
-            
-            if let name = data["name"] as? String {
-                print("   name: \(name)")
-            } else {
-                print("   ❌ name missing or wrong type")
-            }
-            
-            if let fields = data["fields"] as? [[String: Any]] {
-                print("   fields: \(fields.count) field(s)")
-            } else {
-                print("   ❌ fields missing or wrong type")
-            }
-            
-            // Try to decode
-            do {
-                let template = try doc.data(as: ReportTemplate.self)
-                successfulTemplates.append(template)
-                print("   ✅ Successfully decoded template: \(template.name)")
-            } catch {
-                failedDecodes += 1
-                print("   ❌ Failed to decode template: \(error)")
-                print("   ❌ Full document data: \(data)")
-            }
-        }
-        
-        print("📊 TemplateService Summary:")
-        print("   Total documents: \(snapshot.documents.count)")
-        print("   Successfully decoded: \(successfulTemplates.count)")
-        print("   Failed to decode: \(failedDecodes)")
-        
-        if successfulTemplates.isEmpty {
-            if snapshot.documents.isEmpty {
-                print("❌ No templates found with filters - organizationID: \(organizationID), isActive: true")
+            let fetchedTemplates: [ReportTemplate] = try await supabase
+                .from("report_templates")
+                .select()
+                .eq("organization_id", value: organizationID)
+                .eq("is_active", value: true)
+                .order("created_at", ascending: false)
+                .execute()
+                .value
+
+            print("📄 TemplateService: Found \(fetchedTemplates.count) templates")
+
+            if fetchedTemplates.isEmpty {
+                print("❌ No templates found for organizationID: \(organizationID)")
                 throw TemplateError.noTemplatesFound
-            } else {
-                print("❌ Templates found but none could be decoded - data structure mismatch")
-                throw TemplateError.invalidTemplate
             }
+
+            self.templates = fetchedTemplates
+            return fetchedTemplates
+
+        } catch let error as TemplateError {
+            throw error
+        } catch {
+            print("❌ Error fetching templates: \(error)")
+            throw TemplateError.networkError(error)
         }
-        
-        DispatchQueue.main.async {
-            self.templates = successfulTemplates
+    }
+
+    /// Get a single template by ID
+    func getTemplate(templateId: String) async throws -> ReportTemplate? {
+        let templates: [ReportTemplate] = try await supabase
+            .from("report_templates")
+            .select()
+            .eq("id", value: templateId)
+            .limit(1)
+            .execute()
+            .value
+
+        return templates.first
+    }
+
+    /// Create a new template
+    func createTemplate(_ template: ReportTemplate) async throws -> ReportTemplate {
+        isLoading = true
+        errorMessage = ""
+
+        defer { isLoading = false }
+
+        // Convert fields array to JSONB format
+        let fieldsJSON: [AnyJSON] = template.fields.map { field in
+            var fieldDict: [String: AnyJSON] = [
+                "id": .string(field.id),
+                "type": .string(field.type),
+                "label": .string(field.label),
+                "required": .bool(field.required)
+            ]
+
+            if let options = field.options {
+                fieldDict["options"] = .array(options.map { .string($0) })
+            }
+            if let placeholder = field.placeholder {
+                fieldDict["placeholder"] = .string(placeholder)
+            }
+            if let defaultValue = field.defaultValue {
+                fieldDict["defaultValue"] = .string(defaultValue)
+            }
+            if let readOnly = field.readOnly {
+                fieldDict["readOnly"] = .bool(readOnly)
+            }
+            if let smartConfig = field.smartConfig {
+                var smartConfigDict: [String: AnyJSON] = [
+                    "calculationType": .string(smartConfig.calculationType),
+                    "autoUpdate": .bool(smartConfig.autoUpdate)
+                ]
+                if let fallbackValue = smartConfig.fallbackValue {
+                    smartConfigDict["fallbackValue"] = .string(fallbackValue)
+                }
+                if let format = smartConfig.format {
+                    smartConfigDict["format"] = .string(format)
+                }
+                fieldDict["smartConfig"] = .object(smartConfigDict)
+            }
+
+            return .object(fieldDict)
         }
-        
-        return successfulTemplates
+
+        let templateData: [String: AnyJSON] = [
+            "id": .string(template.id),
+            "organization_id": .string(template.organization_id),
+            "name": .string(template.name),
+            "description": template.description != nil ? .string(template.description!) : .null,
+            "shoot_type": .string(template.shoot_type),
+            "fields": .array(fieldsJSON),
+            "is_default": .bool(template.is_default),
+            "is_active": .bool(template.is_active),
+            "version": .integer(template.version),
+            "created_by": .string(template.created_by)
+        ]
+
+        do {
+            let createdTemplate: ReportTemplate = try await supabase
+                .from("report_templates")
+                .insert(templateData)
+                .select()
+                .single()
+                .execute()
+                .value
+
+            return createdTemplate
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    /// Update an existing template
+    func updateTemplate(_ template: ReportTemplate) async throws {
+        isLoading = true
+        errorMessage = ""
+
+        defer { isLoading = false }
+
+        // Convert fields array to JSONB format
+        let fieldsJSON: [AnyJSON] = template.fields.map { field in
+            var fieldDict: [String: AnyJSON] = [
+                "id": .string(field.id),
+                "type": .string(field.type),
+                "label": .string(field.label),
+                "required": .bool(field.required)
+            ]
+
+            if let options = field.options {
+                fieldDict["options"] = .array(options.map { .string($0) })
+            }
+            if let placeholder = field.placeholder {
+                fieldDict["placeholder"] = .string(placeholder)
+            }
+            if let defaultValue = field.defaultValue {
+                fieldDict["defaultValue"] = .string(defaultValue)
+            }
+            if let readOnly = field.readOnly {
+                fieldDict["readOnly"] = .bool(readOnly)
+            }
+            if let smartConfig = field.smartConfig {
+                var smartConfigDict: [String: AnyJSON] = [
+                    "calculationType": .string(smartConfig.calculationType),
+                    "autoUpdate": .bool(smartConfig.autoUpdate)
+                ]
+                if let fallbackValue = smartConfig.fallbackValue {
+                    smartConfigDict["fallbackValue"] = .string(fallbackValue)
+                }
+                if let format = smartConfig.format {
+                    smartConfigDict["format"] = .string(format)
+                }
+                fieldDict["smartConfig"] = .object(smartConfigDict)
+            }
+
+            return .object(fieldDict)
+        }
+
+        var updateData: [String: AnyJSON] = [
+            "name": .string(template.name),
+            "shoot_type": .string(template.shoot_type),
+            "fields": .array(fieldsJSON),
+            "is_default": .bool(template.is_default),
+            "is_active": .bool(template.is_active),
+            "version": .integer(template.version)
+        ]
+
+        if let description = template.description {
+            updateData["description"] = .string(description)
+        }
+
+        do {
+            try await supabase
+                .from("report_templates")
+                .update(updateData)
+                .eq("id", value: template.id)
+                .execute()
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    /// Delete a template
+    func deleteTemplate(templateId: String) async throws {
+        isLoading = true
+        errorMessage = ""
+
+        defer { isLoading = false }
+
+        do {
+            try await supabase
+                .from("report_templates")
+                .delete()
+                .eq("id", value: templateId)
+                .execute()
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
     }
     
     func loadTemplatesAsync() {
         guard !storedUserOrganizationID.isEmpty else {
-            DispatchQueue.main.async {
-                self.errorMessage = "No organization ID found"
-            }
+            self.errorMessage = "No organization ID found"
             return
         }
-        
+
         isLoading = true
         errorMessage = ""
-        
+
         Task {
             do {
                 _ = try await fetchTemplates(for: storedUserOrganizationID)
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                }
+                self.isLoading = false
             } catch {
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                    self.errorMessage = error.localizedDescription
-                }
+                self.isLoading = false
+                self.errorMessage = error.localizedDescription
             }
         }
     }
-    
+
     // MARK: - School Data Loading
-    
+
+    /// Load schools from Supabase via SchoolService
     func loadSchools() async throws -> [SchoolItem] {
         guard !storedUserOrganizationID.isEmpty else {
             throw TemplateError.noOrganization
         }
-        
-        let snapshot = try await db.collection("schools")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .order(by: "value")
-            .getDocuments()
-        
-        let schools = snapshot.documents.compactMap { doc -> SchoolItem? in
-            let data = doc.data()
-            guard let id = doc.documentID as String?,
-                  let name = data["value"] as? String else { return nil }
-            
+
+        // Use SchoolService to get schools from Supabase
+        let schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
+
+        // Convert School models to SchoolItem for template use
+        let schoolItems = schools.map { school -> SchoolItem in
             // Build address from available fields
             var addressComponents: [String] = []
-            if let street = data["street"] as? String, !street.isEmpty {
+            if let street = school.street, !street.isEmpty {
                 addressComponents.append(street)
             }
-            if let city = data["city"] as? String, !city.isEmpty {
+            if let city = school.city, !city.isEmpty {
                 addressComponents.append(city)
             }
-            if let state = data["state"] as? String, !state.isEmpty {
+            if let state = school.state, !state.isEmpty {
                 addressComponents.append(state)
             }
-            if let zipCode = data["zipCode"] as? String, !zipCode.isEmpty {
-                addressComponents.append(zipCode)
+            if let zip = school.zip, !zip.isEmpty {
+                addressComponents.append(zip)
             }
-            
-            let address = addressComponents.isEmpty ? name : addressComponents.joined(separator: ", ")
-            let coordinates = data["coordinates"] as? String
-            
-            return SchoolItem(id: id, name: name, address: address, coordinates: coordinates)
+
+            let address = addressComponents.isEmpty ? school.value : addressComponents.joined(separator: ", ")
+
+            return SchoolItem(
+                id: school.id,
+                name: school.value,
+                address: address,
+                coordinates: school.coordinates
+            )
         }
-        
-        self.schoolOptions = schools
-        return schools
+
+        self.schoolOptions = schoolItems
+        return schoolItems
     }
     
     // MARK: - Smart Field Calculations
@@ -455,37 +555,72 @@ class TemplateService: ObservableObject {
     }
     
     // MARK: - Report Submission
-    
+
+    /// Submit a template-based report using DailyJobReportService
     func submitTemplateReport(
         template: ReportTemplate,
         formData: [String: Any]
     ) async throws -> String {
-        guard let user = Auth.auth().currentUser else {
+        guard let currentUserId = UserManager.shared.getCurrentUserIDUnified() else {
             throw TemplateError.permissionDenied
         }
-        
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withFullDate]
-        
-        let reportData: [String: Any] = [
-            "organizationID": storedUserOrganizationID,
-            "userId": user.uid,
-            "date": dateFormatter.string(from: Date()),
-            "photographer": "\(storedUserFirstName) \(storedUserLastName)".trimmingCharacters(in: .whitespaces),
-            "templateId": template.id,
-            "templateName": template.name,
-            "templateVersion": template.version,
-            "reportType": "template",
-            "smartFieldsUsed": template.fields.compactMap { $0.smartConfig != nil ? $0.id : nil },
-            "createdAt": FieldValue.serverTimestamp(),
-            "updatedAt": FieldValue.serverTimestamp()
-        ]
-        
-        // Merge form data with report metadata
-        let finalData = reportData.merging(formData) { (current, _) in current }
-        
-        let docRef = try await db.collection("dailyJobReports").addDocument(data: finalData)
-        return docRef.documentID
+
+        let yourName = "\(storedUserFirstName) \(storedUserLastName)".trimmingCharacters(in: .whitespaces)
+
+        // Extract fields from formData that map to DailyJobReport fields
+        let schoolOrDestination = formData["schoolOrDestination"] as? String
+            ?? formData["school_or_destination"] as? String
+            ?? (formData["selectedSchools"] as? [SchoolItem])?.map { $0.name }.joined(separator: ", ")
+
+        let totalMileage = formData["totalMileage"] as? Double
+            ?? formData["total_mileage"] as? Double
+            ?? (formData["mileage"] as? String).flatMap { Double($0) }
+            ?? 0.0
+
+        let photoURLs = formData["photoURLs"] as? [String]
+            ?? formData["photo_urls"] as? [String]
+            ?? []
+
+        let jobDescriptions = formData["jobDescriptions"] as? [String]
+            ?? formData["job_descriptions"] as? [String]
+
+        let extraItems = formData["extraItems"] as? [String]
+            ?? formData["extra_items"] as? [String]
+
+        let jobDescriptionText = formData["jobDescriptionText"] as? String
+            ?? formData["job_description_text"] as? String
+            ?? formData["notes"] as? String
+
+        // Convert form data to AnyCodable for storage
+        var formDataAnyCodable: [String: AnyCodable] = [:]
+        for (key, value) in formData {
+            formDataAnyCodable[key] = AnyCodable(value)
+        }
+
+        // Build the report
+        let report = DailyJobReport(
+            id: UUID().uuidString,
+            organizationID: storedUserOrganizationID,
+            userId: currentUserId,
+            date: Date(),
+            yourName: yourName.isEmpty ? storedUserFirstName : yourName,
+            schoolOrDestination: schoolOrDestination,
+            totalMileage: totalMileage,
+            jobDescriptions: jobDescriptions,
+            extraItems: extraItems,
+            jobDescriptionText: jobDescriptionText,
+            photoURLs: photoURLs,
+            templateId: template.id,
+            templateName: template.name,
+            templateVersion: template.version,
+            reportType: "template",
+            smartFieldsUsed: template.fields.compactMap { $0.smartConfig != nil ? $0.id : nil },
+            formData: formDataAnyCodable
+        )
+
+        // Use DailyJobReportService to create the report
+        let createdReport = try await DailyJobReportService.shared.createReport(report)
+        return createdReport.id
     }
     
     // MARK: - Weather Integration

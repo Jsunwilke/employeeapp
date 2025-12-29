@@ -1,6 +1,4 @@
 import SwiftUI
-import FirebaseFirestore
-import FirebaseAuth
 
 struct JobBoxFormView: View {
     let boxNumber: String
@@ -210,29 +208,33 @@ struct JobBoxFormView: View {
     }
     
     private func updateAvailableSessions() {
-        // Use the same logic as ManualEntryView - get sessions for next 2 weeks
-        timeTrackingService.getAvailableSessionsForJobBox { sessions in
-            DispatchQueue.main.async {
-                self.availableSessions = sessions.sorted { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) }
-                
-                // If there's a last record with a shiftUid, try to select that session
-                if let lastShiftUid = self.lastRecord?.shiftUid {
-                    self.selectedSession = self.availableSessions.first { $0.id == lastShiftUid }
-                } else if self.availableSessions.count == 1 {
-                    // Auto-select if only one session
-                    self.selectedSession = self.availableSessions.first
+        Task {
+            do {
+                let sessions = try await timeTrackingService.getAvailableSessionsForJobBox()
+                await MainActor.run {
+                    self.availableSessions = sessions.sorted { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) }
+
+                    // If there's a last record with a shiftUid, try to select that session
+                    if let lastShiftUid = self.lastRecord?.shiftUid {
+                        self.selectedSession = self.availableSessions.first { $0.id == lastShiftUid }
+                    } else if self.availableSessions.count == 1 {
+                        // Auto-select if only one session
+                        self.selectedSession = self.availableSessions.first
+                    }
                 }
+            } catch {
+                print("Error getting available sessions for job box: \(error)")
             }
         }
     }
     
     private func updateDefaults() {
         if let last = lastRecord {
-            selectedSchool = last.school
+            selectedSchool = last.school ?? ""
             selectedSchoolId = last.schoolId
             
             // Advance status
-            let currentStatusString = last.status.rawValue
+            let currentStatusString = last.status
             if let index = jobBoxStatuses.firstIndex(where: { $0 == currentStatusString }) {
                 let nextIndex = (index + 1) % jobBoxStatuses.count
                 selectedStatus = jobBoxStatuses[nextIndex]

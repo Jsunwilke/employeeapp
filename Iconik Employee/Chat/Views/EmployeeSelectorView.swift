@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 
 struct EmployeeSelectorView: View {
     @StateObject private var chatManager = ChatManager.shared
@@ -8,9 +7,11 @@ struct EmployeeSelectorView: View {
     @Environment(\.dismiss) private var dismiss
     
     let onSelection: ([ChatUser]) -> Void
-    
-    private let currentUserId = Auth.auth().currentUser?.uid ?? ""
-    
+
+    private var currentUserId: String {
+        UserManager.shared.getCurrentUserIDUnified() ?? ""
+    }
+
     // Filtered users based on search
     private var filteredUsers: [ChatUser] {
         let users = chatManager.organizationUsers.filter { $0.id != currentUserId }

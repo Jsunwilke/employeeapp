@@ -247,29 +247,35 @@ struct TimeOffDetailView: View {
     }
     
     private func cancelRequest() {
-        timeOffService.cancelTimeOffRequest(requestId: timeOffEntry.requestId) { success, error in
-            DispatchQueue.main.async {
-                if success {
+        Task {
+            do {
+                try await timeOffService.cancelTimeOffRequest(requestId: timeOffEntry.requestId)
+                await MainActor.run {
                     alertMessage = "Time off request cancelled successfully"
                     onCancel?()
                     presentationMode.wrappedValue.dismiss()
-                } else {
-                    alertMessage = error ?? "Failed to cancel request"
+                }
+            } catch {
+                await MainActor.run {
+                    alertMessage = error.localizedDescription
                     showingAlert = true
                 }
             }
         }
     }
-    
+
     private func deleteRequest() {
-        timeOffService.cancelTimeOffRequest(requestId: timeOffEntry.requestId) { success, error in
-            DispatchQueue.main.async {
-                if success {
+        Task {
+            do {
+                try await timeOffService.cancelTimeOffRequest(requestId: timeOffEntry.requestId)
+                await MainActor.run {
                     alertMessage = "Time off deleted successfully"
                     onDelete?()
                     presentationMode.wrappedValue.dismiss()
-                } else {
-                    alertMessage = error ?? "Failed to delete time off"
+                }
+            } catch {
+                await MainActor.run {
+                    alertMessage = error.localizedDescription
                     showingAlert = true
                 }
             }

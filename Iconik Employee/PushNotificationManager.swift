@@ -1,12 +1,8 @@
 import UIKit
-import FirebaseCore
-import FirebaseMessaging
 import UserNotifications
-import FirebaseAuth
-import FirebaseFirestore
-import StreamChat
+import Supabase
 
-class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
+class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     
     // Define notification types
     enum NotificationType: String {
@@ -28,37 +24,97 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     let notificationCenter = NotificationCenter.default
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
-        // Firebase is already configured in Iconik_EmployeeApp.swift init()
-        
-        if #available(iOS 10.0, *) {
-            let center = UNUserNotificationCenter.current()
-            center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
-                if let error = error {
-                    print("Error requesting notification authorization: \(error.localizedDescription)")
-                } else {
-                    print("Notification permission granted: \(granted)")
-                }
+        // Request notification permissions
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+            if let error = error {
+                print("Error requesting notification authorization: \(error.localizedDescription)")
+            } else {
+                print("Notification permission granted: \(granted)")
             }
-            center.delegate = self
-            Messaging.messaging().delegate = self
         }
-        
+        center.delegate = self
+
+        // Register for remote notifications (APNs)
         application.registerForRemoteNotifications()
         return true
     }
+
+    // MARK: - Deep Link Handling
+
+    /// Handle URL callbacks (Supabase OAuth + Google Sign-In)
+    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
+        print("📱 Received URL: \(url.absoluteString)")
+
+        // Handle Supabase OAuth callback
+        if url.scheme == "iconikemployee" && url.host == "auth-callback" {
+            print("🔐 Processing Supabase OAuth callback")
+
+            Task {
+                do {
+                    let authService = SupabaseAuthService()
+                    try await authService.handleOAuthCallback(url: url)
+                    print("✅ OAuth callback processed successfully")
+
+                    // Post notification to update UI
+                    NotificationCenter.default.post(
+                        name: Notification.Name("didCompleteOAuthSignIn"),
+                        object: nil
+                    )
+                } catch {
+                    print("❌ OAuth callback error: \(error.localizedDescription)")
+
+                    // Post error notification
+                    NotificationCenter.default.post(
+                        name: Notification.Name("didFailOAuthSignIn"),
+                        object: nil,
+                        userInfo: ["error": error.localizedDescription]
+                    )
+                }
+            }
+
+            return true
+        }
+
+        // No other URL handlers needed (Google Sign-In removed)
+        return false
+    }
     
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        // Pass the device token to Firebase Messaging.
-        Messaging.messaging().apnsToken = deviceToken
-        print("Registered for remote notifications with device token")
-        
+        // Convert device token to hex string for APNs
+        let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+        print("📱 APNs device token: \(tokenString)")
+
+        // Save APNs token to Supabase
+        saveAPNsTokenToSupabase(token: tokenString)
+
         // Also register with our JobBoxService
         JobBoxService.shared.registerDeviceToken(deviceToken)
-        
-        // Register device token with Stream Chat if connected
-        if let client = StreamChatManager.shared.client {
-            Task {
-                await client.currentUserController().addDevice(.apn(token: deviceToken))
+    }
+
+    /// Save APNs device token to Supabase users table
+    private func saveAPNsTokenToSupabase(token: String) {
+        guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
+            print("⚠️ No user ID available for APNs token save")
+            return
+        }
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                // Update apns_token in users table
+                try await supabase
+                    .from("users")
+                    .update([
+                        "apns_token": AnyJSON.string(token)
+                    ])
+                    .eq("id", value: userId.lowercased())
+                    .execute()
+
+                print("✅ Successfully saved APNs token to Supabase")
+            } catch {
+                print("❌ Error updating APNs token in Supabase: \(error.localizedDescription)")
             }
         }
     }
@@ -81,36 +137,11 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         completionHandler()
     }
     
-    // MARK: - MessagingDelegate
-    
-    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        print("Firebase registration token: \(String(describing: fcmToken))")
-        // Save the FCM token to Firestore for the current user.
-        guard let token = fcmToken, let uid = Auth.auth().currentUser?.uid else {
-            return
-        }
-        let db = Firestore.firestore()
-        db.collection("users").document(uid).updateData(["fcmToken": token]) { error in
-            if let error = error {
-                print("Error updating FCM token in Firestore: \(error.localizedDescription)")
-            } else {
-                print("Successfully updated FCM token in Firestore.")
-            }
-        }
-    }
-    
     // MARK: - Custom Notification Handling
     
     /// Handle incoming notifications
     func handleNotification(userInfo: [AnyHashable: Any]) {
-        // Check if this is a Stream Chat notification first
-        if userInfo["stream"] != nil || userInfo["channel_cid"] != nil {
-            // This is a Stream Chat notification
-            handleChatNotification(userInfo: userInfo)
-            return
-        }
-        
-        // Determine the notification type for Firebase notifications
+        // Determine the notification type
         let type = userInfo["type"] as? String ?? ""
         let notificationType = NotificationType(rawValue: type) ?? .unknown
         
@@ -163,34 +194,12 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                                  userInfo: userInfo)
     }
     
-    /// Handle chat message notifications (both Firebase and Stream Chat)
+    /// Handle chat message notifications
     private func handleChatNotification(userInfo: [AnyHashable: Any]) {
-        // Check if this is a Stream Chat notification
-        if let stream = userInfo["stream"] as? [String: Any],
-           let channelId = stream["channel_id"] as? String {
-            // Handle Stream Chat notification
-            print("Received Stream Chat notification for channel: \(channelId)")
-            
-            // Extract Stream Chat specific data
-            let channelCid = stream["channel_cid"] as? String ?? ""
-            let messageId = stream["message_id"] as? String
-            let messageText = stream["message_text"] as? String ?? "New message"
-            let senderName = stream["sender_name"] as? String ?? "Someone"
-            
-            // Post notification for Stream Chat
-            notificationCenter.post(name: Notification.Name("didReceiveStreamChatNotification"),
-                                     object: nil,
-                                     userInfo: [
-                                        "channelCid": channelCid,
-                                        "channelId": channelId,
-                                        "messageId": messageId ?? "",
-                                        "messageText": messageText,
-                                        "senderName": senderName
-                                     ])
-            
-        } else if let conversationId = userInfo["conversationId"] as? String {
-            // Handle legacy Firebase chat notification
-            print("Received Firebase chat notification")
+        // Check if this is a chat notification
+        if let conversationId = userInfo["conversationId"] as? String {
+            // Handle chat notification
+            print("Received chat notification")
             
             let senderId = userInfo["senderId"] as? String
             let senderName = userInfo["senderName"] as? String ?? "Someone"
@@ -198,7 +207,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
             
             print("From: \(senderName), ConversationId: \(conversationId)")
             
-            // Post notification for Firebase chat
+            // Post notification for chat
             notificationCenter.post(name: Notification.Name("didReceiveChatNotification"),
                                      object: nil,
                                      userInfo: userInfo)

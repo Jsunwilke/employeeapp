@@ -9,8 +9,7 @@
 //
 
 import SwiftUI
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 /// Simple data model for an employee in the manager's organization.
 struct EmployeeRecord: Identifiable {
@@ -81,39 +80,48 @@ class ManagerMileageViewModel: ObservableObject {
         print("Manager current period calculated as: \(debugFormatter.string(from: start)) to \(debugFormatter.string(from: end))")
     }
     
-    /// Loads employees from Firestore, then automatically loads stats for the current pay period.
+    /// Loads employees from Supabase, then automatically loads stats for the current pay period.
     func loadEmployees(orgID: String) {
-        // Store the organization ID
         self.organizationID = orgID
-        
-        let db = Firestore.firestore()
-        db.collection("users")
-            .whereField("organizationID", isEqualTo: orgID)
-            .getDocuments { [weak self] snapshot, error in
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self?.errorMessage = "Error loading employees: \(error.localizedDescription)"
-                    }
-                    return
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                struct UserRecord: Decodable {
+                    let id: String
+                    let first_name: String?
+                    let amount_per_mile: Double?
                 }
-                guard let docs = snapshot?.documents else { return }
-                
+
+                let users: [UserRecord] = try await supabase
+                    .from("users")
+                    .select("id, first_name, amount_per_mile")
+                    .eq("organization_id", value: orgID.lowercased())
+                    .execute()
+                    .value
+
                 var list: [EmployeeRecord] = []
-                for doc in docs {
-                    let data = doc.data()
-                    let uid  = doc.documentID
-                    let name = data["firstName"] as? String ?? "Unknown"
-                    let rate = data["amountPerMile"] as? Double ?? 0.0
-                    list.append(EmployeeRecord(id: uid, firstName: name, amountPerMile: rate))
+                for user in users {
+                    list.append(EmployeeRecord(
+                        id: user.id,
+                        firstName: user.first_name ?? "Unknown",
+                        amountPerMile: user.amount_per_mile ?? 0.0
+                    ))
                 }
-                
+
                 list.sort { $0.firstName.lowercased() < $1.firstName.lowercased() }
-                
-                DispatchQueue.main.async {
-                    self?.employees = list
-                    self?.loadStatsForPeriod(selectedPeriodStart: self?.currentPeriodStart ?? Date())
+
+                await MainActor.run {
+                    self.employees = list
+                    self.loadStatsForPeriod(selectedPeriodStart: self.currentPeriodStart)
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Error loading employees: \(error.localizedDescription)"
                 }
             }
+        }
     }
     
     /// Loads period/month/year miles for each employee.
@@ -121,13 +129,13 @@ class ManagerMileageViewModel: ObservableObject {
         let now = Date()
         let currentYear  = calendar.component(.year,  from: now)
         let currentMonth = calendar.component(.month, from: now)
-        
+
         // We'll fetch from start to end of this year, then filter in memory.
         var startOfYearComps = DateComponents()
         startOfYearComps.year  = currentYear
         startOfYearComps.month = 1
         startOfYearComps.day   = 1
-        
+
         var endOfYearComps = DateComponents()
         endOfYearComps.year  = currentYear
         endOfYearComps.month = 12
@@ -135,91 +143,104 @@ class ManagerMileageViewModel: ObservableObject {
         endOfYearComps.hour  = 23
         endOfYearComps.minute = 59
         endOfYearComps.second = 59
-        
+
         let yearStart = calendar.date(from: startOfYearComps) ?? now
         let yearEnd   = calendar.date(from: endOfYearComps)   ?? now
-        
+
         // Calculate period end with proper end-of-day timing
         guard let tempPeriodEnd = calendar.date(byAdding: .day, value: 13, to: selectedPeriodStart),
               let periodEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempPeriodEnd) else {
             print("Error calculating period end date")
             return
         }
-        
+
         // Log the date range we're querying for debugging
         let debugFormatter = DateFormatter()
         debugFormatter.dateStyle = .medium
         debugFormatter.timeStyle = .medium
         print("Manager loading stats from \(debugFormatter.string(from: selectedPeriodStart)) to \(debugFormatter.string(from: periodEnd))")
-        
+
         // Reset stats
         statsByUser = [:]
-        
-        let db = Firestore.firestore()
-        let group = DispatchGroup()
-        
-        for emp in employees {
-            group.enter()
-            db.collection("dailyJobReports")
-                .whereField("organizationID", isEqualTo: organizationID)
-                .whereField("yourName", isEqualTo: emp.firstName)
-                .whereField("date", isGreaterThanOrEqualTo: yearStart)
-                .whereField("date", isLessThanOrEqualTo: yearEnd)
-                .getDocuments { [weak self] snapshot, error in
-                    if let error = error {
-                        DispatchQueue.main.async {
-                            self?.errorMessage = "Error fetching reports for \(emp.firstName): \(error.localizedDescription)"
-                        }
-                        group.leave()
-                        return
+
+        // Fetch stats for all employees using Supabase
+        Task {
+            let supabase = SupabaseManager.shared.client
+
+            struct ReportRecord: Decodable {
+                let your_name: String?
+                let total_mileage: Double?
+                let date: Date?
+            }
+
+            do {
+                // Fetch all reports for the organization within the year range
+                let reports: [ReportRecord] = try await supabase
+                    .from("daily_job_reports")
+                    .select("your_name, total_mileage, date")
+                    .eq("organization_id", value: organizationID.lowercased())
+                    .gte("date", value: yearStart.ISO8601Format())
+                    .lte("date", value: yearEnd.ISO8601Format())
+                    .execute()
+                    .value
+
+                // Group reports by employee name
+                var reportsByEmployee: [String: [ReportRecord]] = [:]
+                for report in reports {
+                    guard let name = report.your_name else { continue }
+                    if reportsByEmployee[name] == nil {
+                        reportsByEmployee[name] = []
                     }
-                    guard let docs = snapshot?.documents else {
-                        group.leave()
-                        return
-                    }
-                    
+                    reportsByEmployee[name]?.append(report)
+                }
+
+                // Calculate stats for each employee
+                var newStats: [String: ManagerMileageStats] = [:]
+
+                for emp in employees {
+                    let empReports = reportsByEmployee[emp.firstName] ?? []
+
                     var periodMiles = 0.0
                     var monthMiles  = 0.0
                     var yearMiles   = 0.0
-                    
-                    for doc in docs {
-                        let data = doc.data()
-                        let miles = data["totalMileage"] as? Double ?? 0.0
-                        if let ts = data["date"] as? Timestamp {
-                            let dateVal = ts.dateValue()
+
+                    for report in empReports {
+                        let miles = report.total_mileage ?? 0.0
+                        if let dateVal = report.date {
                             yearMiles += miles
-                            
-                            let docMonth = self?.calendar.component(.month, from: dateVal) ?? 1
-                            let docYear  = self?.calendar.component(.year,  from: dateVal) ?? 2024
+
+                            let docMonth = calendar.component(.month, from: dateVal)
+                            let docYear  = calendar.component(.year,  from: dateVal)
                             if docMonth == currentMonth && docYear == currentYear {
                                 monthMiles += miles
                             }
-                            
-                            // Fixed: Now properly comparing with end-of-day periodEnd
+
+                            // Check if date falls within the selected period
                             if dateVal >= selectedPeriodStart && dateVal <= periodEnd {
                                 periodMiles += miles
                             }
                         }
                     }
-                    
-                    DispatchQueue.main.async {
-                        self?.statsByUser[emp.id] = ManagerMileageStats(
-                            periodMiles: periodMiles,
-                            monthMiles:  monthMiles,
-                            yearMiles:   yearMiles
-                        )
-                        
-                        // Log the calculation for this employee
-                        print("Manager calculated mileage for \(emp.firstName): period=\(periodMiles), month=\(monthMiles), year=\(yearMiles)")
-                        
-                        group.leave()
-                    }
+
+                    newStats[emp.id] = ManagerMileageStats(
+                        periodMiles: periodMiles,
+                        monthMiles:  monthMiles,
+                        yearMiles:   yearMiles
+                    )
+
+                    // Log the calculation for this employee
+                    print("Manager calculated mileage for \(emp.firstName): period=\(periodMiles), month=\(monthMiles), year=\(yearMiles)")
                 }
-        }
-        
-        group.notify(queue: .main) {
-            // All stats fetched
-            print("Manager finished loading all employee stats")
+
+                await MainActor.run {
+                    self.statsByUser = newStats
+                    print("Manager finished loading all employee stats")
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Error fetching reports: \(error.localizedDescription)"
+                }
+            }
         }
     }
     

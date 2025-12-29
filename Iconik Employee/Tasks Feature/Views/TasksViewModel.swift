@@ -9,9 +9,8 @@
 import Foundation
 import SwiftUI
 import Combine
-import FirebaseAuth
-import FirebaseFirestore
 
+@MainActor
 class TasksViewModel: ObservableObject {
     @Published var tasks: [TaskItem] = []
     @Published var isLoading = false
@@ -22,20 +21,18 @@ class TasksViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     private var currentUserId: String {
-        return Auth.auth().currentUser?.uid ?? ""
+        return UserManager.shared.getCurrentUserIDUnified() ?? ""
     }
 
     private var currentOrganizationId: String {
-        // Get organization ID from UserManager (which fetches from Firestore)
+        // Get organization ID from UserManager
         let orgId = UserManager.shared.getCachedOrganizationID()
 
         if orgId.isEmpty {
-            print("⚠️ WARNING: organizationID is empty! Attempting to initialize...")
             // Try to initialize if not already done
             UserManager.shared.initializeOrganizationID()
             return UserManager.shared.getCachedOrganizationID()
         } else {
-            print("✓ Using organizationID from UserManager: \(orgId)")
             return orgId
         }
     }
@@ -43,33 +40,30 @@ class TasksViewModel: ObservableObject {
     // MARK: - Load Tasks (Cache-First Strategy)
 
     func loadTasks() {
+
         guard !currentUserId.isEmpty else {
-            print("❌ Cannot load tasks: Missing user ID")
             return
         }
+
 
         // Check if we have organization ID
         let orgId = UserManager.shared.getCachedOrganizationID()
 
         if orgId.isEmpty {
-            print("⚠️ Organization ID not available, fetching from Firestore...")
             isLoading = true
 
             // Fetch organization ID first
             UserManager.shared.getCurrentUserOrganizationID { [weak self] fetchedOrgId in
                 guard let self = self, let fetchedOrgId = fetchedOrgId else {
-                    print("❌ Failed to get organization ID")
                     self?.isLoading = false
                     return
                 }
 
-                print("✅ Got organization ID: \(fetchedOrgId)")
                 // Now load tasks with the fetched org ID
                 self.loadTasksWithOrgId(fetchedOrgId)
             }
         } else {
             // Organization ID already cached, load immediately
-            print("✓ Using cached organization ID: \(orgId)")
             loadTasksWithOrgId(orgId)
         }
     }
@@ -77,7 +71,6 @@ class TasksViewModel: ObservableObject {
     private func loadTasksWithOrgId(_ orgId: String) {
         // Step 1: Load from cache immediately
         if let cachedTasks = cacheService.getCachedTasks(userId: currentUserId, orgId: orgId) {
-            print("✅ Loaded \(cachedTasks.count) tasks from cache")
             self.tasks = cachedTasks
 
             // Get cache timestamp for incremental updates
@@ -86,7 +79,6 @@ class TasksViewModel: ObservableObject {
             // Start real-time listener for updates AFTER cache timestamp
             startIncrementalListener(afterTimestamp: cacheTimestamp)
         } else {
-            print("⚠️ No cache found - fetching all tasks from Firestore")
             // No cache - fetch all tasks
             fetchAllTasks()
         }
@@ -95,25 +87,25 @@ class TasksViewModel: ObservableObject {
     // MARK: - Fetch All Tasks
 
     private func fetchAllTasks() {
-        isLoading = true
+        Task {
+            isLoading = true
+            defer { isLoading = false }
 
-        taskService.fetchTasks(organizationID: currentOrganizationId) { [weak self] result in
-            guard let self = self else { return }
-            self.isLoading = false
 
-            switch result {
-            case .success(let tasks):
-                print("📥 Fetched \(tasks.count) tasks from Firestore")
-                self.tasks = tasks
+            do {
+                let fetchedTasks = try await taskService.fetchTasks(organizationID: currentOrganizationId)
+
+                if fetchedTasks.isEmpty {
+                }
+
+                self.tasks = fetchedTasks
 
                 // Cache the fetched tasks
-                self.cacheService.setCachedTasks(tasks, userId: self.currentUserId, orgId: self.currentOrganizationId)
+                self.cacheService.setCachedTasks(fetchedTasks, userId: self.currentUserId, orgId: self.currentOrganizationId)
 
                 // Start real-time listener
                 self.startIncrementalListener(afterTimestamp: nil)
-
-            case .failure(let error):
-                print("❌ Failed to fetch tasks: \(error.localizedDescription)")
+            } catch {
                 self.error = error
             }
         }
@@ -121,7 +113,7 @@ class TasksViewModel: ObservableObject {
 
     // MARK: - Incremental Listener
 
-    private func startIncrementalListener(afterTimestamp: Timestamp?) {
+    private func startIncrementalListener(afterTimestamp: Date?) {
         // Start listening to real-time updates
         taskService.startListening(organizationID: currentOrganizationId)
 
@@ -144,22 +136,22 @@ class TasksViewModel: ObservableObject {
 
     // MARK: - Stop Listening
 
-    func stopListening() {
-        taskService.stopListening()
-        cancellables.removeAll()
+    nonisolated func stopListening() {
+        Task { @MainActor in
+            taskService.stopListening()
+            cancellables.removeAll()
+        }
     }
 
     // MARK: - Refresh Tasks
 
     func refreshTasks() {
-        print("🔄 Refreshing tasks...")
         fetchAllTasks()
     }
 
     // MARK: - Clear Cache and Reload
 
     func clearCacheAndReload() {
-        print("🗑 Clearing cache and reloading...")
         cacheService.clearCache(userId: currentUserId, orgId: currentOrganizationId)
         tasks.removeAll()
         fetchAllTasks()
@@ -168,21 +160,16 @@ class TasksViewModel: ObservableObject {
     // MARK: - Create Task
 
     func createTask(_ task: TaskItem) {
-        taskService.createTask(task) { [weak self] result in
-            guard let self = self else { return }
-
-            switch result {
-            case .success(let createdTask):
-                print("✅ Task created: \(createdTask.title)")
+        Task {
+            do {
+                let createdTask = try await taskService.createTask(task)
 
                 // Clear cache to force refresh (prevents ghost tasks)
                 self.cacheService.clearOrganizationCache(orgId: self.currentOrganizationId)
 
                 // Refresh tasks
                 self.refreshTasks()
-
-            case .failure(let error):
-                print("❌ Failed to create task: \(error.localizedDescription)")
+            } catch {
                 self.error = error
             }
         }
@@ -191,12 +178,9 @@ class TasksViewModel: ObservableObject {
     // MARK: - Update Task
 
     func updateTask(_ task: TaskItem) {
-        taskService.updateTask(task) { [weak self] result in
-            guard let self = self else { return }
-
-            switch result {
-            case .success:
-                print("✅ Task updated: \(task.title)")
+        Task {
+            do {
+                try await taskService.updateTask(task)
 
                 // Clear cache to force refresh
                 self.cacheService.clearOrganizationCache(orgId: self.currentOrganizationId)
@@ -205,9 +189,7 @@ class TasksViewModel: ObservableObject {
                 if let index = self.tasks.firstIndex(where: { $0.id == task.id }) {
                     self.tasks[index] = task
                 }
-
-            case .failure(let error):
-                print("❌ Failed to update task: \(error.localizedDescription)")
+            } catch {
                 self.error = error
             }
         }
@@ -216,37 +198,21 @@ class TasksViewModel: ObservableObject {
     // MARK: - Toggle Task Completion
 
     func toggleTaskCompletion(_ task: TaskItem) {
-        if task.status == .completed {
-            // Reopen task
-            taskService.reopenTask(id: task.id) { [weak self] result in
-                guard let self = self else { return }
-
-                switch result {
-                case .success:
-                    print("✅ Task reopened: \(task.title)")
+        Task {
+            do {
+                if task.status == .completed {
+                    // Reopen task
+                    try await taskService.reopenTask(id: task.id)
                     self.cacheService.clearOrganizationCache(orgId: self.currentOrganizationId)
                     self.refreshTasks()
-
-                case .failure(let error):
-                    print("❌ Failed to reopen task: \(error.localizedDescription)")
-                    self.error = error
-                }
-            }
-        } else {
-            // Complete task
-            taskService.completeTask(id: task.id, userId: currentUserId) { [weak self] result in
-                guard let self = self else { return }
-
-                switch result {
-                case .success:
-                    print("✅ Task completed: \(task.title)")
+                } else {
+                    // Complete task
+                    try await taskService.completeTask(id: task.id, userId: currentUserId)
                     self.cacheService.clearOrganizationCache(orgId: self.currentOrganizationId)
                     self.refreshTasks()
-
-                case .failure(let error):
-                    print("❌ Failed to complete task: \(error.localizedDescription)")
-                    self.error = error
                 }
+            } catch {
+                self.error = error
             }
         }
     }
@@ -259,28 +225,28 @@ class TasksViewModel: ObservableObject {
         // Apply filter
         switch filter {
         case .all:
-            // Exclude completed tasks from "All" view
+            // Exclude done tasks from "All" view
             filtered = filtered.filter { $0.status != .completed }
         case .myTasks:
-            // Show only user's tasks, excluding completed
+            // Show only user's tasks, excluding done
             filtered = filtered.filter {
                 ($0.isAssignedTo(userId: currentUserId) || $0.createdBy == currentUserId) &&
                 $0.status != .completed
             }
         case .today:
-            // Show only tasks due today, excluding completed
+            // Show only tasks due today, excluding done
             filtered = filtered.filter { task in
                 guard let dueDate = task.dueDate else { return false }
                 return Calendar.current.isDateInToday(dueDate) && task.status != .completed
             }
         case .urgent:
-            // Show only urgent/overdue tasks, excluding completed
+            // Show only urgent/overdue tasks, excluding done
             filtered = filtered.filter {
                 ($0.priority == .urgent || $0.isOverdue) &&
                 $0.status != .completed
             }
         case .completed:
-            // Only show completed tasks
+            // Only show done tasks
             filtered = filtered.filter { $0.status == .completed }
         }
 

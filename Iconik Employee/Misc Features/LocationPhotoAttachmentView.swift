@@ -1,7 +1,5 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
-import FirebaseStorage
+import Supabase
 import UIKit
 import CoreLocation
 import MapKit
@@ -24,7 +22,7 @@ struct LocationPhotoAttachmentView: View {
     // School selection
     @State private var schoolOptions: [SchoolItem] = []
     @State private var selectedSchool: SchoolItem? = nil
-    @State private var organizationID: String = ""
+    @AppStorage("userOrganizationID") var storedUserOrganizationID: String = ""
     
     // Photo management
     @State private var labeledImages: [LabeledImage] = []
@@ -203,7 +201,7 @@ struct LocationPhotoAttachmentView: View {
                         selection: $selectedSchool,
                         schools: $schoolOptions,
                         title: "Select Location",
-                        organizationID: organizationID
+                        organizationID: storedUserOrganizationID
                     )
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -582,152 +580,113 @@ struct LocationPhotoAttachmentView: View {
     // MARK: - Data Functions
     
     private func loadSchoolOptions() {
-        // Get current user's organization ID
-        guard let currentUser = Auth.auth().currentUser else {
-            errorMessage = "User not authenticated"
+        // Check for organization ID
+        guard !storedUserOrganizationID.isEmpty else {
+            errorMessage = "User organization not found"
             return
         }
-        
-        let db = Firestore.firestore()
-        
-        // First get the user's organization ID
-        db.collection("users").document(currentUser.uid).getDocument { userDoc, error in
-            if let error = error {
-                self.errorMessage = "Error getting user data: \(error.localizedDescription)"
-                return
-            }
-            
-            guard let userData = userDoc?.data(),
-                  let organizationID = userData["organizationID"] as? String else {
-                self.errorMessage = "User organization not found"
-                return
-            }
-            
-            // Store the organization ID for refresh
-            self.organizationID = organizationID
-            
-            // Now query schools for this organization
-            db.collection("schools")
-                .whereField("organizationID", isEqualTo: organizationID)
-                .getDocuments { snapshot, error in
-                    if let error = error {
-                        self.errorMessage = "Error loading schools: \(error.localizedDescription)"
-                        return
-                    }
-                    guard let docs = snapshot?.documents else { return }
-                    var temp: [SchoolItem] = []
-                    for doc in docs {
-                        let data = doc.data()
-                        if let value = data["value"] as? String,
-                           let address = data["schoolAddress"] as? String {
-                            let coordinates = data["coordinates"] as? String
-                            temp.append(SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates))
-                        }
-                    }
-                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                    self.schoolOptions = temp
+
+        Task {
+            do {
+                let schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
+
+                // Convert to SchoolItem format
+                let items = schools.map { school in
+                    SchoolItem(
+                        id: school.id,
+                        name: school.name,
+                        address: school.address ?? "",
+                        coordinates: school.coordinates
+                    )
+                }.sorted { $0.name.lowercased() < $1.name.lowercased() }
+
+                await MainActor.run {
+                    self.schoolOptions = items
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Error loading schools: \(error.localizedDescription)"
                 }
             }
         }
+    }
     
     private func uploadLocationPhotos() {
         guard let school = selectedSchool else {
             errorMessage = "Please select a location."
             return
         }
-        
-        guard let currentUser = Auth.auth().currentUser else {
-            errorMessage = "User not authenticated"
+
+        guard !storedUserOrganizationID.isEmpty else {
+            errorMessage = "User organization not found"
             return
         }
-        
+
         isUploading = true
-        
-        let storageRef = Storage.storage().reference()
-        let db = Firestore.firestore()
-        
-        // First get the user's organization ID
-        db.collection("users").document(currentUser.uid).getDocument { userDoc, error in
-            if let error = error {
-                DispatchQueue.main.async {
-                    self.isUploading = false
-                    self.errorMessage = "Error getting user data: \(error.localizedDescription)"
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+                var uploadedPhotoDicts: [[String: String]] = []
+
+                for labeledImage in self.labeledImages {
+                    guard let imageData = labeledImage.image.jpegData(compressionQuality: 0.8) else { continue }
+
+                    // Use lowercase IDs per CLAUDE.md guidelines
+                    let path = "location-photos/\(storedUserOrganizationID.lowercased())/\(school.id.lowercased())/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
+
+                    print("📸 Uploading location photo to Supabase Storage: \(path)")
+
+                    // Upload to Supabase Storage
+                    _ = try await supabase.storage
+                        .from("daily-reports")
+                        .upload(
+                            path: path,
+                            file: imageData,
+                            options: FileOptions(contentType: "image/jpeg")
+                        )
+
+                    // Get signed URL (1 year expiry for private access)
+                    let signedURL = try await supabase.storage
+                        .from("daily-reports")
+                        .createSignedURL(path: path, expiresIn: 31536000)
+
+                    // Create a dictionary with URL and label
+                    let dict: [String: String] = [
+                        "url": signedURL.absoluteString,
+                        "label": labeledImage.label.isEmpty ? "Location Photo" : labeledImage.label
+                    ]
+                    uploadedPhotoDicts.append(dict)
+                    print("📸 Photo uploaded: \(signedURL.absoluteString.prefix(80))...")
                 }
-                return
-            }
-            
-            guard let userData = userDoc?.data(),
-                  let organizationID = userData["organizationID"] as? String else {
-                DispatchQueue.main.async {
-                    self.isUploading = false
-                    self.errorMessage = "User organization not found"
-                }
-                return
-            }
-            
-            var uploadedPhotoDicts: [[String: String]] = []
-            let dispatchGroup = DispatchGroup()
-            
-            for labeledImage in self.labeledImages {
-                guard let imageData = labeledImage.image.jpegData(compressionQuality: 0.8) else { continue }
-                dispatchGroup.enter()
-                
-                // Updated path to include organization ID
-                let fileName = "locationPhotos/\(organizationID)/\(school.id)/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
-                let photoRef = storageRef.child(fileName)
-                
-                // Set metadata with content type
-                let metadata = StorageMetadata()
-                metadata.contentType = "image/jpeg"
-                
-                photoRef.putData(imageData, metadata: metadata) { metadata, error in
-                    if let error = error {
-                        DispatchQueue.main.async {
-                            self.isUploading = false
-                            self.errorMessage = "Upload error: \(error.localizedDescription)"
-                        }
-                        dispatchGroup.leave()
-                        return
-                    }
-                    // Once uploaded, get the download URL.
-                    photoRef.downloadURL { url, error in
-                        if let error = error {
-                            DispatchQueue.main.async {
-                                self.isUploading = false
-                                self.errorMessage = "Download URL error: \(error.localizedDescription)"
-                            }
-                        } else if let downloadURL = url {
-                            // Create a dictionary with URL and label.
-                            let dict: [String: String] = [
-                                "url": downloadURL.absoluteString,
-                                "label": labeledImage.label.isEmpty ? "Location Photo" : labeledImage.label
-                            ]
-                            uploadedPhotoDicts.append(dict)
-                        }
-                        dispatchGroup.leave()
-                    }
-                }
-            }
-            
-            // After all uploads complete, update Firestore.
-            dispatchGroup.notify(queue: .main) {
-                let locationDocRef = db.collection("schools").document(school.id)
-                // Use arrayUnion to append new dictionaries to the "locationPhotos" field.
-                locationDocRef.updateData([
-                    "locationPhotos": FieldValue.arrayUnion(uploadedPhotoDicts)
-                ]) { error in
-                    self.isUploading = false
-                
-                if let error = error {
-                    self.errorMessage = "Firestore update error: \(error.localizedDescription)"
+
+                // Get existing photos and append new ones
+                if let existingSchool = try await SchoolService.shared.getSchool(schoolId: school.id) {
+                    let existingPhotos = existingSchool.parsedLocationPhotos.map { ["url": $0.url, "label": $0.label] }
+                    let allPhotos = existingPhotos + uploadedPhotoDicts
+
+                    try await SchoolService.shared.updateLocationPhotos(schoolId: school.id, photos: allPhotos)
                 } else {
+                    // No existing school found, just save the new photos
+                    try await SchoolService.shared.updateLocationPhotos(schoolId: school.id, photos: uploadedPhotoDicts)
+                }
+
+                await MainActor.run {
+                    self.isUploading = false
                     // Show success animation
                     withAnimation(.spring()) {
                         self.animateSuccess = true
                     }
                 }
+                print("✅ Location photos saved to Supabase")
+
+            } catch {
+                print("❌ Location photo upload failed: \(error.localizedDescription)")
+                await MainActor.run {
+                    self.isUploading = false
+                    self.errorMessage = "Upload error: \(error.localizedDescription)"
+                }
             }
-        }
         }
     }
 }

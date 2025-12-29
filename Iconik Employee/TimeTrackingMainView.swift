@@ -30,10 +30,6 @@ struct TimeTrackingMainView: View {
         .padding(.bottom, 8)
         .navigationTitle("Time Tracking")
         .navigationBarTitleDisplayMode(.inline) // Make title more compact
-        .onAppear {
-            // Update existing entries with session names if needed
-            timeTrackingService.updateExistingEntriesWithSessionNames()
-        }
             .sheet(isPresented: $showingSessionSelection) {
                 SessionSelectionView(
                     timeTrackingService: timeTrackingService,
@@ -275,25 +271,33 @@ struct TimeTrackingMainView: View {
     }
     
     private func clockIn(sessionId: String?, notes: String?) {
-        timeTrackingService.clockIn(sessionId: sessionId, notes: notes) { success, errorMessage in
-            DispatchQueue.main.async {
-                if success {
+        Task {
+            do {
+                try await timeTrackingService.clockIn(sessionId: sessionId, notes: notes)
+
+                await MainActor.run {
                     showingSessionSelection = false
-                } else {
-                    alertMessage = errorMessage ?? "Failed to clock in"
+                }
+            } catch {
+                await MainActor.run {
+                    alertMessage = error.localizedDescription
                     showingAlert = true
                 }
             }
         }
     }
-    
+
     private func clockOut(notes: String?) {
-        timeTrackingService.clockOut(notes: notes) { success, errorMessage in
-            DispatchQueue.main.async {
-                if success {
+        Task {
+            do {
+                try await timeTrackingService.clockOut(notes: notes)
+
+                await MainActor.run {
                     showingNotesInput = false
-                } else {
-                    alertMessage = errorMessage ?? "Failed to clock out"
+                }
+            } catch {
+                await MainActor.run {
+                    alertMessage = error.localizedDescription
                     showingAlert = true
                 }
             }

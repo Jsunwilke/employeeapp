@@ -2,13 +2,12 @@
 //  BackgroundSyncService.swift
 //  Iconik Employee
 //
-//  Monitors network status and syncs pending changes to Firestore
+//  Monitors network status and syncs pending changes to Supabase
 //  Handles retry logic with exponential backoff
 //
 
 import Foundation
-import Firebase
-import FirebaseFirestore
+import Supabase
 import Combine
 
 class BackgroundSyncService: ObservableObject {
@@ -229,7 +228,7 @@ class BackgroundSyncService: ObservableObject {
                     LocalSportsShootRepository.shared.markAsSynced(shootId: shootId)
                     continuation.resume(returning: true)
                 case .failure(let error):
-                    print("❌ Firestore update failed: \(error.localizedDescription)")
+                    print("❌ Supabase update failed: \(error.localizedDescription)")
                     continuation.resume(returning: false)
                 }
             }
@@ -238,46 +237,47 @@ class BackgroundSyncService: ObservableObject {
 
     /// Fetch the current remote entry and intelligently merge with local changes
     private func fetchAndMergeRemoteEntry(shootId: String, localEntry: RosterEntry) async -> RosterEntry {
-        // Fetch the remote shoot to get current state
-        let remoteEntry: RosterEntry? = await withCheckedContinuation { continuation in
-            let db = Firestore.firestore()
-            db.collection("sportsJobs").document(shootId).getDocument { snapshot, error in
-                guard let snapshot = snapshot,
-                      snapshot.exists,
-                      let remoteShoot = SportsShoot(from: snapshot),
-                      let entry = remoteShoot.roster.first(where: { $0.id == localEntry.id }) else {
-                    // If can't fetch remote or entry doesn't exist, use local as-is
-                    continuation.resume(returning: nil)
-                    return
-                }
-                continuation.resume(returning: entry)
-            }
-        }
+        // Fetch the remote shoot to get current state using Supabase
+        do {
+            let supabase = SupabaseManager.shared.client
 
-        guard let remote = remoteEntry else {
-            // No remote version found, use local as-is
+            let shoots: [SupabaseSportsShoot] = try await supabase
+                .from("sports_jobs")
+                .select()
+                .eq("id", value: shootId)
+                .limit(1)
+                .execute()
+                .value
+
+            guard let remoteShoot = shoots.first?.toSportsShoot(),
+                  let remote = remoteShoot.roster.first(where: { $0.id == localEntry.id }) else {
+                // No remote version found, use local as-is
+                return localEntry
+            }
+
+            // Check if we need to merge imageNumbers
+            if !localEntry.imageNumbers.isEmpty && !remote.imageNumbers.isEmpty &&
+               localEntry.imageNumbers != remote.imageNumbers {
+                // Both have imageNumbers - merge them!
+                var merged = localEntry
+                merged.imageNumbers = ImageNumbersMerger.mergeImageNumbers(
+                    local: localEntry.imageNumbers,
+                    remote: remote.imageNumbers
+                )
+                merged.notes = ImageNumbersMerger.mergeNotes(
+                    local: localEntry.notes,
+                    remote: remote.notes
+                )
+                print("   🔀 Merged with remote: imageNumbers=\"\(merged.imageNumbers)\"")
+                return merged
+            }
+
+            // No merge needed, use local
+            return localEntry
+        } catch {
+            print("❌ Error fetching remote shoot: \(error.localizedDescription)")
             return localEntry
         }
-
-        // Check if we need to merge imageNumbers
-        if !localEntry.imageNumbers.isEmpty && !remote.imageNumbers.isEmpty &&
-           localEntry.imageNumbers != remote.imageNumbers {
-            // Both have imageNumbers - merge them!
-            var merged = localEntry
-            merged.imageNumbers = ImageNumbersMerger.mergeImageNumbers(
-                local: localEntry.imageNumbers,
-                remote: remote.imageNumbers
-            )
-            merged.notes = ImageNumbersMerger.mergeNotes(
-                local: localEntry.notes,
-                remote: remote.notes
-            )
-            print("   🔀 Merged with remote: imageNumbers=\"\(merged.imageNumbers)\"")
-            return merged
-        }
-
-        // No merge needed, use local
-        return localEntry
     }
 
     private func syncRosterEntryCreate(shootId: String, data: [String: Any]) async -> Bool {
@@ -301,7 +301,7 @@ class BackgroundSyncService: ObservableObject {
                     LocalSportsShootRepository.shared.markAsSynced(shootId: shootId)
                     continuation.resume(returning: true)
                 case .failure(let error):
-                    print("❌ Firestore create failed: \(error.localizedDescription)")
+                    print("❌ Supabase create failed: \(error.localizedDescription)")
                     continuation.resume(returning: false)
                 }
             }
@@ -318,7 +318,7 @@ class BackgroundSyncService: ObservableObject {
                     LocalSportsShootRepository.shared.markAsSynced(shootId: shootId)
                     continuation.resume(returning: true)
                 case .failure(let error):
-                    print("❌ Firestore delete failed: \(error.localizedDescription)")
+                    print("❌ Supabase delete failed: \(error.localizedDescription)")
                     continuation.resume(returning: false)
                 }
             }

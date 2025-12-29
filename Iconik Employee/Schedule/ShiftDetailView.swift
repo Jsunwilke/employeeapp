@@ -1,9 +1,8 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
 import MessageUI
 import MapKit
 import CoreLocation
+import Supabase
 
 // MARK: - Model Structs
 
@@ -79,17 +78,17 @@ struct ShiftDetailView: View {
     
     // Job box state
     @State private var jobBoxes: [JobBox] = []
-    @State private var jobBoxListener: ListenerRegistration?
+    @State private var jobBoxListener: ListenerRegistrationWrapper?
     @State private var latestJobBoxStatus: JobBoxStatus = .unknown
     @State private var latestJobBoxScannedBy: String = ""
     @State private var latestJobBoxTimestamp: Date?
-    
+
     // State for photo detail management
     @State private var selectedPhoto: LocationPhoto? = nil
     @State private var showingPhotoDetail = false
-    
-    // Real-time listener
-    @State private var sessionListener: ListenerRegistration?
+
+    // Real-time listener (using SessionService)
+    @State private var sessionListenerActive: Bool = false
     
     // Loading state for initial data
     @State private var isInitializing = true
@@ -99,6 +98,10 @@ struct ShiftDetailView: View {
     private let sessionService = SessionService.shared
     
     var body: some View {
+        contentView
+    }
+
+    private var contentView: some View {
         ZStack(alignment: .top) {
             if isInitializing {
                 // Loading view while data is being loaded
@@ -128,12 +131,12 @@ struct ShiftDetailView: View {
                     // Action buttons
                     actionButtonsRow
                         .padding(.vertical, 8)
-                    
+
                     // Session Types Pills
-                    if let sessionTypes = session.sessionType, !sessionTypes.isEmpty {
+                    if !session.sessionType.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
-                                ForEach(sessionTypes, id: \.self) { type in
+                                ForEach(session.sessionType, id: \.self) { type in
                                     SessionTypePill(
                                         sessionType: type,
                                         color: colorForSessionType(type)
@@ -201,164 +204,8 @@ struct ShiftDetailView: View {
                         .padding(.vertical, 8)
                     }
                     
-                    // Job Box Status section with pill shapes and full width
-                    if latestJobBoxStatus != .unknown {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Job Box Status")
-                                    .font(.headline)
-                                
-                                if let latestBox = jobBoxes.sorted(by: { $0.timestamp > $1.timestamp }).first,
-                                   !latestBox.boxNumber.isEmpty {
-                                    Spacer()
-                                    Text("Box #\(latestBox.boxNumber)")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            
-                            // Status indicators as pills in a centered HStack
-                            HStack(spacing: 8) {
-                                let stepsCompleted = statusToStep(latestJobBoxStatus)
-                                let _ = print("DEBUG-JOBBOX-UI - Current status: \(latestJobBoxStatus), stepsCompleted: \(stepsCompleted)")
-                                
-                                Spacer(minLength: 0) // Add spacer for centering
-                                
-                                // Each step as a pill shape
-                                VStack(spacing: 2) {
-                                    ZStack {
-                                        Capsule() // Pill shape instead of Circle
-                                            .fill({
-                                                let isCompleted = stepsCompleted >= 1
-                                                print("DEBUG-JOBBOX-STEP1 - stepsCompleted: \(stepsCompleted), isCompleted: \(isCompleted)")
-                                                return isCompleted ? .green : Color(.systemGray4)
-                                            }())
-                                            .frame(height: 24) // Fixed height
-                                            .frame(maxWidth: .infinity) // Fill available width
-                                        
-                                        if stepsCompleted >= 1 {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(.white)
-                                        } else {
-                                            Text("1")
-                                                .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(.gray)
-                                        }
-                                    }
-                                    Text("Packed")
-                                        .font(.caption2)
-                                        .fontWeight(stepsCompleted >= 1 ? .medium : .regular)
-                                        .foregroundColor(stepsCompleted >= 1 ? .primary : .gray)
-                                }
-                                
-                                VStack(spacing: 2) {
-                                    ZStack {
-                                        Capsule()
-                                            .fill(stepsCompleted >= 2 ? .green : Color(.systemGray4))
-                                            .frame(height: 24)
-                                            .frame(maxWidth: .infinity)
-                                        
-                                        if stepsCompleted >= 2 {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(.white)
-                                        } else {
-                                            Text("2")
-                                                .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(.gray)
-                                        }
-                                    }
-                                    Text("Picked Up")
-                                        .font(.caption2)
-                                        .fontWeight(stepsCompleted >= 2 ? .medium : .regular)
-                                        .foregroundColor(stepsCompleted >= 2 ? .primary : .gray)
-                                }
-                                
-                                VStack(spacing: 2) {
-                                    ZStack {
-                                        Capsule()
-                                            .fill(stepsCompleted >= 3 ? .green : Color(.systemGray4))
-                                            .frame(height: 24)
-                                            .frame(maxWidth: .infinity)
-                                        
-                                        if stepsCompleted >= 3 {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(.white)
-                                        } else {
-                                            Text("3")
-                                                .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(.gray)
-                                        }
-                                    }
-                                    Text("Left Job")
-                                        .font(.caption2)
-                                        .fontWeight(stepsCompleted >= 3 ? .medium : .regular)
-                                        .foregroundColor(stepsCompleted >= 3 ? .primary : .gray)
-                                }
-                                
-                                VStack(spacing: 2) {
-                                    ZStack {
-                                        Capsule()
-                                            .fill(stepsCompleted >= 4 ? .green : Color(.systemGray4))
-                                            .frame(height: 24)
-                                            .frame(maxWidth: .infinity)
-                                        
-                                        if stepsCompleted >= 4 {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(.white)
-                                        } else {
-                                            Text("4")
-                                                .font(.system(size: 12, weight: .bold))
-                                                .foregroundColor(stepsCompleted >= 4 ? .white : .gray)
-                                        }
-                                    }
-                                    Text("Turned In")
-                                        .font(.caption2)
-                                        .fontWeight(stepsCompleted >= 4 ? .medium : .regular)
-                                        .foregroundColor(stepsCompleted >= 4 ? .primary : .gray)
-                                }
-                                
-                                Spacer(minLength: 0) // Add spacer for centering
-                            }
-                            .padding(.horizontal, 4) // Small horizontal padding inside the HStack
-                            
-                            // Combine last scanned info in one row with smaller fonts
-                            if !latestJobBoxScannedBy.isEmpty {
-                                HStack(spacing: 4) {
-                                    Text("Last scanned by:")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Text(latestJobBoxScannedBy)
-                                        .font(.caption)
-                                        .fontWeight(.medium)
-                                    
-                                    if let timestamp = latestJobBoxTimestamp {
-                                        Text("•")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                        Text("Scan time:")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                        Text(formatTimestamp(timestamp))
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(.secondarySystemBackground))
-                        )
-                        .padding(.horizontal, 16) // Match the outside padding of the card below
-                        .padding(.vertical, 4)
-                        .frame(maxWidth: .infinity) // Ensure it fills the full width
-                    }
+                    // Job Box Status section
+                    jobBoxStatusSection
                     
                     // Session notes (from session.description)
                     if let sessionNotes = session.description, !sessionNotes.isEmpty {
@@ -379,11 +226,11 @@ struct ShiftDetailView: View {
                     }
                     
                     // Photographer notes (from photographer array)
-                    if let userInfo = currentUserPhotographerInfo, !userInfo.notes.isEmpty {
+                    if let userInfo = currentUserPhotographerInfo, let photographerNotes = userInfo.notes, !photographerNotes.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Personal Notes")
                                 .font(.headline)
-                            Text(userInfo.notes)
+                            Text(photographerNotes)
                                 .font(.body)
                                 .foregroundColor(.primary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -469,8 +316,9 @@ struct ShiftDetailView: View {
         .onDisappear {
             // Remove the job box listener
             jobBoxListener?.remove()
-            // Remove the session listener
-            sessionListener?.remove()
+            // Stop session listener via SessionService
+            sessionService.stopListeningToSessions(organizationID: session.organizationID, includeUnpublished: false)
+            sessionListenerActive = false
             // Remove notification observer
             NotificationCenter.default.removeObserver(self)
         }
@@ -513,12 +361,11 @@ struct ShiftDetailView: View {
             }
         }
         .sheet(isPresented: $showingYearbookChecklist) {
-            if let schoolId = session.schoolId {
-                NavigationView {
-                    YearbookChecklistViewForSession(
-                        schoolId: schoolId,
-                        schoolName: session.schoolName,
-                        sessionContext: YearbookSessionContext(
+            NavigationView {
+                YearbookChecklistViewForSession(
+                    schoolId: session.schoolId,
+                    schoolName: session.schoolName,
+                    sessionContext: YearbookSessionContext(
                             sessionId: session.id,
                             photographerId: currentUserID ?? "",
                             photographerName: currentUserPhotographerInfo?.name ?? "Unknown",
@@ -526,16 +373,6 @@ struct ShiftDetailView: View {
                         )
                     )
                 }
-            } else {
-                VStack {
-                    Text("No school information available")
-                        .foregroundColor(.secondary)
-                    Button("Close") {
-                        showingYearbookChecklist = false
-                    }
-                    .padding()
-                }
-            }
         }
         .overlay(
             // Loading overlay for contacts
@@ -563,9 +400,9 @@ struct ShiftDetailView: View {
             }
         )
     }
-    
+
     // MARK: - View Components
-    
+
     private var headerView: some View {
         HStack(alignment: .center, spacing: 16) {
             // Session info
@@ -588,25 +425,7 @@ struct ShiftDetailView: View {
             
             // Employee Profile Photo
             if let profile = employeeProfile, !profile.photoURL.isEmpty {
-                AsyncImage(url: URL(string: profile.photoURL)) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 80, height: 80)
-                            .clipShape(Circle())
-                    case .failure(_):
-                        Image(systemName: "person.crop.circle.badge.exclam")
-                            .resizable()
-                            .frame(width: 80, height: 80)
-                            .foregroundColor(.gray)
-                    @unknown default:
-                        EmptyView()
-                    }
-                }
+                SupabaseAvatarView(storageURL: profile.photoURL, size: 80)
             } else {
                 Image(systemName: "person.circle")
                     .resizable()
@@ -658,7 +477,76 @@ struct ShiftDetailView: View {
         .background(Color(.secondarySystemBackground))
         .cornerRadius(12)
     }
-    
+
+    // Job Box Status section
+    @ViewBuilder
+    private var jobBoxStatusSection: some View {
+        if latestJobBoxStatus != .unknown {
+            let stepsCompleted = statusToStep(latestJobBoxStatus)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Job Box Status")
+                        .font(.headline)
+
+                    if let latestBox = jobBoxes.sorted(by: { $0.timestampDate > $1.timestampDate }).first,
+                       !latestBox.boxNumber.isEmpty {
+                        Spacer()
+                        Text("Box #\(latestBox.boxNumber)")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                // Status indicators as pills
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+
+                    statusStep(number: 1, title: "Packed", isActive: stepsCompleted >= 1, isCompleted: stepsCompleted >= 1)
+                    statusStep(number: 2, title: "Picked Up", isActive: stepsCompleted >= 2, isCompleted: stepsCompleted >= 2)
+                    statusStep(number: 3, title: "Left Job", isActive: stepsCompleted >= 3, isCompleted: stepsCompleted >= 3)
+                    statusStep(number: 4, title: "Turned In", isActive: stepsCompleted >= 4, isCompleted: stepsCompleted >= 4)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 4)
+
+                // Last scanned info
+                if !latestJobBoxScannedBy.isEmpty {
+                    HStack(spacing: 4) {
+                        Text("Last scanned by:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(latestJobBoxScannedBy)
+                            .font(.caption)
+                            .fontWeight(.medium)
+
+                        if let timestamp = latestJobBoxTimestamp {
+                            Text("•")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Scan time:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(formatTimestamp(timestamp))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.secondarySystemBackground))
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
     // Weather section
     private var weatherSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1152,7 +1040,7 @@ struct ShiftDetailView: View {
     private func startJobBoxListener() {
         // Remove any existing listener
         jobBoxListener?.remove()
-        
+
         // Convert Session to ICSEvent for JobBoxService compatibility
         let compatibilityEvent = ICSEvent(
             id: session.id,
@@ -1163,18 +1051,16 @@ struct ShiftDetailView: View {
             location: session.location,
             url: nil
         )
-        
+
         // Start a new listener
         jobBoxListener = JobBoxService.shared.listenForJobBoxes(forShift: compatibilityEvent, organizationID: session.organizationID) { jobBoxes in
-            DispatchQueue.main.async {
-                self.jobBoxes = jobBoxes
-                
-                // Find the latest job box record based on timestamp
-                if let latestBox = jobBoxes.sorted(by: { $0.timestamp > $1.timestamp }).first {
-                    self.latestJobBoxStatus = latestBox.status
-                    self.latestJobBoxScannedBy = latestBox.scannedBy
-                    self.latestJobBoxTimestamp = latestBox.timestamp // Store the timestamp
-                }
+            self.jobBoxes = jobBoxes
+
+            // Find the latest job box record based on timestamp
+            if let latestBox = jobBoxes.sorted(by: { $0.timestampDate > $1.timestampDate }).first {
+                self.latestJobBoxStatus = latestBox.jobBoxStatus
+                self.latestJobBoxScannedBy = latestBox.scannedBy
+                self.latestJobBoxTimestamp = latestBox.timestampDate
             }
         }
     }
@@ -1295,7 +1181,7 @@ struct ShiftDetailView: View {
     }
     
     // Get the current user's photographer info from the session
-    private var currentUserPhotographerInfo: (name: String, notes: String)? {
+    private var currentUserPhotographerInfo: (name: String, notes: String?)? {
         guard let userID = currentUserID else { return nil }
         return session.getPhotographerInfo(for: userID)
     }
@@ -1316,8 +1202,8 @@ struct ShiftDetailView: View {
         }
         
         // Add photographer-specific notes if they exist
-        if let userInfo = currentUserPhotographerInfo, !userInfo.notes.isEmpty {
-            notes.append("Personal: \(userInfo.notes)")
+        if let userInfo = currentUserPhotographerInfo, let photographerNotes = userInfo.notes, !photographerNotes.isEmpty {
+            notes.append("Personal: \(photographerNotes)")
         }
         
         return notes.joined(separator: "\n")
@@ -1393,32 +1279,38 @@ struct ShiftDetailView: View {
             print("🔐 Cannot load employee profile: no current user ID")
             return
         }
-        
-        let db = Firestore.firestore()
-        db.collection("users")
-            .document(userID)
-            .getDocument { snapshot, error in
-                if let error = error {
-                    print("⚠️ Employee profile unavailable: \(error.localizedDescription)")
-                    // Continue without employee profile photo
-                    return
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                struct UserRecord: Decodable {
+                    let id: String
+                    let photo_url: String?
+                    let first_name: String?
+                    let last_name: String?
                 }
-                
-                if let data = snapshot?.data() {
-                    let photoURL = data["photoURL"] as? String ?? ""
-                    let firstName = data["firstName"] as? String ?? ""
-                    let lastName = data["lastName"] as? String ?? ""
-                    let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
-                    
-                    DispatchQueue.main.async {
+
+                let users: [UserRecord] = try await supabase
+                    .from("users")
+                    .select("id, photo_url, first_name, last_name")
+                    .eq("id", value: userID.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+
+                await MainActor.run {
+                    if let user = users.first {
+                        let firstName = user.first_name ?? ""
+                        let lastName = user.last_name ?? ""
+                        let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+
                         self.employeeProfile = CoworkerProfile(
                             id: userID,
                             name: fullName.isEmpty ? self.displayEmployeeName : fullName,
-                            photoURL: photoURL
+                            photoURL: user.photo_url ?? ""
                         )
-                    }
-                } else {
-                    DispatchQueue.main.async {
+                    } else {
                         self.employeeProfile = CoworkerProfile(
                             id: userID,
                             name: self.displayEmployeeName,
@@ -1426,53 +1318,80 @@ struct ShiftDetailView: View {
                         )
                     }
                 }
+            } catch {
+                print("⚠️ Employee profile unavailable: \(error.localizedDescription)")
             }
+        }
     }
     
     private func loadCoworkerPhotos() {
         coworkerProfiles = []
-        
+
         // Get all photographers from the session (excluding current user)
         guard let currentUserID = currentUserID else { return }
-        
+
         // Get organization ID to comply with security rules
         let orgID = UserManager.shared.getCachedOrganizationID()
         guard !orgID.isEmpty else {
             print("🔐 Cannot load coworker photos: no organization ID found")
             return
         }
-        
-        let db = Firestore.firestore()
-        
+
+        // Collect all photographer IDs to fetch
+        var photographerIDs: Set<String> = []
+        var photographerNameMap: [String: String] = [:]
+
         for photographer in session.photographers {
-            guard let photographerID = photographer["id"] as? String,
-                  let photographerName = photographer["name"] as? String,
-                  photographerID != currentUserID else {
-                continue // Skip current user
+            guard photographer.id != currentUserID else { continue }
+            photographerIDs.insert(photographer.id)
+            photographerNameMap[photographer.id] = photographer.name
+        }
+
+        // Also check for coworkers from other sessions on the same day/location
+        let calendar = Calendar.current
+        if let sessionDate = session.startDate {
+            let sessionDay = calendar.startOfDay(for: sessionDate)
+
+            for otherSession in allSessions {
+                guard let otherSessionDate = otherSession.startDate,
+                      otherSession.id != session.id,
+                      calendar.startOfDay(for: otherSessionDate) == sessionDay,
+                      otherSession.schoolName == session.schoolName else {
+                    continue
+                }
+
+                for photographer in otherSession.photographers {
+                    guard photographer.id != currentUserID else { continue }
+                    photographerIDs.insert(photographer.id)
+                    photographerNameMap[photographer.id] = photographer.name
+                }
             }
-            
-            // Load actual photo URL from users collection
-            db.collection("users")
-                .document(photographerID)
-                .getDocument { snapshot, error in
-                    if let error = error {
-                        print("⚠️ Coworker photo unavailable: \(error.localizedDescription)")
-                        // Create profile with initials fallback
-                        DispatchQueue.main.async {
-                            let profile = CoworkerProfile(
-                                id: photographerID,
-                                name: photographerName,
-                                photoURL: ""
-                            )
-                            if !self.coworkerProfiles.contains(where: { $0.id == photographerID }) {
-                                self.coworkerProfiles.append(profile)
-                            }
-                        }
-                        return
-                    }
-                    
-                    let photoURL = snapshot?.data()?["photoURL"] as? String ?? ""
-                    DispatchQueue.main.async {
+        }
+
+        // Fetch all coworker photos in one batch
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                struct UserRecord: Decodable {
+                    let id: String
+                    let photo_url: String?
+                }
+
+                // Batch fetch all photographer profiles
+                for photographerID in photographerIDs {
+                    let users: [UserRecord] = try await supabase
+                        .from("users")
+                        .select("id, photo_url")
+                        .eq("id", value: photographerID.lowercased())
+                        .limit(1)
+                        .execute()
+                        .value
+
+                    let photoURL = users.first?.photo_url ?? ""
+                    let photographerName = photographerNameMap[photographerID] ?? "Unknown"
+
+                    await MainActor.run {
                         let profile = CoworkerProfile(
                             id: photographerID,
                             name: photographerName,
@@ -1483,213 +1402,195 @@ struct ShiftDetailView: View {
                         }
                     }
                 }
-        }
-        
-        // Also check for coworkers from other sessions on the same day/location
-        let calendar = Calendar.current
-        guard let sessionDate = session.startDate else { return }
-        let sessionDay = calendar.startOfDay(for: sessionDate)
-        
-        for otherSession in allSessions {
-            guard let otherSessionDate = otherSession.startDate,
-                  otherSession.id != session.id,
-                  calendar.startOfDay(for: otherSessionDate) == sessionDay,
-                  otherSession.schoolName == session.schoolName else {
-                continue
-            }
-            
-            // Add photographers from other sessions on same day
-            for photographer in otherSession.photographers {
-                guard let photographerID = photographer["id"] as? String,
-                      let photographerName = photographer["name"] as? String,
-                      photographerID != currentUserID,
-                      !coworkerProfiles.contains(where: { $0.id == photographerID }) else {
-                    continue
-                }
-                
-                // Load actual photo URL from users collection for other session photographers too
-                db.collection("users")
-                    .document(photographerID)
-                    .getDocument { snapshot, error in
-                        if let error = error {
-                            print("⚠️ Other session coworker photo unavailable: \(error.localizedDescription)")
-                            // Create profile with initials fallback
-                            DispatchQueue.main.async {
-                                let profile = CoworkerProfile(
-                                    id: photographerID,
-                                    name: photographerName,
-                                    photoURL: ""
-                                )
-                                if !self.coworkerProfiles.contains(where: { $0.id == photographerID }) {
-                                    self.coworkerProfiles.append(profile)
-                                }
-                            }
-                            return
-                        }
-                        
-                        let photoURL = snapshot?.data()?["photoURL"] as? String ?? ""
-                        DispatchQueue.main.async {
-                            let profile = CoworkerProfile(
-                                id: photographerID,
-                                name: photographerName,
-                                photoURL: photoURL
-                            )
-                            if !self.coworkerProfiles.contains(where: { $0.id == photographerID }) {
-                                self.coworkerProfiles.append(profile)
-                            }
+            } catch {
+                print("⚠️ Coworker photos unavailable: \(error.localizedDescription)")
+                // Still add profiles with empty photoURLs as fallback
+                await MainActor.run {
+                    for photographerID in photographerIDs {
+                        let photographerName = photographerNameMap[photographerID] ?? "Unknown"
+                        let profile = CoworkerProfile(
+                            id: photographerID,
+                            name: photographerName,
+                            photoURL: ""
+                        )
+                        if !self.coworkerProfiles.contains(where: { $0.id == photographerID }) {
+                            self.coworkerProfiles.append(profile)
                         }
                     }
+                }
             }
         }
     }
     
     private func loadLocationPhotos() {
-        let db = Firestore.firestore()
-        
-        // Get organization ID to comply with security rules
-        UserManager.shared.getCurrentUserOrganizationID { organizationID in
-            guard let orgID = organizationID else {
-                print("🔐 Cannot load location photos: no organization ID found")
-                return
-            }
-            
-            db.collection("schools")
-                .whereField("organizationID", isEqualTo: orgID)
-                .whereField("value", isEqualTo: self.session.schoolName)
-                .getDocuments { snapshot, error in
-                    if let error = error {
-                        print("⚠️ Location photos unavailable: \(error.localizedDescription)")
-                        // Don't show error to user, just fail silently for location photos
-                        return
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                guard let orgID = await withCheckedContinuation({ continuation in
+                    UserManager.shared.getCurrentUserOrganizationID { orgID in
+                        continuation.resume(returning: orgID)
                     }
-                    guard let docs = snapshot?.documents,
-                          let doc = docs.first,
-                          let photoDicts = doc.data()["locationPhotos"] as? [[String: String]] else {
-                        return
-                    }
-                    // Map each dictionary to a LocationPhoto.
-                    let photos = photoDicts.compactMap { dict -> LocationPhoto? in
-                        if let url = dict["url"], let label = dict["label"] {
-                            return LocationPhoto(url: url, label: label)
-                        }
-                        return nil
-                    }
-                    DispatchQueue.main.async {
-                        self.locationPhotos = photos
-                    }
+                }) else {
+                    print("🔐 Cannot load location photos: no organization ID found")
+                    return
                 }
+
+                struct SchoolRecord: Decodable {
+                    let id: String
+                    let location_photos: [[String: String]]?
+                }
+
+                let schools: [SchoolRecord] = try await supabase
+                    .from("schools")
+                    .select("id, location_photos")
+                    .eq("organization_id", value: orgID.lowercased())
+                    .eq("value", value: self.session.schoolName)
+                    .limit(1)
+                    .execute()
+                    .value
+
+                guard let school = schools.first,
+                      let photoDicts = school.location_photos else {
+                    return
+                }
+
+                // Map each dictionary to a LocationPhoto
+                let photos = photoDicts.compactMap { dict -> LocationPhoto? in
+                    if let url = dict["url"], let label = dict["label"] {
+                        return LocationPhoto(url: url, label: label)
+                    }
+                    return nil
+                }
+
+                await MainActor.run {
+                    self.locationPhotos = photos
+                }
+            } catch {
+                print("⚠️ Location photos unavailable: \(error.localizedDescription)")
+            }
         }
     }
     
     private func loadUserHomeAddress() {
-        guard let userId = Auth.auth().currentUser?.uid else {
-            travelPlan.errorMessage = "User not signed in"
+        // First try AppStorage (synced from UserProfileService)
+        let storedHomeAddress = UserDefaults.standard.string(forKey: "userHomeAddress") ?? ""
+
+        if !storedHomeAddress.isEmpty {
+            self.userHomeAddress = storedHomeAddress
+            print("✅ Home address loaded from AppStorage: \(storedHomeAddress)")
+            if !self.schoolAddress.isEmpty {
+                self.calculateTravelPlan()
+            }
             return
         }
-        
-        let db = Firestore.firestore()
-        db.collection("users").document(userId).getDocument { snapshot, error in
-            if let error = error {
-                print("⚠️ User home address unavailable: \(error.localizedDescription)")
-                // Continue without user home address data
-                return
+
+        // Then try UserProfileService cached profile
+        if let profile = UserProfileService.shared.currentUserProfile,
+           !profile.homeAddress.isEmpty {
+            self.userHomeAddress = profile.homeAddress
+            print("✅ Home address loaded from cached profile: \(profile.homeAddress)")
+            if !self.schoolAddress.isEmpty {
+                self.calculateTravelPlan()
             }
-            
-            if let data = snapshot?.data() {
-                let homeAddress = data["homeAddress"] as? String ?? ""
-                
-                // Check if readyTime exists and is greater than zero
-                if let readyTimeMinutes = data["readyTime"] as? Double, readyTimeMinutes > 0 {
-                    self.travelPlan.readyTime = readyTimeMinutes * 60 // Convert to seconds
-                } else {
-                    self.travelPlan.readyTime = 0
+            return
+        }
+
+        // Finally, fetch fresh from Supabase
+        Task {
+            do {
+                guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
+                    print("❌ Cannot load home address: User not signed in")
+                    return
                 }
-                
-                self.userHomeAddress = homeAddress
-                
-                // Calculate travel plan if we already have the school address
-                if !self.schoolAddress.isEmpty {
-                    self.calculateTravelPlan()
+
+                print("🔄 Fetching user profile for home address...")
+                let profile = try await UserProfileService.shared.fetchUserProfile(uid: userId)
+
+                await MainActor.run {
+                    self.userHomeAddress = profile.homeAddress
+                    print("✅ Home address fetched from Supabase: \(profile.homeAddress)")
+
+                    if !self.schoolAddress.isEmpty && !self.userHomeAddress.isEmpty {
+                        self.calculateTravelPlan()
+                    }
                 }
+            } catch {
+                print("❌ Failed to fetch home address: \(error.localizedDescription)")
             }
         }
     }
     
-    private func loadSchoolAddress() {
-        let db = Firestore.firestore()
-        
-        // Get organization ID to comply with security rules
-        UserManager.shared.getCurrentUserOrganizationID { organizationID in
-            guard let orgID = organizationID else {
-                print("🔐 Cannot load school address: no organization ID found")
-                self.travelPlan.errorMessage = "Could not load school data"
-                return
-            }
-            
-            db.collection("schools")
-                .whereField("organizationID", isEqualTo: orgID)
-                .whereField("value", isEqualTo: self.session.schoolName)
-                .getDocuments { snapshot, error in
-                    if let _ = error {
-                        self.travelPlan.errorMessage = "Could not load school data"
-                        return
-                    }
-                    
-                    if let doc = snapshot?.documents.first {
-                        let data = doc.data()
-                        
-                        // First try to use coordinates field for maximum accuracy
-                        if let coordinates = data["coordinates"] as? String, !coordinates.isEmpty {
-                            self.schoolAddress = coordinates
-                        }
-                        // Fall back to schoolAddress field
-                        else if let address = data["schoolAddress"] as? String, !address.isEmpty {
-                            self.schoolAddress = address
-                        }
-                        // Finally fall back to session location
-                        else if let location = self.session.location, !location.isEmpty {
-                            self.schoolAddress = location
-                        }
-                        else {
-                            self.travelPlan.errorMessage = "School location not found"
-                            return
-                        }
-                        
-                        // Calculate travel plan if we already have the user home address
-                        if !self.userHomeAddress.isEmpty {
-                            self.calculateTravelPlan()
-                        }
-                    } else if let location = self.session.location, !location.isEmpty {
-                        // Use the session location if no school document found
+    private func loadSchoolAddress() async {
+        do {
+            // Use SchoolService to fetch school data from Supabase
+            guard let school = try await SchoolService.shared.getSchool(schoolId: session.schoolId) else {
+                // Fall back to session location if school not found
+                if let location = session.location, !location.isEmpty {
+                    await MainActor.run {
                         self.schoolAddress = location
-                        
                         if !self.userHomeAddress.isEmpty {
                             self.calculateTravelPlan()
                         }
-                    } else {
+                    }
+                } else {
+                    await MainActor.run {
                         self.travelPlan.errorMessage = "School location not found"
                     }
                 }
+                return
+            }
+
+            await MainActor.run {
+                // First try to use coordinates for maximum accuracy
+                if let coords = school.parsedCoordinates {
+                    self.schoolAddress = "\(coords.lat),\(coords.lng)"
+                }
+                // Fall back to address field
+                else if let address = school.address, !address.isEmpty {
+                    self.schoolAddress = address
+                }
+                // Fall back to session location
+                else if let location = self.session.location, !location.isEmpty {
+                    self.schoolAddress = location
+                }
+                else {
+                    self.travelPlan.errorMessage = "School location not found"
+                    return
+                }
+
+                // Calculate travel plan if we already have the user home address
+                if !self.userHomeAddress.isEmpty {
+                    self.calculateTravelPlan()
+                }
+            }
+        } catch {
+            print("⚠️ Error loading school address: \(error)")
+            await MainActor.run {
+                self.travelPlan.errorMessage = "Could not load school data"
+            }
         }
     }
     
     private func loadWeatherData() {
         guard let sessionDate = session.startDate else { return }
-        
+
         // Only load weather if the session is within the next 7 days
         let calendar = Calendar.current
         let now = Date()
         let sevenDaysFromNow = calendar.date(byAdding: .day, value: 7, to: now) ?? now
-        
+
         if sessionDate > sevenDaysFromNow {
             weatherErrorMessage = "Weather forecast only available for next 7 days"
             return // Don't attempt to load weather for dates more than 7 days away
         }
-        
+
         isLoadingWeather = true
-        
+
         // Load school data to get the best location for weather
-        loadSchoolDataForWeather { latitude, longitude, addressFallback in
+        Task {
+            let (latitude, longitude, addressFallback) = await loadSchoolDataForWeather()
+
             // Use coordinates if available for maximum accuracy
             if let lat = latitude, let lng = longitude {
                 self.weatherService.getWeatherData(latitude: lat, longitude: lng, date: sessionDate) { weatherData, errorMessage in
@@ -1723,75 +1624,48 @@ struct ShiftDetailView: View {
         }
     }
     
-    private func loadSchoolDataForWeather(completion: @escaping (Double?, Double?, String) -> Void) {
-        let db = Firestore.firestore()
-        
-        // Get organization ID to comply with security rules
-        UserManager.shared.getCurrentUserOrganizationID { organizationID in
-            guard let orgID = organizationID else {
-                print("🔐 Cannot load school data for weather: no organization ID found")
-                completion(nil, nil, "")
-                return
-            }
-            
-            db.collection("schools")
-                .whereField("organizationID", isEqualTo: orgID)
-                .whereField("value", isEqualTo: self.session.schoolName)
-                .getDocuments { snapshot, error in
-                    if let error = error {
-                        print("⚠️ School data for weather unavailable: \(error.localizedDescription)")
-                        completion(nil, nil, "")
-                        return
-                    }
-                    
-                    if let doc = snapshot?.documents.first {
-                        let data = doc.data()
-                        
-                        // First priority: Use coordinates field for maximum accuracy
-                        if let coordinates = data["coordinates"] as? String, !coordinates.isEmpty,
-                           let parsedCoords = self.parseCoordinateString(coordinates) {
-                            // Return coordinates directly - most accurate for weather
-                            completion(parsedCoords.latitude, parsedCoords.longitude, "")
-                            return
-                        }
-                        
-                        // Second priority: city + state for weather data (good for geocoding)
-                        if let city = data["city"] as? String, !city.isEmpty,
-                           let state = data["state"] as? String, !state.isEmpty {
-                            completion(nil, nil, "\(city), \(state)")
-                            return
-                        }
-                        
-                        // Third priority: street address
-                        if let street = data["street"] as? String, !street.isEmpty,
-                           let city = data["city"] as? String, !city.isEmpty {
-                            completion(nil, nil, "\(street), \(city)")
-                            return
-                        }
-                        
-                        // Fourth priority: schoolAddress field (if not coordinates)
-                        if let address = data["schoolAddress"] as? String, !address.isEmpty,
-                           self.parseCoordinateString(address) == nil { // Not coordinates
-                            completion(nil, nil, address)
-                            return
-                        }
-                        
-                        // Final fallback: session location
-                        if let location = self.session.location, !location.isEmpty {
-                            completion(nil, nil, location)
-                            return
-                        }
-                        
-                        completion(nil, nil, "")
-                    } else {
-                        // Use session location if no school document found
-                        if let location = self.session.location, !location.isEmpty {
-                            completion(nil, nil, location)
-                        } else {
-                            completion(nil, nil, "")
-                        }
-                    }
+    private func loadSchoolDataForWeather() async -> (lat: Double?, lng: Double?, address: String) {
+        do {
+            // Use SchoolService to fetch school data from Supabase
+            guard let school = try await SchoolService.shared.getSchool(schoolId: session.schoolId) else {
+                // Use session location if no school document found
+                if let location = session.location, !location.isEmpty {
+                    return (nil, nil, location)
                 }
+                return (nil, nil, "")
+            }
+
+            // First priority: Use coordinates for maximum accuracy
+            if let coords = school.parsedCoordinates {
+                return (coords.lat, coords.lng, "")
+            }
+
+            // Second priority: city + state for weather data (good for geocoding)
+            if let city = school.city, !city.isEmpty,
+               let state = school.state, !state.isEmpty {
+                return (nil, nil, "\(city), \(state)")
+            }
+
+            // Third priority: street address
+            if let street = school.street, !street.isEmpty,
+               let city = school.city, !city.isEmpty {
+                return (nil, nil, "\(street), \(city)")
+            }
+
+            // Fourth priority: address field
+            if let address = school.address, !address.isEmpty {
+                return (nil, nil, address)
+            }
+
+            // Final fallback: session location
+            if let location = session.location, !location.isEmpty {
+                return (nil, nil, location)
+            }
+
+            return (nil, nil, "")
+        } catch {
+            print("⚠️ School data for weather unavailable: \(error.localizedDescription)")
+            return (nil, nil, "")
         }
     }
     
@@ -2094,7 +1968,7 @@ struct ShiftDetailView: View {
             // Show loading state
             isLoadingContacts = true
             
-            // Load real contacts from Firestore
+            // Load real contacts from Supabase
             loadCoworkerPhoneNumbers { success in
                 DispatchQueue.main.async {
                     self.isLoadingContacts = false
@@ -2115,19 +1989,18 @@ struct ShiftDetailView: View {
         return "Hey crew, "
     }
     
-    // Load phone numbers from Firestore with completion handler
+    // Load phone numbers from Supabase with completion handler
     private func loadCoworkerPhoneNumbers(completion: @escaping (Bool) -> Void = { _ in }) {
-        let db = Firestore.firestore()
         coworkerContacts = [] // Reset the array
-        
+
         // Get all coworkers on this shoot
         let coworkerNames = otherEmployeesSameJob()
-        
+
         if coworkerNames.isEmpty {
             completion(false)
             return // No coworkers to message
         }
-        
+
         // Get organization ID to comply with security rules
         let orgID = UserManager.shared.getCachedOrganizationID()
         guard !orgID.isEmpty else {
@@ -2135,49 +2008,52 @@ struct ShiftDetailView: View {
             completion(false)
             return
         }
-        
-        var loadedCount = 0
-        var foundPhoneNumber = false
-        
-        for fullName in coworkerNames {
-            let queryName = firstName(from: fullName)
-            db.collection("users")
-                .whereField("organizationID", isEqualTo: orgID)
-                .whereField("firstName", isEqualTo: queryName)
-                .getDocuments { snapshot, error in
-                    defer {
-                        loadedCount += 1
-                        // Check if we're done loading
-                        if loadedCount == coworkerNames.count {
-                            DispatchQueue.main.async {
-                                completion(foundPhoneNumber)
-                            }
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+                var foundPhoneNumber = false
+
+                struct UserContact: Decodable {
+                    let id: String
+                    let first_name: String?
+                    let phone: String?
+                }
+
+                for fullName in coworkerNames {
+                    let queryName = firstName(from: fullName)
+
+                    let users: [UserContact] = try await supabase
+                        .from("users")
+                        .select("id, first_name, phone")
+                        .eq("organization_id", value: orgID.lowercased())
+                        .eq("first_name", value: queryName)
+                        .limit(1)
+                        .execute()
+                        .value
+
+                    if let user = users.first, let phone = user.phone, !phone.isEmpty {
+                        await MainActor.run {
+                            let contact = CoworkerContactInfo(
+                                id: user.id,
+                                name: fullName,
+                                phoneNumber: phone
+                            )
+                            self.coworkerContacts.append(contact)
                         }
-                    }
-                    
-                    if let error = error {
-                        print("⚠️ Coworker contact unavailable: \(error.localizedDescription)")
-                        // Continue without coworker contact data
-                        return
-                    }
-                    
-                    if let docs = snapshot?.documents, let doc = docs.first {
-                        let data = doc.data()
-                        let phone = data["phone"] as? String ?? ""
-                        
-                        if !phone.isEmpty {
-                            DispatchQueue.main.async {
-                                let contact = CoworkerContactInfo(
-                                    id: doc.documentID,
-                                    name: fullName,
-                                    phoneNumber: phone
-                                )
-                                self.coworkerContacts.append(contact)
-                                foundPhoneNumber = true
-                            }
-                        }
+                        foundPhoneNumber = true
                     }
                 }
+
+                await MainActor.run {
+                    completion(foundPhoneNumber)
+                }
+            } catch {
+                print("⚠️ Coworker contacts unavailable: \(error.localizedDescription)")
+                await MainActor.run {
+                    completion(false)
+                }
+            }
         }
     }
     
@@ -2393,7 +2269,7 @@ struct ShiftDetailView: View {
         loadCoworkerPhotos()
         loadLocationPhotos()
         loadUserHomeAddress()
-        loadSchoolAddress()
+        Task { await loadSchoolAddress() }
         loadWeatherData()
         startJobBoxListener()
         setupNotificationObserver()
@@ -2409,16 +2285,26 @@ struct ShiftDetailView: View {
     // MARK: - Real-time Session Updates
     
     private func startSessionListener() {
-        // Listen for updates to the specific session only
-        sessionListener = sessionService.listenForSession(sessionId: session.id) { updatedSession in
+        // Listen for updates to the specific session using organization-wide listener with client-side filtering
+        let organizationID = session.organizationID
+        guard !organizationID.isEmpty else {
+            print("❌ Cannot start session listener: no organization ID")
+            return
+        }
+
+        sessionService.startListeningToSessions(
+            organizationID: organizationID,
+            includeUnpublished: true  // Admin/manager views should see all sessions
+        ) { sessions in
             DispatchQueue.main.async {
-                if let updatedSession = updatedSession {
+                // Filter for the specific session we're viewing
+                if let updatedSession = sessions.first(where: { $0.id == self.session.id }) {
                     self.session = updatedSession
-                    
+
                     // Reload related data that might have changed
                     self.loadCoworkerPhotos()
                     self.loadWeatherData()
-                    
+
                     // Update this session in allSessions array if it exists
                     if let index = self.allSessions.firstIndex(where: { $0.id == updatedSession.id }) {
                         self.allSessions[index] = updatedSession

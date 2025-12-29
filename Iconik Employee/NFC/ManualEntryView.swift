@@ -117,12 +117,10 @@ struct ManualEntryView: View {
                                         Text(session.schoolName)
                                             .font(.subheadline)
                                             .foregroundColor(.primary)
-                                        
-                                        if let dateStr = session.date {
-                                            Text(dateStr)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
+
+                                        Text(session.date)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
                                     }
                                 }
                                 
@@ -135,12 +133,12 @@ struct ManualEntryView: View {
                     }
                     .onChange(of: selectedSession) { newSession in
                         if let session = newSession {
-                            print("Session selected: \(session.schoolName), schoolId: \(session.schoolId ?? "nil")")
+                            print("Session selected: \(session.schoolName), schoolId: \(session.schoolId)")
                             print("Available schools: \(schools.map { "id: \($0.id), name: \($0.name)" })")
-                            
+
                             // Find the school by ID
-                            if let schoolId = session.schoolId,
-                               let school = schools.first(where: { $0.id == schoolId }) {
+                            let schoolId = session.schoolId
+                            if let school = schools.first(where: { $0.id == schoolId }) {
                                 // Set the school name from the school record to ensure exact match
                                 selectedSchool = school.name
                                 print("Found matching school: \(school.name)")
@@ -361,9 +359,14 @@ struct ManualEntryView: View {
     }
     
     func loadAvailableSessionsForJobBox() {
-        timeTrackingService.getAvailableSessionsForJobBox { sessions in
-            DispatchQueue.main.async {
-                self.availableSessions = sessions
+        Task {
+            do {
+                let sessions = try await timeTrackingService.getAvailableSessionsForJobBox()
+                await MainActor.run {
+                    self.availableSessions = sessions
+                }
+            } catch {
+                print("Error loading available sessions for job box: \(error)")
             }
         }
     }
@@ -391,7 +394,7 @@ struct ManualEntryView: View {
         FirestoreManager.shared.fetchJobBoxRecords(field: "boxNumber", value: boxNumber, organizationID: orgID) { result in
             switch result {
             case .success(let records):
-                let sortedRecords = records.sorted { $0.timestamp > $1.timestamp }
+                let sortedRecords = records.sorted { $0.timestampDate > $1.timestampDate }
                 self.lastJobBoxRecord = sortedRecords.first
                 updateJobBoxDefaults()
             case .failure(let error):
@@ -437,15 +440,15 @@ struct ManualEntryView: View {
     
     private func updateJobBoxDefaults() {
         if let last = lastJobBoxRecord {
-            selectedSchool = last.school
-            
+            selectedSchool = last.school ?? ""
+
             // If last status was "Turned In", default school to "Iconik"
-            if last.status == .turnedIn {
+            if last.jobBoxStatus == .turnedIn {
                 selectedSchool = "Iconik"
             }
-            
+
             // Calculate next status in the cycle
-            if let currentIndex = jobBoxStatuses.firstIndex(where: { $0 == last.status.rawValue }) {
+            if let currentIndex = jobBoxStatuses.firstIndex(where: { $0 == last.status }) {
                 let nextIndex = (currentIndex + 1) % jobBoxStatuses.count
                 selectedStatus = jobBoxStatuses[nextIndex]
             } else {

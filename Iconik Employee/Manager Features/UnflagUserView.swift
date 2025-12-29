@@ -1,6 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
 
 // Model representing a flagged user.
 struct FlaggedUser: Identifiable, Hashable {
@@ -93,29 +91,26 @@ struct UnflagUserView: View {
         }
     }
     
-    // Fetch flagged users from Firestore.
+    // Fetch flagged users from Supabase.
     func loadFlaggedUsers() {
-        let db = Firestore.firestore()
-        db.collection("users")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID)
-            .whereField("isFlagged", isEqualTo: true)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    errorMessage = error.localizedDescription
-                    return
-                }
-                guard let docs = snapshot?.documents else {
-                    return
-                }
-                flaggedUsers = docs.compactMap { doc in
-                    let data = doc.data()
-                    if let firstName = data["firstName"] as? String {
-                        let note = data["flagNote"] as? String ?? ""
-                        return FlaggedUser(id: doc.documentID, name: firstName, flagNote: note)
+        Task {
+            do {
+                let members = try await TeamService.shared.getFlaggedUsers(organizationID: storedUserOrganizationID)
+                await MainActor.run {
+                    flaggedUsers = members.map { member in
+                        FlaggedUser(
+                            id: member.id,
+                            name: member.firstName,
+                            flagNote: member.flagNote ?? ""
+                        )
                     }
-                    return nil
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
                 }
             }
+        }
     }
     
     // Unflag the selected user.
@@ -125,22 +120,21 @@ struct UnflagUserView: View {
             errorMessage = "You don't have permission to unflag users."
             return
         }
-        
-        let db = Firestore.firestore()
-        db.collection("users").document(user.id)
-            .updateData([
-                "isFlagged": false,
-                "flagNote": "",
-                "flaggedBy": FieldValue.delete()
-            ]) { error in
-                if let error = error {
-                    errorMessage = error.localizedDescription
-                } else {
+
+        Task {
+            do {
+                try await TeamService.shared.unflagUser(userId: user.id)
+                await MainActor.run {
                     successMessage = "\(user.name) has been unflagged."
                     // Refresh the list.
                     loadFlaggedUsers()
                 }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
             }
+        }
     }
 }
 

@@ -1,11 +1,11 @@
 import SwiftUI
-import Firebase
-import FirebaseMessaging
+import Supabase
 
 struct RootView: View {
     @State private var isSignedIn = false
     @StateObject private var userManager = UserManager.shared
     @StateObject private var profileService = UserProfileService.shared
+    @StateObject private var authService = SupabaseAuthService()
     
     var body: some View {
         Group {
@@ -16,61 +16,48 @@ struct RootView: View {
             }
         }
         .onAppear {
-            if Auth.auth().currentUser != nil {
-                isSignedIn = true
-                // Refresh user profile when already signed in
-                profileService.refreshCurrentUserProfile()
-                userManager.initializeOrganizationID()
-                // Ensure FCM token is saved on app startup
-                requestAndSaveFCMToken()
-            }
-            
-            Auth.auth().addStateDidChangeListener { _, user in
-                isSignedIn = (user != nil)
-                
-                if user != nil {
-                    // Refresh user profile when signing in
-                    profileService.refreshCurrentUserProfile()
-                    userManager.initializeOrganizationID()
-                    // Save FCM token when user signs in
-                    requestAndSaveFCMToken()
+            // Check for existing Supabase session
+            Task {
+                await authService.checkSession()
+
+                let hasSupabaseSession = authService.isAuthenticated
+
+                if hasSupabaseSession {
+                    // IMPORTANT: Initialize organization ID BEFORE showing main view
+                    // This fixes the race condition where views load before org ID is available
+                    await userManager.initializeOrganizationIDAsync()
+
+                    // Refresh user profile before showing main view
+                    await profileService.refreshCurrentUserProfile()
+
+                    // Verify we have the org ID before proceeding
+                    let orgID = userManager.getCachedOrganizationID()
+                    if orgID.isEmpty {
+                        // One more attempt via profile service
+                        await profileService.refreshCurrentUserProfile()
+                    }
+
+                    // NOW show the main view
+                    await MainActor.run {
+                        isSignedIn = true
+                    }
                 }
             }
         }
-    }
-    
-    /// Request FCM token and save it to Firestore
-    private func requestAndSaveFCMToken() {
-        guard let uid = Auth.auth().currentUser?.uid else {
-            print("No authenticated user to save FCM token for")
-            return
-        }
-        
-        // Get the current FCM token
-        Messaging.messaging().token { token, error in
-            if let error = error {
-                print("Error fetching FCM token: \(error.localizedDescription)")
-                return
-            }
-            
-            guard let token = token else {
-                print("No FCM token available")
-                return
-            }
-            
-            print("FCM token retrieved: \(token)")
-            
-            // Save token to Firestore
-            let db = Firestore.firestore()
-            db.collection("users").document(uid).updateData([
-                "fcmToken": token,
-                "fcmTokenUpdatedAt": FieldValue.serverTimestamp()
-            ]) { error in
-                if let error = error {
-                    print("Error updating FCM token in Firestore: \(error.localizedDescription)")
-                } else {
-                    print("Successfully updated FCM token in Firestore on app startup")
+        .onChange(of: authService.isAuthenticated) { isAuthenticated in
+            if isAuthenticated {
+                // Initialize org ID and refresh profile BEFORE showing main view
+                Task {
+                    await userManager.initializeOrganizationIDAsync()
+                    await profileService.refreshCurrentUserProfile()
+
+                    await MainActor.run {
+                        isSignedIn = true
+                    }
                 }
+            } else {
+                // Sign out - update immediately
+                isSignedIn = false
             }
         }
     }

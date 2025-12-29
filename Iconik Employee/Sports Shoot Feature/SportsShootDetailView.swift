@@ -6,8 +6,6 @@
 //
 
 import SwiftUI
-import Firebase
-import FirebaseFirestore
 import Combine
 
 struct SportsShootDetailView: View {
@@ -253,7 +251,7 @@ struct SportsShootDetailView: View {
         .onAppear {
             loadSportsShoot()
             setupNetworkMonitoring()
-            setupFirestoreListeners()
+            setupRealtimeListeners()
             // Force cleanup of any stale locks when entering the view
             forceCleanupStaleLocks()
         }
@@ -1289,10 +1287,10 @@ struct SportsShootDetailView: View {
 
             // If online, fetch updates in background
             if isOnline {
-                fetchAndUpdateFromFirestore()
+                fetchAndUpdateFromServer()
             }
         } else {
-            // Not in cache - must fetch from Firestore
+            // Not in cache - must fetch from server
             if !isOnline {
                 // Show error: "Shoot Not Available Offline"
                 self.isLoading = false
@@ -1301,13 +1299,13 @@ struct SportsShootDetailView: View {
                 return
             }
 
-            // Show loading and fetch from Firestore
+            // Show loading and fetch from server
             isLoading = true
-            fetchAndUpdateFromFirestore()
+            fetchAndUpdateFromServer()
         }
     }
 
-    private func fetchAndUpdateFromFirestore() {
+    private func fetchAndUpdateFromServer() {
         SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
             DispatchQueue.main.async {
                 self.isLoading = false
@@ -1342,7 +1340,7 @@ struct SportsShootDetailView: View {
             self.sportsShoot = cachedShoot
         }
 
-        // If online, also refresh from Firestore in background
+        // If online, also refresh from server in background
         if isOnline {
             SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
                 DispatchQueue.main.async {
@@ -1380,7 +1378,7 @@ struct SportsShootDetailView: View {
         }
     }
     
-    private func setupFirestoreListeners() {
+    private func setupRealtimeListeners() {
         setupLockListener()
     }
     
@@ -1454,7 +1452,7 @@ struct SportsShootDetailView: View {
     
     private func acquireLock(shootID: String, entryID: String, targetImageNumbers: String) {
         // Use consistent editor ID - prefer auth user ID, fallback to device session
-        let editorID = Auth.auth().currentUser?.uid ?? Self.deviceSessionID
+        let editorID = UserManager.shared.getCurrentUserIDUnified() ?? Self.deviceSessionID
         let editorName = currentEditorIdentifier
         
         EntryLockManager.shared.acquireLock(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName) { success in
@@ -1474,7 +1472,7 @@ struct SportsShootDetailView: View {
     
     private func releaseLockWithoutClearingState(shootID: String, entryID: String) {
         // Release lock without clearing editing state - used when switching between entries
-        let editorID = Auth.auth().currentUser?.uid ?? Self.deviceSessionID
+        let editorID = UserManager.shared.getCurrentUserIDUnified() ?? Self.deviceSessionID
         
         EntryLockManager.shared.releaseLock(shootID: shootID, entryID: entryID, editorID: editorID) { success in
             // Don't clear any state - just log the result
@@ -1488,7 +1486,7 @@ struct SportsShootDetailView: View {
     
     private func releaseLock(shootID: String, entryID: String) {
         // Store the device session ID to ensure consistent editor ID
-        let editorID = Auth.auth().currentUser?.uid ?? Self.deviceSessionID
+        let editorID = UserManager.shared.getCurrentUserIDUnified() ?? Self.deviceSessionID
         
         // Cancel any pending autosave before releasing lock
         if currentlyEditingEntry == entryID {

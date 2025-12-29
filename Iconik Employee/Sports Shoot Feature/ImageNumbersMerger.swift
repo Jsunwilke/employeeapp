@@ -15,7 +15,7 @@ class ImageNumbersMerger {
     /// Intelligently merge image numbers from two sources
     /// - Parameters:
     ///   - local: Image numbers from local/offline changes
-    ///   - remote: Image numbers from remote/Firestore
+    ///   - remote: Image numbers from remote/server
     /// - Returns: Merged string with format "101, 102, 234-35, 678-79"
     ///
     /// Rules:
@@ -89,7 +89,7 @@ class ImageNumbersMerger {
     /// Intelligently merge notes from two sources
     /// - Parameters:
     ///   - local: Notes from local/offline changes
-    ///   - remote: Notes from remote/Firestore
+    ///   - remote: Notes from remote/server
     /// - Returns: Merged string with format "Note A; Note B"
     ///
     /// Rules:

@@ -2,7 +2,7 @@ import Foundation
 
 enum TimeOffStatus: String, CaseIterable, Codable {
     case pending = "pending"
-    case underReview = "under_review"
+    case underReview = "underReview"
     case approved = "approved"
     case denied = "denied"
     case cancelled = "cancelled"

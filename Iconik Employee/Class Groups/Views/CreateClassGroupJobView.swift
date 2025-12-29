@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 
 struct CreateClassGroupJobView: View {
     @Environment(\.presentationMode) var presentationMode
@@ -116,9 +115,9 @@ struct CreateClassGroupJobView: View {
     }
     
     private func createJob() {
-        guard let session = selectedSession,
-              let schoolId = session.schoolId else { return }
-        
+        guard let session = selectedSession else { return }
+        let schoolId = session.schoolId
+
         isLoading = true
         
         UserManager.shared.getCurrentUserOrganizationID { organizationId in
@@ -172,8 +171,8 @@ struct ClassGroupSessionRowView: View {
                     .foregroundColor(.secondary)
                 
                 // Session type
-                if let sessionTypes = session.sessionType, !sessionTypes.isEmpty {
-                    Text(sessionTypes.joined(separator: ", "))
+                if !session.sessionType.isEmpty {
+                    Text(session.sessionType.joined(separator: ", "))
                         .font(.caption)
                         .foregroundColor(.blue)
                 }

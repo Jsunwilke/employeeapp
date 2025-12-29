@@ -93,20 +93,23 @@ struct CritiqueListCard: View {
 struct CritiqueListCard_Previews: PreviewProvider {
     static var previews: some View {
         CritiqueListCard(critique: Critique(
-            organizationId: "test",
-            submitterId: "1",
-            submitterName: "John Manager",
-            submitterEmail: "john@test.com",
-            targetPhotographerId: "2",
-            targetPhotographerName: "Jane Photographer",
-            imageUrls: ["https://example.com/image.jpg"],
-            thumbnailUrls: ["https://example.com/thumb.jpg"],
-            imageUrl: "https://example.com/image.jpg",
-            thumbnailUrl: "https://example.com/thumb.jpg",
-            imageCount: 3,
-            managerNotes: "Pay attention to the exposure settings here. The highlights are blown out which loses detail in the important areas.",
-            exampleType: "improvement",
-            status: "published"
+            id: "preview-1",
+            organization_id: "test",
+            submitter_id: "1",
+            submitter_name: "John Manager",
+            submitter_email: "john@test.com",
+            target_photographer_id: "2",
+            target_photographer_name: "Jane Photographer",
+            image_urls: ["https://example.com/image.jpg"],
+            thumbnail_urls: ["https://example.com/thumb.jpg"],
+            image_url: "https://example.com/image.jpg",
+            thumbnail_url: "https://example.com/thumb.jpg",
+            image_count: 3,
+            manager_notes: "Pay attention to the exposure settings here. The highlights are blown out which loses detail in the important areas.",
+            example_type: "improvement",
+            status: "published",
+            created_at: Date(),
+            updated_at: Date()
         ))
         .padding()
     }

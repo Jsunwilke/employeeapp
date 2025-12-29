@@ -1,7 +1,5 @@
 import SwiftUI
 import MapKit
-import FirebaseFirestore
-import Firebase
 
 struct AddSchoolView: View {
     // User input fields
@@ -184,43 +182,40 @@ struct AddSchoolView: View {
             errorMessage = "Please enter a school name."
             return
         }
-        
+
         guard !storedUserOrganizationID.isEmpty else {
             errorMessage = "No organization ID found. Please sign in again."
             return
         }
-        
+
         isSubmitting = true
         errorMessage = ""
-        
+
         // Create the coordinates string
         let coordinatesString = "\(pinLocation.latitude),\(pinLocation.longitude)"
-        
-        // Create the school data - now using the correct field structure
-        let schoolData: [String: Any] = [
-            "type": "school",
-            "value": schoolName,
-            "address": schoolAddress,         // Human-readable address in 'address' field
-            "schoolAddress": coordinatesString, // Coordinates in 'schoolAddress' field as requested
-            "organizationID": storedUserOrganizationID
-            // Timestamp field removed as requested
-        ]
-        
-        // Save to Firestore
-        let db = Firestore.firestore()
-        db.collection("schools").addDocument(data: schoolData) { error in
-            DispatchQueue.main.async {
-                isSubmitting = false
-                
-                if let error = error {
-                    errorMessage = "Error saving school: \(error.localizedDescription)"
-                } else {
+
+        Task {
+            do {
+                _ = try await SchoolService.shared.createSchool(
+                    organizationID: storedUserOrganizationID,
+                    name: schoolName,
+                    address: schoolAddress,
+                    coordinates: coordinatesString
+                )
+
+                await MainActor.run {
+                    isSubmitting = false
                     successMessage = "School added successfully!"
-                    
+
                     // Reset the form after a brief delay
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         presentationMode.wrappedValue.dismiss()
                     }
+                }
+            } catch {
+                await MainActor.run {
+                    isSubmitting = false
+                    errorMessage = "Error saving school: \(error.localizedDescription)"
                 }
             }
         }

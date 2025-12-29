@@ -1,13 +1,13 @@
 import SwiftUI
-import FirebaseFirestore
+import Supabase
 
 struct SchoolInfoListView: View {
-    @State private var schools: [SchoolItem] = []
+    @State private var schools: [School] = []
     @State private var mileageBySchool: [String: Double] = [:]
     @State private var errorMessage: String = ""
     @State private var showingAddSchool = false
     @State private var isLoading = false
-    
+
     // User's organization ID
     @AppStorage("userOrganizationID") var storedUserOrganizationID: String = ""
     
@@ -39,7 +39,7 @@ struct SchoolInfoListView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(school.name)
                                     .font(.headline)
-                                Text(school.address)
+                                Text(school.address ?? "")
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
                                 if let mileage = mileageBySchool[school.id] {
@@ -92,74 +92,65 @@ struct SchoolInfoListView: View {
             errorMessage = "No organization ID found. Please sign in again."
             return
         }
-        
+
         isLoading = true
         schools = []
         mileageBySchool = [:]
-        
-        let db = Firestore.firestore()
-        db.collection("schools")
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID) // Filter by organization ID
-            .getDocuments { snapshot, error in
-                DispatchQueue.main.async {
-                    isLoading = false
-                    
-                    if let error = error {
-                        errorMessage = error.localizedDescription
-                        return
+
+        Task {
+            do {
+                let loadedSchools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
+                await MainActor.run {
+                    self.schools = loadedSchools
+                    self.isLoading = false
+
+                    // Load mileage for each school
+                    for school in loadedSchools {
+                        loadMileage(for: school)
                     }
-                    
-                    guard let docs = snapshot?.documents else { return }
-                    
-                    if docs.isEmpty {
-                        // No schools found for this organization
-                        return
-                    }
-                    
-                    var temp: [SchoolItem] = []
-                    for doc in docs {
-                        let data = doc.data()
-                        if let value = data["value"] as? String,
-                           let address = data["schoolAddress"] as? String {
-                            let coordinates = data["coordinates"] as? String
-                            let school = SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates)
-                            temp.append(school)
-                            loadMileage(for: school)
-                        }
-                    }
-                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                    schools = temp
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isLoading = false
                 }
             }
+        }
     }
     
-    func loadMileage(for school: SchoolItem) {
+    // Load mileage using Supabase
+    func loadMileage(for school: School) {
         guard let seasonDates = currentSchoolSeasonDates() else { return }
         let seasonStart = seasonDates.start
         let seasonEnd = seasonDates.end
-        let db = Firestore.firestore()
-        
-        db.collection("dailyJobReports")
-            .whereField("schoolOrDestination", isEqualTo: school.name)
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID) // Filter by organization ID
-            .whereField("date", isGreaterThanOrEqualTo: seasonStart)
-            .whereField("date", isLessThanOrEqualTo: seasonEnd)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    print("Error loading mileage for \(school.name): \(error.localizedDescription)")
-                    return
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                struct MileageRecord: Decodable {
+                    let total_mileage: Double?
                 }
-                guard let docs = snapshot?.documents else { return }
-                var total: Double = 0.0
-                for doc in docs {
-                    let data = doc.data()
-                    let mileage = data["totalMileage"] as? Double ?? 0.0
-                    total += mileage
-                }
-                DispatchQueue.main.async {
+
+                let records: [MileageRecord] = try await supabase
+                    .from("daily_job_reports")
+                    .select("total_mileage")
+                    .eq("school_or_destination", value: school.name)
+                    .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                    .gte("date", value: seasonStart.ISO8601Format())
+                    .lte("date", value: seasonEnd.ISO8601Format())
+                    .execute()
+                    .value
+
+                let total = records.reduce(0.0) { $0 + ($1.total_mileage ?? 0.0) }
+
+                await MainActor.run {
                     mileageBySchool[school.id] = total
                 }
+            } catch {
+                print("Error loading mileage for \(school.name): \(error.localizedDescription)")
             }
+        }
     }
     
     func currentSchoolSeasonDates() -> (start: Date, end: Date)? {

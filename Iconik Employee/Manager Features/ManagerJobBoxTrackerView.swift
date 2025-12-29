@@ -1,6 +1,5 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 struct JobBoxWithEvent: Identifiable {
     let id: String
@@ -14,16 +13,16 @@ struct JobBoxWithEvent: Identifiable {
     
     // Computed property to determine if the job box is stalled
     var isStalled: Bool {
-        let threshold = JobBoxSettingsManager.shared.getStalledThreshold(for: jobBox.status)
+        let threshold = JobBoxSettingsManager.shared.getStalledThreshold(for: jobBox.jobBoxStatus)
         let thresholdDate = Date().addingTimeInterval(-threshold)
-        return jobBox.timestamp < thresholdDate && jobBox.status != .turnedIn
+        return jobBox.timestampDate < thresholdDate && jobBox.jobBoxStatus != .turnedIn
     }
-    
+
     // Time since last status change
     var timeSinceUpdate: String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        return formatter.localizedString(for: jobBox.timestamp, relativeTo: Date())
+        return formatter.localizedString(for: jobBox.timestampDate, relativeTo: Date())
     }
 }
 
@@ -68,6 +67,25 @@ enum JobBoxStatusFilter: String, CaseIterable {
 }
 
 class ManagerJobBoxViewModel: ObservableObject {
+    // Supabase model for job boxes (must be at class scope)
+    struct SupabaseJobBox: Decodable {
+        let id: String
+        let shift_uid: String?
+        let status: String?
+        let photographer: String?
+        let timestamp: Date?
+        let box_number: String?
+        let organization_id: String?
+        let school: String?
+        let school_id: String?
+        let user_id: String?
+        let jobbox_number: String?
+        let card_number: String?
+        let card_id: String?
+        let event_date: Date?
+        let scanned_by: String?
+    }
+
     @Published var allJobBoxes: [JobBoxWithEvent] = []
     @Published var selectedFilter: JobBoxFilter = .active
     @Published var selectedSort: JobBoxSort = .newestFirst
@@ -75,18 +93,18 @@ class ManagerJobBoxViewModel: ObservableObject {
     @Published var searchText: String = ""
     @Published var isLoading: Bool = false
     @Published var errorMessage: String = ""
-    
+
     @Published var selectedDate: Date = Date()
     @Published var showDatePicker: Bool = false
-    
+
     // Flag to indicate if we're searching by card number
     private var isSearchingByCardNumber: Bool = false
-    
+
     // Store organization ID
     private var organizationID: String = ""
-    
-    private var db = Firestore.firestore()
-    
+
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
+
     init() {
         // Don't load job boxes until organization ID is set
     }
@@ -106,97 +124,81 @@ class ManagerJobBoxViewModel: ObservableObject {
             isLoading = false
             return
         }
-        
+
         isLoading = true
         errorMessage = ""
-        
+
         // Check if we're searching by card number (numeric search)
         isSearchingByCardNumber = !searchText.isEmpty && searchText.rangeOfCharacter(from: .decimalDigits) != nil &&
             searchText.rangeOfCharacter(from: .letters) == nil
-        
+
         // Query all job boxes
         let calendar = Calendar.current
         let thirtyDaysAgo = calendar.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-        
-        var query: Query = db.collection("jobBoxes")
-            .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("timestamp", isGreaterThan: Timestamp(date: thirtyDaysAgo))
-        
-        // Get today's date bounds for the "today" filter
-        if selectedFilter == .today && !isSearchingByCardNumber {
-            let startOfDay = calendar.startOfDay(for: Date())
-            let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-            query = query.whereField("timestamp", isGreaterThanOrEqualTo: Timestamp(date: startOfDay))
-                .whereField("timestamp", isLessThan: Timestamp(date: endOfDay))
-        }
-        
-        query.getDocuments { [weak self] snapshot, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                DispatchQueue.main.async {
+
+        Task {
+            do {
+                var jobBoxes: [SupabaseJobBox]
+
+                // Build query based on filters
+                if selectedFilter == .today && !isSearchingByCardNumber {
+                    let startOfDay = calendar.startOfDay(for: Date())
+                    let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+
+                    jobBoxes = try await supabase
+                        .from("job_boxes")
+                        .select()
+                        .eq("organization_id", value: organizationID.lowercased())
+                        .gte("timestamp", value: startOfDay.ISO8601Format())
+                        .lt("timestamp", value: endOfDay.ISO8601Format())
+                        .execute()
+                        .value
+                } else {
+                    jobBoxes = try await supabase
+                        .from("job_boxes")
+                        .select()
+                        .eq("organization_id", value: organizationID.lowercased())
+                        .gte("timestamp", value: thirtyDaysAgo.ISO8601Format())
+                        .execute()
+                        .value
+                }
+
+                await self.processJobBoxRecords(jobBoxes)
+            } catch {
+                await MainActor.run {
                     self.isLoading = false
                     self.errorMessage = "Error loading job boxes: \(error.localizedDescription)"
                 }
-                return
             }
-            
-            guard let documents = snapshot?.documents else {
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                    self.allJobBoxes = []
-                }
-                return
-            }
-            
-            self.processJobBoxDocuments(documents)
         }
     }
-    
-    private func processJobBoxDocuments(_ documents: [QueryDocumentSnapshot]) {
+
+    private func processJobBoxRecords(_ records: [SupabaseJobBox]) async {
         // This will hold all job boxes
         var allBoxes: [JobBoxWithEvent] = []
-        
-        // Process each document
-        for document in documents {
-            let data = document.data()
-            let jobBox = JobBox(id: document.documentID, data: data)
-            
-            var schoolName = "Unknown School"
-            var jobboxNumber = ""
-            var cardNumber = ""
-            var date = jobBox.timestamp
-            let photographerName = jobBox.scannedBy
-            let position = "Unknown"
-            
-            // Extract fields from the document
-            
-            // Get school name
-            if let school = data["school"] as? String, !school.isEmpty {
-                schoolName = school
-            }
-            
-            // Get jobbox number
-            if let boxNum = data["jobboxNumber"] as? String, !boxNum.isEmpty {
-                jobboxNumber = boxNum
-            } else if let boxNum = data["boxNumber"] as? String, !boxNum.isEmpty {
-                jobboxNumber = boxNum
-            } else if let boxNum = data["jobbox"] as? String, !boxNum.isEmpty {
-                jobboxNumber = boxNum
-            }
-            
-            // Get card number
-            if let card = data["cardNumber"] as? String, !card.isEmpty {
-                cardNumber = card
-            } else if let card = data["cardId"] as? String, !card.isEmpty {
-                cardNumber = card
-            }
-            
-            // Get event date if available
-            if let eventDate = data["eventDate"] as? Timestamp {
-                date = eventDate.dateValue()
-            }
-            
+
+        // Process each record
+        for record in records {
+            // Create JobBox from Supabase record
+            let jobBox = JobBox(
+                id: record.id,
+                shift_uid: record.shift_uid ?? "",
+                status: record.status ?? "Unknown",
+                photographer: record.photographer ?? record.scanned_by ?? "Unknown",
+                timestamp: record.timestamp,
+                box_number: record.box_number ?? record.jobbox_number,
+                organization_id: record.organization_id ?? "",
+                school: record.school,
+                school_id: record.school_id,
+                user_id: record.user_id
+            )
+
+            let schoolName = record.school ?? "Unknown School"
+            let jobboxNumber = record.jobbox_number ?? record.box_number ?? ""
+            let cardNumber = record.card_number ?? record.card_id ?? ""
+            let date = record.event_date ?? jobBox.timestamp ?? Date()
+            let photographerName = record.scanned_by ?? record.photographer ?? "Unknown"
+
             // Create JobBoxWithEvent object
             let jobBoxWithEvent = JobBoxWithEvent(
                 id: jobBox.id,
@@ -204,70 +206,70 @@ class ManagerJobBoxViewModel: ObservableObject {
                 schoolName: schoolName,
                 date: date,
                 photographerName: photographerName,
-                position: position,
+                position: "Unknown",
                 jobboxNumber: jobboxNumber,
                 cardNumber: cardNumber
             )
-            
+
             // Add to the array
             allBoxes.append(jobBoxWithEvent)
         }
-        
-        DispatchQueue.main.async {
+
+        await MainActor.run {
             // First apply search filter to all boxes
             let filteredBoxes = self.filterJobBoxesBySearch(allBoxes)
-            
+
             // If we're searching for a specific card number, show all results for that card
             if self.isSearchingByCardNumber {
                 self.allJobBoxes = self.sortJobBoxes(filteredBoxes)
                 self.isLoading = false
                 return
             }
-            
+
             // Group by card number and get only the latest status for each
             let groupedBoxes = Dictionary(grouping: filteredBoxes) { box -> String in
                 // Group by card number, or use jobbox number as fallback
                 return !box.cardNumber.isEmpty ? box.cardNumber : box.jobboxNumber
             }
-            
+
             // For each group, get only the latest status
             var latestStatusBoxes: [JobBoxWithEvent] = []
-            
+
             for (_, boxes) in groupedBoxes {
                 // Sort by timestamp (newest first) and take only the first one
-                if let latestBox = boxes.sorted(by: { $0.jobBox.timestamp > $1.jobBox.timestamp }).first {
+                if let latestBox = boxes.sorted(by: { $0.jobBox.timestampDate > $1.jobBox.timestampDate }).first {
                     latestStatusBoxes.append(latestBox)
                 }
             }
-            
+
             // IMPORTANT: Apply status filter AFTER determining the latest status
             // This ensures we only see boxes currently at a specific status
             if self.selectedStatusFilter != .all {
                 if let status = self.selectedStatusFilter.correspondingStatus {
-                    latestStatusBoxes = latestStatusBoxes.filter { $0.jobBox.status == status }
+                    latestStatusBoxes = latestStatusBoxes.filter { $0.jobBox.jobBoxStatus == status }
                 }
             }
-            
+
             // Process the 'stalled' filter separately
             if self.selectedFilter == .stalled {
                 latestStatusBoxes = latestStatusBoxes.filter { $0.isStalled }
             }
-            
+
             // Apply active/completed filter after getting the latest status
             if self.selectedFilter == .active {
                 // For Active tab, filter out cards where most recent status is "turned in"
-                latestStatusBoxes = latestStatusBoxes.filter { $0.jobBox.status != .turnedIn }
+                latestStatusBoxes = latestStatusBoxes.filter { $0.jobBox.jobBoxStatus != .turnedIn }
             } else if self.selectedFilter == .completed {
                 // For Completed tab, only show cards where most recent status is "turned in"
-                latestStatusBoxes = latestStatusBoxes.filter { $0.jobBox.status == .turnedIn }
+                latestStatusBoxes = latestStatusBoxes.filter { $0.jobBox.jobBoxStatus == .turnedIn }
             }
-            
+
             // Apply sort
             self.allJobBoxes = self.sortJobBoxes(latestStatusBoxes)
             self.isLoading = false
         }
     }
-    
+
     // Filter job boxes based on search text
     func filterJobBoxesBySearch(_ jobBoxes: [JobBoxWithEvent]) -> [JobBoxWithEvent] {
         if searchText.isEmpty {
@@ -294,22 +296,22 @@ class ManagerJobBoxViewModel: ObservableObject {
     func sortJobBoxes(_ jobBoxes: [JobBoxWithEvent]) -> [JobBoxWithEvent] {
         switch selectedSort {
         case .newestFirst:
-            return jobBoxes.sorted { $0.jobBox.timestamp > $1.jobBox.timestamp }
-            
+            return jobBoxes.sorted { $0.jobBox.timestampDate > $1.jobBox.timestampDate }
+
         case .oldestFirst:
-            return jobBoxes.sorted { $0.jobBox.timestamp < $1.jobBox.timestamp }
-            
+            return jobBoxes.sorted { $0.jobBox.timestampDate < $1.jobBox.timestampDate }
+
         case .schoolName:
             return jobBoxes.sorted { $0.schoolName < $1.schoolName }
-            
+
         case .photographer:
             return jobBoxes.sorted { $0.photographerName < $1.photographerName }
-            
+
         case .jobboxNumber:
             return jobBoxes.sorted { $0.jobboxNumber < $1.jobboxNumber }
-            
+
         case .status:
-            return jobBoxes.sorted { statusPriority($0.jobBox.status) < statusPriority($1.jobBox.status) }
+            return jobBoxes.sorted { statusPriority($0.jobBox.jobBoxStatus) < statusPriority($1.jobBox.jobBoxStatus) }
         }
     }
     
@@ -328,35 +330,53 @@ class ManagerJobBoxViewModel: ObservableObject {
     
     // Manually update a job box status
     func updateJobBoxStatus(jobBox: JobBoxWithEvent, newStatus: JobBoxStatus) {
-        db.collection("jobBoxes").document(jobBox.id).updateData([
-            "status": newStatus.rawValue,
-            "timestamp": Timestamp(date: Date())
-        ]) { [weak self] error in
-            if let error = error {
-                DispatchQueue.main.async {
-                    self?.errorMessage = "Error updating job box: \(error.localizedDescription)"
+        Task {
+            do {
+                let updateData: [String: AnyJSON] = [
+                    "status": .string(newStatus.rawValue),
+                    "timestamp": .string(Date().ISO8601Format())
+                ]
+
+                try await supabase
+                    .from("job_boxes")
+                    .update(updateData)
+                    .eq("id", value: jobBox.id)
+                    .execute()
+
+                await MainActor.run {
+                    self.loadJobBoxes()
                 }
-            } else {
-                // Reload data on success
-                self?.loadJobBoxes()
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Error updating job box: \(error.localizedDescription)"
+                }
             }
         }
     }
-    
+
     // Flag a job box for attention
     func flagJobBox(jobBox: JobBoxWithEvent, note: String) {
-        db.collection("jobBoxes").document(jobBox.id).updateData([
-            "flagged": true,
-            "flagNote": note,
-            "flaggedAt": Timestamp(date: Date())
-        ]) { [weak self] error in
-            if let error = error {
-                DispatchQueue.main.async {
-                    self?.errorMessage = "Error flagging job box: \(error.localizedDescription)"
+        Task {
+            do {
+                let updateData: [String: AnyJSON] = [
+                    "flagged": .bool(true),
+                    "flag_note": .string(note),
+                    "flagged_at": .string(Date().ISO8601Format())
+                ]
+
+                try await supabase
+                    .from("job_boxes")
+                    .update(updateData)
+                    .eq("id", value: jobBox.id)
+                    .execute()
+
+                await MainActor.run {
+                    self.loadJobBoxes()
                 }
-            } else {
-                // Reload data on success
-                self?.loadJobBoxes()
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Error flagging job box: \(error.localizedDescription)"
+                }
             }
         }
     }
@@ -724,7 +744,7 @@ struct ManagerJobBoxTrackerView: View {
             
             // Bottom row with status
             HStack(spacing: 8) {
-                statusPillsView(for: jobBox.jobBox.status)
+                statusPillsView(for: jobBox.jobBox.jobBoxStatus)
                 
                 Spacer()
                 
@@ -748,8 +768,8 @@ struct ManagerJobBoxTrackerView: View {
         if jobBox.isStalled {
             return Color.orange.opacity(0.1)
         }
-        
-        let status = jobBox.jobBox.status
+
+        let status = jobBox.jobBox.jobBoxStatus
         if status == .packed { return Color.blue.opacity(0.05) }
         if status == .pickedUp { return Color.purple.opacity(0.05) }
         if status == .leftJob { return Color.orange.opacity(0.05) }
@@ -789,7 +809,7 @@ struct ManagerJobBoxTrackerView: View {
                 }
                 
                 Section(header: Text("Current Status")) {
-                    Text("Status: \(jobBox.jobBox.status.rawValue)")
+                    Text("Status: \(jobBox.jobBox.jobBoxStatus.rawValue)")
                     Text("Last Updated: \(jobBox.timeSinceUpdate)")
                 }
                 
@@ -804,7 +824,7 @@ struct ManagerJobBoxTrackerView: View {
                                 
                                 Spacer()
                                 
-                                if status == jobBox.jobBox.status {
+                                if status == jobBox.jobBox.jobBoxStatus {
                                     Image(systemName: "checkmark")
                                         .foregroundColor(.blue)
                                 }
@@ -835,7 +855,7 @@ struct ManagerJobBoxTrackerView: View {
                     Text("Job Box Number: \(jobBox.jobboxNumber)")
                     Text("Date: \(viewModel.formatDate(jobBox.date))")
                     Text("Photographer: \(jobBox.photographerName)")
-                    Text("Status: \(jobBox.jobBox.status.rawValue)")
+                    Text("Status: \(jobBox.jobBox.jobBoxStatus.rawValue)")
                 }
                 
                 Section(header: Text("Flag Note")) {

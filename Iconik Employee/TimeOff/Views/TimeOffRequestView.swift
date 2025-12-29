@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 
 struct TimeOffRequestView: View {
     @ObservedObject var timeOffService: TimeOffService
@@ -63,8 +62,8 @@ struct TimeOffRequestView: View {
             _isPartialDay = State(initialValue: request.isPartialDay)
             _startDate = State(initialValue: request.startDate)
             _endDate = State(initialValue: request.endDate)
-            _selectedReason = State(initialValue: request.reason)
-            _notes = State(initialValue: request.notes)
+            _selectedReason = State(initialValue: request.reasonEnum)
+            _notes = State(initialValue: request.notes ?? "")
             _isPaidTimeOff = State(initialValue: request.isPaidTimeOff)
             _ptoHoursRequested = State(initialValue: request.ptoHoursRequested ?? 0)
             
@@ -397,16 +396,17 @@ struct TimeOffRequestView: View {
     private func checkForConflicts() {
         let startTimeString = isPartialDay ? timeStringFormatter.string(from: startTime) : nil
         let endTimeString = isPartialDay ? timeStringFormatter.string(from: endTime) : nil
-        
-        timeOffService.checkForConflicts(
-            startDate: startDate,
-            endDate: endDate,
-            isPartialDay: isPartialDay,
-            startTime: startTimeString,
-            endTime: endTimeString,
-            excludeRequestId: editingRequest?.id
-        ) { foundConflicts in
-            DispatchQueue.main.async {
+
+        Task {
+            let foundConflicts = await timeOffService.checkForConflicts(
+                startDate: startDate,
+                endDate: endDate,
+                isPartialDay: isPartialDay,
+                startTime: startTimeString,
+                endTime: endTimeString,
+                excludeRequestId: editingRequest?.id
+            )
+            await MainActor.run {
                 self.conflicts = foundConflicts
             }
         }
@@ -415,20 +415,21 @@ struct TimeOffRequestView: View {
     // MARK: - PTO Methods
     
     private func loadPTOData() {
-        guard let userId = Auth.auth().currentUser?.uid,
+        guard let userId = UserManager.shared.getCurrentUserIDUnified(),
               let orgId = UserDefaults.standard.string(forKey: "userOrganizationID") else { return }
-        
-        // Load PTO balance
-        ptoService.getPTOBalance(userId: userId, organizationID: orgId) { balance in
-            DispatchQueue.main.async {
-                self.currentPTOBalance = balance
-            }
-        }
-        
-        // Load PTO settings
-        ptoService.getPTOSettings(organizationID: orgId) { settings in
-            DispatchQueue.main.async {
-                self.ptoSettings = settings
+
+        Task {
+            do {
+                // Load PTO balance
+                let balance = try await ptoService.getPTOBalance(userId: userId, organizationID: orgId)
+                let settings = try await ptoService.getPTOSettings(organizationID: orgId)
+
+                await MainActor.run {
+                    self.currentPTOBalance = balance
+                    self.ptoSettings = settings
+                }
+            } catch {
+                print("Error loading PTO data: \(error.localizedDescription)")
             }
         }
     }
@@ -460,58 +461,56 @@ struct TimeOffRequestView: View {
     
     private func submitRequest() {
         isSubmitting = true
-        
+
         let startTimeString = isPartialDay ? timeStringFormatter.string(from: startTime) : nil
         let endTimeString = isPartialDay ? timeStringFormatter.string(from: endTime) : nil
-        
-        if let editingRequest = editingRequest {
-            // Update existing request
-            timeOffService.updateTimeOffRequest(
-                requestId: editingRequest.id,
-                startDate: startDate,
-                endDate: endDate,
-                reason: selectedReason,
-                notes: notes,
-                isPartialDay: isPartialDay,
-                startTime: startTimeString,
-                endTime: endTimeString,
-                isPaidTimeOff: isPaidTimeOff,
-                ptoHoursRequested: isPaidTimeOff ? ptoHoursRequested : nil,
-                projectedPTOBalance: isPaidTimeOff ? projectedPTOBalance : nil
-            ) { success, error in
-                DispatchQueue.main.async {
-                    isSubmitting = false
-                    
-                    if success {
+
+        Task {
+            do {
+                if let editingRequest = editingRequest {
+                    // Update existing request
+                    try await timeOffService.updateTimeOffRequest(
+                        requestId: editingRequest.id,
+                        startDate: startDate,
+                        endDate: endDate,
+                        reason: selectedReason,
+                        notes: notes,
+                        isPartialDay: isPartialDay,
+                        startTime: startTimeString,
+                        endTime: endTimeString,
+                        isPaidTimeOff: isPaidTimeOff,
+                        ptoHoursRequested: isPaidTimeOff ? ptoHoursRequested : nil,
+                        projectedPTOBalance: isPaidTimeOff ? projectedPTOBalance : nil
+                    )
+                    await MainActor.run {
+                        isSubmitting = false
                         alertMessage = "Time off request updated successfully!"
-                    } else {
-                        alertMessage = error ?? "Failed to update request"
+                        showingAlert = true
                     }
-                    showingAlert = true
-                }
-            }
-        } else {
-            // Create new request
-            timeOffService.createTimeOffRequest(
-                startDate: startDate,
-                endDate: endDate,
-                reason: selectedReason,
-                notes: notes,
-                isPartialDay: isPartialDay,
-                startTime: startTimeString,
-                endTime: endTimeString,
-                isPaidTimeOff: isPaidTimeOff,
-                ptoHoursRequested: isPaidTimeOff ? ptoHoursRequested : nil,
-                projectedPTOBalance: isPaidTimeOff ? projectedPTOBalance : nil
-            ) { success, error in
-                DispatchQueue.main.async {
-                    isSubmitting = false
-                    
-                    if success {
+                } else {
+                    // Create new request
+                    try await timeOffService.createTimeOffRequest(
+                        startDate: startDate,
+                        endDate: endDate,
+                        reason: selectedReason,
+                        notes: notes,
+                        isPartialDay: isPartialDay,
+                        startTime: startTimeString,
+                        endTime: endTimeString,
+                        isPaidTimeOff: isPaidTimeOff,
+                        ptoHoursRequested: isPaidTimeOff ? ptoHoursRequested : nil,
+                        projectedPTOBalance: isPaidTimeOff ? projectedPTOBalance : nil
+                    )
+                    await MainActor.run {
+                        isSubmitting = false
                         alertMessage = "Time off request submitted successfully!"
-                    } else {
-                        alertMessage = error ?? "Failed to submit request"
+                        showingAlert = true
                     }
+                }
+            } catch {
+                await MainActor.run {
+                    isSubmitting = false
+                    alertMessage = error.localizedDescription
                     showingAlert = true
                 }
             }

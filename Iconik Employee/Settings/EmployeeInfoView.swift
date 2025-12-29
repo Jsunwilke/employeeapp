@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 import MapKit
 
 struct EmployeeInfoView: View {
@@ -144,7 +143,9 @@ struct EmployeeInfoView: View {
         .onAppear {
             loadUserData()
             // Refresh profile when view appears
-            profileService.refreshCurrentUserProfile()
+            Task {
+                await profileService.refreshCurrentUserProfile()
+            }
         }
         .alert(isPresented: $showingSaveAlert) {
             Alert(
@@ -210,16 +211,16 @@ struct EmployeeInfoView: View {
             firstName = profile.firstName
             lastName = profile.lastName
             displayName = profile.displayName
-            email = profile.email
-            phone = profile.phone
+            email = profile.email ?? ""
+            phone = profile.phone ?? ""
             coordinates = profile.homeAddress  // homeAddress stores coordinates
-            fullAddress = profile.address  // address stores the full formatted address
-            city = profile.city
-            state = profile.state
+            fullAddress = profile.address ?? ""  // address stores the full formatted address
+            city = profile.city ?? ""
+            state = profile.state ?? ""
             zipCode = profile.zipCode
-            bio = profile.bio
-            position = profile.position
-            
+            bio = profile.bio ?? ""
+            position = profile.position ?? ""
+
             // Show map if we have coordinates
             showMap = isValidCoordinates(coordinates)
         } else {
@@ -243,7 +244,7 @@ struct EmployeeInfoView: View {
     }
     
     private func saveChanges() {
-        guard let _ = Auth.auth().currentUser?.uid else {
+        guard let _ = UserManager.shared.getCurrentUserIDUnified() else {
             saveAlertMessage = "No authenticated user found"
             showingSaveAlert = true
             return

@@ -106,6 +106,8 @@ struct SessionSelectionView: View {
     
     private var clockInButton: some View {
         Button(action: {
+            print("🟢 [SessionSelectionView] Clock In button tapped!")
+            print("🟢 [SessionSelectionView] selectedSession: \(selectedSession?.id ?? "nil")")
             onClockIn(selectedSession?.id, notes.isEmpty ? nil : notes)
         }) {
             HStack {
@@ -126,16 +128,24 @@ struct SessionSelectionView: View {
     // MARK: - Functions
     
     private func loadTodaysSessions() {
-        timeTrackingService.getTodayAssignedSessions { sessions in
-            DispatchQueue.main.async {
-                self.availableSessions = sessions.sorted { session1, session2 in
-                    guard let start1 = session1.startDate,
-                          let start2 = session2.startDate else {
-                        return false
+        Task {
+            do {
+                let sessions = try await timeTrackingService.getTodayAssignedSessions()
+
+                await MainActor.run {
+                    self.availableSessions = sessions.sorted { session1, session2 in
+                        guard let start1 = session1.startDate,
+                              let start2 = session2.startDate else {
+                            return false
+                        }
+                        return start1 < start2
                     }
-                    return start1 < start2
+                    self.isLoading = false
                 }
-                self.isLoading = false
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                }
             }
         }
     }

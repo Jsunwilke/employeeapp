@@ -1,7 +1,4 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
-import FirebaseStorage
 
 struct PhotoshootNotesView: View {
     // Store an array of photoshoot notes as JSON in AppStorage.
@@ -9,7 +6,7 @@ struct PhotoshootNotesView: View {
     @State private var notes: [PhotoshootNote] = []
     @State private var selectedNote: PhotoshootNote? = nil
     
-    // School options loaded from Firestore
+    // School options loaded from Supabase
     @State private var schoolOptions: [SchoolItem] = []
     @State private var errorMessage: String = ""
     @State private var successMessage: String = ""
@@ -19,7 +16,6 @@ struct PhotoshootNotesView: View {
     @State private var todaySessions: [Session] = []
     @State private var isLoadingSchedule: Bool = false
     @State private var scheduleError: String = ""
-    @State private var scheduleListener: ListenerRegistration?
     @State private var showSchoolSelectionDialog = false
     @State private var pendingNote: PhotoshootNote? = nil
     
@@ -33,7 +29,7 @@ struct PhotoshootNotesView: View {
     @State private var tempImage: UIImage? = nil
     @State private var isUploadingImage = false
     
-    // Session service for Firestore operations
+    // Session service for Supabase operations
     private let sessionService = SessionService.shared
 
     // A simple date/time formatter for the list display.
@@ -373,8 +369,7 @@ struct PhotoshootNotesView: View {
             loadScheduleForToday()
         }
         .onDisappear {
-            // Clean up real-time listener
-            scheduleListener?.remove()
+            // SessionService handles its own cleanup
         }
         .confirmationDialog(
             "Select School for Note",
@@ -482,95 +477,71 @@ struct PhotoshootNotesView: View {
             errorMessage = "Could not compress image"
             return
         }
-        
+
+        // Get organization ID
+        let orgID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        guard !orgID.isEmpty else {
+            errorMessage = "Cannot upload photo: no organization ID found"
+            return
+        }
+
         isUploadingImage = true
-        
-        // Get organization ID to comply with updated security rules
-        UserManager.shared.getCurrentUserOrganizationID { organizationID in
-            guard let orgID = organizationID else {
-                DispatchQueue.main.async {
+
+        Task {
+            let supabase = SupabaseManager.shared.client
+
+            // Create unique file path: photoshoot-notes/orgId/noteId/photoId.jpg
+            let fileName = "photoshoot-notes/\(orgID)/\(note.id.uuidString)/\(UUID().uuidString).jpg"
+            print("📸 Uploading photo to path: \(fileName)")
+
+            do {
+                // Upload to Supabase Storage bucket "daily-reports" (shared with DailyJobReportView)
+                _ = try await supabase.storage
+                    .from("daily-reports")
+                    .upload(path: fileName, file: imageData)
+
+                print("📸 Upload complete, getting signed URL...")
+
+                // Get a signed URL for the uploaded file (valid for 1 year)
+                let signedURL = try await supabase.storage
+                    .from("daily-reports")
+                    .createSignedURL(path: fileName, expiresIn: 31536000) // 1 year in seconds
+
+                print("✅ Photo uploaded successfully: \(signedURL.absoluteString.prefix(80))...")
+
+                await MainActor.run {
                     self.isUploadingImage = false
-                    self.errorMessage = "Cannot upload photo: no organization ID found"
-                }
-                return
-            }
-            
-            // Debug: Log user information
-            if let currentUser = Auth.auth().currentUser {
-                print("🔍 Upload Debug - User ID: \(currentUser.uid)")
-                print("🔍 Upload Debug - Organization ID: \(orgID)")
-                
-                // Verify user document in Firestore
-                let db = Firestore.firestore()
-                db.collection("users").document(currentUser.uid).getDocument { document, error in
-                    if let document = document, document.exists {
-                        let data = document.data() ?? [:]
-                        print("🔍 Upload Debug - User role: \(data["role"] ?? "nil")")
-                        print("🔍 Upload Debug - User organizationID: \(data["organizationID"] ?? "nil")")
-                    } else {
-                        print("🔍 Upload Debug - User document not found or error: \(error?.localizedDescription ?? "unknown")")
-                    }
-                }
-            }
-            
-            let storageRef = Storage.storage().reference()
-            
-            // Updated path to include organization ID
-            let photoPath = "photoshootNotes/\(orgID)/\(note.id.uuidString)/\(UUID().uuidString).jpg"
-            let photoRef = storageRef.child(photoPath)
-            
-            // Set metadata with content type
-            let metadata = StorageMetadata()
-            metadata.contentType = "image/jpeg"
-            
-            photoRef.putData(imageData, metadata: metadata) { metadata, error in
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self.isUploadingImage = false
-                        self.errorMessage = "Error uploading photo: \(error.localizedDescription)"
-                        print("Firebase storage error: \(error)")
-                    }
-                    return
-                }
-                
-                photoRef.downloadURL { url, error in
-                    DispatchQueue.main.async {
-                        self.isUploadingImage = false
-                        
-                        if let error = error {
-                            self.errorMessage = "Error getting download URL: \(error.localizedDescription)"
-                            return
-                        }
-                        
-                        guard let downloadURL = url else {
-                            self.errorMessage = "Failed to get download URL"
-                            return
-                        }
-                        
-                        // Update the note with the new photo URL
-                        if let index = self.notes.firstIndex(where: { $0.id == note.id }) {
-                            var updatedNote = self.notes[index]
-                            updatedNote.photoURLs.append(downloadURL.absoluteString)
-                            self.notes[index] = updatedNote
-                            self.selectedNote = updatedNote
-                            self.saveNotes()
-                            self.successMessage = "Photo added successfully"
-                            
-                            // Clear success message after delay
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                self.successMessage = ""
-                            }
+
+                    // Update the note with the new photo URL
+                    if let index = self.notes.firstIndex(where: { $0.id == note.id }) {
+                        var updatedNote = self.notes[index]
+                        updatedNote.photoURLs.append(signedURL.absoluteString)
+                        self.notes[index] = updatedNote
+                        self.selectedNote = updatedNote
+                        self.saveNotes()
+                        self.successMessage = "Photo added successfully"
+
+                        // Clear success message after delay
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            self.successMessage = ""
                         }
                     }
+                }
+
+            } catch {
+                print("❌ Supabase Storage upload failed: \(error.localizedDescription)")
+                await MainActor.run {
+                    self.isUploadingImage = false
+                    self.errorMessage = "Error uploading photo: \(error.localizedDescription)"
                 }
             }
         }
     }
     
     private func deletePhoto(urlString: String, from note: PhotoshootNote) {
-        // First try to delete from Firebase Storage
+        // Try to delete from Supabase Storage
         deletePhotoFromStorage(urlString: urlString)
-        
+
         // Remove URL from note
         if let index = notes.firstIndex(where: { $0.id == note.id }) {
             var updatedNote = notes[index]
@@ -579,27 +550,46 @@ struct PhotoshootNotesView: View {
             selectedNote = updatedNote
             saveNotes()
             successMessage = "Photo removed"
-            
+
             // Clear success message after delay
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 successMessage = ""
             }
         }
     }
-    
+
     private func deletePhotoFromStorage(urlString: String) {
-        if let url = URL(string: urlString),
-           url.pathComponents.count > 1 {
-            let storage = Storage.storage()
-            // Create a reference directly from the URL string
-            let storageRef = storage.reference(forURL: urlString)
-            
-            storageRef.delete { error in
-                if let error = error {
-                    print("Error deleting photo from storage: \(error.localizedDescription)")
-                } else {
-                    print("Photo successfully deleted from storage")
-                }
+        // Check if this is a Supabase Storage URL
+        guard urlString.contains("supabase") else {
+            // Old URL - can't delete, just log
+            print("⚠️ Cannot delete legacy photo: \(urlString.prefix(50))...")
+            return
+        }
+
+        // Extract path from Supabase signed URL
+        // URL format: https://xxx.supabase.co/storage/v1/object/sign/daily-reports/photoshoot-notes/orgId/noteId/photoId.jpg?token=xxx
+        guard let url = URL(string: urlString),
+              let pathIndex = url.pathComponents.firstIndex(of: "daily-reports"),
+              pathIndex + 1 < url.pathComponents.count else {
+            print("❌ Could not extract path from Supabase URL")
+            return
+        }
+
+        // Build the path after the bucket name (includes photoshoot-notes/ prefix)
+        let pathComponents = url.pathComponents[(pathIndex + 1)...]
+        let filePath = pathComponents.joined(separator: "/")
+
+        print("🗑️ Deleting photo from Supabase Storage: \(filePath)")
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+                try await supabase.storage
+                    .from("daily-reports")
+                    .remove(paths: [filePath])
+                print("✅ Photo successfully deleted from Supabase Storage")
+            } catch {
+                print("❌ Error deleting photo from storage: \(error.localizedDescription)")
             }
         }
     }
@@ -624,42 +614,40 @@ struct PhotoshootNotesView: View {
     }
     
     private func loadSchoolOptions() {
-        let db = Firestore.firestore()
-        
-        // Get organization ID to comply with security rules
-        UserManager.shared.getCurrentUserOrganizationID { organizationID in
-            guard let orgID = organizationID else {
-                print("🔐 Cannot load schools: no organization ID found")
-                return
-            }
-            
-            db.collection("schools")
-                .whereField("organizationID", isEqualTo: orgID)
-                .whereField("type", isEqualTo: "school")
-                .getDocuments { snapshot, error in
-                    if let error = error {
-                        self.errorMessage = error.localizedDescription
-                        return
-                    }
-                    guard let docs = snapshot?.documents else { return }
-                    var temp: [SchoolItem] = []
-                    for doc in docs {
-                        let data = doc.data()
-                        if let value = data["value"] as? String,
-                           let address = data["schoolAddress"] as? String {
-                            let coordinates = data["coordinates"] as? String
-                            let item = SchoolItem(id: doc.documentID, name: value, address: address, coordinates: coordinates)
-                            temp.append(item)
-                        }
-                    }
-                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                    self.schoolOptions = temp
-                    
+        // Get organization ID
+        let orgID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        guard !orgID.isEmpty else {
+            print("🔐 Cannot load schools: no organization ID found")
+            return
+        }
+
+        Task {
+            do {
+                let schools = try await SchoolService.shared.getSchools(organizationID: orgID)
+
+                // Convert School to SchoolItem for the picker
+                let items = schools.map { school in
+                    SchoolItem(
+                        id: school.id,
+                        name: school.name,
+                        address: school.address ?? "",
+                        coordinates: school.coordinates
+                    )
+                }
+
+                await MainActor.run {
+                    self.schoolOptions = items
+
                     // Try to set school from schedule when we have options loaded
                     if let note = self.selectedNote, note.school.isEmpty {
                         self.setSchoolFromSchedule(for: note)
                     }
                 }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Error loading schools: \(error.localizedDescription)"
+                }
+            }
         }
     }
     
@@ -669,10 +657,7 @@ struct PhotoshootNotesView: View {
         isLoadingSchedule = true
         scheduleError = ""
         todaySessions = []
-        
-        // Remove any existing listener
-        scheduleListener?.remove()
-        
+
         // Create date range for today
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date())
@@ -684,22 +669,35 @@ struct PhotoshootNotesView: View {
             self.isLoadingSchedule = false
             return
         }
-        
-        // Load sessions from Firestore with real-time updates
-        scheduleListener = sessionService.listenForSessions { sessions in
+
+        // Get current user email for fallback matching
+        let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail")
+
+        let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        guard !organizationID.isEmpty else {
+            print("❌ Cannot load sessions: no organization ID")
+            self.isLoadingSchedule = false
+            return
+        }
+
+        // Load sessions from Supabase with real-time updates
+        sessionService.startListeningToSessions(
+            organizationID: organizationID,
+            includeUnpublished: false  // Regular users see only published
+        ) { sessions in
             DispatchQueue.main.async {
-                
+
                 // Filter sessions for today where current user is assigned
                 let sessionsForToday = sessions.filter { session in
                     guard let sessionDate = session.startDate else { return false }
                     let isToday = sessionDate >= startOfDay && sessionDate < endOfDay
-                    let isUserAssigned = session.isUserAssigned(userID: currentUserID)
+                    let isUserAssigned = session.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail)
                     return isToday && isUserAssigned
                 }
-                
+
                 self.todaySessions = sessionsForToday
                 self.isLoadingSchedule = false
-                
+
                 // Try to set school for selected note based on today's schedule
                 if let note = self.selectedNote, note.school.isEmpty {
                     self.setSchoolFromSchedule(for: note)

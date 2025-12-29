@@ -3,7 +3,7 @@
 //  Iconik Employee
 //
 //  Local-first data repository for sports shoots
-//  All UI operations use this repository - no direct Firestore calls
+//  All UI operations use this repository for offline-first behavior
 //
 
 import Foundation
@@ -297,7 +297,7 @@ class LocalSportsShootRepository {
 
     // MARK: - Sync Tracking
 
-    /// Mark a shoot as synced with Firestore
+    /// Mark a shoot as synced with server
     func markAsSynced(shootId: String) {
         let fetchRequest: NSFetchRequest<CachedShoot> = CachedShoot.fetchRequest()
         fetchRequest.predicate = NSPredicate(format: "id == %@", shootId)

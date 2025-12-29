@@ -132,19 +132,18 @@ struct AllFeaturesView: View {
             ToolbarItem(placement: .navigationBarLeading) {
                 // Clock In/Out Button
                 Button(action: {
-                    if timeTrackingService.isClockIn {
-                        timeTrackingService.clockOut { success, error in
-                            if !success {
-                                print("Clock out error: \(error ?? "Unknown")")
-                            }
-                        }
-                    } else {
-                        timeTrackingService.clockIn { success, error in
-                            if !success {
-                                print("Clock in error: \(error ?? "Unknown")")
+                    Task {
+                        do {
+                            if timeTrackingService.isClockIn {
+                                try await timeTrackingService.clockOut()
                             } else {
-                                startTimerIfNeeded()
+                                try await timeTrackingService.clockIn()
+                                await MainActor.run {
+                                    startTimerIfNeeded()
+                                }
                             }
+                        } catch {
+                            print("Clock in/out error: \(error.localizedDescription)")
                         }
                     }
                 }) {
@@ -190,8 +189,8 @@ struct AllFeaturesView: View {
             }
         }
         .environment(\.editMode, $localEditMode)
-        .onAppear {
-            timeTrackingService.refreshUserAndStatus()
+        .task {
+            await timeTrackingService.refreshUserAndStatus()
             startTimerIfNeeded()
         }
         .onDisappear {

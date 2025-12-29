@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 
 struct CreateSessionView: View {
     @Environment(\.dismiss) var dismiss
@@ -44,16 +43,15 @@ struct CreateSessionView: View {
                             formData: $formData,
                             schools: schoolService.schools,
                             teamMembers: teamService.teamMembers,
-                            sessionTypes: organizationService.getOrganizationSessionTypes(
-                                organization: Organization(
-                                    id: organizationID,
-                                    name: "",
-                                    sessionTypes: organizationService.sessionTypes.map { SessionType(id: $0.id, name: $0.name, color: $0.color, order: 0) },
-                                    sessionOrderColors: nil,
-                                    enableSessionPublishing: nil,
-                                    payPeriodSettings: nil
-                                )
-                            ),
+                            sessionTypes: {
+                                // Convert SessionTypeDefinition array to SessionType array with proper ordering
+                                var types = organizationService.sessionTypes.map { SessionType(id: $0.id, name: $0.name, color: $0.color, order: 0) }
+                                // Ensure "Other" is available
+                                if !types.contains(where: { $0.id == "other" }) {
+                                    types.append(SessionType(id: "other", name: "Other", color: "#000000", order: 9999))
+                                }
+                                return types
+                            }(),
                             isEditing: false
                         )
                         .disabled(isLoading)
@@ -124,20 +122,29 @@ struct CreateSessionView: View {
             return
         }
         
-        guard let currentUser = Auth.auth().currentUser else {
+        guard let currentUserId = UserManager.shared.getCurrentUserIDUnified() else {
             errorMessage = "User not authenticated"
             showError = true
             return
         }
-        
+
         isLoading = true
-        
+
         Task {
             do {
+                // Get user info from UserDefaults
+                let firstName = UserDefaults.standard.string(forKey: "userFirstName") ?? ""
+                let lastName = UserDefaults.standard.string(forKey: "userLastName") ?? ""
+                let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+                let currentUserName = fullName.isEmpty ? "Unknown User" : fullName
+                let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail") ?? ""
+
                 let sessionId = try await SessionService.shared.createSession(
                     organizationID: organizationID,
                     formData: formData,
-                    currentUser: currentUser,
+                    currentUserID: currentUserId,
+                    currentUserName: currentUserName,
+                    currentUserEmail: currentUserEmail,
                     teamMembers: teamService.teamMembers,
                     schools: schoolService.schools
                 )

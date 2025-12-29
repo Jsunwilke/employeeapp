@@ -3,186 +3,139 @@
 //  Iconik Employee
 //
 //  Service layer for Task Management System
-//  Handles all Firestore operations for tasks
+//  Handles all Supabase operations for tasks
 //
 
 import Foundation
-import FirebaseFirestore
+import Supabase
 import Combine
 
+@MainActor
 class TaskService: ObservableObject {
     static let shared = TaskService()
 
-    private let db = Firestore.firestore()
-    private let tasksCollection = "tasks"
+    private let supabase = SupabaseManager.shared.client
+    private let tasksTable = "tasks"
 
     @Published var tasks: [TaskItem] = []
     @Published var isLoading = false
     @Published var error: Error?
 
-    private var listeners: [String: ListenerRegistration] = [:]
+    private var channels: [String: RealtimeChannelV2] = [:]
 
     private init() {}
 
     // MARK: - Create Task
 
-    /// Create a new task in Firestore
-    func createTask(_ task: TaskItem, completion: @escaping (Result<TaskItem, Error>) -> Void) {
+    /// Create a new task in Supabase
+    func createTask(_ task: TaskItem) async throws -> TaskItem {
         var taskToCreate = task
 
         // Calculate order for new task (append to end of status column)
-        fetchTasks(organizationID: task.organizationID, status: task.status) { [weak self] (result: Result<[TaskItem], Error>) in
-            guard let self = self else { return }
+        let existingTasks = try await fetchTasks(organizationID: task.organizationID, status: task.status)
+        let maxOrder = existingTasks.map { $0.order }.max() ?? -1
+        taskToCreate.order = maxOrder + 1
 
-            switch result {
-            case .success(let existingTasks):
-                let maxOrder = existingTasks.map { $0.order }.max() ?? -1
-                taskToCreate.order = maxOrder + 1
+        // Set timestamps
+        taskToCreate.createdAt = Date()
+        taskToCreate.updatedAt = Date()
 
-                // Set timestamps
-                taskToCreate.createdAt = Date()
-                taskToCreate.updatedAt = Date()
-
-                // Auto-watch creator
-                if !taskToCreate.watchers.contains(taskToCreate.createdBy) {
-                    taskToCreate.watchers.append(taskToCreate.createdBy)
-                }
-
-                // Create document in Firestore
-                let docRef = self.db.collection(self.tasksCollection).document(taskToCreate.id)
-                docRef.setData(taskToCreate.toFirestoreData()) { error in
-                    if let error = error {
-                        completion(.failure(error))
-                    } else {
-                        // Add to local state
-                        self.tasks.append(taskToCreate)
-                        completion(.success(taskToCreate))
-
-                        // TODO: Log activity (TASK_CREATED)
-                        // TODO: Send notifications to assignees
-                    }
-                }
-
-            case .failure(let error):
-                completion(.failure(error))
-            }
+        // Auto-watch creator
+        if !taskToCreate.watchers.contains(taskToCreate.createdBy) {
+            taskToCreate.watchers.append(taskToCreate.createdBy)
         }
+
+        // Insert into Supabase
+        try await supabase
+            .from(tasksTable)
+            .insert(taskToCreate)
+            .execute()
+
+        // Add to local state
+        tasks.append(taskToCreate)
+
+        // TODO: Log activity (TASK_CREATED)
+        // TODO: Send notifications to assignees
+
+        return taskToCreate
     }
 
     // MARK: - Read Tasks
 
     /// Fetch a single task by ID
-    func getTask(id: String, completion: @escaping (Result<TaskItem, Error>) -> Void) {
-        db.collection(tasksCollection).document(id).getDocument { snapshot, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
+    func getTask(id: String) async throws -> TaskItem {
+        let tasks: [TaskItem] = try await supabase
+            .from(tasksTable)
+            .select()
+            .eq("id", value: id)
+            .limit(1)
+            .execute()
+            .value
 
-            guard let snapshot = snapshot, snapshot.exists else {
-                completion(.failure(NSError(domain: "TaskService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Task not found"])))
-                return
-            }
-
-            if let task = TaskItem(from: snapshot) {
-                completion(.success(task))
-            } else {
-                completion(.failure(NSError(domain: "TaskService", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to parse task"])))
-            }
+        guard let task = tasks.first else {
+            throw NSError(domain: "TaskService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Task not found"])
         }
+
+        return task
     }
 
     /// Fetch tasks for an organization
-    func fetchTasks(organizationID: String, completion: @escaping (Result<[TaskItem], Error>) -> Void) {
+    func fetchTasks(organizationID: String) async throws -> [TaskItem] {
         isLoading = true
+        defer { isLoading = false }
 
-        db.collection(tasksCollection)
-            .whereField("organizationID", isEqualTo: organizationID)
-            .order(by: "updatedAt", descending: true)
-            .getDocuments { [weak self] snapshot, error in
-                self?.isLoading = false
+        let fetchedTasks: [TaskItem] = try await supabase
+            .from(tasksTable)
+            .select()
+            .eq("organization_id", value: organizationID)
+            .order("updated_at", ascending: false)
+            .execute()
+            .value
 
-                if let error = error {
-                    self?.error = error
-                    completion(.failure(error))
-                    return
-                }
-
-                guard let documents = snapshot?.documents else {
-                    completion(.success([]))
-                    return
-                }
-
-                let tasks = documents.compactMap { TaskItem(from: $0) }
-                self?.tasks = tasks
-                completion(.success(tasks))
-            }
+        tasks = fetchedTasks
+        return fetchedTasks
     }
 
     /// Fetch tasks for an organization with specific status
-    func fetchTasks(organizationID: String, status: TaskStatus, completion: @escaping (Result<[TaskItem], Error>) -> Void) {
-        db.collection(tasksCollection)
-            .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("status", isEqualTo: status.rawValue)
-            .order(by: "order", descending: false)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    completion(.failure(error))
-                    return
-                }
+    func fetchTasks(organizationID: String, status: TaskStatus) async throws -> [TaskItem] {
+        let fetchedTasks: [TaskItem] = try await supabase
+            .from(tasksTable)
+            .select()
+            .eq("organization_id", value: organizationID)
+            .eq("status", value: status.rawValue)
+            .order("order", ascending: true)
+            .execute()
+            .value
 
-                guard let documents = snapshot?.documents else {
-                    completion(.success([]))
-                    return
-                }
-
-                let tasks = documents.compactMap { TaskItem(from: $0) }
-                completion(.success(tasks))
-            }
+        return fetchedTasks
     }
 
     /// Fetch tasks assigned to a specific user
-    func fetchTasksAssignedTo(userId: String, organizationID: String, completion: @escaping (Result<[TaskItem], Error>) -> Void) {
-        db.collection(tasksCollection)
-            .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("assignedTo", arrayContains: userId)
-            .order(by: "updatedAt", descending: true)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    completion(.failure(error))
-                    return
-                }
+    func fetchTasksAssignedTo(userId: String, organizationID: String) async throws -> [TaskItem] {
+        let fetchedTasks: [TaskItem] = try await supabase
+            .from(tasksTable)
+            .select()
+            .eq("organization_id", value: organizationID)
+            .contains("assigned_to", value: [userId])
+            .order("updated_at", ascending: false)
+            .execute()
+            .value
 
-                guard let documents = snapshot?.documents else {
-                    completion(.success([]))
-                    return
-                }
-
-                let tasks = documents.compactMap { TaskItem(from: $0) }
-                completion(.success(tasks))
-            }
+        return fetchedTasks
     }
 
     /// Fetch tasks created by a specific user
-    func fetchTasksCreatedBy(userId: String, organizationID: String, completion: @escaping (Result<[TaskItem], Error>) -> Void) {
-        db.collection(tasksCollection)
-            .whereField("organizationID", isEqualTo: organizationID)
-            .whereField("createdBy", isEqualTo: userId)
-            .order(by: "updatedAt", descending: true)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    completion(.failure(error))
-                    return
-                }
+    func fetchTasksCreatedBy(userId: String, organizationID: String) async throws -> [TaskItem] {
+        let fetchedTasks: [TaskItem] = try await supabase
+            .from(tasksTable)
+            .select()
+            .eq("organization_id", value: organizationID)
+            .eq("created_by", value: userId)
+            .order("updated_at", ascending: false)
+            .execute()
+            .value
 
-                guard let documents = snapshot?.documents else {
-                    completion(.success([]))
-                    return
-                }
-
-                let tasks = documents.compactMap { TaskItem(from: $0) }
-                completion(.success(tasks))
-            }
+        return fetchedTasks
     }
 
     // MARK: - Real-time Listener
@@ -192,290 +145,256 @@ class TaskService: ObservableObject {
         // Remove existing listener if any
         stopListening()
 
-        let listener = db.collection(tasksCollection)
-            .whereField("organizationID", isEqualTo: organizationID)
-            .order(by: "updatedAt", descending: true)
-            .addSnapshotListener { [weak self] snapshot, error in
-                if let error = error {
-                    print("❌ Task listener error: \(error.localizedDescription)")
+        let channelKey = "tasks-\(organizationID)"
+        let channel = supabase.channel(channelKey)
+
+        _ = channel.onPostgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: tasksTable,
+            filter: "organization_id=eq.\(organizationID)"
+        ) { [weak self] payload in
+            Task { @MainActor in
+                do {
+                    let fetchedTasks = try await self?.fetchTasks(organizationID: organizationID) ?? []
+                    self?.tasks = fetchedTasks
+                } catch {
                     self?.error = error
-                    return
                 }
-
-                guard let documents = snapshot?.documents else { return }
-
-                let tasks = documents.compactMap { TaskItem(from: $0) }
-                self?.tasks = tasks
             }
+        }
 
-        listeners["main"] = listener
+        Task {
+            await channel.subscribe()
+
+            // Initial fetch
+            do {
+                let fetchedTasks = try await fetchTasks(organizationID: organizationID)
+                tasks = fetchedTasks
+            } catch {
+                // Handle error silently or log if needed
+            }
+        }
+
+        channels["main"] = channel
     }
 
     /// Stop listening to real-time updates
     func stopListening() {
-        for (_, listener) in listeners {
-            listener.remove()
+        for (_, channel) in channels {
+            Task {
+                await channel.unsubscribe()
+            }
         }
-        listeners.removeAll()
+        channels.removeAll()
     }
 
     // MARK: - Update Task
 
     /// Update a task with partial changes
-    func updateTask(id: String, updates: [String: Any], completion: @escaping (Result<Void, Error>) -> Void) {
-        var finalUpdates = updates
-        finalUpdates["updatedAt"] = Timestamp(date: Date())
+    /// Note: For Supabase, we need to pass a properly typed Encodable struct for updates
+    /// Callers should use the full updateTask(_ task:) method instead
+    private func updateTaskFields(id: String, updates: [String: Any]) async throws {
+        // This is a temporary helper - most callers should be migrated to use updateTask(_ task:)
+        // For now, fetch the task, apply changes, and update
+        var task = try await getTask(id: id)
 
-        db.collection(tasksCollection).document(id).updateData(finalUpdates) { [weak self] error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
+        // Apply updates to task (this is a simplified approach)
+        // In production, you'd want proper field mapping
+        task.updatedAt = Date()
 
-            // Update local state
-            if let index = self?.tasks.firstIndex(where: { $0.id == id }) {
-                self?.getTask(id: id) { result in
-                    if case .success(let updatedTask) = result {
-                        self?.tasks[index] = updatedTask
-                    }
-                }
-            }
-
-            completion(.success(()))
-        }
+        try await updateTask(task)
     }
 
     /// Update entire task
-    func updateTask(_ task: TaskItem, completion: @escaping (Result<Void, Error>) -> Void) {
+    func updateTask(_ task: TaskItem) async throws {
         var updatedTask = task
         updatedTask.updatedAt = Date()
 
-        db.collection(tasksCollection).document(task.id).setData(updatedTask.toFirestoreData(), merge: true) { [weak self] error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
+        try await supabase
+            .from(tasksTable)
+            .update(updatedTask)
+            .eq("id", value: task.id)
+            .execute()
 
-            // Update local state
-            if let index = self?.tasks.firstIndex(where: { $0.id == task.id }) {
-                self?.tasks[index] = updatedTask
-            }
-
-            completion(.success(()))
+        // Update local state
+        if let index = tasks.firstIndex(where: { $0.id == task.id }) {
+            tasks[index] = updatedTask
         }
     }
 
     // MARK: - Complete/Reopen Task
 
     /// Mark task as completed
-    func completeTask(id: String, userId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        updateTask(id: id, updates: [
-            "status": TaskStatus.completed.rawValue,
-            "completedAt": Timestamp(date: Date()),
-            "completedBy": userId
-        ]) { result in
-            // TODO: Auto-stop time tracking
-            // TODO: Log activity (TASK_COMPLETED)
-            // TODO: Notify watchers
-            completion(result)
-        }
+    func completeTask(id: String, userId: String) async throws {
+        var task = try await getTask(id: id)
+        task.status = .completed
+        task.completedAt = Date()
+        task.completedBy = userId
+
+        try await updateTask(task)
+
+        // TODO: Auto-stop time tracking
+        // TODO: Log activity (TASK_COMPLETED)
+        // TODO: Notify watchers
     }
 
     /// Reopen a completed task
-    func reopenTask(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        updateTask(id: id, updates: [
-            "status": TaskStatus.todo.rawValue,
-            "completedAt": FieldValue.delete(),
-            "completedBy": FieldValue.delete()
-        ]) { result in
-            // TODO: Log activity (TASK_REOPENED)
-            completion(result)
-        }
+    func reopenTask(id: String) async throws {
+        var task = try await getTask(id: id)
+        task.status = .todo
+        task.completedAt = nil
+        task.completedBy = nil
+
+        try await updateTask(task)
+
+        // TODO: Log activity (TASK_REOPENED)
     }
 
     // MARK: - Delete Task
 
     /// Delete a task
-    func deleteTask(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    func deleteTask(id: String) async throws {
         // TODO: Check permissions before deleting
 
-        db.collection(tasksCollection).document(id).delete { [weak self] error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
+        try await supabase
+            .from(tasksTable)
+            .delete()
+            .eq("id", value: id)
+            .execute()
 
-            // Remove from local state
-            self?.tasks.removeAll { $0.id == id }
+        // Remove from local state
+        tasks.removeAll { $0.id == id }
 
-            // TODO: Delete comments subcollection
-            // TODO: Delete activity entries
-            // TODO: Delete attachments from storage
-            // TODO: Remove time entry references
-
-            completion(.success(()))
-        }
+        // TODO: Delete comments subcollection
+        // TODO: Delete activity entries
+        // TODO: Delete attachments from storage
+        // TODO: Remove time entry references
     }
 
     // MARK: - Subtasks
 
     /// Add a subtask to a task
-    func addSubtask(to taskId: String, title: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    func addSubtask(to taskId: String, title: String) async throws {
         let newSubtask = Subtask(id: UUID().uuidString, title: title)
-
-        getTask(id: taskId) { [weak self] (result: Result<TaskItem, Error>) in
-            switch result {
-            case .success(var task):
-                task.subtasks.append(newSubtask)
-                self?.updateTask(task, completion: completion)
-
-            case .failure(let error):
-                completion(.failure(error))
-            }
-        }
+        var task = try await getTask(id: taskId)
+        task.subtasks.append(newSubtask)
+        try await updateTask(task)
     }
 
     /// Toggle subtask completion
-    func toggleSubtask(taskId: String, subtaskId: String, userId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        getTask(id: taskId) { [weak self] (result: Result<TaskItem, Error>) in
-            switch result {
-            case .success(var task):
-                if let index = task.subtasks.firstIndex(where: { $0.id == subtaskId }) {
-                    task.subtasks[index].completed.toggle()
+    func toggleSubtask(taskId: String, subtaskId: String, userId: String) async throws {
+        var task = try await getTask(id: taskId)
 
-                    if task.subtasks[index].completed {
-                        task.subtasks[index].completedAt = Date()
-                        task.subtasks[index].completedBy = userId
-                        // TODO: Log activity (SUBTASK_COMPLETED)
-                    } else {
-                        task.subtasks[index].completedAt = nil
-                        task.subtasks[index].completedBy = nil
-                        // TODO: Log activity (SUBTASK_UNCOMPLETED)
-                    }
-
-                    self?.updateTask(task, completion: completion)
-                } else {
-                    completion(.failure(NSError(domain: "TaskService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Subtask not found"])))
-                }
-
-            case .failure(let error):
-                completion(.failure(error))
-            }
+        guard let index = task.subtasks.firstIndex(where: { $0.id == subtaskId }) else {
+            throw NSError(domain: "TaskService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Subtask not found"])
         }
+
+        task.subtasks[index].completed.toggle()
+
+        if task.subtasks[index].completed {
+            task.subtasks[index].completedAt = Date()
+            task.subtasks[index].completedBy = userId
+            // TODO: Log activity (SUBTASK_COMPLETED)
+        } else {
+            task.subtasks[index].completedAt = nil
+            task.subtasks[index].completedBy = nil
+            // TODO: Log activity (SUBTASK_UNCOMPLETED)
+        }
+
+        try await updateTask(task)
     }
 
     /// Delete a subtask
-    func deleteSubtask(taskId: String, subtaskId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        getTask(id: taskId) { [weak self] (result: Result<TaskItem, Error>) in
-            switch result {
-            case .success(var task):
-                task.subtasks.removeAll { $0.id == subtaskId }
-                self?.updateTask(task, completion: completion)
-
-            case .failure(let error):
-                completion(.failure(error))
-            }
-        }
+    func deleteSubtask(taskId: String, subtaskId: String) async throws {
+        var task = try await getTask(id: taskId)
+        task.subtasks.removeAll { $0.id == subtaskId }
+        try await updateTask(task)
     }
 
     // MARK: - Watchers
 
     /// Add a watcher to a task
-    func addWatcher(taskId: String, userId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        updateTask(id: taskId, updates: [
-            "watchers": FieldValue.arrayUnion([userId])
-        ], completion: completion)
+    func addWatcher(taskId: String, userId: String) async throws {
+        var task = try await getTask(id: taskId)
+        if !task.watchers.contains(userId) {
+            task.watchers.append(userId)
+            try await updateTask(task)
+        }
     }
 
     /// Remove a watcher from a task
-    func removeWatcher(taskId: String, userId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        updateTask(id: taskId, updates: [
-            "watchers": FieldValue.arrayRemove([userId])
-        ], completion: completion)
+    func removeWatcher(taskId: String, userId: String) async throws {
+        var task = try await getTask(id: taskId)
+        task.watchers.removeAll { $0 == userId }
+        try await updateTask(task)
     }
 
     /// Toggle watch status for current user
-    func toggleWatch(taskId: String, userId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        getTask(id: taskId) { [weak self] (result: Result<TaskItem, Error>) in
-            switch result {
-            case .success(let task):
-                if task.watchers.contains(userId) {
-                    self?.removeWatcher(taskId: taskId, userId: userId, completion: completion)
-                } else {
-                    self?.addWatcher(taskId: taskId, userId: userId, completion: completion)
-                }
-
-            case .failure(let error):
-                completion(.failure(error))
-            }
+    func toggleWatch(taskId: String, userId: String) async throws {
+        let task = try await getTask(id: taskId)
+        if task.watchers.contains(userId) {
+            try await removeWatcher(taskId: taskId, userId: userId)
+        } else {
+            try await addWatcher(taskId: taskId, userId: userId)
         }
     }
 
     // MARK: - Assignment
 
     /// Add assignee to task
-    func addAssignee(taskId: String, userId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        updateTask(id: taskId, updates: [
-            "assignedTo": FieldValue.arrayUnion([userId])
-        ]) { result in
-            // TODO: Auto-add to watchers
-            // TODO: Send notification (ASSIGNEE_ADDED)
-            // TODO: Log activity
-            completion(result)
+    func addAssignee(taskId: String, userId: String) async throws {
+        var task = try await getTask(id: taskId)
+        if !task.assignedTo.contains(userId) {
+            task.assignedTo.append(userId)
+            try await updateTask(task)
         }
+        // TODO: Auto-add to watchers
+        // TODO: Send notification (ASSIGNEE_ADDED)
+        // TODO: Log activity
     }
 
     /// Remove assignee from task
-    func removeAssignee(taskId: String, userId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        updateTask(id: taskId, updates: [
-            "assignedTo": FieldValue.arrayRemove([userId])
-        ]) { result in
-            // TODO: Send notification (ASSIGNEE_REMOVED)
-            // TODO: Log activity
-            completion(result)
-        }
+    func removeAssignee(taskId: String, userId: String) async throws {
+        var task = try await getTask(id: taskId)
+        task.assignedTo.removeAll { $0 == userId }
+        try await updateTask(task)
+        // TODO: Send notification (ASSIGNEE_REMOVED)
+        // TODO: Log activity
     }
 
     // MARK: - Reordering (Drag-and-Drop)
 
     /// Batch update task orders
-    func batchUpdateTaskOrders(_ updates: [(taskId: String, newOrder: Int)], completion: @escaping (Result<Void, Error>) -> Void) {
-        let batch = db.batch()
-
+    func batchUpdateTaskOrders(_ updates: [(taskId: String, newOrder: Int)]) async throws {
+        // Supabase doesn't have batch writes, so we update each task individually
+        // For better performance, we could use a stored procedure or parallel updates
         for update in updates {
-            let ref = db.collection(tasksCollection).document(update.taskId)
-            batch.updateData([
-                "order": update.newOrder,
-                "updatedAt": Timestamp(date: Date())
-            ], forDocument: ref)
-        }
+            var task = try await getTask(id: update.taskId)
+            task.order = update.newOrder
+            task.updatedAt = Date()
 
-        batch.commit { [weak self] error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
+            try await supabase
+                .from(tasksTable)
+                .update(task)
+                .eq("id", value: update.taskId)
+                .execute()
 
             // Update local state
-            for update in updates {
-                if let index = self?.tasks.firstIndex(where: { $0.id == update.taskId }) {
-                    self?.tasks[index].order = update.newOrder
-                }
+            if let index = tasks.firstIndex(where: { $0.id == update.taskId }) {
+                tasks[index].order = update.newOrder
             }
-
-            completion(.success(()))
         }
     }
 
     /// Reorder task within same status
-    func reorderTask(taskId: String, from sourceIndex: Int, to destinationIndex: Int, status: TaskStatus, completion: @escaping (Result<Void, Error>) -> Void) {
+    func reorderTask(taskId: String, from sourceIndex: Int, to destinationIndex: Int, status: TaskStatus) async throws {
         // Get all tasks with this status
         var statusTasks = tasks.filter { $0.status == status }
             .sorted { $0.order < $1.order }
 
         guard sourceIndex < statusTasks.count else {
-            completion(.failure(NSError(domain: "TaskService", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid source index"])))
-            return
+            throw NSError(domain: "TaskService", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid source index"])
         }
 
         // Remove task from source
@@ -490,24 +409,22 @@ class TaskService: ObservableObject {
             (taskId: task.id, newOrder: index)
         }
 
-        // Batch update Firestore
-        batchUpdateTaskOrders(updates, completion: completion)
+        // Batch update Supabase
+        try await batchUpdateTaskOrders(updates)
     }
 
     /// Move task to different status
-    func moveTask(taskId: String, to newStatus: TaskStatus, at index: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+    func moveTask(taskId: String, to newStatus: TaskStatus, at index: Int) async throws {
         // Update status first
-        updateTask(id: taskId, updates: [
-            "status": newStatus.rawValue
-        ]) { [weak self] result in
-            switch result {
-            case .success:
-                // Then reorder within new status
-                self?.reorderTask(taskId: taskId, from: 0, to: index, status: newStatus, completion: completion)
+        var task = try await getTask(id: taskId)
+        task.status = newStatus
+        try await updateTask(task)
 
-            case .failure(let error):
-                completion(.failure(error))
-            }
-        }
+        // Then reorder within new status
+        try await reorderTask(taskId: taskId, from: 0, to: index, status: newStatus)
     }
+
+    // MARK: - Debug Helper
+
+    /// Diagnostic method to debug why tasks aren't loading
 }

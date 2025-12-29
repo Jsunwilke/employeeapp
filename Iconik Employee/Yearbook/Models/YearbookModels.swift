@@ -1,31 +1,116 @@
 import Foundation
-import FirebaseFirestore
 
-// MARK: - Yearbook Shoot List Model
+// MARK: - Yearbook Shoot List Model (Supabase)
 struct YearbookShootList: Identifiable, Codable {
-    @DocumentID var id: String?
-    let organizationId: String
-    let schoolId: String
-    let schoolName: String
-    let schoolYear: String
-    let startDate: Date
-    let endDate: Date
-    let isActive: Bool
-    let copiedFromId: String?
-    var completedCount: Int
-    let totalCount: Int
+    let id: String
+    let organization_id: String
+    let school_id: String
+    let school_name: String
+    let school_year: String
+    let start_date: Date
+    let end_date: Date
+    let is_active: Bool
+    let copied_from_id: String?
+    var completed_count: Int
+    let total_count: Int
     var items: [YearbookItem]
-    let createdAt: Date
-    var updatedAt: Date
-    
+    let created_at: Date
+    var updated_at: Date
+
+    // Backward compatibility computed properties
+    var organizationId: String { organization_id }
+    var schoolId: String { school_id }
+    var schoolName: String { school_name }
+    var schoolYear: String { school_year }
+    var startDate: Date { start_date }
+    var endDate: Date { end_date }
+    var isActive: Bool { is_active }
+    var copiedFromId: String? { copied_from_id }
+    var completedCount: Int {
+        get { completed_count }
+        set { completed_count = newValue }
+    }
+    var totalCount: Int { total_count }
+    var createdAt: Date { created_at }
+    var updatedAt: Date {
+        get { updated_at }
+        set { updated_at = newValue }
+    }
+
     // Computed properties
     var completionPercentage: Double {
-        guard totalCount > 0 else { return 0 }
-        return Double(completedCount) / Double(totalCount) * 100
+        guard total_count > 0 else { return 0 }
+        return Double(completed_count) / Double(total_count) * 100
     }
-    
+
     var isCompleted: Bool {
-        return completedCount == totalCount && totalCount > 0
+        return completed_count == total_count && total_count > 0
+    }
+
+    // Initializer with camelCase parameters for backward compatibility
+    init(
+        id: String = UUID().uuidString,
+        organizationId: String,
+        schoolId: String,
+        schoolName: String,
+        schoolYear: String,
+        startDate: Date,
+        endDate: Date,
+        isActive: Bool,
+        copiedFromId: String? = nil,
+        completedCount: Int,
+        totalCount: Int,
+        items: [YearbookItem],
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.id = id
+        self.organization_id = organizationId
+        self.school_id = schoolId
+        self.school_name = schoolName
+        self.school_year = schoolYear
+        self.start_date = startDate
+        self.end_date = endDate
+        self.is_active = isActive
+        self.copied_from_id = copiedFromId
+        self.completed_count = completedCount
+        self.total_count = totalCount
+        self.items = items
+        self.created_at = createdAt
+        self.updated_at = updatedAt
+    }
+
+    // Initializer with snake_case parameters for database operations
+    init(
+        id: String = UUID().uuidString,
+        organization_id: String,
+        school_id: String,
+        school_name: String,
+        school_year: String,
+        start_date: Date,
+        end_date: Date,
+        is_active: Bool,
+        copied_from_id: String? = nil,
+        completed_count: Int,
+        total_count: Int,
+        items: [YearbookItem],
+        created_at: Date,
+        updated_at: Date
+    ) {
+        self.id = id
+        self.organization_id = organization_id
+        self.school_id = school_id
+        self.school_name = school_name
+        self.school_year = school_year
+        self.start_date = start_date
+        self.end_date = end_date
+        self.is_active = is_active
+        self.copied_from_id = copied_from_id
+        self.completed_count = completed_count
+        self.total_count = total_count
+        self.items = items
+        self.created_at = created_at
+        self.updated_at = updated_at
     }
 }
 
@@ -37,14 +122,36 @@ struct YearbookItem: Identifiable, Codable, Equatable {
     let category: String
     let required: Bool
     var completed: Bool
-    var completedDate: Date?
-    var completedBySession: String?
-    var photographerId: String?
-    var photographerName: String?
-    var imageNumbers: [String]?
+    var completed_date: Date?
+    var completed_by_session: String?
+    var photographer_id: String?
+    var photographer_name: String?
+    var image_numbers: [String]?
     var notes: String?
     let order: Int
-    
+
+    // Backward compatibility
+    var completedDate: Date? {
+        get { completed_date }
+        set { completed_date = newValue }
+    }
+    var completedBySession: String? {
+        get { completed_by_session }
+        set { completed_by_session = newValue }
+    }
+    var photographerId: String? {
+        get { photographer_id }
+        set { photographer_id = newValue }
+    }
+    var photographerName: String? {
+        get { photographer_name }
+        set { photographer_name = newValue }
+    }
+    var imageNumbers: [String]? {
+        get { image_numbers }
+        set { image_numbers = newValue }
+    }
+
     // Default initializer for creating new items
     init(
         id: String = UUID().uuidString,
@@ -67,11 +174,11 @@ struct YearbookItem: Identifiable, Codable, Equatable {
         self.category = category
         self.required = required
         self.completed = completed
-        self.completedDate = completedDate
-        self.completedBySession = completedBySession
-        self.photographerId = photographerId
-        self.photographerName = photographerName
-        self.imageNumbers = imageNumbers
+        self.completed_date = completedDate
+        self.completed_by_session = completedBySession
+        self.photographer_id = photographerId
+        self.photographer_name = photographerName
+        self.image_numbers = imageNumbers
         self.notes = notes
         self.order = order
     }
@@ -92,7 +199,7 @@ extension YearbookShootList {
         let calendar = Calendar.current
         let year = calendar.component(.year, from: date)
         let month = calendar.component(.month, from: date)
-        
+
         // School year starts in August (month 8)
         if month >= 8 {
             // August-December: return current year - next year
@@ -102,7 +209,7 @@ extension YearbookShootList {
             return "\(year - 1)-\(year)"
         }
     }
-    
+
     /// Get the start and end dates for a school year
     static func getSchoolYearDates(schoolYear: String) -> (start: Date, end: Date)? {
         let components = schoolYear.split(separator: "-")
@@ -111,43 +218,43 @@ extension YearbookShootList {
               let endYear = Int(components[1]) else {
             return nil
         }
-        
+
         let calendar = Calendar.current
         var startComponents = DateComponents()
         startComponents.year = startYear
         startComponents.month = 8  // August
         startComponents.day = 1
-        
+
         var endComponents = DateComponents()
         endComponents.year = endYear
         endComponents.month = 7  // July
         endComponents.day = 31
-        
+
         guard let startDate = calendar.date(from: startComponents),
               let endDate = calendar.date(from: endComponents) else {
             return nil
         }
-        
+
         return (startDate, endDate)
     }
-    
+
     /// Group items by category
     func itemsByCategory() -> [(category: String, items: [YearbookItem])] {
         let grouped = Dictionary(grouping: items) { $0.category }
         return grouped.sorted { $0.key < $1.key }
             .map { (category: $0.key, items: $0.value.sorted { $0.order < $1.order }) }
     }
-    
+
     /// Get items filtered by completion status
     func items(completed: Bool) -> [YearbookItem] {
         return items.filter { $0.completed == completed }
     }
-    
+
     /// Get required items only
     var requiredItems: [YearbookItem] {
         return items.filter { $0.required }
     }
-    
+
     /// Get completion stats by category
     func completionStatsByCategory() -> [(category: String, completed: Int, total: Int)] {
         let grouped = itemsByCategory()
@@ -155,72 +262,6 @@ extension YearbookShootList {
             let completed = items.filter { $0.completed }.count
             return (category: category, completed: completed, total: items.count)
         }
-    }
-}
-
-// MARK: - Firestore Extensions
-extension YearbookShootList {
-    /// Convert to Firestore data
-    func toFirestoreData() -> [String: Any] {
-        var data: [String: Any] = [
-            "organizationId": organizationId,
-            "schoolId": schoolId,
-            "schoolName": schoolName,
-            "schoolYear": schoolYear,
-            "startDate": Timestamp(date: startDate),
-            "endDate": Timestamp(date: endDate),
-            "isActive": isActive,
-            "completedCount": completedCount,
-            "totalCount": totalCount,
-            "items": items.map { $0.toFirestoreData() },
-            "createdAt": Timestamp(date: createdAt),
-            "updatedAt": Timestamp(date: updatedAt)
-        ]
-        
-        if let copiedFromId = copiedFromId {
-            data["copiedFromId"] = copiedFromId
-        }
-        
-        return data
-    }
-}
-
-extension YearbookItem {
-    /// Convert to Firestore data
-    func toFirestoreData() -> [String: Any] {
-        var data: [String: Any] = [
-            "id": id,
-            "name": name,
-            "category": category,
-            "required": required,
-            "completed": completed,
-            "order": order
-        ]
-        
-        // Optional fields
-        if let description = description {
-            data["description"] = description
-        }
-        if let completedDate = completedDate {
-            data["completedDate"] = Timestamp(date: completedDate)
-        }
-        if let completedBySession = completedBySession {
-            data["completedBySession"] = completedBySession
-        }
-        if let photographerId = photographerId {
-            data["photographerId"] = photographerId
-        }
-        if let photographerName = photographerName {
-            data["photographerName"] = photographerName
-        }
-        if let imageNumbers = imageNumbers, !imageNumbers.isEmpty {
-            data["imageNumbers"] = imageNumbers
-        }
-        if let notes = notes {
-            data["notes"] = notes
-        }
-        
-        return data
     }
 }
 
@@ -232,7 +273,7 @@ enum YearbookError: LocalizedError {
     case permissionDenied
     case networkError
     case unknownError
-    
+
     var errorDescription: String? {
         switch self {
         case .listNotFound:

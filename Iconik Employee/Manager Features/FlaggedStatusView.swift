@@ -1,20 +1,21 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 struct FlaggedStatusView: View {
     // Assume the current user's UID is available.
     var currentUserID: String
-    
-    // These properties might be loaded from Firestore in your app’s user listener.
+
+    // These properties might be loaded from Supabase in your app's user listener.
     @State private var isFlagged: Bool = false
     @State private var flagNote: String = ""
-    
+
     // For unflag request.
     @State private var unflagRequestNote: String = ""
     @State private var errorMessage: String = ""
     @State private var successMessage: String = ""
-    
+
+    private var supabase: SupabaseClient { SupabaseManager.shared.client }
+
     var body: some View {
         VStack(spacing: 20) {
             if isFlagged {
@@ -24,7 +25,7 @@ struct FlaggedStatusView: View {
                 Text("Flag note: \(flagNote)")
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
-                
+
                 TextField("Enter a note to request unflag", text: $unflagRequestNote)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .padding(.horizontal)
@@ -47,34 +48,57 @@ struct FlaggedStatusView: View {
         .padding()
         .onAppear(perform: loadFlagStatus)
     }
-    
+
     func loadFlagStatus() {
-        let db = Firestore.firestore()
-        db.collection("users").document(currentUserID)
-            .addSnapshotListener { snapshot, error in
-                if let data = snapshot?.data() {
-                    isFlagged = data["isFlagged"] as? Bool ?? false
-                    flagNote = data["flagNote"] as? String ?? ""
+        Task {
+            do {
+                // Use snake_case field names for Supabase
+                struct UserFlagData: Decodable {
+                    let is_flagged: Bool?
+                    let flag_note: String?
                 }
+
+                let response: UserFlagData = try await supabase
+                    .from("users")
+                    .select("is_flagged, flag_note")
+                    .eq("id", value: currentUserID.lowercased())
+                    .single()
+                    .execute()
+                    .value
+
+                await MainActor.run {
+                    self.isFlagged = response.is_flagged ?? false
+                    self.flagNote = response.flag_note ?? ""
+                }
+            } catch {
+                print("Error loading flag status: \(error.localizedDescription)")
             }
+        }
     }
-    
+
     func requestUnflag() {
-        let db = Firestore.firestore()
-        let userDocRef = db.collection("users").document(currentUserID)
-        
-        // Update the document to record the unflag request.
-        userDocRef.updateData([
-            "unflagRequestNote": unflagRequestNote,
-            "isUnflagRequested": true
-        ]) { error in
-            if let error = error {
-                errorMessage = error.localizedDescription
-            } else {
-                successMessage = "Unflag request sent. Please wait for approval."
-                // TODO: Trigger a notification to the flagging user (or admin) via FCM or Cloud Functions.
+        Task {
+            do {
+                // Use snake_case field names for Supabase
+                let updateData: [String: AnyJSON] = [
+                    "unflag_request_note": .string(unflagRequestNote),
+                    "is_unflag_requested": .bool(true)
+                ]
+                try await supabase
+                    .from("users")
+                    .update(updateData)
+                    .eq("id", value: currentUserID.lowercased())
+                    .execute()
+
+                await MainActor.run {
+                    self.successMessage = "Unflag request sent. Please wait for approval."
+                    // TODO: Trigger a notification to the flagging user (or admin) via push notification
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                }
             }
         }
     }
 }
-

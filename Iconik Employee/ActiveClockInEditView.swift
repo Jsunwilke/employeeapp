@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseFirestore
 
 struct ActiveClockInEditView: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
@@ -161,15 +160,18 @@ struct ActiveClockInEditView: View {
     
     private func updateClockInTime() {
         isLoading = true
-        
-        // Call the service to update the active clock-in time
-        timeTrackingService.updateActiveClockInTime(newClockInTime: combinedClockIn) { success, error in
-            DispatchQueue.main.async {
-                isLoading = false
-                if success {
+
+        Task {
+            do {
+                try await timeTrackingService.updateActiveClockInTime(newClockInTime: combinedClockIn)
+                await MainActor.run {
+                    isLoading = false
                     presentationMode.wrappedValue.dismiss()
-                } else {
-                    alertMessage = error ?? "Failed to update clock-in time"
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    alertMessage = error.localizedDescription
                     showingAlert = true
                 }
             }

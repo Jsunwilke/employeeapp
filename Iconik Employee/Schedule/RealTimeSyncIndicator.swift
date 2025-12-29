@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseFirestore
 
 /// Real-time sync status indicator
 /// Shows users when data is syncing, last updated, or if offline

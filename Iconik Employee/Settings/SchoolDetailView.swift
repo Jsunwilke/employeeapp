@@ -1,7 +1,5 @@
 import SwiftUI
-import FirebaseFirestore
-import FirebaseStorage
-import Firebase
+import Supabase
 import MapKit
 
 // Inline struct for daily reports used only in this view.
@@ -202,41 +200,42 @@ struct SchoolDetailView: View {
     
     // Load school info then trigger mileage and report queries.
     func loadSchoolInfo() {
-        let db = Firestore.firestore()
-        db.collection("schools").document(schoolId).getDocument { snapshot, error in
-            if let error = error {
-                errorMessage = error.localizedDescription
-                return
-            }
-            guard let data = snapshot?.data() else { return }
-            name = data["value"] as? String ?? ""
-            address = data["schoolAddress"] as? String ?? ""
-            coordinates = data["coordinates"] as? String ?? ""
-            
-            // Parse coordinates if available
-            if !coordinates.isEmpty {
-                let parts = coordinates.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                if parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]) {
-                    let location = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-                    pinLocation = location
-                    region = MKCoordinateRegion(
-                        center: location,
-                        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-                    )
-                }
-            }
-            
-            if let photoDicts = data["locationPhotos"] as? [[String: String]] {
-                let photos = photoDicts.compactMap { dict -> LocationPhoto? in
-                    if let url = dict["url"], let label = dict["label"] {
-                        return LocationPhoto(url: url, label: label)
+        Task {
+            do {
+                guard let school = try await SchoolService.shared.getSchool(schoolId: schoolId) else {
+                    await MainActor.run {
+                        errorMessage = "School not found"
                     }
-                    return nil
+                    return
                 }
-                locationPhotos = photos
+
+                await MainActor.run {
+                    name = school.name
+                    address = school.address ?? ""
+                    coordinates = school.coordinates ?? ""
+
+                    // Parse coordinates if available
+                    if let coords = school.parsedCoordinates {
+                        let location = CLLocationCoordinate2D(latitude: coords.lat, longitude: coords.lng)
+                        pinLocation = location
+                        region = MKCoordinateRegion(
+                            center: location,
+                            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                        )
+                    }
+
+                    // Parse location photos from JSONB
+                    locationPhotos = school.parsedLocationPhotos
+
+                    // Load mileage and reports
+                    loadMileageForSchool()
+                    loadDailyReportsForSchool()
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
             }
-            loadMileageForSchool()
-            loadDailyReportsForSchool()
         }
     }
     
@@ -245,64 +244,60 @@ struct SchoolDetailView: View {
         guard let seasonDates = currentSchoolSeasonDates() else { return }
         let seasonStart = seasonDates.start
         let seasonEnd = seasonDates.end
-        let db = Firestore.firestore()
-        
-        db.collection("dailyJobReports")
-            .whereField("schoolOrDestination", isEqualTo: name)
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID) // Filter by organization ID
-            .whereField("date", isGreaterThanOrEqualTo: seasonStart)
-            .whereField("date", isLessThanOrEqualTo: seasonEnd)
-            .getDocuments { snapshot, error in
-                if let error = error {
+
+        Task {
+            do {
+                let mileage = try await DailyJobReportService.shared.getMileageForSchool(
+                    schoolName: name,
+                    organizationID: storedUserOrganizationID,
+                    startDate: seasonStart,
+                    endDate: seasonEnd
+                )
+                await MainActor.run {
+                    self.seasonMileage = mileage
+                }
+            } catch {
+                await MainActor.run {
                     self.errorMessage = error.localizedDescription
-                    return
-                }
-                guard let docs = snapshot?.documents else { return }
-                var total: Double = 0.0
-                for doc in docs {
-                    let data = doc.data()
-                    let mileage = data["totalMileage"] as? Double ?? 0.0
-                    total += mileage
-                }
-                DispatchQueue.main.async {
-                    self.seasonMileage = total
                 }
             }
+        }
     }
-    
+
     // Load daily job reports (with photographer name) for the current season.
     func loadDailyReportsForSchool() {
         guard let seasonDates = currentSchoolSeasonDates() else { return }
         let seasonStart = seasonDates.start
         let seasonEnd = seasonDates.end
-        let db = Firestore.firestore()
-        
-        db.collection("dailyJobReports")
-            .whereField("schoolOrDestination", isEqualTo: name)
-            .whereField("organizationID", isEqualTo: storedUserOrganizationID) // Filter by organization ID
-            .whereField("date", isGreaterThanOrEqualTo: seasonStart)
-            .whereField("date", isLessThanOrEqualTo: seasonEnd)
-            .getDocuments { snapshot, error in
-                if let error = error {
-                    self.errorMessage = error.localizedDescription
-                    return
+
+        Task {
+            do {
+                let supabaseReports = try await DailyJobReportService.shared.getReportsForSchool(
+                    schoolName: name,
+                    organizationID: storedUserOrganizationID,
+                    startDate: seasonStart,
+                    endDate: seasonEnd
+                )
+
+                // Convert to local Report struct
+                let reports = supabaseReports.map { report in
+                    Report(
+                        id: report.id,
+                        date: report.date,
+                        totalMileage: report.total_mileage,
+                        photographerName: report.your_name
+                    )
                 }
-                guard let docs = snapshot?.documents else { return }
-                var reports: [Report] = []
-                for doc in docs {
-                    let data = doc.data()
-                    if let timestamp = data["date"] as? Timestamp {
-                        let date = timestamp.dateValue()
-                        let mileage = data["totalMileage"] as? Double ?? 0.0
-                        let photographerName = data["yourName"] as? String ?? "Unknown"
-                        let newReport = Report(id: doc.documentID, date: date, totalMileage: mileage, photographerName: photographerName)
-                        reports.append(newReport)
-                    }
-                }
-                DispatchQueue.main.async {
+
+                await MainActor.run {
                     self.dailyReports = reports
                 }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                }
             }
+        }
     }
     
     // Compute the current school season based on today's date.
@@ -326,30 +321,38 @@ struct SchoolDetailView: View {
     }
     
     func saveChanges() {
-        let db = Firestore.firestore()
-        db.collection("schools").document(schoolId).updateData([
-            "value": name,
-            "schoolAddress": address,
-            "organizationID": storedUserOrganizationID // Always ensure org ID is set
-        ]) { error in
-            if let error = error {
-                errorMessage = error.localizedDescription
-            } else {
-                successMessage = "School info updated!"
+        Task {
+            do {
+                try await SchoolService.shared.updateSchool(
+                    schoolId: schoolId,
+                    name: name,
+                    address: address
+                )
+                await MainActor.run {
+                    successMessage = "School info updated!"
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
             }
         }
     }
     
     func deletePhoto(_ photo: LocationPhoto) {
         locationPhotos.removeAll { $0.id == photo.id }
-        let db = Firestore.firestore()
-        db.collection("schools").document(schoolId).updateData([
-            "locationPhotos": locationPhotos.map { ["url": $0.url, "label": $0.label] }
-        ]) { error in
-            if let error = error {
-                errorMessage = error.localizedDescription
-            } else {
-                successMessage = "Photo deleted."
+
+        Task {
+            do {
+                let photoDicts = locationPhotos.map { ["url": $0.url, "label": $0.label] }
+                try await SchoolService.shared.updateLocationPhotos(schoolId: schoolId, photos: photoDicts)
+                await MainActor.run {
+                    successMessage = "Photo deleted."
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -357,34 +360,52 @@ struct SchoolDetailView: View {
     func uploadNewPhoto() {
         guard let newLabeledImage = newLabeledImage else { return }
         guard let imageData = newLabeledImage.image.jpegData(compressionQuality: 0.8) else { return }
-        let storageRef = Storage.storage().reference()
-        // Include organization ID in the storage path
-        let fileName = "locationPhotos/\(storedUserOrganizationID)/\(schoolId)/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
-        let photoRef = storageRef.child(fileName)
-        photoRef.putData(imageData, metadata: nil) { _, error in
-            if let error = error {
-                errorMessage = error.localizedDescription
-                return
-            }
-            photoRef.downloadURL { url, error in
-                if let error = error {
-                    errorMessage = error.localizedDescription
-                } else if let downloadURL = url {
-                    let newPhoto = LocationPhoto(url: downloadURL.absoluteString, label: newLabeledImage.label)
-                    locationPhotos.append(newPhoto)
-                    let db = Firestore.firestore()
-                    db.collection("schools").document(schoolId).updateData([
-                        "locationPhotos": FieldValue.arrayUnion([
-                            ["url": newPhoto.url, "label": newPhoto.label]
-                        ])
-                    ]) { error in
-                        if let error = error {
-                            errorMessage = error.localizedDescription
-                        } else {
-                            successMessage = "New photo uploaded."
-                            self.newLabeledImage = nil
-                        }
-                    }
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                // Use lowercase IDs per CLAUDE.md guidelines
+                let path = "location-photos/\(storedUserOrganizationID.lowercased())/\(schoolId.lowercased())/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
+
+                print("📸 Uploading location photo to Supabase Storage: \(path)")
+
+                // Upload to Supabase Storage
+                _ = try await supabase.storage
+                    .from("daily-reports")
+                    .upload(
+                        path: path,
+                        file: imageData,
+                        options: FileOptions(contentType: "image/jpeg")
+                    )
+
+                // Get signed URL (1 year expiry for private access)
+                let signedURL = try await supabase.storage
+                    .from("daily-reports")
+                    .createSignedURL(path: path, expiresIn: 31536000)
+
+                let urlString = signedURL.absoluteString
+                print("📸 Location photo uploaded. URL: \(urlString.prefix(80))...")
+
+                await MainActor.run {
+                    let newPhoto = LocationPhoto(url: urlString, label: newLabeledImage.label)
+                    self.locationPhotos.append(newPhoto)
+                }
+
+                // Update Supabase with new photos array
+                let photoDicts = self.locationPhotos.map { ["url": $0.url, "label": $0.label] }
+                try await SchoolService.shared.updateLocationPhotos(schoolId: self.schoolId, photos: photoDicts)
+
+                await MainActor.run {
+                    self.successMessage = "New photo uploaded."
+                    self.newLabeledImage = nil
+                }
+                print("✅ Location photo saved to Supabase")
+
+            } catch {
+                print("❌ Location photo upload failed: \(error.localizedDescription)")
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
                 }
             }
         }
@@ -399,11 +420,11 @@ struct MapPin: Identifiable {
 
 struct DailyReportDetailView: View {
     let docID: String
-    
-    @State private var reportData: [String: Any] = [:]
+
+    @State private var report: DailyJobReport?
     @State private var isLoading = true
     @State private var errorMessage = ""
-    
+
     var body: some View {
         ScrollView {
             if isLoading {
@@ -413,11 +434,11 @@ struct DailyReportDetailView: View {
                 Text(errorMessage)
                     .foregroundColor(.red)
                     .padding()
-            } else {
+            } else if let report = report {
                 VStack(spacing: 20) {
-                    headerSection
-                    detailsSection
-                    if let photoURLs = reportData["photoURLs"] as? [String], !photoURLs.isEmpty {
+                    headerSection(report: report)
+                    detailsSection(report: report)
+                    if let photoURLs = report.photo_urls, !photoURLs.isEmpty {
                         photosSection(photoURLs: photoURLs)
                     }
                 }
@@ -430,18 +451,15 @@ struct DailyReportDetailView: View {
             loadReport()
         }
     }
-    
-    private var headerSection: some View {
+
+    private func headerSection(report: DailyJobReport) -> some View {
         VStack(spacing: 8) {
-            if let timestamp = reportData["date"] as? Timestamp {
-                let date = timestamp.dateValue()
-                Text(date, style: .date)
-                    .font(.largeTitle)
-                    .bold()
-            }
-            Text("Photographer: \(reportData["yourName"] as? String ?? "Unknown")")
+            Text(report.date, style: .date)
+                .font(.largeTitle)
+                .bold()
+            Text("Photographer: \(report.your_name)")
                 .font(.headline)
-            Text("School: \(reportData["schoolOrDestination"] as? String ?? "Unknown")")
+            Text("School: \(report.school_or_destination ?? "Unknown")")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
         }
@@ -449,17 +467,17 @@ struct DailyReportDetailView: View {
         .padding()
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
     }
-    
-    private var detailsSection: some View {
+
+    private func detailsSection(report: DailyJobReport) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Mileage:")
                     .font(.headline)
                 Spacer()
-                Text("\(reportData["totalMileage"] as? Double ?? 0, specifier: "%.1f") miles")
+                Text("\(report.total_mileage, specifier: "%.1f") miles")
                     .font(.body)
             }
-            if let jobNotes = reportData["jobDescriptionText"] as? String, !jobNotes.isEmpty {
+            if let jobNotes = report.job_description_text, !jobNotes.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Job Notes:")
                         .font(.headline)
@@ -467,7 +485,7 @@ struct DailyReportDetailView: View {
                         .font(.body)
                 }
             }
-            if let jobDescriptions = reportData["jobDescriptions"] as? [String], !jobDescriptions.isEmpty {
+            if let jobDescriptions = report.job_descriptions, !jobDescriptions.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Job Descriptions:")
                         .font(.headline)
@@ -475,7 +493,7 @@ struct DailyReportDetailView: View {
                         .font(.body)
                 }
             }
-            if let extraItems = reportData["extraItems"] as? [String], !extraItems.isEmpty {
+            if let extraItems = report.extra_items, !extraItems.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Extra Items:")
                         .font(.headline)
@@ -483,7 +501,7 @@ struct DailyReportDetailView: View {
                         .font(.body)
                 }
             }
-            if let cardsScanned = reportData["cardsScannedChoice"] as? String {
+            if let cardsScanned = report.cards_scanned_choice {
                 HStack {
                     Text("Cards Scanned:")
                         .font(.headline)
@@ -492,7 +510,7 @@ struct DailyReportDetailView: View {
                         .font(.body)
                 }
             }
-            if let boxCards = reportData["jobBoxAndCameraCards"] as? String {
+            if let boxCards = report.job_box_and_camera_cards {
                 HStack {
                     Text("Job Box/Camera Cards:")
                         .font(.headline)
@@ -501,7 +519,7 @@ struct DailyReportDetailView: View {
                         .font(.body)
                 }
             }
-            if let sportsShot = reportData["sportsBackgroundShot"] as? String {
+            if let sportsShot = report.sports_background_shot {
                 HStack {
                     Text("Sports Background Shot:")
                         .font(.headline)
@@ -514,7 +532,7 @@ struct DailyReportDetailView: View {
         .padding()
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
     }
-    
+
     private func photosSection(photoURLs: [String]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Attached Photos:")
@@ -552,18 +570,25 @@ struct DailyReportDetailView: View {
         .padding()
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
     }
-    
+
     private func loadReport() {
-        let db = Firestore.firestore()
-        db.collection("dailyJobReports").document(docID).getDocument { snapshot, error in
-            if let error = error {
-                self.errorMessage = "Error: \(error.localizedDescription)"
-            } else if let data = snapshot?.data() {
-                self.reportData = data
-            } else {
-                self.errorMessage = "No data found."
+        Task {
+            do {
+                let fetchedReport = try await DailyJobReportService.shared.getReport(reportId: docID)
+                await MainActor.run {
+                    if let fetchedReport = fetchedReport {
+                        self.report = fetchedReport
+                    } else {
+                        self.errorMessage = "No data found."
+                    }
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Error: \(error.localizedDescription)"
+                    self.isLoading = false
+                }
             }
-            self.isLoading = false
         }
     }
 }

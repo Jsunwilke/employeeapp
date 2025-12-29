@@ -1,6 +1,5 @@
 import SwiftUI
-import Firebase
-import FirebaseFirestore
+import Supabase
 
 struct CreateSportsShootView: View {
     @Environment(\.presentationMode) var presentationMode
@@ -70,12 +69,10 @@ struct CreateSportsShootView: View {
                                 }
 
                                 // Set date from session
-                                if let dateStr = session.date {
-                                    let formatter = DateFormatter()
-                                    formatter.dateFormat = "yyyy-MM-dd"
-                                    if let date = formatter.date(from: dateStr) {
-                                        shootDate = date
-                                    }
+                                let formatter = DateFormatter()
+                                formatter.dateFormat = "yyyy-MM-dd"
+                                if let date = formatter.date(from: session.date) {
+                                    shootDate = date
                                 }
 
                                 // Set location from session
@@ -187,84 +184,74 @@ struct CreateSportsShootView: View {
             showAlert = true
             return
         }
-        
+
         guard let school = selectedSchool else {
             alertTitle = "Error"
             alertMessage = "School is required."
             showAlert = true
             return
         }
-        
+
         isLoading = true
-        
+
         // Create a new SportsShoot object
-        let newShoot = SportsShoot(
-            id: UUID().uuidString,
-            schoolName: school.value,
-            schoolId: school.id,
-            sportName: sportName,
-            seasonType: seasonType,
-            shootDate: shootDate,
-            location: location,
-            photographer: photographer,
-            roster: [],
-            groupImages: [],
-            additionalNotes: additionalNotes,
-            organizationID: storedUserOrganizationID,
-            createdAt: Date(),
-            updatedAt: Date(),
-            isArchived: false
-        )
-        
-        // Save to Firestore
-        let db = Firestore.firestore()
-        let docRef = db.collection("sportsJobs").document(newShoot.id)
-        
-        // Convert to Firestore data
-        var data: [String: Any] = [
-            "schoolName": newShoot.schoolName,
-            "schoolId": newShoot.schoolId ?? "",
-            "sportName": newShoot.sportName,
-            "seasonType": newShoot.seasonType ?? "",
-            "shootDate": Timestamp(date: newShoot.shootDate),
-            "location": newShoot.location,
-            "photographer": newShoot.photographer,
-            "roster": [],  // Empty roster initially
-            "groupImages": [],  // Empty group images initially
-            "additionalNotes": newShoot.additionalNotes,
-            "organizationID": newShoot.organizationID,
-            "createdAt": FieldValue.serverTimestamp(),
-            "updatedAt": FieldValue.serverTimestamp(),
-            "isArchived": false
-        ]
+        let newShootId = UUID().uuidString.lowercased()
 
-        // Add sessionId if linking to a session
-        if linkToSession, let sessionId = selectedSession?.id {
-            data["sessionId"] = sessionId
-        }
-        
-        docRef.setData(data) { error in
-            DispatchQueue.main.async {
-                isLoading = false
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
 
-                if let error = error {
-                    alertTitle = "Error"
-                    alertMessage = "Failed to create sports shoot: \(error.localizedDescription)"
-                    showAlert = true
-                } else {
-                    // If linked to a session, update the session's hasSportsJob flag
-                    if self.linkToSession, let sessionId = self.selectedSession?.id {
-                        db.collection("sessions").document(sessionId).updateData([
-                            "hasSportsJob": true
-                        ]) { sessionError in
-                            if let sessionError = sessionError {
-                                print("Warning: Failed to update session flag: \(sessionError.localizedDescription)")
-                            }
-                        }
-                    }
+                // Build the data for Supabase insert
+                var insertData: [String: AnyJSON] = [
+                    "id": .string(newShootId),
+                    "school_name": .string(school.value),
+                    "school_id": .string(school.id),
+                    "sport_name": .string(sportName),
+                    "season_type": .string(seasonType),
+                    "shoot_date": .string(shootDate.ISO8601Format()),
+                    "location": .string(location),
+                    "photographer": .string(photographer),
+                    "roster": .array([]),  // Empty roster initially
+                    "group_images": .array([]),  // Empty group images initially
+                    "additional_notes": .string(additionalNotes),
+                    "organization_id": .string(storedUserOrganizationID.lowercased()),
+                    "is_archived": .bool(false)
+                ]
 
+                // Add session_id if linking to a session
+                if linkToSession, let sessionId = selectedSession?.id {
+                    insertData["session_id"] = .string(sessionId)
+                }
+
+                try await supabase
+                    .from("sports_jobs")
+                    .insert(insertData)
+                    .execute()
+
+                // If linked to a session, update the session's has_sports_job flag
+                if linkToSession, let sessionId = selectedSession?.id {
+                    let updateData: [String: AnyJSON] = [
+                        "has_sports_job": .bool(true)
+                    ]
+
+                    try? await supabase
+                        .from("sessions")
+                        .update(updateData)
+                        .eq("id", value: sessionId)
+                        .execute()
+                }
+
+                await MainActor.run {
+                    isLoading = false
                     alertTitle = "Success"
                     alertMessage = "Sports shoot created successfully."
+                    showAlert = true
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    alertTitle = "Error"
+                    alertMessage = "Failed to create sports shoot: \(error.localizedDescription)"
                     showAlert = true
                 }
             }
