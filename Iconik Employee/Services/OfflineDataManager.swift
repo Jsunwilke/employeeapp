@@ -108,12 +108,12 @@ class OfflineDataManager: ObservableObject {
     
     private func savePendingOperations() {
         if let encoded = try? JSONEncoder().encode(pendingOperations) {
-            UserDefaults.standard.set(encoded, forKey: "pendingFirestoreOperations")
+            UserDefaults.standard.set(encoded, forKey: "pendingSupabaseOperations")
         }
     }
     
     private func loadPendingOperations() {
-        if let data = UserDefaults.standard.data(forKey: "pendingFirestoreOperations"),
+        if let data = UserDefaults.standard.data(forKey: "pendingSupabaseOperations"),
            let operations = try? JSONDecoder().decode([PendingOperation].self, from: data) {
             pendingOperations = operations
             syncPending = !operations.isEmpty
@@ -225,17 +225,17 @@ class OfflineDataManager: ObservableObject {
     // MARK: - SD Card Specific Methods
     
     // Cache records for offline use
-    func cacheRecords(records: [FirestoreRecord]) {
+    func cacheRecords(records: [NFCRecord]) {
         cacheData(data: records, forKey: "cachedRecords")
     }
     
     // Get cached records
-    func getCachedRecords() -> [FirestoreRecord]? {
+    func getCachedRecords() -> [NFCRecord]? {
         return getCachedData(forKey: "cachedRecords")
     }
     
     // Add a new record when offline
-    func addOfflineRecord(record: FirestoreRecord) {
+    func addOfflineRecord(record: NFCRecord) {
         // Add to local cache
         var cachedRecords = getCachedRecords() ?? []
         cachedRecords.append(record)

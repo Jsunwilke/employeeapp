@@ -72,12 +72,6 @@ class ManagerMileageViewModel: ObservableObject {
         
         self.currentPeriodStart = start
         self.currentPeriodEnd = end
-        
-        // Log the calculated period for debugging
-        let debugFormatter = DateFormatter()
-        debugFormatter.dateStyle = .medium
-        debugFormatter.timeStyle = .medium
-        print("Manager current period calculated as: \(debugFormatter.string(from: start)) to \(debugFormatter.string(from: end))")
     }
     
     /// Loads employees from Supabase, then automatically loads stats for the current pay period.
@@ -97,7 +91,7 @@ class ManagerMileageViewModel: ObservableObject {
                 let users: [UserRecord] = try await supabase
                     .from("users")
                     .select("id, first_name, amount_per_mile")
-                    .eq("organization_id", value: orgID.lowercased())
+                    .eq("organization_id", value: orgID)
                     .execute()
                     .value
 
@@ -126,39 +120,31 @@ class ManagerMileageViewModel: ObservableObject {
     
     /// Loads period/month/year miles for each employee.
     func loadStatsForPeriod(selectedPeriodStart: Date) {
-        let now = Date()
-        let currentYear  = calendar.component(.year,  from: now)
-        let currentMonth = calendar.component(.month, from: now)
+        let selectedYear  = calendar.component(.year,  from: selectedPeriodStart)
+        let selectedMonth = calendar.component(.month, from: selectedPeriodStart)
 
-        // We'll fetch from start to end of this year, then filter in memory.
+        // Calculate period end (14 days from start, end of day)
+        guard let tempPeriodEnd = calendar.date(byAdding: .day, value: 13, to: selectedPeriodStart),
+              let periodEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempPeriodEnd) else {
+            return
+        }
+
+        // Query the full year of the selected period for year/month totals
         var startOfYearComps = DateComponents()
-        startOfYearComps.year  = currentYear
+        startOfYearComps.year  = selectedYear
         startOfYearComps.month = 1
         startOfYearComps.day   = 1
 
         var endOfYearComps = DateComponents()
-        endOfYearComps.year  = currentYear
+        endOfYearComps.year  = selectedYear
         endOfYearComps.month = 12
         endOfYearComps.day   = 31
         endOfYearComps.hour  = 23
         endOfYearComps.minute = 59
         endOfYearComps.second = 59
 
-        let yearStart = calendar.date(from: startOfYearComps) ?? now
-        let yearEnd   = calendar.date(from: endOfYearComps)   ?? now
-
-        // Calculate period end with proper end-of-day timing
-        guard let tempPeriodEnd = calendar.date(byAdding: .day, value: 13, to: selectedPeriodStart),
-              let periodEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempPeriodEnd) else {
-            print("Error calculating period end date")
-            return
-        }
-
-        // Log the date range we're querying for debugging
-        let debugFormatter = DateFormatter()
-        debugFormatter.dateStyle = .medium
-        debugFormatter.timeStyle = .medium
-        print("Manager loading stats from \(debugFormatter.string(from: selectedPeriodStart)) to \(debugFormatter.string(from: periodEnd))")
+        let queryStart = calendar.date(from: startOfYearComps) ?? selectedPeriodStart
+        let queryEnd = calendar.date(from: endOfYearComps) ?? periodEnd
 
         // Reset stats
         statsByUser = [:]
@@ -168,37 +154,37 @@ class ManagerMileageViewModel: ObservableObject {
             let supabase = SupabaseManager.shared.client
 
             struct ReportRecord: Decodable {
-                let your_name: String?
+                let user_id: String?
                 let total_mileage: Double?
                 let date: Date?
             }
 
             do {
-                // Fetch all reports for the organization within the year range
+                // Fetch all reports for the organization within the available periods range
                 let reports: [ReportRecord] = try await supabase
                     .from("daily_job_reports")
-                    .select("your_name, total_mileage, date")
-                    .eq("organization_id", value: organizationID.lowercased())
-                    .gte("date", value: yearStart.ISO8601Format())
-                    .lte("date", value: yearEnd.ISO8601Format())
+                    .select("user_id, total_mileage, date")
+                    .eq("organization_id", value: organizationID)
+                    .gte("date", value: queryStart.ISO8601Format())
+                    .lte("date", value: queryEnd.ISO8601Format())
                     .execute()
                     .value
 
-                // Group reports by employee name
-                var reportsByEmployee: [String: [ReportRecord]] = [:]
+                // Group reports by user_id
+                var reportsByUserId: [String: [ReportRecord]] = [:]
                 for report in reports {
-                    guard let name = report.your_name else { continue }
-                    if reportsByEmployee[name] == nil {
-                        reportsByEmployee[name] = []
+                    guard let userId = report.user_id else { continue }
+                    if reportsByUserId[userId] == nil {
+                        reportsByUserId[userId] = []
                     }
-                    reportsByEmployee[name]?.append(report)
+                    reportsByUserId[userId]?.append(report)
                 }
 
                 // Calculate stats for each employee
                 var newStats: [String: ManagerMileageStats] = [:]
 
                 for emp in employees {
-                    let empReports = reportsByEmployee[emp.firstName] ?? []
+                    let empReports = reportsByUserId[emp.id] ?? []
 
                     var periodMiles = 0.0
                     var monthMiles  = 0.0
@@ -207,15 +193,20 @@ class ManagerMileageViewModel: ObservableObject {
                     for report in empReports {
                         let miles = report.total_mileage ?? 0.0
                         if let dateVal = report.date {
-                            yearMiles += miles
-
                             let docMonth = calendar.component(.month, from: dateVal)
                             let docYear  = calendar.component(.year,  from: dateVal)
-                            if docMonth == currentMonth && docYear == currentYear {
+
+                            // Year miles: same year as selected period
+                            if docYear == selectedYear {
+                                yearMiles += miles
+                            }
+
+                            // Month miles: same month AND year as selected period
+                            if docMonth == selectedMonth && docYear == selectedYear {
                                 monthMiles += miles
                             }
 
-                            // Check if date falls within the selected period
+                            // Period miles: within the 14-day period
                             if dateVal >= selectedPeriodStart && dateVal <= periodEnd {
                                 periodMiles += miles
                             }
@@ -227,14 +218,10 @@ class ManagerMileageViewModel: ObservableObject {
                         monthMiles:  monthMiles,
                         yearMiles:   yearMiles
                     )
-
-                    // Log the calculation for this employee
-                    print("Manager calculated mileage for \(emp.firstName): period=\(periodMiles), month=\(monthMiles), year=\(yearMiles)")
                 }
 
                 await MainActor.run {
                     self.statsByUser = newStats
-                    print("Manager finished loading all employee stats")
                 }
             } catch {
                 await MainActor.run {
@@ -260,10 +247,11 @@ class ManagerMileageViewModel: ObservableObject {
 
 struct ManagerMileageView: View {
     @StateObject private var viewModel = ManagerMileageViewModel()
-    
-    // Typically from AppStorage, if your org ID is stored there
-    @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
-    
+
+    // The organization ID - will be refreshed from database on appear
+    @State private var organizationID: String = ""
+    @State private var isLoadingOrgID = true
+
     // The selected pay period from the horizontal scroller
     @State private var selectedPeriodStart: Date = Date()
     
@@ -404,7 +392,24 @@ struct ManagerMileageView: View {
         }
         .onAppear {
             selectedPeriodStart = viewModel.currentPeriodStart
-            viewModel.loadEmployees(orgID: storedUserOrganizationID)
+            // Force refresh organization ID from database to fix stale cache
+            Task {
+                if let refreshedOrgID = await UserManager.shared.forceRefreshOrganizationID() {
+                    await MainActor.run {
+                        organizationID = refreshedOrgID
+                        isLoadingOrgID = false
+                        viewModel.loadEmployees(orgID: refreshedOrgID)
+                    }
+                } else {
+                    // Fallback to cached value if refresh fails
+                    let cachedOrgID = UserManager.shared.getCachedOrganizationID()
+                    await MainActor.run {
+                        organizationID = cachedOrgID
+                        isLoadingOrgID = false
+                        viewModel.loadEmployees(orgID: cachedOrgID)
+                    }
+                }
+            }
         }
     }
 }

@@ -1163,22 +1163,14 @@ struct SportsRostersWidget: View {
                 
                 Spacer()
                 
-                // Roster count
-                Group {
-                    if shoot.roster.count > 0 {
-                        HStack(spacing: 4) {
-                            Image(systemName: "person.3.fill")
-                                .font(.caption2)
-                            Text("\(shoot.roster.count)")
-                                .font(.caption)
-                        }
-                        .foregroundColor(.blue)
-                    } else {
-                        Text("No roster")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                    }
+                // Sports shoot indicator
+                HStack(spacing: 4) {
+                    Image(systemName: "sportscourt.fill")
+                        .font(.caption2)
+                    Text("View")
+                        .font(.caption)
                 }
+                .foregroundColor(.blue)
                 
                 Image(systemName: "chevron.right")
                     .font(.caption)
@@ -1226,26 +1218,28 @@ struct SportsRostersWidget: View {
         isLoading = true
         
         // Fetch all sports shoots for the organization
-        SportsShootService.shared.fetchAllSportsShoots(forOrganization: storedUserOrganizationID) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let shoots):
-                    // Filter for today's shoots
-                    let calendar = Calendar.current
-                    let today = calendar.startOfDay(for: Date())
-                    let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
-                    
+        Task {
+            do {
+                let shoots = try await SportsShootService.shared.fetchAllSportsShoots(forOrganization: storedUserOrganizationID)
+
+                // Filter for today's shoots
+                let calendar = Calendar.current
+                let today = calendar.startOfDay(for: Date())
+                let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+
+                await MainActor.run {
                     self.todaysSportsShoots = shoots.filter { shoot in
                         let shootDay = calendar.startOfDay(for: shoot.shootDate)
                         // Filter out archived shoots and only show today's shoots
                         return !shoot.isArchived && shootDay >= today && shootDay < tomorrow
                     }.sorted { $0.shootDate < $1.shootDate }
-
-                case .failure:
-                    self.todaysSportsShoots = []
+                    self.isLoading = false
                 }
-                
-                self.isLoading = false
+            } catch {
+                await MainActor.run {
+                    self.todaysSportsShoots = []
+                    self.isLoading = false
+                }
             }
         }
     }
@@ -1787,7 +1781,7 @@ struct PhotoshootNotesWidget: View {
                 let schools: [SchoolRecord] = try await supabase
                     .from("schools")
                     .select("id, value, school_address, coordinates")
-                    .eq("organization_id", value: orgID.lowercased())
+                    .eq("organization_id", value: orgID)
                     .eq("type", value: "school")
                     .execute()
                     .value

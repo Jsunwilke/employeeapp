@@ -12,7 +12,7 @@ class TimeOffService: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage = ""
 
-    private var requestsChannel: RealtimeChannel?
+    private var requestsChannel: RealtimeChannelV2?
     private var currentUserId: String?
     private var currentOrgId: String?
 
@@ -38,7 +38,7 @@ class TimeOffService: ObservableObject {
     private func setupUser() async {
         do {
             let session = try await supabase.auth.session
-            self.currentUserId = session.user.id.uuidString
+            self.currentUserId = session.user.id.uuidString.lowercased()
             self.currentOrgId = UserDefaults.standard.string(forKey: "userOrganizationID")
         } catch {
             print("⚠️ TimeOffService: No active session")
@@ -48,7 +48,14 @@ class TimeOffService: ObservableObject {
     // MARK: - Real-time Listeners
 
     func startListeningToRequests() async {
-        guard let orgId = currentOrgId else {
+        // Try currentOrgId first, fall back to UserDefaults if not set yet
+        let orgId: String
+        if let cachedOrgId = currentOrgId, !cachedOrgId.isEmpty {
+            orgId = cachedOrgId
+        } else if let storedOrgId = UserDefaults.standard.string(forKey: "userOrganizationID"), !storedOrgId.isEmpty {
+            orgId = storedOrgId
+            self.currentOrgId = storedOrgId
+        } else {
             errorMessage = "Organization ID not found"
             return
         }
@@ -61,6 +68,23 @@ class TimeOffService: ObservableObject {
                Date().timeIntervalSince(lastUpdate) < cacheValidityDuration,
                !timeOffRequests.isEmpty {
                 updateFilteredLists()
+                return
+            }
+            // Cache is empty or stale - fetch fresh data even with active listener
+            do {
+                let response: [TimeOffRequest] = try await supabase.database
+                    .from("time_off_requests")
+                    .select()
+                    .eq("organization_id", value: orgId)
+                    .order("created_at", ascending: false)
+                    .execute()
+                    .value
+
+                self.timeOffRequests = response
+                self.lastCacheUpdate = Date()
+                updateFilteredLists()
+            } catch {
+                print("❌ TimeOffService refresh error: \(error)")
             }
             return
         }
@@ -83,8 +107,25 @@ class TimeOffService: ObservableObject {
             self.lastCacheUpdate = Date()
             updateFilteredLists()
 
-            // TODO: Set up real-time listener when Supabase realtime API is confirmed
-            // For now, using polling approach
+            // Set up real-time channel for live updates
+            let channel = supabase.channel("timeoff-\(orgId)")
+
+            _ = channel.onPostgresChange(
+                AnyAction.self,
+                schema: "public",
+                table: "time_off_requests",
+                filter: "organization_id=eq.\(orgId)"
+            ) { [weak self] action in
+                Task { @MainActor in
+                    await self?.handleRealtimeChange(action)
+                }
+            }
+
+            Task {
+                await channel.subscribe()
+            }
+
+            self.requestsChannel = channel
 
         } catch {
             errorMessage = "Error loading requests: \(error.localizedDescription)"
@@ -158,6 +199,7 @@ class TimeOffService: ObservableObject {
 
         // Prepare insert data matching database schema
         struct InsertData: Encodable {
+            let id: String
             let organization_id: String
             let photographer_id: String
             let photographer_name: String
@@ -177,6 +219,7 @@ class TimeOffService: ObservableObject {
         }
 
         let insertData = InsertData(
+            id: UUID().uuidString,
             organization_id: orgId,
             photographer_id: userId,
             photographer_name: photographerName,
@@ -629,9 +672,26 @@ class TimeOffService: ObservableObject {
     // MARK: - Calendar Integration
 
     func getTimeOffForCalendar(dateRange: (start: Date, end: Date)) async -> [TimeOffCalendarEntry] {
-        guard let orgId = currentOrgId else {
+        // Try currentOrgId first, fall back to UserDefaults if not set yet
+        let orgId: String
+        if let cachedOrgId = currentOrgId, !cachedOrgId.isEmpty {
+            orgId = cachedOrgId
+        } else if let storedOrgId = UserDefaults.standard.string(forKey: "userOrganizationID"), !storedOrgId.isEmpty {
+            orgId = storedOrgId
+            // Also update the cached value for future calls
+            self.currentOrgId = storedOrgId
+        } else {
+            print("📅 TimeOffService: No org ID for calendar query")
             return []
         }
+
+        // Format dates as ISO8601 for Supabase query
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        let startDateStr = formatter.string(from: dateRange.start)
+        let endDateStr = formatter.string(from: dateRange.end)
+
+        print("📅 TimeOffService: Fetching time off for \(startDateStr) to \(endDateStr), org: \(orgId)")
 
         do {
             // Query for time off requests that overlap with the visible date range
@@ -641,10 +701,12 @@ class TimeOffService: ObservableObject {
                 .select()
                 .eq("organization_id", value: orgId)
                 .in("status", values: ["pending", "underReview", "approved"])
-                .lte("start_date", value: dateRange.end)
-                .gte("end_date", value: dateRange.start)
+                .lte("start_date", value: endDateStr)
+                .gte("end_date", value: startDateStr)
                 .execute()
                 .value
+
+            print("📅 TimeOffService: Found \(response.count) time off requests for calendar")
 
             // Convert to calendar entries
             return convertToCalendarEntries(requests: response)
@@ -672,8 +734,8 @@ class TimeOffService: ObservableObject {
             return nil
         }
 
-        // TODO: Set up real-time listener when Supabase realtime API is confirmed
-        // For now, return nil and rely on manual refresh
+        // Real-time is handled by the main listener in startListeningToRequests()
+        // Calendar views should call startListeningToRequests() instead
         return nil
     }
 

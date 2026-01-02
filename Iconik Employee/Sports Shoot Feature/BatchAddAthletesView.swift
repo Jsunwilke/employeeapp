@@ -1,51 +1,52 @@
 import SwiftUI
 
 struct BatchAddAthletesView: View {
-    let shootID: String
+    let shootID: UUID
     let onComplete: (Bool) -> Void
-    
+
     @State private var sportName: String = ""
     @State private var numberOfAthletes: String = "10"
     @State private var startingSubjectID: Int = 101
     @State private var specialField: String = ""
-    
+
     @State private var isLoading = false
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
     @State private var isLoadingExisting = true
-    
+
     @Environment(\.presentationMode) var presentationMode
-    
+
     // Computed property for preview entries
-    private var previewEntries: [RosterEntry] {
+    private var previewEntries: [PreviewEntry] {
         guard let count = Int(numberOfAthletes),
               count > 0,
               count <= 100 else { return [] }
-        
+
         return (0..<count).map { index in
-            RosterEntry(
-                id: UUID().uuidString,
-                lastName: "",  // Will be filled in later by user
-                firstName: "\(startingSubjectID + index)",
-                teacher: specialField,
-                group: sportName,
-                email: "",
-                phone: "",
-                imageNumbers: "",
-                notes: "",
-                wasBlank: true,
-                isFilledBlank: false
+            PreviewEntry(
+                id: UUID(),
+                subjectID: "\(startingSubjectID + index)",
+                groupName: sportName,
+                teacher: specialField
             )
         }
     }
-    
+
+    // Simple preview struct for display
+    private struct PreviewEntry: Identifiable {
+        let id: UUID
+        let subjectID: String
+        let groupName: String
+        let teacher: String
+    }
+
     var body: some View {
         NavigationView {
             Form {
                 Section(header: Text("Batch Configuration")) {
                     TextField("Sport/Team Name", text: $sportName)
                         .autocapitalization(.words)
-                    
+
                     HStack {
                         Text("Number of Athletes")
                         Spacer()
@@ -54,10 +55,10 @@ struct BatchAddAthletesView: View {
                             .multilineTextAlignment(.trailing)
                             .frame(width: 60)
                     }
-                    
+
                     TextField("Grade/Special (optional)", text: $specialField)
                         .autocapitalization(.words)
-                    
+
                     HStack {
                         Text("Starting Subject ID")
                         Spacer()
@@ -71,7 +72,7 @@ struct BatchAddAthletesView: View {
                         }
                     }
                 }
-                
+
                 Section(header: Text("Preview (\(previewEntries.count) athletes)")) {
                     if previewEntries.isEmpty {
                         Text("Enter valid number of athletes (1-100)")
@@ -82,7 +83,7 @@ struct BatchAddAthletesView: View {
                         ForEach(previewEntries.prefix(5)) { entry in
                             previewRow(for: entry)
                         }
-                        
+
                         HStack {
                             Spacer()
                             Text("... \(previewEntries.count - 10) more entries ...")
@@ -91,7 +92,7 @@ struct BatchAddAthletesView: View {
                             Spacer()
                         }
                         .padding(.vertical, 4)
-                        
+
                         ForEach(previewEntries.suffix(5)) { entry in
                             previewRow(for: entry)
                         }
@@ -101,24 +102,24 @@ struct BatchAddAthletesView: View {
                         }
                     }
                 }
-                
+
                 Section(header: Text("Notes")) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("• Athletes will be created with blank names")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        
+
                         Text("• Subject IDs will auto-increment from \(startingSubjectID)")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        
+
                         Text("• You can edit individual athletes after creation")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     .padding(.vertical, 4)
                 }
-                
+
                 if isLoading {
                     HStack {
                         Spacer()
@@ -134,7 +135,7 @@ struct BatchAddAthletesView: View {
                         presentationMode.wrappedValue.dismiss()
                     }
                 }
-                
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Add Athletes") {
                         batchAddAthletes()
@@ -155,19 +156,19 @@ struct BatchAddAthletesView: View {
             loadHighestSubjectID()
         }
     }
-    
+
     @ViewBuilder
-    private func previewRow(for entry: RosterEntry) -> some View {
+    private func previewRow(for entry: PreviewEntry) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text("ID: \(entry.firstName)")
+                Text("ID: \(entry.subjectID)")
                     .font(.headline)
                     .foregroundColor(.blue)
-                
+
                 Spacer()
-                
-                if !entry.group.isEmpty {
-                    Text(entry.group)
+
+                if !entry.groupName.isEmpty {
+                    Text(entry.groupName)
                         .font(.caption)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
@@ -175,13 +176,13 @@ struct BatchAddAthletesView: View {
                         .cornerRadius(4)
                 }
             }
-            
+
             if !entry.teacher.isEmpty {
                 Text("Special: \(entry.teacher)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            
+
             Text("(Name to be added later)")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -189,24 +190,25 @@ struct BatchAddAthletesView: View {
         }
         .padding(.vertical, 2)
     }
-    
+
     private func loadHighestSubjectID() {
         isLoadingExisting = true
-        
-        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let shoot):
-                    // Find the highest Subject ID value
-                    let highestID = shoot.roster.compactMap { entry -> Int? in
-                        return Int(entry.firstName)
-                    }.max() ?? 100
-                    
+
+        Task {
+            do {
+                let entries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+
+                // Find the highest Subject ID value
+                let highestID = entries.compactMap { entry -> Int? in
+                    return Int(entry.firstName)
+                }.max() ?? 100
+
+                await MainActor.run {
                     self.startingSubjectID = highestID + 1
                     self.isLoadingExisting = false
-                    
-                case .failure(let error):
-                    print("Error loading sports shoot: \(error.localizedDescription)")
+                }
+            } catch {
+                await MainActor.run {
                     // Use default starting ID
                     self.startingSubjectID = 101
                     self.isLoadingExisting = false
@@ -214,7 +216,7 @@ struct BatchAddAthletesView: View {
             }
         }
     }
-    
+
     private func batchAddAthletes() {
         guard !sportName.isEmpty,
               let count = Int(numberOfAthletes),
@@ -224,22 +226,33 @@ struct BatchAddAthletesView: View {
             showingErrorAlert = true
             return
         }
-        
+
         isLoading = true
-        
-        // Create the roster entries
-        let entriesToAdd = previewEntries
-        
-        // Batch save to database
-        SportsShootService.shared.batchAddRosterEntries(shootID: shootID, entries: entriesToAdd) { success, error in
-            DispatchQueue.main.async {
-                isLoading = false
-                
-                if success {
+
+        Task {
+            do {
+                // Create roster entries one by one
+                for index in 0..<count {
+                    let entry = RosterEntry(
+                        sportsJobId: shootID,
+                        lastName: "",
+                        firstName: "\(startingSubjectID + index)",
+                        teacher: specialField,
+                        groupName: sportName,
+                        sortOrder: index
+                    )
+                    _ = try await RosterEntryService.shared.createEntry(entry)
+                }
+
+                await MainActor.run {
+                    isLoading = false
                     onComplete(true)
                     presentationMode.wrappedValue.dismiss()
-                } else {
-                    errorMessage = error?.localizedDescription ?? "Failed to add athletes"
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = "Failed to add athletes: \(error.localizedDescription)"
                     showingErrorAlert = true
                 }
             }
@@ -250,6 +263,6 @@ struct BatchAddAthletesView: View {
 // Preview
 struct BatchAddAthletesView_Previews: PreviewProvider {
     static var previews: some View {
-        BatchAddAthletesView(shootID: "preview-id") { _ in }
+        BatchAddAthletesView(shootID: UUID()) { _ in }
     }
 }

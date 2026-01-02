@@ -3,146 +3,342 @@
 //  Iconik Employee
 //
 //  Created for iPhone editing of sports shoots
+//  Updated for new Supabase-based architecture with realtime sync
 //
 
 import SwiftUI
 import Combine
 
 struct SportsShootDetailView: View {
-    let shootID: String
+    let shootID: UUID
 
-    // State management
+    // State management - now uses separate state for shoot, roster, and groups
     @State private var sportsShoot: SportsShoot?
+    @State private var rosterEntries: [RosterEntry] = []
+    @State private var groupImages: [GroupImage] = []
     @State private var isLoading = true
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
     @State private var showingPermissionWarning = false
     @State private var selectedTab = 0 // 0 = Athletes, 1 = Groups
 
-    // Network status
-    @State private var isOnline = true
+    // Sync engine for offline-first operations
+    @StateObject private var syncEngine = SyncEngine.shared
+    @StateObject private var lockManager = LockManager.shared
 
-    // Background sync service for visual feedback
-    @ObservedObject private var syncService = BackgroundSyncService.shared
-    
     // States for roster management
     @State private var showingAddRosterEntry = false
     @State private var showingBatchAdd = false
     @State private var showingAddGroupImage = false
     @State private var selectedRosterEntry: RosterEntry?
     @State private var selectedGroupImage: GroupImage?
-    
+
     // Sort states
     @State private var sortField: String = "firstName" // Default to sort by Subject ID
     @State private var sortAscending: Bool = true
-    
+
     // Import/Export state
     @State private var showingImportExport = false
     @State private var showingMultiPhotoImport = false
-    
+
     // Field editing state
-    @State private var currentlyEditingEntry: String? = nil // ID of entry being edited
-    @State private var editingValues: [String: String] = [:] // [entryID: imageNumber]
-    @State private var lockedEntries: [String: String] = [:] // [entryID: editorName]
-    
+    @State private var currentlyEditingEntryId: UUID? = nil
+    @State private var editingValues: [UUID: String] = [:]
+    @State private var lastSavedValues: [UUID: String] = [:]
+
     // Filter states
     @State private var showFilterPanel = false
     @State private var selectedFilters: Set<String> = []
     @State private var selectedSpecialFilters: Set<String> = []
     @State private var imageFilterType: ImageFilterType = .all
-    
-    // Autosave states - these need to be @State properties, not simple vars
+
+    // Autosave states
     @State private var debounceTask: DispatchWorkItem?
-    @State private var lastSavedValues: [String: String] = [:] // [entryID: lastSavedValue]
-    
-    // Track lock timestamps for force unlock feature
-    @State private var lockTimestamps: [String: Date] = [:]
 
     // Sync notification
     @State private var showSyncNotification = false
     @State private var syncNotificationMessage = ""
 
     // Environment
-    // @Environment(\.presentationMode) var presentationMode // Removed - using NavigationLink
     @Environment(\.scenePhase) var scenePhase
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     @AppStorage("userLastName") private var storedUserLastName: String = ""
-    
-    // Device session ID - unique to this app instance
-    private static let deviceSessionID = UUID().uuidString
-    
-    // Current user identifier combines name and device
-    private var currentEditorIdentifier: String {
-        return "\(storedUserFirstName) \(storedUserLastName) (\(Self.deviceSessionID.prefix(8)))"
-    }
-    
+
     // Focus state for keyboard navigation
-    @FocusState private var focusedField: String?
-    
-    // Timer for refreshing locked entries - increased frequency for better responsiveness
-    let lockRefreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
-    
+    @FocusState private var focusedField: UUID?
+
+    // Current user identifier
+    private var currentEditorName: String {
+        return "\(storedUserFirstName) \(storedUserLastName)".trimmingCharacters(in: .whitespaces)
+    }
+
     // Filter options
     let specialFilters = ["Seniors", "8th Graders", "Coaches"]
-    
+
     enum ImageFilterType {
         case all
         case hasImages
         case noImages
     }
-    
+
     var body: some View {
+        mainContentView
+            .overlay(overlayViews)
+            .navigationTitle(sportsShoot?.schoolName ?? "Sports Shoot")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(false)
+            .toolbar { toolbarContent }
+            .task { await performInitialLoad() }
+            .onDisappear { handleDisappear() }
+            .onChange(of: scenePhase) { handleScenePhaseChange($0) }
+            .onChange(of: editingValues) { handleEditingValueChange($0) }
+            .alert(isPresented: $showingErrorAlert) { errorAlert }
+            .sheet(isPresented: $showingAddRosterEntry) { addRosterEntrySheet }
+            .sheet(isPresented: $showingBatchAdd) { batchAddSheet }
+            .sheet(isPresented: $showingAddGroupImage) { addGroupImageSheet }
+            .sheet(isPresented: $showingImportExport) { importExportSheet }
+            .sheet(isPresented: $showingMultiPhotoImport) { multiPhotoImportSheet }
+    }
+
+    // MARK: - Toolbar Content
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            leadingToolbarButton
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            trailingToolbarMenu
+        }
+    }
+
+    @ViewBuilder
+    private var leadingToolbarButton: some View {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            Button(action: { toggleSidebar() }) {
+                Image(systemName: "sidebar.left")
+                    .foregroundColor(.blue)
+            }
+        }
+    }
+
+    private var trailingToolbarMenu: some View {
+        Menu {
+            Button(action: { showingMultiPhotoImport = true }) {
+                Label("Import Paper Rosters", systemImage: "doc.viewfinder")
+            }
+            Button(action: { showingImportExport = true }) {
+                Label("Import/Export CSV", systemImage: "square.and.arrow.up.on.square")
+            }
+            syncStatusButton
+            connectionStatusLabel
+        } label: {
+            menuLabel
+        }
+    }
+
+    @ViewBuilder
+    private var syncStatusButton: some View {
+        if syncEngine.pendingCount > 0 {
+            Button(action: { Task { await syncEngine.syncNow() } }) {
+                syncButtonLabel
+            }
+            .disabled(syncEngine.isSyncing || !syncEngine.isOnline)
+        }
+    }
+
+    @ViewBuilder
+    private var syncButtonLabel: some View {
+        if syncEngine.isSyncing {
+            Label("Syncing...", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+        } else {
+            Label("Sync \(syncEngine.pendingCount) pending change\(syncEngine.pendingCount == 1 ? "" : "s")", systemImage: "arrow.triangle.2.circlepath")
+        }
+    }
+
+    @ViewBuilder
+    private var connectionStatusLabel: some View {
+        if syncEngine.isOnline {
+            Label("Online", systemImage: "wifi")
+                .foregroundColor(.green)
+        } else {
+            Label("Offline", systemImage: "wifi.slash")
+                .foregroundColor(.orange)
+        }
+    }
+
+    private var menuLabel: some View {
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: "ellipsis.circle")
+            if syncEngine.pendingCount > 0 {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 8, height: 8)
+                    .offset(x: 4, y: -4)
+            }
+        }
+    }
+
+    // MARK: - Lifecycle Handlers
+
+    private func performInitialLoad() async {
+        // Set current user for lock manager
+        if let userId = SupabaseManager.shared.client.auth.currentUser?.id {
+            LockManager.shared.setCurrentUser(
+                userId: userId,
+                userName: "\(storedUserFirstName) \(storedUserLastName)"
+            )
+        }
+
+        await loadSportsShoot()
+        await setupRealtimeSubscriptions()
+        syncEngine.startSyncing()
+    }
+
+    private func handleDisappear() {
+        Task {
+            if let entryId = currentlyEditingEntryId {
+                await lockManager.releaseRosterEntryLock(entryId: entryId)
+            }
+            await RosterEntryService.shared.unsubscribe()
+            await GroupImageService.shared.unsubscribe()
+        }
+    }
+
+    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        if newPhase == .background || newPhase == .inactive {
+            lockManager.handleAppBackground()
+        } else if newPhase == .active {
+            lockManager.handleAppForeground()
+        }
+    }
+
+    // MARK: - Alert and Sheet Views
+
+    private var errorAlert: Alert {
+        Alert(
+            title: Text("Error"),
+            message: Text(errorMessage),
+            dismissButton: .default(Text("OK"))
+        )
+    }
+
+    private var addRosterEntrySheet: some View {
+        AddRosterEntryView(
+            shootID: shootID,
+            existingEntry: selectedRosterEntry,
+            onComplete: { success in
+                if success { Task { await refreshRosterEntries() } }
+                selectedRosterEntry = nil
+            }
+        )
+    }
+
+    private var batchAddSheet: some View {
+        BatchAddAthletesView(
+            shootID: shootID,
+            onComplete: { success in
+                if success { Task { await refreshRosterEntries() } }
+            }
+        )
+    }
+
+    private var addGroupImageSheet: some View {
+        AddGroupImageView(
+            shootID: shootID,
+            existingGroup: selectedGroupImage,
+            onComplete: { success in
+                if success { Task { await refreshGroupImages() } }
+                selectedGroupImage = nil
+            }
+        )
+    }
+
+    private var importExportSheet: some View {
+        CSVImportExportView(
+            shootID: shootID,
+            onComplete: { success in
+                if success { Task { await refreshRosterEntries() } }
+                showingImportExport = false
+            }
+        )
+    }
+
+    private var multiPhotoImportSheet: some View {
+        MultiPhotoRosterImporterView(
+            shootID: shootID,
+            onComplete: { success in
+                if success { Task { await refreshRosterEntries() } }
+                showingMultiPhotoImport = false
+            }
+        )
+    }
+
+    // MARK: - Extracted Body Components
+
+    @ViewBuilder
+    private var mainContentView: some View {
         ZStack {
             if isLoading {
-                ProgressView("Loading...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                loadingView
             } else if let shoot = sportsShoot {
-                VStack(spacing: 0) {
-                    // Compact header - much smaller
-                    compactHeaderView(shoot)
-                    
-                    // Tab selector
-                    tabSelectorView
-                    
-                    // Active filters indicator
-                    if (!selectedFilters.isEmpty || !selectedSpecialFilters.isEmpty || imageFilterType != .all) && selectedTab == 0 {
-                        activeFiltersView
-                    }
-                    
-                    // Tab content
-                    if selectedTab == 0 {
-                        rosterListView(shoot)
-                    } else {
-                        groupImagesListView(shoot)
-                    }
-                }
-                .background(Color(.systemGroupedBackground))
+                shootContentView(shoot)
             } else {
-                VStack {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 50))
-                        .foregroundColor(.orange)
-                    
-                    Text("Failed to Load")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .padding(.top)
-                    
-                    Text("Unable to load this sports shoot. Please try again.")
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                    
-                    Button("Retry") {
-                        loadSportsShoot()
-                    }
-                    .padding(.top)
-                    .foregroundColor(.blue)
-                }
-                .padding()
+                failedToLoadView
             }
-            
-            // Filter panel (slides out from right side)
+        }
+    }
+
+    private var loadingView: some View {
+        ProgressView("Loading...")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func shootContentView(_ shoot: SportsShoot) -> some View {
+        VStack(spacing: 0) {
+            compactHeaderView(shoot)
+            tabSelectorView
+            if shouldShowFiltersIndicator {
+                activeFiltersView
+            }
+            if selectedTab == 0 {
+                rosterListView(shoot)
+            } else {
+                groupImagesListView(shoot)
+            }
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private var shouldShowFiltersIndicator: Bool {
+        (!selectedFilters.isEmpty || !selectedSpecialFilters.isEmpty || imageFilterType != .all) && selectedTab == 0
+    }
+
+    private var failedToLoadView: some View {
+        VStack {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 50))
+                .foregroundColor(.orange)
+            Text("Failed to Load")
+                .font(.title2)
+                .fontWeight(.bold)
+                .padding(.top)
+            Text("Unable to load this sports shoot. Please try again.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+            Button("Retry") {
+                Task { await loadSportsShoot() }
+            }
+            .padding(.top)
+            .foregroundColor(.blue)
+        }
+        .padding()
+    }
+
+    @ViewBuilder
+    private var overlayViews: some View {
+        ZStack {
             if selectedTab == 0 {
                 FilterPanelView(
                     isShowing: $showFilterPanel,
@@ -155,320 +351,88 @@ struct SportsShootDetailView: View {
                 )
             }
 
-            // Sync notification toast
             if showSyncNotification {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                        Text(syncNotificationMessage)
-                            .font(.subheadline)
-                            .foregroundColor(.white)
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.8))
-                    .cornerRadius(10)
-                    .padding(.bottom, 50)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                .animation(.spring(), value: showSyncNotification)
-            }
-        }
-        .navigationTitle(sportsShoot?.schoolName ?? "Sports Shoot")
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(false) // Use default back button
-        .toolbar {
-            // Add sidebar toggle button for iPad
-            ToolbarItem(placement: .navigationBarLeading) {
-                if UIDevice.current.userInterfaceIdiom == .pad {
-                    Button(action: {
-                        toggleSidebar()
-                    }) {
-                        Image(systemName: "sidebar.left")
-                            .foregroundColor(.blue)
-                    }
-                }
-            }
-            
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    Button(action: {
-                        showingMultiPhotoImport = true
-                    }) {
-                        Label("Import Paper Rosters", systemImage: "doc.viewfinder")
-                    }
-
-                    Button(action: {
-                        showingImportExport = true
-                    }) {
-                        Label("Import/Export CSV", systemImage: "square.and.arrow.up.on.square")
-                    }
-
-                    // Show sync status and pending change count
-                    if let shoot = sportsShoot {
-                        let pendingCount = PendingSyncManager.shared.pendingChangeCount(for: shoot.id)
-
-                        if pendingCount > 0 {
-                            Button(action: {
-                                Task {
-                                    await BackgroundSyncService.shared.syncNow()
-                                }
-                            }) {
-                                if syncService.isSyncing {
-                                    Label("Syncing...", systemImage: "arrow.triangle.2.circlepath.circle.fill")
-                                } else {
-                                    Label("Sync \(pendingCount) pending change\(pendingCount == 1 ? "" : "s")", systemImage: "arrow.triangle.2.circlepath")
-                                }
-                            }
-                            .disabled(syncService.isSyncing || !isOnline)
-                        }
-
-                        // Show offline status
-                        if LocalSportsShootRepository.shared.isFullyCached(shootId: shoot.id) {
-                            Label("Available Offline", systemImage: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                        }
-                    }
-                } label: {
-                    // Show badge if there are pending changes
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "ellipsis.circle")
-
-                        if let shoot = sportsShoot {
-                            let pendingCount = PendingSyncManager.shared.pendingChangeCount(for: shoot.id)
-                            if pendingCount > 0 {
-                                Circle()
-                                    .fill(Color.orange)
-                                    .frame(width: 8, height: 8)
-                                    .offset(x: 4, y: -4)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .onAppear {
-            loadSportsShoot()
-            setupNetworkMonitoring()
-            setupRealtimeListeners()
-            // Force cleanup of any stale locks when entering the view
-            forceCleanupStaleLocks()
-        }
-        .onDisappear {
-            // Release any active locks when leaving the view
-            if let entryID = currentlyEditingEntry {
-                releaseLock(shootID: shootID, entryID: entryID)
-            }
-        }
-        .onChange(of: scenePhase) { newPhase in
-            // Release locks when app goes to background
-            if newPhase == .background || newPhase == .inactive {
-                if let entryID = currentlyEditingEntry {
-                    releaseLock(shootID: shootID, entryID: entryID)
-                }
-            }
-        }
-        .onReceive(lockRefreshTimer) { _ in
-            refreshLocks()
-        }
-        .onChange(of: syncService.isSyncing) { isSyncing in
-            // Show notification when sync completes
-            if !isSyncing && syncService.lastSyncAt != nil {
-                let pendingCount = syncService.pendingChangeCount
-                if syncService.lastSyncSuccess && pendingCount == 0 {
-                    syncNotificationMessage = "All changes synced successfully"
-                    showSyncNotification = true
-
-                    // Auto-dismiss after 3 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        showSyncNotification = false
-                    }
-                }
-            }
-        }
-        .onChange(of: editingValues) { newValues in
-            // Auto-save when the text changes - LOCAL-FIRST APPROACH
-            if let entryID = currentlyEditingEntry,
-               let newValue = newValues[entryID],
-               let shoot = sportsShoot,
-               let entry = shoot.roster.first(where: { $0.id == entryID }),
-               newValue != (lastSavedValues[entryID] ?? entry.imageNumbers) {
-
-                // Cancel any existing debounce task
-                debounceTask?.cancel()
-
-                // Create a new debounce task with a 0.5-second delay
-                let task = DispatchWorkItem {
-                    var updatedEntry = entry
-                    updatedEntry.imageNumbers = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                    // LOCAL-FIRST: Save to local repository immediately (always succeeds)
-                    if LocalSportsShootRepository.shared.updateRosterEntry(shootId: shoot.id, entry: updatedEntry) {
-                        // Update the lastSavedValue to prevent redundant saves
-                        lastSavedValues[entryID] = newValue
-
-                        // Queue change for background sync
-                        let changeData: [String: Any] = [
-                            "firstName": updatedEntry.firstName,
-                            "lastName": updatedEntry.lastName,
-                            "teacher": updatedEntry.teacher,
-                            "group": updatedEntry.group,
-                            "email": updatedEntry.email,
-                            "phone": updatedEntry.phone,
-                            "imageNumbers": updatedEntry.imageNumbers,
-                            "notes": updatedEntry.notes
-                        ]
-
-                        PendingSyncManager.shared.queueChange(
-                            shootId: shoot.id,
-                            entryId: updatedEntry.id,
-                            changeType: .updateEntry,
-                            data: changeData
-                        )
-
-                        // Update in-memory state directly (don't reload entire shoot)
-                        if var currentShoot = self.sportsShoot,
-                           let index = currentShoot.roster.firstIndex(where: { $0.id == entryID }) {
-                            currentShoot.roster[index] = updatedEntry
-                            self.sportsShoot = currentShoot
-                        }
-
-                        print("✓ Saved locally and queued for sync")
-                    } else {
-                        print("❌ Local save failed - this should never happen!")
-                    }
-                }
-
-                // Schedule the new task
-                debounceTask = task
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
-            }
-        }
-        .alert(isPresented: $showingErrorAlert) {
-            Alert(
-                title: Text("Error"),
-                message: Text(errorMessage),
-                dismissButton: .default(Text("OK"))
-            )
-        }
-        .sheet(isPresented: $showingAddRosterEntry) {
-            if let shoot = sportsShoot {
-                AddRosterEntryView(
-                    shootID: shoot.id,
-                    existingEntry: selectedRosterEntry,
-                    onComplete: { success in
-                        if success {
-                            refreshSportsShoot()
-                        }
-                        selectedRosterEntry = nil
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showingBatchAdd) {
-            if let shoot = sportsShoot {
-                BatchAddAthletesView(
-                    shootID: shoot.id,
-                    onComplete: { success in
-                        if success {
-                            refreshSportsShoot()
-                        }
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showingAddGroupImage) {
-            if let shoot = sportsShoot {
-                AddGroupImageView(
-                    shootID: shoot.id,
-                    existingGroup: selectedGroupImage,
-                    sportsShoot: shoot,
-                    onComplete: { success in
-                        if success {
-                            refreshSportsShoot()
-                        }
-                        selectedGroupImage = nil
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showingImportExport) {
-            if let shoot = sportsShoot {
-                CSVImportExportView(
-                    shootID: shoot.id,
-                    onComplete: { success in
-                        if success {
-                            refreshSportsShoot()
-                        }
-                        showingImportExport = false
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showingMultiPhotoImport) {
-            if let shoot = sportsShoot {
-                MultiPhotoRosterImporterView(
-                    shootID: shoot.id,
-                    onComplete: { success in
-                        if success {
-                            refreshSportsShoot()
-                        }
-                        showingMultiPhotoImport = false
-                    }
-                )
+                syncNotificationView
             }
         }
     }
-    
+
+    private var syncNotificationView: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                Text(syncNotificationMessage)
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+            }
+            .padding()
+            .background(Color.black.opacity(0.8))
+            .cornerRadius(10)
+            .padding(.bottom, 50)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+        .animation(.spring(), value: showSyncNotification)
+    }
+
     // MARK: - Compact Header View
-    
+
     private func compactHeaderView(_ shoot: SportsShoot) -> some View {
         VStack(spacing: 4) {
-            // Single line with sport and basic info
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(shoot.sportName)
                         .font(.headline)
                         .foregroundColor(.blue)
-                    
+
                     HStack(spacing: 8) {
                         if !shoot.location.isEmpty {
                             Text(shoot.location)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
-                        
+
                         Text(formatDate(shoot.shootDate))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
-                
+
                 Spacer()
-                
-                // Status indicators in compact form
+
+                // Status indicators
                 HStack(spacing: 8) {
-                    SyncStatusBadge(shootID: shoot.id)
-                        .font(.system(size: 16))
-                    
-                    CompactConnectionIndicator()
+                    // Sync status indicator
+                    if syncEngine.isSyncing {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    } else if syncEngine.pendingCount > 0 {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 14))
+                            .foregroundColor(.orange)
+                    }
+
+                    // Connection indicator
+                    Image(systemName: syncEngine.isOnline ? "wifi" : "wifi.slash")
+                        .font(.system(size: 14))
+                        .foregroundColor(syncEngine.isOnline ? .green : .orange)
                 }
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
-            
-            // Offline notification banner (if applicable) - more compact
-            if !isOnline {
+
+            // Offline notification banner
+            if !syncEngine.isOnline {
                 HStack {
                     Image(systemName: "wifi.slash")
                         .font(.caption)
                         .foregroundColor(.orange)
-                    
+
                     Text("Offline - changes will sync when you reconnect")
                         .font(.caption)
                         .foregroundColor(.orange)
-                    
+
                     Spacer()
                 }
                 .padding(.horizontal)
@@ -478,33 +442,27 @@ struct SportsShootDetailView: View {
         }
         .background(Color(.secondarySystemGroupedBackground))
     }
-    
+
     // MARK: - Tab Selector View
-    
+
     private var tabSelectorView: some View {
         HStack {
             Picker("", selection: $selectedTab) {
-                Text("Athletes").tag(0)
-                Text("Groups").tag(1)
+                Text("Athletes (\(rosterEntries.count))").tag(0)
+                Text("Groups (\(groupImages.count))").tag(1)
             }
             .pickerStyle(SegmentedPickerStyle())
             .onChange(of: selectedTab) { newValue in
-                // Close filter panel when switching to Groups tab
                 if newValue == 1 {
-                    withAnimation {
-                        showFilterPanel = false
-                    }
+                    withAnimation { showFilterPanel = false }
                 }
             }
-            
+
             Spacer()
-            
-            // Filter button (only for Athletes tab)
+
             if selectedTab == 0 {
                 Button(action: {
-                    withAnimation {
-                        showFilterPanel.toggle()
-                    }
+                    withAnimation { showFilterPanel.toggle() }
                 }) {
                     Image(systemName: "line.horizontal.3.decrease.circle")
                         .font(.system(size: 18))
@@ -515,18 +473,17 @@ struct SportsShootDetailView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
     }
-    
+
     // MARK: - Active Filters View
-    
+
     private var activeFiltersView: some View {
         HStack {
             Text("Filtered by: ")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    // Show image filter indicator if active
                     if imageFilterType == .hasImages {
                         Text("Has Images")
                             .font(.caption)
@@ -544,8 +501,7 @@ struct SportsShootDetailView: View {
                             .foregroundColor(.green)
                             .cornerRadius(4)
                     }
-                    
-                    // Show special filter indicators
+
                     ForEach(Array(selectedSpecialFilters), id: \.self) { special in
                         Text(special)
                             .font(.caption)
@@ -555,8 +511,7 @@ struct SportsShootDetailView: View {
                             .foregroundColor(.purple)
                             .cornerRadius(4)
                     }
-                    
-                    // Show group filter indicators
+
                     ForEach(Array(selectedFilters), id: \.self) { group in
                         Text(group)
                             .font(.caption)
@@ -568,9 +523,9 @@ struct SportsShootDetailView: View {
                     }
                 }
             }
-            
+
             Spacer()
-            
+
             Button(action: {
                 withAnimation {
                     selectedFilters.removeAll()
@@ -587,25 +542,25 @@ struct SportsShootDetailView: View {
         .padding(.vertical, 4)
         .background(Color(.systemGroupedBackground))
     }
-    
+
     // MARK: - Roster List View
-    
+
     private func rosterListView(_ shoot: SportsShoot) -> some View {
         VStack(spacing: 0) {
-            // Column headers with sorting functionality
+            // Column headers with sorting
             HStack {
                 sortableHeader("Name", field: "lastName")
                 sortableHeader("ID", field: "firstName")
                 sortableHeader("Special", field: "teacher")
-                sortableHeader("Team", field: "group")
+                sortableHeader("Team", field: "groupName")
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
             .background(Color(.secondarySystemGroupedBackground))
-            
-            // Athlete count display
+
+            // Athlete count
             HStack {
-                let filteredRoster = filterRoster(shoot.roster)
+                let filteredRoster = filterRoster(rosterEntries)
                 let athleteCount = filteredRoster.filter { !$0.lastName.isEmpty }.count
                 Text("Athletes: \(athleteCount)")
                     .font(.system(size: 14, weight: .medium))
@@ -615,27 +570,21 @@ struct SportsShootDetailView: View {
                 Spacer()
             }
             .background(Color(.systemGroupedBackground))
-            
-            // List of roster entries
+
+            // Roster list
             List {
-                ForEach(Array(sortedRoster(filterRoster(shoot.roster)).enumerated()), id: \.element.id) { index, entry in
-                    rosterEntryRow(shoot: shoot, entry: entry, isEven: index % 2 == 0)
-                        .listRowInsets(EdgeInsets(
-                            top: 4,
-                            leading: 10,
-                            bottom: 4,
-                            trailing: 10
-                        ))
+                ForEach(Array(sortedRoster(filterRoster(rosterEntries)).enumerated()), id: \.element.id) { index, entry in
+                    rosterEntryRow(entry: entry, isEven: index % 2 == 0)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
                         .listRowBackground(Color.clear)
                 }
-                
             }
             .listStyle(PlainListStyle())
-            
-            // Add athlete buttons below the list
+
+            // Add athlete buttons
             HStack(spacing: 10) {
                 Spacer()
-                
+
                 Button(action: {
                     selectedRosterEntry = nil
                     showingAddRosterEntry = true
@@ -651,10 +600,8 @@ struct SportsShootDetailView: View {
                     .foregroundColor(.white)
                     .cornerRadius(8)
                 }
-                
-                Button(action: {
-                    showingBatchAdd = true
-                }) {
+
+                Button(action: { showingBatchAdd = true }) {
                     HStack {
                         Image(systemName: "person.3.fill")
                         Text("Batch")
@@ -666,139 +613,73 @@ struct SportsShootDetailView: View {
                     .foregroundColor(.white)
                     .cornerRadius(8)
                 }
-                
+
                 Spacer()
             }
             .padding(.vertical, 8)
         }
     }
-    
-    private func rosterEntryRow(shoot: SportsShoot, entry: RosterEntry, isEven: Bool) -> some View {
-        let isOwnLock = isOwnLock(entry.id)
-        let isLockedByOthers = lockedEntries[entry.id] != nil && !isOwnLock
-        let isCurrentlyEditing = currentlyEditingEntry == entry.id
-        let groupColor = colorForGroup(entry.group)
-        
+
+    private func rosterEntryRow(entry: RosterEntry, isEven: Bool) -> some View {
+        let isCurrentlyEditing = currentlyEditingEntryId == entry.id
+        let isLockedByOther = entry.isLocked && entry.lockedBy != lockManager.currentUserId
+        let groupColor = colorForGroup(entry.groupName)
+
         return VStack(spacing: 0) {
-            // Main content row
             VStack(spacing: 8) {
-                // Adaptive layout based on content length
-                let layoutStrategy = getLayoutStrategy(entry)
-                let needsMultiLine = groupNeedsMultiLineLayout(entry.group)
-                
-                if layoutStrategy.useVertical {
-                    // Vertical layout for extremely long content
-                    VStack(alignment: .leading, spacing: 8) {
-                        // Player info - full width
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 4) {
-                                Text(entry.firstName)
-                                    .font(.system(size: 18, weight: .bold))
-                                    .foregroundColor(.blue)
-                                
-                                if !entry.teacher.isEmpty {
-                                    Text(specialTranslation(entry.teacher))
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.secondary)
-                                }
-                                
-                                Spacer()
+                // Player info row
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(entry.firstName)
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundColor(.blue)
+
+                            if !entry.teacher.isEmpty {
+                                Text(specialTranslation(entry.teacher))
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.secondary)
                             }
-                            
-                            Text(entry.lastName)
-                                .font(.system(size: 16))
-                                .foregroundColor(.primary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        
-                        // Group tag - full width
-                        if !entry.group.isEmpty {
-                            Text(entry.group)
-                                .font(.system(size: 11))
-                                .foregroundColor(.white)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .frame(minHeight: 32)
-                                .background(groupColor)
-                                .cornerRadius(4)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+
+                        Text(entry.lastName)
+                            .font(.system(size: 16))
+                            .foregroundColor(.primary)
+                            .lineLimit(2)
                     }
-                    .contentShape(Rectangle())  // Make entire area tappable
-                    .onTapGesture {
-                        // Open edit view when tapping on player info or group
-                        selectedRosterEntry = entry
-                        showingAddRosterEntry = true
-                    }
-                } else {
-                    // Horizontal layout for normal/moderately long content
-                    HStack(alignment: .top) {
-                        // Player info - gets priority for space
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 4) {
-                                Text(entry.firstName)
-                                    .font(.system(size: 18, weight: .bold))
-                                    .foregroundColor(.blue)
-                                
-                                if !entry.teacher.isEmpty {
-                                    Text(specialTranslation(entry.teacher))
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            
-                            Text(entry.lastName)
-                                .font(.system(size: 16))
-                                .foregroundColor(.primary)
-                                .lineLimit(layoutStrategy.playerLines)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .layoutPriority(1)
-                        
-                        Spacer(minLength: 8)
-                        
-                        // Group/Team tag
-                        if !entry.group.isEmpty {
-                            Text(entry.group)
-                                .font(.system(size: needsMultiLine ? 10 : 11))
-                                .foregroundColor(.white)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 4)
-                                .frame(minHeight: needsMultiLine ? 44 : 32)
-                                .background(groupColor)
-                                .cornerRadius(4)
-                                .lineLimit(layoutStrategy.groupLines)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .contentShape(Rectangle())  // Make entire area tappable
-                    .onTapGesture {
-                        // Open edit view when tapping on player info or group
-                        selectedRosterEntry = entry
-                        showingAddRosterEntry = true
+                    .layoutPriority(1)
+
+                    Spacer(minLength: 8)
+
+                    if !entry.groupName.isEmpty {
+                        Text(entry.groupName)
+                            .font(.system(size: 11))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(groupColor)
+                            .cornerRadius(4)
+                            .lineLimit(2)
                     }
                 }
-                
-                // Bottom row - Image input
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedRosterEntry = entry
+                    showingAddRosterEntry = true
+                }
+
+                // Image input row
                 if isCurrentlyEditing {
                     HStack(spacing: 8) {
                         AutosaveTextField(
                             text: Binding(
-                                get: { self.editingValues[entry.id] ?? entry.imageNumbers },
-                                set: { self.editingValues[entry.id] = $0 }
+                                get: { editingValues[entry.id] ?? entry.imageNumbers },
+                                set: { editingValues[entry.id] = $0 }
                             ),
                             placeholder: "",
-                            onTapOutside: {
-                                // Field autosaves on text change
-                            },
+                            onTapOutside: { },
                             onEnterOrDown: {
-                                // Find the next editable entry and start editing it
                                 moveToNextEditableEntry(currentID: entry.id)
                             }
                         )
@@ -806,12 +687,10 @@ struct SportsShootDetailView: View {
                         .frame(height: 40)
                         .background(Color.blue.opacity(0.3))
                         .cornerRadius(6)
-                        
-                        // Stop editing button
+
                         Button(action: {
-                            // Save any pending changes and release lock
-                            if let entryID = currentlyEditingEntry {
-                                releaseLock(shootID: shoot.id, entryID: entryID)
+                            Task {
+                                await stopEditing(entryId: entry.id)
                             }
                         }) {
                             Image(systemName: "checkmark.circle.fill")
@@ -819,30 +698,17 @@ struct SportsShootDetailView: View {
                                 .foregroundColor(.green)
                         }
                     }
-                } else if isLockedByOthers {
+                } else if isLockedByOther {
                     VStack(spacing: 2) {
                         Text(entry.imageNumbers.isEmpty ? "No images recorded" : entry.imageNumbers)
                             .font(.system(size: 14))
                             .foregroundColor(entry.imageNumbers.isEmpty ? .orange : .secondary)
                             .lineLimit(1)
-                        
-                        if let editor = lockedEntries[entry.id] {
-                            HStack(spacing: 4) {
-                                Text("Editing: \(editor)")
-                                    .font(.caption)
-                                    .foregroundColor(.red)
-                                
-                                // Add force unlock button for locks older than 60 seconds
-                                if shouldShowForceUnlock(for: entry.id) {
-                                    Button(action: {
-                                        forceUnlockEntry(shootID: shoot.id, entryID: entry.id)
-                                    }) {
-                                        Image(systemName: "lock.open.fill")
-                                            .font(.caption)
-                                            .foregroundColor(.orange)
-                                    }
-                                }
-                            }
+
+                        if let editorName = entry.lockedByName {
+                            Text("Editing: \(editorName)")
+                                .font(.caption)
+                                .foregroundColor(.red)
                         }
                     }
                     .frame(height: 40)
@@ -851,7 +717,9 @@ struct SportsShootDetailView: View {
                     .cornerRadius(6)
                 } else {
                     Button(action: {
-                        startEditing(shootID: shoot.id, entry: entry)
+                        Task {
+                            await startEditing(entry: entry)
+                        }
                     }) {
                         Text(entry.imageNumbers.isEmpty ? "Tap to add image #" : entry.imageNumbers)
                             .font(.system(size: 16))
@@ -863,54 +731,46 @@ struct SportsShootDetailView: View {
                             .foregroundColor(.white)
                             .cornerRadius(6)
                     }
-                    .buttonStyle(PlainButtonStyle())  // Prevents button from taking over entire tap area
+                    .buttonStyle(PlainButtonStyle())
                 }
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
-            
+
             Divider()
         }
-        .background(
-            isEven ?
-                Color(.systemBackground) :
-                Color(.systemGray6)
-        )
-        .overlay(
-            isLockedByOthers ?
-                Color.red.opacity(0.05) :
-                Color.clear
-        )
+        .background(isEven ? Color(.systemBackground) : Color(.systemGray6))
+        .overlay(isLockedByOther ? Color.red.opacity(0.05) : Color.clear)
         .contextMenu {
-            if !isLockedByOthers {
+            if !isLockedByOther {
                 Button(action: {
                     selectedRosterEntry = entry
                     showingAddRosterEntry = true
                 }) {
                     Label("Edit", systemImage: "pencil")
                 }
-                
+
                 Button(action: {
-                    startEditing(shootID: shoot.id, entry: entry)
+                    Task { await startEditing(entry: entry) }
                 }) {
                     Label("Edit Image Numbers", systemImage: "camera")
                 }
-                
+
                 Button(role: .destructive, action: {
-                    deleteRosterEntry(shoot: shoot, id: entry.id)
+                    Task { await deleteRosterEntry(entry) }
                 }) {
                     Label("Delete", systemImage: "trash")
                 }
             }
         }
     }
-    
+
     // MARK: - Group Images List View
-    
+
     private func groupImagesListView(_ shoot: SportsShoot) -> some View {
         VStack {
             List {
-                ForEach(shoot.groupImages) { group in
+                ForEach(groupImages) { group in
                     Button(action: {
                         selectedGroupImage = group
                         showingAddGroupImage = true
@@ -919,25 +779,31 @@ struct SportsShootDetailView: View {
                             Text(group.description)
                                 .font(.headline)
                                 .foregroundColor(.primary)
-                            
+
                             if !group.imageNumbers.isEmpty {
-                                HStack {
-                                    Label("Images: \(group.imageNumbers)", systemImage: "camera")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.top, 2)
+                                Label("Images: \(group.imageNumbers)", systemImage: "camera")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding(.top, 2)
                             } else {
                                 Text("No images recorded")
                                     .font(.caption)
                                     .foregroundColor(.orange)
                                     .padding(.top, 2)
                             }
-                            
+
                             if !group.notes.isEmpty {
                                 Text("Notes: \(group.notes)")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                    .padding(.top, 2)
+                            }
+
+                            // Lock indicator
+                            if group.isLocked, let editorName = group.lockedByName {
+                                Text("Editing: \(editorName)")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
                                     .padding(.top, 2)
                             }
                         }
@@ -945,23 +811,25 @@ struct SportsShootDetailView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                     .contextMenu {
-                        Button(action: {
-                            selectedGroupImage = group
-                            showingAddGroupImage = true
-                        }) {
-                            Label("Edit", systemImage: "pencil")
-                        }
-                        
-                        Button(role: .destructive, action: {
-                            deleteGroupImage(shoot: shoot, id: group.id)
-                        }) {
-                            Label("Delete", systemImage: "trash")
+                        if !group.isLocked || group.lockedBy == lockManager.currentUserId {
+                            Button(action: {
+                                selectedGroupImage = group
+                                showingAddGroupImage = true
+                            }) {
+                                Label("Edit", systemImage: "pencil")
+                            }
+
+                            Button(role: .destructive, action: {
+                                Task { await deleteGroupImage(group) }
+                            }) {
+                                Label("Delete", systemImage: "trash")
+                            }
                         }
                     }
                 }
             }
             .listStyle(InsetGroupedListStyle())
-            
+
             Button(action: {
                 selectedGroupImage = nil
                 showingAddGroupImage = true
@@ -978,9 +846,9 @@ struct SportsShootDetailView: View {
             }
         }
     }
-    
+
     // MARK: - Filter Panel View
-    
+
     struct FilterPanelView: View {
         @Binding var isShowing: Bool
         @Binding var selectedFilters: Set<String>
@@ -989,34 +857,27 @@ struct SportsShootDetailView: View {
         var groupNames: [String]
         var specialFilters: [String]
         var colorForGroup: (String) -> Color
-        
+
         var body: some View {
             ZStack {
-                // Background overlay
                 Color.black.opacity(isShowing ? 0.3 : 0)
                     .edgesIgnoringSafeArea(.all)
                     .onTapGesture {
-                        withAnimation {
-                            isShowing = false
-                        }
+                        withAnimation { isShowing = false }
                     }
-                
-                // Filter panel
+
                 HStack {
                     Spacer()
-                    
+
                     VStack(spacing: 0) {
-                        // Header
                         HStack {
                             Text("Filter Athletes")
                                 .font(.headline)
-                            
+
                             Spacer()
-                            
+
                             Button(action: {
-                                withAnimation {
-                                    isShowing = false
-                                }
+                                withAnimation { isShowing = false }
                             }) {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundColor(.gray)
@@ -1024,22 +885,20 @@ struct SportsShootDetailView: View {
                             }
                         }
                         .padding()
-                        
+
                         Divider()
-                        
+
                         ScrollView {
                             VStack(alignment: .leading, spacing: 16) {
-                                // Special filters section
+                                // Special filters
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Special Categories")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
-                                    
+
                                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                                         ForEach(specialFilters, id: \.self) { special in
-                                            Button(action: {
-                                                toggleSpecialFilter(special)
-                                            }) {
+                                            Button(action: { toggleSpecialFilter(special) }) {
                                                 Text(special)
                                                     .font(.system(size: 14))
                                                     .padding(.horizontal, 12)
@@ -1051,15 +910,15 @@ struct SportsShootDetailView: View {
                                         }
                                     }
                                 }
-                                
+
                                 Divider()
-                                
-                                // Image filters section
+
+                                // Image filters
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Image Status")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
-                                    
+
                                     HStack(spacing: 8) {
                                         Button(action: {
                                             imageFilterType = imageFilterType == .hasImages ? .all : .hasImages
@@ -1072,7 +931,7 @@ struct SportsShootDetailView: View {
                                                 .foregroundColor(imageFilterType == .hasImages ? .white : .primary)
                                                 .cornerRadius(8)
                                         }
-                                        
+
                                         Button(action: {
                                             imageFilterType = imageFilterType == .noImages ? .all : .noImages
                                         }) {
@@ -1086,23 +945,21 @@ struct SportsShootDetailView: View {
                                         }
                                     }
                                 }
-                                
+
                                 Divider()
-                                
-                                // Group filters section
+
+                                // Group filters
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
                                         Text("Sport/Team")
                                             .font(.subheadline)
                                             .fontWeight(.medium)
-                                        
+
                                         Spacer()
-                                        
+
                                         if !selectedFilters.isEmpty {
                                             Button(action: {
-                                                withAnimation {
-                                                    selectedFilters.removeAll()
-                                                }
+                                                withAnimation { selectedFilters.removeAll() }
                                             }) {
                                                 Text("Clear")
                                                     .font(.caption)
@@ -1110,7 +967,7 @@ struct SportsShootDetailView: View {
                                             }
                                         }
                                     }
-                                    
+
                                     if groupNames.isEmpty {
                                         Text("No groups available")
                                             .font(.caption)
@@ -1118,9 +975,7 @@ struct SportsShootDetailView: View {
                                     } else {
                                         LazyVGrid(columns: [GridItem(.flexible())], spacing: 8) {
                                             ForEach(groupNames, id: \.self) { group in
-                                                Button(action: {
-                                                    toggleGroupFilter(group)
-                                                }) {
+                                                Button(action: { toggleGroupFilter(group) }) {
                                                     HStack {
                                                         Text(group)
                                                             .font(.system(size: 14))
@@ -1129,9 +984,9 @@ struct SportsShootDetailView: View {
                                                             .padding(.vertical, 4)
                                                             .background(colorForGroup(group))
                                                             .cornerRadius(4)
-                                                        
+
                                                         Spacer()
-                                                        
+
                                                         if selectedFilters.contains(group) {
                                                             Image(systemName: "checkmark")
                                                                 .foregroundColor(.blue)
@@ -1150,8 +1005,7 @@ struct SportsShootDetailView: View {
                             }
                             .padding()
                         }
-                        
-                        // Clear all and done buttons
+
                         VStack(spacing: 8) {
                             if !selectedFilters.isEmpty || !selectedSpecialFilters.isEmpty || imageFilterType != .all {
                                 Button(action: {
@@ -1170,11 +1024,9 @@ struct SportsShootDetailView: View {
                                         .cornerRadius(8)
                                 }
                             }
-                            
+
                             Button(action: {
-                                withAnimation {
-                                    isShowing = false
-                                }
+                                withAnimation { isShowing = false }
                             }) {
                                 Text("Done")
                                     .font(.headline)
@@ -1197,7 +1049,7 @@ struct SportsShootDetailView: View {
             }
             .opacity(isShowing ? 1 : 0)
         }
-        
+
         private func toggleSpecialFilter(_ filter: String) {
             withAnimation {
                 if selectedSpecialFilters.contains(filter) {
@@ -1207,7 +1059,7 @@ struct SportsShootDetailView: View {
                 }
             }
         }
-        
+
         private func toggleGroupFilter(_ group: String) {
             withAnimation {
                 if selectedFilters.contains(group) {
@@ -1218,427 +1070,250 @@ struct SportsShootDetailView: View {
             }
         }
     }
-    
-    // MARK: - Helper Functions
-    
-    // Function to move to the next editable entry when pressing Enter or Down arrow
-    private func moveToNextEditableEntry(currentID: String) {
-        guard let shoot = sportsShoot else { return }
-        
-        // Get the filtered and sorted roster as displayed in the list
-        let displayedRoster = sortedRoster(filterRoster(shoot.roster))
-        
-        // Find the index of the current entry
-        guard let currentIndex = displayedRoster.firstIndex(where: { $0.id == currentID }) else {
-            return
-        }
-        
-        // Try to find the next entry that's not locked by others
-        for index in (currentIndex + 1)..<displayedRoster.count {
-            let nextEntry = displayedRoster[index]
-            let isLocked = lockedEntries[nextEntry.id] != nil && lockedEntries[nextEntry.id] != currentEditorIdentifier
-            
-            if !isLocked {
-                // Release current lock
-                if let currentEntryID = currentlyEditingEntry {
-                    releaseLock(shootID: shoot.id, entryID: currentEntryID)
-                }
-                
-                // Start editing the next entry
-                startEditing(shootID: shoot.id, entry: nextEntry)
-                
-                // Optionally scroll to make the entry visible
-                // This would require additional changes to track scroll position
-                
-                return
-            }
-        }
-        
-        // If we reach here, we're at the last entry or all remaining entries are locked
-        // Option 1: Loop back to the first entry
-        for index in 0..<currentIndex {
-            let nextEntry = displayedRoster[index]
-            let isLocked = lockedEntries[nextEntry.id] != nil && lockedEntries[nextEntry.id] != currentEditorIdentifier
-            
-            if !isLocked {
-                // Release current lock
-                if let currentEntryID = currentlyEditingEntry {
-                    releaseLock(shootID: shoot.id, entryID: currentEntryID)
-                }
-                
-                // Start editing the entry
-                startEditing(shootID: shoot.id, entry: nextEntry)
-                return
-            }
-        }
-        
-        // Option 2: Just release the current lock if no other entries are available
-        if let currentEntryID = currentlyEditingEntry {
-            releaseLock(shootID: shoot.id, entryID: currentEntryID)
-        }
-    }
-    
-    private func loadSportsShoot() {
-        // Try local cache first (instant load)
-        if let cachedShoot = LocalSportsShootRepository.shared.getShoot(id: shootID) {
-            // Load instantly from cache - no spinner!
-            self.sportsShoot = cachedShoot
-            self.isLoading = false
 
-            // If online, fetch updates in background
-            if isOnline {
-                fetchAndUpdateFromServer()
-            }
-        } else {
-            // Not in cache - must fetch from server
-            if !isOnline {
-                // Show error: "Shoot Not Available Offline"
-                self.isLoading = false
-                self.errorMessage = "Shoot Not Available Offline\n\nThis shoot hasn't been downloaded yet. Please connect to the internet to open it."
-                self.showingErrorAlert = true
-                return
-            }
+    // MARK: - Data Loading
 
-            // Show loading and fetch from server
-            isLoading = true
-            fetchAndUpdateFromServer()
+    private func loadSportsShoot() async {
+        isLoading = true
+
+        do {
+            // Fetch shoot info
+            let shoot = try await SportsShootService.shared.fetchSportsShoot(id: shootID)
+            self.sportsShoot = shoot
+
+            // Fetch roster entries and group images in parallel
+            async let entries = RosterEntryService.shared.fetchEntries(forJob: shootID)
+            async let groups = GroupImageService.shared.fetchGroups(forJob: shootID)
+
+            self.rosterEntries = try await entries
+            self.groupImages = try await groups
+
+            isLoading = false
+        } catch {
+            isLoading = false
+            errorMessage = "Failed to load: \(error.localizedDescription)"
+            showingErrorAlert = true
         }
     }
 
-    private func fetchAndUpdateFromServer() {
-        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
-            DispatchQueue.main.async {
-                self.isLoading = false
-
-                switch result {
-                case .success(let shoot):
-                    // Save to local repository (auto-cache on open)
-                    if LocalSportsShootRepository.shared.saveShoot(shoot) {
-                        LocalSportsShootRepository.shared.markFullyCached(shootId: shoot.id)
-                        print("✓ Auto-cached shoot for offline use")
-                    }
-
-                    // Update UI
-                    self.sportsShoot = shoot
-
-                case .failure(let error):
-                    // Only show error if we don't have a cached version
-                    if self.sportsShoot == nil {
-                        self.errorMessage = "Failed to load sports shoot: \(error.localizedDescription)"
-                        self.showingErrorAlert = true
-                    } else {
-                        print("Background refresh failed (using cached data): \(error.localizedDescription)")
-                    }
-                }
-            }
+    private func refreshRosterEntries() async {
+        do {
+            rosterEntries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+        } catch {
+            print("Failed to refresh roster: \(error)")
         }
     }
-    
-    private func refreshSportsShoot() {
-        // Load from local cache immediately (instant)
-        if let cachedShoot = LocalSportsShootRepository.shared.getShoot(id: shootID) {
-            self.sportsShoot = cachedShoot
+
+    private func refreshGroupImages() async {
+        do {
+            groupImages = try await GroupImageService.shared.fetchGroups(forJob: shootID)
+        } catch {
+            print("Failed to refresh groups: \(error)")
+        }
+    }
+
+    private func setupRealtimeSubscriptions() async {
+        // Subscribe to roster entry changes
+        await RosterEntryService.shared.subscribeToChanges(jobId: shootID) { entries in
+            self.rosterEntries = entries
         }
 
-        // If online, also refresh from server in background
-        if isOnline {
-            SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let updatedShoot):
-                        // Update local cache
-                        _ = LocalSportsShootRepository.shared.saveShoot(updatedShoot)
-                        // Update UI
-                        self.sportsShoot = updatedShoot
-                    case .failure(let error):
-                        print("Background refresh failed (using cached data): \(error.localizedDescription)")
-                        // Don't show error - we already have cached data
-                    }
-                }
-            }
+        // Subscribe to group image changes
+        await GroupImageService.shared.subscribeToChanges(jobId: shootID) { groups in
+            self.groupImages = groups
         }
     }
-    
-    private func setupNetworkMonitoring() {
-        let networkMonitor = NetworkMonitor.shared
-        networkMonitor.startMonitoring { isConnected in
-            DispatchQueue.main.async {
-                let wasOnline = self.isOnline
-                self.isOnline = isConnected
 
-                // Release lock when going offline to prevent blocking other users
-                if wasOnline && !isConnected {
-                    if let entryID = self.currentlyEditingEntry,
-                       let shoot = self.sportsShoot {
-                        print("📡 Going offline - releasing lock for entry \(entryID)")
-                        self.releaseLockWithoutClearingState(shootID: shoot.id, entryID: entryID)
-                    }
-                }
-            }
-        }
-    }
-    
-    private func setupRealtimeListeners() {
-        setupLockListener()
-    }
-    
-    private func setupLockListener() {
-        EntryLockManager.shared.listenForLocks(shootID: shootID) { locks in
-            DispatchQueue.main.async {
-                // Track when we first see each lock
-                for (entryID, editor) in locks {
-                    if self.lockedEntries[entryID] == nil {
-                        // New lock detected, record timestamp
-                        self.lockTimestamps[entryID] = Date()
-                    }
-                }
-                
-                // Clean up timestamps for released locks
-                for entryID in self.lockedEntries.keys {
-                    if locks[entryID] == nil {
-                        self.lockTimestamps.removeValue(forKey: entryID)
-                    }
-                }
-                
-                self.lockedEntries = locks
-            }
-        }
-    }
-    
-    private func refreshLocks() {
-        EntryLockManager.shared.cleanupStaleLocks(shootID: shootID)
-    }
-    
     // MARK: - Editing Functions
-    
-    private func isOwnLock(_ lockId: String) -> Bool {
-        return lockedEntries[lockId] == currentEditorIdentifier
-    }
-    
-    private func startEditing(shootID: String, entry: RosterEntry) {
-        // Check if anyone else is editing this entry
-        if let editor = lockedEntries[entry.id], !isOwnLock(entry.id) {
-            errorMessage = "This entry is currently being edited by \(editor)"
+
+    private func startEditing(entry: RosterEntry) async {
+        // Check if locked by someone else
+        if entry.isLocked && entry.lockedBy != lockManager.currentUserId {
+            errorMessage = "This entry is being edited by \(entry.lockedByName ?? "another user")"
             showingErrorAlert = true
             return
         }
-        
-        // Check if we already have a lock on this entry
-        if isOwnLock(entry.id) {
-            print("🔓 Using existing lock for entry \(entry.id), setting editingValues to: '\(entry.imageNumbers)'")
-            self.currentlyEditingEntry = entry.id
-            self.editingValues[entry.id] = entry.imageNumbers
-            self.lastSavedValues[entry.id] = entry.imageNumbers
-            print("🔓 State set synchronously: currentlyEditingEntry=\(self.currentlyEditingEntry ?? "nil"), editingValues[entry.id]='\(self.editingValues[entry.id] ?? "")'")
-            return
+
+        // Release previous lock if any
+        if let previousId = currentlyEditingEntryId, previousId != entry.id {
+            await lockManager.releaseRosterEntryLock(entryId: previousId)
         }
-        
-        // Release any previous lock
-        if let previousEntryID = currentlyEditingEntry {
-            // Don't clear editing state when switching entries - just release the lock
-            releaseLockWithoutClearingState(shootID: shootID, entryID: previousEntryID)
-        }
-        
-        // Set up editing state
-        print("🔓 Setting up editing state for entry \(entry.id), setting editingValues to: '\(entry.imageNumbers)'")
-        self.editingValues[entry.id] = entry.imageNumbers
-        self.lastSavedValues[entry.id] = entry.imageNumbers
-        self.currentlyEditingEntry = entry.id
-        print("🔓 Pre-lock state set: currentlyEditingEntry=\(self.currentlyEditingEntry ?? "nil"), editingValues[entry.id]='\(self.editingValues[entry.id] ?? "")'")
-        
-        // Acquire lock for this entry
-        acquireLock(shootID: shootID, entryID: entry.id, targetImageNumbers: entry.imageNumbers)
-    }
-    
-    private func acquireLock(shootID: String, entryID: String, targetImageNumbers: String) {
-        // Use consistent editor ID - prefer auth user ID, fallback to device session
-        let editorID = UserManager.shared.getCurrentUserIDUnified() ?? Self.deviceSessionID
-        let editorName = currentEditorIdentifier
-        
-        EntryLockManager.shared.acquireLock(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName) { success in
-            if success {
-                DispatchQueue.main.async {
-                    print("🔓 Lock acquired for entry \(entryID)")
-                    // Values are already set synchronously in startEditing, no need to set again
-                }
-            } else {
-                DispatchQueue.main.async {
-                    self.errorMessage = "This field is locked because another user is editing. The lock will expire in a few minutes, or you can try the force unlock button if available."
-                    self.showingErrorAlert = true
-                }
-            }
+
+        // Acquire lock
+        let acquired = await lockManager.acquireRosterEntryLock(entryId: entry.id)
+
+        if acquired {
+            currentlyEditingEntryId = entry.id
+            editingValues[entry.id] = entry.imageNumbers
+            lastSavedValues[entry.id] = entry.imageNumbers
+        } else {
+            errorMessage = "Could not acquire lock. Please try again."
+            showingErrorAlert = true
         }
     }
-    
-    private func releaseLockWithoutClearingState(shootID: String, entryID: String) {
-        // Release lock without clearing editing state - used when switching between entries
-        let editorID = UserManager.shared.getCurrentUserIDUnified() ?? Self.deviceSessionID
-        
-        EntryLockManager.shared.releaseLock(shootID: shootID, entryID: entryID, editorID: editorID) { success in
-            // Don't clear any state - just log the result
-            if success {
-                print("🔓 Lock released for entry \(entryID) (without clearing state)")
-            } else {
-                print("⚠️ Failed to release lock for entry \(entryID)")
-            }
+
+    private func stopEditing(entryId: UUID) async {
+        // Save any pending changes first
+        debounceTask?.cancel()
+
+        if let newValue = editingValues[entryId],
+           let entry = rosterEntries.first(where: { $0.id == entryId }),
+           newValue != entry.imageNumbers {
+            await saveEntry(entryId: entryId, imageNumbers: newValue)
         }
+
+        await lockManager.releaseRosterEntryLock(entryId: entryId)
+
+        currentlyEditingEntryId = nil
+        editingValues.removeValue(forKey: entryId)
+        lastSavedValues.removeValue(forKey: entryId)
     }
-    
-    private func releaseLock(shootID: String, entryID: String) {
-        // Store the device session ID to ensure consistent editor ID
-        let editorID = UserManager.shared.getCurrentUserIDUnified() ?? Self.deviceSessionID
-        
-        // Cancel any pending autosave before releasing lock
-        if currentlyEditingEntry == entryID {
-            debounceTask?.cancel()
-        }
-        
-        EntryLockManager.shared.releaseLock(shootID: shootID, entryID: entryID, editorID: editorID) { success in
-            DispatchQueue.main.async {
-                if self.currentlyEditingEntry == entryID {
-                    self.currentlyEditingEntry = nil
-                    self.editingValues.removeValue(forKey: entryID)
-                    self.lastSavedValues.removeValue(forKey: entryID)
-                    self.debounceTask?.cancel()
-                }
-                
-                if !success {
-                    // Enhanced user feedback for lock release failure
-                    self.errorMessage = "Warning: Unable to properly release the editing lock. Your changes have been saved, but other users may need to wait longer before they can edit this entry."
-                    self.showingErrorAlert = true
-                    
-                    print("Warning: Failed to release lock for entry \(entryID)")
-                    
-                    // Even if release failed, clear local state to allow user to continue
-                    if self.currentlyEditingEntry == entryID {
-                        self.currentlyEditingEntry = nil
-                        self.editingValues.removeValue(forKey: entryID)
-                        self.lastSavedValues.removeValue(forKey: entryID)
-                    }
+
+    private func handleEditingValueChange(_ newValues: [UUID: String]) {
+        guard let entryId = currentlyEditingEntryId,
+              let newValue = newValues[entryId],
+              newValue != lastSavedValues[entryId] else { return }
+
+        // Cancel any existing debounce task
+        debounceTask?.cancel()
+
+        // Create a new debounce task
+        let task = DispatchWorkItem { [self] in
+            Task {
+                await saveEntry(entryId: entryId, imageNumbers: newValue)
+                await MainActor.run {
+                    lastSavedValues[entryId] = newValue
                 }
             }
         }
+
+        debounceTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
     }
-    
+
+    private func saveEntry(entryId: UUID, imageNumbers: String) async {
+        guard var entry = rosterEntries.first(where: { $0.id == entryId }) else { return }
+
+        entry.imageNumbers = imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Queue for sync (works offline)
+        syncEngine.queueRosterEntryOperation(
+            operation: .update,
+            entry: entry,
+            jobId: shootID
+        )
+
+        // Update local state
+        if let index = rosterEntries.firstIndex(where: { $0.id == entryId }) {
+            rosterEntries[index] = entry
+        }
+
+        // Try to sync immediately if online
+        if syncEngine.isOnline {
+            do {
+                _ = try await RosterEntryService.shared.updateEntry(entry)
+            } catch {
+                print("Failed to sync entry update: \(error)")
+            }
+        }
+    }
+
+    private func moveToNextEditableEntry(currentID: UUID) {
+        let displayedRoster = sortedRoster(filterRoster(rosterEntries))
+
+        guard let currentIndex = displayedRoster.firstIndex(where: { $0.id == currentID }) else { return }
+
+        // Find next unlocked entry
+        for index in (currentIndex + 1)..<displayedRoster.count {
+            let nextEntry = displayedRoster[index]
+            if !nextEntry.isLocked || nextEntry.lockedBy == lockManager.currentUserId {
+                Task {
+                    await stopEditing(entryId: currentID)
+                    await startEditing(entry: nextEntry)
+                }
+                return
+            }
+        }
+
+        // Wrap around to beginning
+        for index in 0..<currentIndex {
+            let nextEntry = displayedRoster[index]
+            if !nextEntry.isLocked || nextEntry.lockedBy == lockManager.currentUserId {
+                Task {
+                    await stopEditing(entryId: currentID)
+                    await startEditing(entry: nextEntry)
+                }
+                return
+            }
+        }
+
+        // No other entries available, just stop editing
+        Task {
+            await stopEditing(entryId: currentID)
+        }
+    }
+
     // MARK: - Delete Functions
 
-    private func deleteRosterEntry(shoot: SportsShoot, id: String) {
-        // LOCAL-FIRST: Delete from local repository immediately
-        guard let entry = shoot.roster.first(where: { $0.id == id }) else {
-            return
-        }
+    private func deleteRosterEntry(_ entry: RosterEntry) async {
+        // Queue for sync
+        syncEngine.queueRosterEntryOperation(
+            operation: .delete,
+            entry: entry,
+            jobId: shootID
+        )
 
-        // Create a temporary updated shoot with the entry removed
-        var updatedShoot = shoot
-        updatedShoot.roster.removeAll { $0.id == id }
+        // Remove from local state
+        rosterEntries.removeAll { $0.id == entry.id }
 
-        // Save updated shoot to local repository
-        if LocalSportsShootRepository.shared.saveShoot(updatedShoot) {
-            // Queue delete for background sync
-            let changeData: [String: Any] = [
-                "deletedEntryId": id,
-                "firstName": entry.firstName,
-                "lastName": entry.lastName
-            ]
-
-            PendingSyncManager.shared.queueChange(
-                shootId: shoot.id,
-                entryId: id,
-                changeType: .deleteEntry,
-                data: changeData
-            )
-
-            // Refresh UI from local cache (instant)
-            refreshSportsShoot()
-
-            print("✓ Entry deleted locally and queued for sync")
-        } else {
-            self.errorMessage = "Failed to delete athlete locally"
-            self.showingErrorAlert = true
+        // Try to sync immediately if online
+        if syncEngine.isOnline {
+            do {
+                try await RosterEntryService.shared.deleteEntry(id: entry.id)
+            } catch {
+                print("Failed to sync delete: \(error)")
+            }
         }
     }
-    
-    private func deleteGroupImage(shoot: SportsShoot, id: String) {
-        // LOCAL-FIRST: Delete from local repository immediately
-        guard let groupImage = shoot.groupImages.first(where: { $0.id == id }) else {
-            return
-        }
 
-        // Create a temporary updated shoot with the group removed
-        var updatedShoot = shoot
-        updatedShoot.groupImages.removeAll { $0.id == id }
+    private func deleteGroupImage(_ group: GroupImage) async {
+        // Queue for sync
+        syncEngine.queueGroupImageOperation(
+            operation: .delete,
+            group: group,
+            jobId: shootID
+        )
 
-        // Save updated shoot to local repository
-        if LocalSportsShootRepository.shared.saveShoot(updatedShoot) {
-            // Queue delete for background sync
-            let changeData: [String: Any] = [
-                "deletedGroupId": id,
-                "description": groupImage.description
-            ]
+        // Remove from local state
+        groupImages.removeAll { $0.id == group.id }
 
-            PendingSyncManager.shared.queueChange(
-                shootId: shoot.id,
-                entryId: id,
-                changeType: .deleteEntry, // Using deleteEntry for group deletion too
-                data: changeData
-            )
-
-            // Refresh UI from local cache (instant)
-            refreshSportsShoot()
-
-            print("✓ Group deleted locally and queued for sync")
-        } else {
-            self.errorMessage = "Failed to delete group locally"
-            self.showingErrorAlert = true
+        // Try to sync immediately if online
+        if syncEngine.isOnline {
+            do {
+                try await GroupImageService.shared.deleteGroup(id: group.id)
+            } catch {
+                print("Failed to sync delete: \(error)")
+            }
         }
     }
-    
-    // Helper function to determine layout strategy based on content lengths
-    private func getLayoutStrategy(_ entry: RosterEntry) -> (playerLines: Int, groupLines: Int, useVertical: Bool) {
-        let playerNameLength = entry.lastName.count
-        let groupNameLength = entry.group.count
-        
-        // If both names are extremely long, use vertical layout
-        if playerNameLength > 25 && groupNameLength > 35 {
-            return (playerLines: 2, groupLines: 2, useVertical: true)
-        }
-        
-        // If either is very long, use multi-line horizontal
-        if playerNameLength > 12 || groupNameLength > 20 {
-            return (playerLines: 2, groupLines: 2, useVertical: false)
-        }
-        
-        // Default: single line horizontal
-        return (playerLines: 1, groupLines: 1, useVertical: false)
-    }
-    
-    // Helper function to check if any player in a group needs multi-line layout
-    private func groupNeedsMultiLineLayout(_ groupName: String) -> Bool {
-        guard let shoot = sportsShoot else { return false }
-        
-        let playersInGroup = shoot.roster.filter { $0.group == groupName }
-        return playersInGroup.contains { player in
-            let strategy = getLayoutStrategy(player)
-            return strategy.playerLines > 1 || strategy.groupLines > 1
-        }
-    }
-    
+
+    // MARK: - Helper Functions
+
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         return formatter.string(from: date)
     }
-    
+
     private func toggleSidebar() {
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
            let rootVC = windowScene.windows.first?.rootViewController {
             findAndToggleSplitView(from: rootVC)
         }
     }
-    
+
     private func findAndToggleSplitView(from viewController: UIViewController) {
         if let splitVC = viewController as? UISplitViewController {
-            // Toggle between showing and hiding the sidebar
             if splitVC.preferredDisplayMode == .oneBesideSecondary || splitVC.preferredDisplayMode == .automatic {
                 splitVC.preferredDisplayMode = .secondaryOnly
             } else {
@@ -1646,12 +1321,12 @@ struct SportsShootDetailView: View {
             }
             return
         }
-        
+
         for child in viewController.children {
             findAndToggleSplitView(from: child)
         }
     }
-    
+
     private func specialTranslation(_ special: String) -> String {
         switch special.lowercased() {
         case "c": return "Coach"
@@ -1660,24 +1335,22 @@ struct SportsShootDetailView: View {
         default: return special
         }
     }
-    
+
     private func allGroupNames() -> [String] {
-        guard let shoot = sportsShoot else { return [] }
-        let allGroups = Set(shoot.roster.map { $0.group })
+        let allGroups = Set(rosterEntries.map { $0.groupName })
         return Array(allGroups).filter { !$0.isEmpty }.sorted()
     }
-    
+
     private func filterRoster(_ roster: [RosterEntry]) -> [RosterEntry] {
         var filteredRoster = roster
-        
-        // Apply group and special filters
+
         if !selectedFilters.isEmpty || !selectedSpecialFilters.isEmpty {
             filteredRoster = roster.filter { entry in
-                let matchesGroup = selectedFilters.contains(entry.group)
+                let matchesGroup = selectedFilters.contains(entry.groupName)
                 let matchesSpecial = (selectedSpecialFilters.contains("Seniors") && entry.teacher.lowercased() == "s") ||
                                     (selectedSpecialFilters.contains("8th Graders") && entry.teacher.lowercased() == "8") ||
                                     (selectedSpecialFilters.contains("Coaches") && entry.teacher.lowercased() == "c")
-                
+
                 if !selectedFilters.isEmpty && !selectedSpecialFilters.isEmpty {
                     return matchesGroup && matchesSpecial
                 } else if !selectedFilters.isEmpty {
@@ -1687,8 +1360,7 @@ struct SportsShootDetailView: View {
                 }
             }
         }
-        
-        // Apply image filter
+
         switch imageFilterType {
         case .all:
             return filteredRoster
@@ -1698,11 +1370,11 @@ struct SportsShootDetailView: View {
             return filteredRoster.filter { $0.imageNumbers.isEmpty }
         }
     }
-    
+
     private func sortedRoster(_ roster: [RosterEntry]) -> [RosterEntry] {
         return roster.sorted { (a, b) -> Bool in
             let result: Bool
-            
+
             switch sortField {
             case "lastName":
                 result = a.lastName.lowercased() < b.lastName.lowercased()
@@ -1710,16 +1382,16 @@ struct SportsShootDetailView: View {
                 result = a.firstName.lowercased() < b.firstName.lowercased()
             case "teacher":
                 result = a.teacher.lowercased() < b.teacher.lowercased()
-            case "group":
-                result = a.group.lowercased() < b.group.lowercased()
+            case "groupName":
+                result = a.groupName.lowercased() < b.groupName.lowercased()
             default:
                 result = a.lastName.lowercased() < b.lastName.lowercased()
             }
-            
+
             return sortAscending ? result : !result
         }
     }
-    
+
     private func sortableHeader(_ title: String, field: String) -> some View {
         Button(action: {
             if sortField == field {
@@ -1733,7 +1405,7 @@ struct SportsShootDetailView: View {
                 Text(title)
                     .font(.caption)
                     .lineLimit(1)
-                
+
                 Image(systemName: sortField == field
                       ? (sortAscending ? "chevron.up" : "chevron.down")
                       : "arrow.up.arrow.down")
@@ -1748,12 +1420,10 @@ struct SportsShootDetailView: View {
             )
         }
     }
-    
+
     private func colorForGroup(_ group: String) -> Color {
-        if group.isEmpty {
-            return Color.gray
-        }
-        
+        if group.isEmpty { return Color.gray }
+
         let hash = abs(group.hashValue)
         let colors: [Color] = [
             Color.blue, Color.green, Color(red: 0.0, green: 0.6, blue: 0.4),
@@ -1762,65 +1432,13 @@ struct SportsShootDetailView: View {
             Color(red: 0.8, green: 0.4, blue: 0.0), Color(red: 0.5, green: 0.1, blue: 0.7),
             Color(red: 0.9, green: 0.2, blue: 0.5)
         ]
-        
+
         return colors[hash % colors.count]
-    }
-    
-    // MARK: - Lock Cleanup Helpers
-    
-    private func forceCleanupStaleLocks() {
-        // Force cleanup of locks older than 100 seconds (half the normal expiration time)
-        EntryLockManager.shared.cleanupStaleLocks(shootID: shootID, timeThreshold: 100)
-        
-        // Test if we have lock permissions by attempting a simple check
-        EntryLockManager.shared.checkLock(shootID: shootID, entryID: "permission_test") { isLocked, editorName in
-            // This is just to trigger permission checks - we ignore the result
-        }
-    }
-    
-    private func showPermissionWarningIfNeeded() {
-        // Show a one-time warning about lock permissions
-        if !showingPermissionWarning {
-            showingPermissionWarning = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                errorMessage = "Note: Lock system is disabled due to permission restrictions. Multiple users can edit simultaneously - please coordinate to avoid conflicts."
-                showingErrorAlert = true
-            }
-        }
-    }
-    
-    // MARK: - Force Unlock Helpers
-    
-    private func shouldShowForceUnlock(for entryID: String) -> Bool {
-        // Show force unlock if lock has been held for more than 60 seconds
-        guard let lockTimestamp = lockTimestamps[entryID] else { return false }
-        let timeSinceLock = Date().timeIntervalSince(lockTimestamp)
-        return timeSinceLock > 60 // 60 seconds
-    }
-    
-    private func forceUnlockEntry(shootID: String, entryID: String) {
-        // Force unlock by cleaning up the lock
-        EntryLockManager.shared.forceReleaseLock(shootID: shootID, entryID: entryID) { success in
-            DispatchQueue.main.async {
-                if success {
-                    // Remove from local tracking
-                    self.lockedEntries.removeValue(forKey: entryID)
-                    self.lockTimestamps.removeValue(forKey: entryID)
-                    
-                    // Show success message
-                    self.errorMessage = "Lock released successfully. You can now edit this entry."
-                    self.showingErrorAlert = true
-                } else {
-                    self.errorMessage = "Failed to release lock. Please try again."
-                    self.showingErrorAlert = true
-                }
-            }
-        }
     }
 }
 
 struct SportsShootDetailView_Previews: PreviewProvider {
     static var previews: some View {
-        SportsShootDetailView(shootID: "preview-id")
+        SportsShootDetailView(shootID: UUID())
     }
 }

@@ -21,7 +21,6 @@ class ClaudeRosterService {
         // Clear the old cached key from UserDefaults to force fresh retrieval from Info.plist/Config.xcconfig
         UserDefaults.standard.removeObject(forKey: "CLAUDE_API_KEY")
         if debugMode {
-            print("Cleared cached CLAUDE_API_KEY from UserDefaults")
         }
     }
     
@@ -33,7 +32,6 @@ class ClaudeRosterService {
            !infoPlistKey.contains("YOUR-API-KEY-HERE"),
            !infoPlistKey.contains("$(") {  // Check that variable substitution worked
             if debugMode {
-                print("Using API key from Info.plist: \(infoPlistKey.prefix(10))...")
             }
             return infoPlistKey.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -44,7 +42,6 @@ class ClaudeRosterService {
            !key.contains("YOUR-API-KEY-HERE"),
            !key.contains("$(") {  // Check that variable substitution worked
             if debugMode {
-                print("Using API key from UserDefaults: \(key.prefix(10))...")
             }
             return key.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -54,7 +51,6 @@ class ClaudeRosterService {
            !envKey.isEmpty,
            !envKey.contains("$(") {  // Check that variable substitution worked
             if debugMode {
-                print("Using API key from Environment: \(envKey.prefix(10))...")
             }
             return envKey.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -62,14 +58,12 @@ class ClaudeRosterService {
         // Then try the organization-level settings - this is a placeholder
         // The actual key will be fetched asynchronously by fetchAPIKeyFromSupabase
         if debugMode {
-            print("No API key found in Info.plist or UserDefaults. Will try to fetch from Supabase.")
         }
         
         if let cachedKey = self.cachedAPIKey,
            !cachedKey.isEmpty,
            !cachedKey.contains("$(") {  // Check that variable substitution worked
             if debugMode {
-                print("Using cached API key: \(cachedKey.prefix(10))...")
             }
             return cachedKey.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -86,14 +80,12 @@ class ClaudeRosterService {
         guard let orgID = UserDefaults.standard.string(forKey: "userOrganizationID"),
               !orgID.isEmpty else {
             if debugMode {
-                print("No organization ID found in UserDefaults.")
             }
             completion(nil)
             return
         }
 
         if debugMode {
-            print("Fetching API key from Supabase for organization: \(orgID)")
         }
 
         Task {
@@ -114,7 +106,6 @@ class ClaudeRosterService {
 
                 if let apiKey = orgs.first?.claude_api_key, !apiKey.isEmpty {
                     if self.debugMode {
-                        print("Successfully retrieved Claude API key from Supabase: \(apiKey.prefix(5))...")
                     }
 
                     // Store it in UserDefaults for future use
@@ -128,14 +119,12 @@ class ClaudeRosterService {
                     }
                 } else {
                     if self.debugMode {
-                        print("No API key found in organization settings")
                     }
                     await MainActor.run {
                         completion(nil)
                     }
                 }
             } catch {
-                print("Error fetching org document: \(error.localizedDescription)")
                 await MainActor.run {
                     completion(nil)
                 }
@@ -203,7 +192,6 @@ class ClaudeRosterService {
             if let httpResponse = response as? HTTPURLResponse {
                 // Print full response data for debugging
                 if self.debugMode, let data = data, let responseString = String(data: data, encoding: .utf8) {
-                    print("Full API response: \(responseString)")
                 }
                 
                 if httpResponse.statusCode == 200 {
@@ -238,8 +226,8 @@ class ClaudeRosterService {
         }.resume()
     }
     
-    // Extract roster entries from an image - with a starting Subject ID
-    func extractRosterFromImage(_ image: UIImage, startingSubjectID: Int = 101, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
+    // Extract roster entries from an image - with a starting Subject ID and sportsJobId
+    func extractRosterFromImage(_ image: UIImage, sportsJobId: UUID = UUID(), startingSubjectID: Int = 101, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Get and verify API key first
         if apiKey.isEmpty {
             // Try to fetch the API key from Supabase
@@ -251,7 +239,7 @@ class ClaudeRosterService {
                     self.verifyAPIKey(apiKey: key) { isValid, errorMessage in
                         if isValid {
                             // Now try the extraction again with the valid key
-                            self.proceedWithRosterExtraction(image, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
+                            self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
                         } else {
                             let error = NSError(domain: "ClaudeRosterService", code: 101,
                                                 userInfo: [NSLocalizedDescriptionKey: "API key validation failed: \(errorMessage ?? "Unknown error")"])
@@ -270,7 +258,7 @@ class ClaudeRosterService {
                 guard let self = self else { return }
                 
                 if isValid {
-                    self.proceedWithRosterExtraction(image, startingSubjectID: startingSubjectID, apiKey: self.apiKey, completion: completion)
+                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, apiKey: self.apiKey, completion: completion)
                 } else {
                     // The API key we had is invalid
                     // Don't clear from UserDefaults in case it's a temporary issue
@@ -295,7 +283,6 @@ class ClaudeRosterService {
                 let sizeInMB = Double(imageData.count) / (1024.0 * 1024.0)
                 
                 if debugMode {
-                    print("Image size at quality \(quality): \(String(format: "%.2f", sizeInMB)) MB")
                 }
                 
                 if imageData.count <= maxSizeInBytes {
@@ -317,7 +304,6 @@ class ClaudeRosterService {
             UIGraphicsEndImageContext()
             
             if debugMode {
-                print("Resized image from \(image.size) to \(newSize)")
             }
             
             // Try compression again on resized image
@@ -327,7 +313,6 @@ class ClaudeRosterService {
                         let sizeInMB = Double(imageData.count) / (1024.0 * 1024.0)
                         
                         if debugMode {
-                            print("Resized image size at quality \(quality): \(String(format: "%.2f", sizeInMB)) MB")
                         }
                         
                         if imageData.count <= maxSizeInBytes {
@@ -342,7 +327,7 @@ class ClaudeRosterService {
     }
     
     // This is the actual extraction logic, only called once we have a valid API key
-    private func proceedWithRosterExtraction(_ image: UIImage, startingSubjectID: Int, apiKey: String, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
+    private func proceedWithRosterExtraction(_ image: UIImage, sportsJobId: UUID, startingSubjectID: Int, apiKey: String, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Convert and compress image to stay under 5MB
         guard let imageData = compressImageForAPI(image) else {
             let error = NSError(domain: "ClaudeRosterService", code: 100,
@@ -353,7 +338,6 @@ class ClaudeRosterService {
         
         let sizeInMB = Double(imageData.count) / (1024.0 * 1024.0)
         if debugMode {
-            print("Final image size for API: \(String(format: "%.2f", sizeInMB)) MB")
         }
         
         let base64Image = imageData.base64EncodedString()
@@ -456,8 +440,6 @@ class ClaudeRosterService {
             request.httpBody = jsonData
             
             if debugMode {
-                print("Sending request to Claude API with key: \(apiKey.prefix(5))...")
-                print("Using starting Subject ID: \(startingSubjectID)")
             }
             
             // Make the request
@@ -477,11 +459,9 @@ class ClaudeRosterService {
                 // Detailed error reporting for debugging
                 if self.debugMode {
                     if let httpResponse = response as? HTTPURLResponse {
-                        print("Claude API response status code: \(httpResponse.statusCode)")
                     }
                     
                     if let data = data, let responseString = String(data: data, encoding: .utf8) {
-                        print("Response data: \(responseString.prefix(500))...")
                     }
                 }
                 
@@ -526,7 +506,7 @@ class ClaudeRosterService {
                        let text = firstContent["text"] as? String {
                         
                         // Parse the JSON text to extract roster entries
-                        self.parseJsonToRosterEntries(jsonString: text, startingSubjectID: startingSubjectID, completion: completion)
+                        self.parseJsonToRosterEntries(jsonString: text, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, completion: completion)
                     } else {
                         let error = NSError(domain: "ClaudeRosterService", code: 106,
                                             userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
@@ -551,7 +531,7 @@ class ClaudeRosterService {
     }
     
     // Parse JSON string to roster entries
-    private func parseJsonToRosterEntries(jsonString: String, startingSubjectID: Int, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
+    private func parseJsonToRosterEntries(jsonString: String, sportsJobId: UUID, startingSubjectID: Int, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Extract JSON from the response if it's wrapped in code blocks
         var cleanedJsonString = jsonString
         if let jsonStartRange = jsonString.range(of: "```json"),
@@ -579,7 +559,7 @@ class ClaudeRosterService {
             // Try to decode as direct array first
             do {
                 let entries = try decoder.decode([ClaudeRosterEntry].self, from: jsonData)
-                var rosterEntries = entries.map { self.convertToRosterEntry($0) }
+                var rosterEntries = entries.map { self.convertToRosterEntry($0, sportsJobId: sportsJobId) }
                 // Sort alphabetically by lastName (which contains the full name)
                 // Since names are in format "FIRSTNAME LASTNAME", this will sort by first name
                 rosterEntries.sort { $0.lastName < $1.lastName }
@@ -594,7 +574,7 @@ class ClaudeRosterService {
                 // If direct decoding fails, try to decode with a root container
                 do {
                     let container = try decoder.decode(ClaudeResponseContainer.self, from: jsonData)
-                    var rosterEntries = container.entries.map { self.convertToRosterEntry($0) }
+                    var rosterEntries = container.entries.map { self.convertToRosterEntry($0, sportsJobId: sportsJobId) }
                     // Sort alphabetically by lastName (which contains the full name)
                     // Since names are in format "FIRSTNAME LASTNAME", this will sort by first name
                     rosterEntries.sort { $0.lastName < $1.lastName }
@@ -619,72 +599,58 @@ class ClaudeRosterService {
     }
     
     // Convert Claude entry model to app's RosterEntry model
-    private func convertToRosterEntry(_ claudeEntry: ClaudeRosterEntry) -> RosterEntry {
+    // Note: sportsJobId will be set by the caller when saving to the database
+    private func convertToRosterEntry(_ claudeEntry: ClaudeRosterEntry, sportsJobId: UUID = UUID()) -> RosterEntry {
         return RosterEntry(
-            id: UUID().uuidString,
+            sportsJobId: sportsJobId,
             lastName: claudeEntry.lastName,
             firstName: claudeEntry.firstName,
             teacher: claudeEntry.teacher,
-            group: claudeEntry.group,
-            email: claudeEntry.email,
-            phone: "",
-            imageNumbers: "",
-            notes: ""
+            groupName: claudeEntry.group,
+            email: claudeEntry.email
         )
     }
     
     // Mock implementation for testing without using actual API
-    func mockExtractRoster(completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
+    // Note: sportsJobId will be set by the caller when saving to the database
+    func mockExtractRoster(sportsJobId: UUID = UUID(), completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Simulate network delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             // Create example roster entries
             let rosterEntries = [
                 RosterEntry(
-                    id: UUID().uuidString,
+                    sportsJobId: sportsJobId,
                     lastName: "SMITH JOHN",
                     firstName: "101",
                     teacher: "s",
-                    group: "BASKETBALL",
-                    email: "jsmith@school.edu",
-                    phone: "",
-                    imageNumbers: "",
-                    notes: ""
+                    groupName: "BASKETBALL",
+                    email: "jsmith@school.edu"
                 ),
                 RosterEntry(
-                    id: UUID().uuidString,
+                    sportsJobId: sportsJobId,
                     lastName: "JOHNSON EMILY",
                     firstName: "102",
                     teacher: "",
-                    group: "BASKETBALL",
-                    email: "",
-                    phone: "",
-                    imageNumbers: "",
-                    notes: ""
+                    groupName: "BASKETBALL"
                 ),
                 RosterEntry(
-                    id: UUID().uuidString,
+                    sportsJobId: sportsJobId,
                     lastName: "WILLIAMS MICHAEL",
                     firstName: "103",
                     teacher: "8",
-                    group: "FOOTBALL",
-                    email: "mwilliams@school.edu",
-                    phone: "",
-                    imageNumbers: "",
-                    notes: ""
+                    groupName: "FOOTBALL",
+                    email: "mwilliams@school.edu"
                 ),
                 RosterEntry(
-                    id: UUID().uuidString,
+                    sportsJobId: sportsJobId,
                     lastName: "DAVIS ROBERT",
                     firstName: "104",
                     teacher: "c",
-                    group: "BASKETBALL",
-                    email: "coach@school.edu",
-                    phone: "",
-                    imageNumbers: "",
-                    notes: ""
+                    groupName: "BASKETBALL",
+                    email: "coach@school.edu"
                 )
             ]
-            
+
             completion(.success(rosterEntries))
         }
     }

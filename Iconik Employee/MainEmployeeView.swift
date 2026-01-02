@@ -1104,7 +1104,7 @@ struct MainEmployeeView: View {
             AnyAction.self,
             schema: "public",
             table: "users",
-            filter: "id=eq.\(currentUID.lowercased())"
+            filter: "id=eq.\(currentUID)"
         )
 
         Task {
@@ -1135,7 +1135,7 @@ struct MainEmployeeView: View {
             let response: UserFlagData = try await supabase
                 .from("users")
                 .select("is_flagged, flag_note, flagged_by, photo_url")
-                .eq("id", value: userId.lowercased())
+                .eq("id", value: userId)
                 .single()
                 .execute()
                 .value
@@ -1176,7 +1176,7 @@ struct MainEmployeeView: View {
             let response: UserName = try await supabase
                 .from("users")
                 .select("first_name")
-                .eq("id", value: flaggedByID.lowercased())
+                .eq("id", value: flaggedByID)
                 .single()
                 .execute()
                 .value

@@ -2,96 +2,99 @@
 //  ConflictResolutionView.swift
 //  Iconik Employee
 //
-//  Created by administrator on 5/18/25.
+//  Updated to use SyncEngine for conflict resolution
 //
-
 
 import SwiftUI
 
 struct ConflictResolutionView: View {
-    let shootID: String
-    let entryConflicts: [OfflineManager.EntryConflict]
-    let groupConflicts: [OfflineManager.GroupConflict]
-    let localShoot: SportsShoot
-    let remoteShoot: SportsShoot
     let onComplete: (Bool) -> Void
-    
-    @State private var useLocalEntries: Set<String> = []
-    @State private var useRemoteEntries: Set<String> = []
-    @State private var useLocalGroups: Set<String> = []
-    @State private var useRemoteGroups: Set<String> = []
+
+    @ObservedObject private var syncEngine = SyncEngine.shared
     @State private var isResolving = false
-    
+    @State private var selectedResolutions: [UUID: ConflictResolution] = [:]
+
     @Environment(\.presentationMode) var presentationMode
-    
+
     var body: some View {
         NavigationView {
             ZStack {
-                List {
-                    // Header explaining the conflict
-                    Section(header: Text("Conflicts Detected")) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Changes were made to this shoot both offline and online.")
-                                .font(.headline)
-                            
-                            Text("Please select which version to keep for each conflicting item.")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
+                if syncEngine.activeConflicts.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.green)
+
+                        Text("No Conflicts")
+                            .font(.title2)
+                            .fontWeight(.bold)
+
+                        Text("All data is synchronized.")
+                            .foregroundColor(.secondary)
+
+                        Button("Done") {
+                            onComplete(true)
+                            presentationMode.wrappedValue.dismiss()
                         }
-                        .padding(.vertical, 8)
+                        .buttonStyle(.borderedProminent)
                     }
-                    
-                    // Entry conflicts
-                    if !entryConflicts.isEmpty {
-                        Section(header: Text("Athlete Conflicts")) {
-                            ForEach(entryConflicts, id: \.localEntry.id) { conflict in
-                                entryConflictRow(conflict)
+                    .padding()
+                } else {
+                    List {
+                        // Header explaining the conflict
+                        Section(header: Text("Conflicts Detected")) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Changes were made both offline and online.")
+                                    .font(.headline)
+
+                                Text("Please select which version to keep for each conflicting item.")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 8)
+                        }
+
+                        // Conflicts
+                        Section(header: Text("Conflicting Items (\(syncEngine.activeConflicts.count))")) {
+                            ForEach(syncEngine.activeConflicts) { conflict in
+                                conflictRow(conflict)
                             }
                         }
-                    }
-                    
-                    // Group conflicts
-                    if !groupConflicts.isEmpty {
-                        Section(header: Text("Group Conflicts")) {
-                            ForEach(groupConflicts, id: \.localGroup.id) { conflict in
-                                groupConflictRow(conflict)
+
+                        // Quick resolution buttons
+                        Section(header: Text("Quick Resolution")) {
+                            Button(action: {
+                                useLocalForAll()
+                            }) {
+                                Label("Keep All Local Changes", systemImage: "iphone")
+                                    .foregroundColor(.blue)
+                            }
+
+                            Button(action: {
+                                useServerForAll()
+                            }) {
+                                Label("Keep All Server Changes", systemImage: "cloud")
+                                    .foregroundColor(.blue)
                             }
                         }
-                    }
-                    
-                    // Quick resolution buttons
-                    Section(header: Text("Quick Resolution")) {
-                        Button(action: {
-                            useLocalForAll()
-                        }) {
-                            Text("Use All Local Changes")
-                                .foregroundColor(.blue)
-                        }
-                        
-                        Button(action: {
-                            useRemoteForAll()
-                        }) {
-                            Text("Use All Server Changes")
-                                .foregroundColor(.blue)
-                        }
-                    }
-                    
-                    // Submit button
-                    Section {
-                        Button(action: {
-                            resolveConflicts()
-                        }) {
-                            HStack {
-                                Spacer()
-                                Text("Apply Resolution")
-                                    .fontWeight(.bold)
-                                Spacer()
+
+                        // Submit button
+                        Section {
+                            Button(action: {
+                                resolveAllConflicts()
+                            }) {
+                                HStack {
+                                    Spacer()
+                                    Text("Apply Resolution")
+                                        .fontWeight(.bold)
+                                    Spacer()
+                                }
                             }
+                            .disabled(!allConflictsResolved())
                         }
-                        .disabled(!allConflictsResolved())
                     }
                 }
-                
+
                 if isResolving {
                     Color.black.opacity(0.3)
                         .edgesIgnoringSafeArea(.all)
@@ -100,7 +103,7 @@ struct ConflictResolutionView: View {
                                 ProgressView()
                                     .scaleEffect(1.5)
                                     .padding()
-                                
+
                                 Text("Resolving conflicts...")
                                     .font(.headline)
                                     .foregroundColor(.white)
@@ -119,311 +122,160 @@ struct ConflictResolutionView: View {
             }
         }
     }
-    
-    // Row for entry conflict
-    private func entryConflictRow(_ conflict: OfflineManager.EntryConflict) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+
+    // Row for a single conflict
+    private func conflictRow(_ conflict: ConflictInfo) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Item info
             HStack {
                 VStack(alignment: .leading) {
-                    Text(conflict.localEntry.lastName)
+                    Text(itemTitle(for: conflict))
                         .font(.headline)
-                    Text("ID: \(conflict.localEntry.firstName)")
-                        .font(.subheadline)
+                    Text(conflict.itemType == .rosterEntry ? "Athlete" : "Group")
+                        .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                
+
                 Spacer()
-                
-                Text("Choose Version")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+
+                VStack(alignment: .trailing) {
+                    Text("v\(conflict.localVersion)")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                    Text("vs v\(conflict.serverVersion)")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
             }
-            
-            HStack(spacing: 20) {
-                // Local version button
+
+            // Resolution options
+            HStack(spacing: 12) {
+                // Keep Local button
                 Button(action: {
-                    toggleLocalEntry(conflict.localEntry.id)
+                    selectedResolutions[conflict.id] = .keepLocal
                 }) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Your Device")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            
-                            Spacer()
-                            
-                            if useLocalEntries.contains(conflict.localEntry.id) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                            } else {
-                                Image(systemName: "circle")
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                        
-                        Text("Images: \(conflict.localEntry.imageNumbers)")
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
+                    VStack(spacing: 4) {
+                        Image(systemName: selectedResolutions[conflict.id] == .keepLocal ? "checkmark.circle.fill" : "iphone")
+                            .font(.title2)
+                        Text("Keep Local")
+                            .font(.caption)
                     }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(useLocalEntries.contains(conflict.localEntry.id) ? Color.green : Color.gray, lineWidth: 1)
+                            .fill(selectedResolutions[conflict.id] == .keepLocal ? Color.green.opacity(0.2) : Color.secondary.opacity(0.1))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(selectedResolutions[conflict.id] == .keepLocal ? Color.green : Color.clear, lineWidth: 2)
                     )
                 }
-                
-                // Remote version button
+                .buttonStyle(PlainButtonStyle())
+
+                // Keep Server button
                 Button(action: {
-                    toggleRemoteEntry(conflict.remoteEntry.id)
+                    selectedResolutions[conflict.id] = .keepServer
                 }) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Server")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            
-                            Spacer()
-                            
-                            if useRemoteEntries.contains(conflict.remoteEntry.id) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                            } else {
-                                Image(systemName: "circle")
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                        
-                        Text("Images: \(conflict.remoteEntry.imageNumbers)")
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
+                    VStack(spacing: 4) {
+                        Image(systemName: selectedResolutions[conflict.id] == .keepServer ? "checkmark.circle.fill" : "cloud")
+                            .font(.title2)
+                        Text("Keep Server")
+                            .font(.caption)
                     }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(useRemoteEntries.contains(conflict.remoteEntry.id) ? Color.green : Color.gray, lineWidth: 1)
+                            .fill(selectedResolutions[conflict.id] == .keepServer ? Color.blue.opacity(0.2) : Color.secondary.opacity(0.1))
                     )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(selectedResolutions[conflict.id] == .keepServer ? Color.blue : Color.clear, lineWidth: 2)
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+
+            // Show differences if available
+            if let localEntry = conflict.localData as? RosterEntry,
+               let serverEntry = conflict.serverData as? RosterEntry {
+                VStack(alignment: .leading, spacing: 4) {
+                    if localEntry.imageNumbers != serverEntry.imageNumbers {
+                        HStack {
+                            Text("Images:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Local: \(localEntry.imageNumbers.isEmpty ? "(empty)" : localEntry.imageNumbers)")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                            Text("Server: \(serverEntry.imageNumbers.isEmpty ? "(empty)" : serverEntry.imageNumbers)")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
+                    }
                 }
             }
         }
         .padding(.vertical, 8)
     }
-    
-    // Row for group conflict
-    private func groupConflictRow(_ conflict: OfflineManager.GroupConflict) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(conflict.localGroup.description)
-                    .font(.headline)
-                
-                Spacer()
-                
-                Text("Choose Version")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            HStack(spacing: 20) {
-                // Local version button
-                Button(action: {
-                    toggleLocalGroup(conflict.localGroup.id)
-                }) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Your Device")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            
-                            Spacer()
-                            
-                            if useLocalGroups.contains(conflict.localGroup.id) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                            } else {
-                                Image(systemName: "circle")
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                        
-                        Text("Images: \(conflict.localGroup.imageNumbers)")
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(useLocalGroups.contains(conflict.localGroup.id) ? Color.green : Color.gray, lineWidth: 1)
-                    )
-                }
-                
-                // Remote version button
-                Button(action: {
-                    toggleRemoteGroup(conflict.localGroup.id)
-                }) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Server")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            
-                            Spacer()
-                            
-                            if useRemoteGroups.contains(conflict.localGroup.id) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                            } else {
-                                Image(systemName: "circle")
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                        
-                        Text("Images: \(conflict.remoteGroup.imageNumbers)")
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(useRemoteGroups.contains(conflict.localGroup.id) ? Color.green : Color.gray, lineWidth: 1)
-                    )
-                }
-            }
+
+    // Get title for conflict item
+    private func itemTitle(for conflict: ConflictInfo) -> String {
+        if let entry = conflict.localData as? RosterEntry {
+            return entry.lastName.isEmpty ? "ID: \(entry.firstName)" : entry.lastName
+        } else if let group = conflict.localData as? GroupImage {
+            return group.description
         }
-        .padding(.vertical, 8)
+        return "Unknown Item"
     }
-    
-    // Toggle local entry selection
-    private func toggleLocalEntry(_ id: String) {
-        // If selecting local, deselect remote
-        if useRemoteEntries.contains(id) {
-            useRemoteEntries.remove(id)
-        }
-        
-        // Toggle local
-        if useLocalEntries.contains(id) {
-            useLocalEntries.remove(id)
-        } else {
-            useLocalEntries.insert(id)
-        }
-    }
-    
-    // Toggle remote entry selection
-    private func toggleRemoteEntry(_ id: String) {
-        // If selecting remote, deselect local
-        if useLocalEntries.contains(id) {
-            useLocalEntries.remove(id)
-        }
-        
-        // Toggle remote
-        if useRemoteEntries.contains(id) {
-            useRemoteEntries.remove(id)
-        } else {
-            useRemoteEntries.insert(id)
-        }
-    }
-    
-    // Toggle local group selection
-    private func toggleLocalGroup(_ id: String) {
-        // If selecting local, deselect remote
-        if useRemoteGroups.contains(id) {
-            useRemoteGroups.remove(id)
-        }
-        
-        // Toggle local
-        if useLocalGroups.contains(id) {
-            useLocalGroups.remove(id)
-        } else {
-            useLocalGroups.insert(id)
-        }
-    }
-    
-    // Toggle remote group selection
-    private func toggleRemoteGroup(_ id: String) {
-        // If selecting remote, deselect local
-        if useLocalGroups.contains(id) {
-            useLocalGroups.remove(id)
-        }
-        
-        // Toggle remote
-        if useRemoteGroups.contains(id) {
-            useRemoteGroups.remove(id)
-        } else {
-            useRemoteGroups.insert(id)
-        }
-    }
-    
+
     // Use local version for all conflicts
     private func useLocalForAll() {
-        // Clear existing selections
-        useRemoteEntries.removeAll()
-        useRemoteGroups.removeAll()
-        
-        // Select all local entries
-        for conflict in entryConflicts {
-            useLocalEntries.insert(conflict.localEntry.id)
-        }
-        
-        // Select all local groups
-        for conflict in groupConflicts {
-            useLocalGroups.insert(conflict.localGroup.id)
+        for conflict in syncEngine.activeConflicts {
+            selectedResolutions[conflict.id] = .keepLocal
         }
     }
-    
-    // Use remote version for all conflicts
-    private func useRemoteForAll() {
-        // Clear existing selections
-        useLocalEntries.removeAll()
-        useLocalGroups.removeAll()
-        
-        // Select all remote entries
-        for conflict in entryConflicts {
-            useRemoteEntries.insert(conflict.remoteEntry.id)
-        }
-        
-        // Select all remote groups
-        for conflict in groupConflicts {
-            useRemoteGroups.insert(conflict.remoteGroup.id)
+
+    // Use server version for all conflicts
+    private func useServerForAll() {
+        for conflict in syncEngine.activeConflicts {
+            selectedResolutions[conflict.id] = .keepServer
         }
     }
-    
+
     // Check if all conflicts have been resolved
     private func allConflictsResolved() -> Bool {
-        // All entry conflicts resolved
-        let entriesResolved = entryConflicts.allSatisfy { conflict in
-            useLocalEntries.contains(conflict.localEntry.id) || useRemoteEntries.contains(conflict.remoteEntry.id)
+        syncEngine.activeConflicts.allSatisfy { conflict in
+            selectedResolutions[conflict.id] != nil
         }
-        
-        // All group conflicts resolved
-        let groupsResolved = groupConflicts.allSatisfy { conflict in
-            useLocalGroups.contains(conflict.localGroup.id) || useRemoteGroups.contains(conflict.remoteGroup.id)
-        }
-        
-        return entriesResolved && groupsResolved
     }
-    
-    // Resolve conflicts and save
-    private func resolveConflicts() {
+
+    // Resolve all conflicts
+    private func resolveAllConflicts() {
         isResolving = true
-        
-        OfflineManager.shared.resolveConflicts(
-            shootID: shootID,
-            useLocalEntries: Array(useLocalEntries),
-            useRemoteEntries: Array(useRemoteEntries),
-            useLocalGroups: Array(useLocalGroups),
-            useRemoteGroups: Array(useRemoteGroups)
-        ) { success in
-            isResolving = false
-            
-            if success {
-                onComplete(true)
-                presentationMode.wrappedValue.dismiss()
-            } else {
-                // Handle error
-                // In a real app, you might want to show an alert
+
+        Task {
+            for conflict in syncEngine.activeConflicts {
+                if let resolution = selectedResolutions[conflict.id] {
+                    await syncEngine.resolveConflict(conflictId: conflict.id, resolution: resolution)
+                }
+            }
+
+            await MainActor.run {
+                isResolving = false
+
+                if syncEngine.activeConflicts.isEmpty {
+                    onComplete(true)
+                    presentationMode.wrappedValue.dismiss()
+                }
             }
         }
+    }
+}
+
+struct ConflictResolutionView_Previews: PreviewProvider {
+    static var previews: some View {
+        ConflictResolutionView(onComplete: { _ in })
     }
 }

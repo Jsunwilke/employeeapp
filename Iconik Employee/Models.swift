@@ -697,8 +697,7 @@ extension TimeInterval {
 // MARK: - NFC SD Tracker Models (Supabase)
 
 /// Record for NFC SD card tracking stored in Supabase
-/// Note: Named FirestoreRecord for backward compatibility with existing code
-struct FirestoreRecord: Codable, Identifiable {
+struct NFCRecord: Codable, Identifiable {
     let id: String
     let timestamp: Date
     let photographer: String

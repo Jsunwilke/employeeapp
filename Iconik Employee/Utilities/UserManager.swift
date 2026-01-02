@@ -70,7 +70,6 @@ class UserManager: ObservableObject {
     // Get current user's Supabase ID
     func getCurrentSupabaseUserID() -> String? {
         let supabase = SupabaseManager.shared.client
-        // Use lowercased() to match Supabase auth.uid() format for RLS policies
         return supabase.auth.currentUser?.id.uuidString.lowercased()
     }
 
@@ -104,7 +103,7 @@ class UserManager: ObservableObject {
 
         // Fallback: fetch from Supabase users table
         let supabase = SupabaseManager.shared.client
-        guard let userId = supabase.auth.currentUser?.id.uuidString else {
+        guard let userId = supabase.auth.currentUser?.id.uuidString.lowercased() else {
             return
         }
 
@@ -132,6 +131,43 @@ class UserManager: ObservableObject {
             }
         } catch {
             // Silent failure - org ID will remain empty
+        }
+    }
+
+    /// Force refresh the organization ID from the database
+    /// Use this when cached values may be stale (e.g., case mismatch)
+    func forceRefreshOrganizationID() async -> String? {
+        let supabase = SupabaseManager.shared.client
+        guard let userId = supabase.auth.currentUser?.id.uuidString.lowercased() else {
+            return nil
+        }
+
+        do {
+            struct UserOrgResponse: Codable {
+                let organization_id: String
+            }
+
+            let response = try await supabase
+                .from("users")
+                .select("organization_id")
+                .eq("id", value: userId)
+                .limit(1)
+                .single()
+                .execute()
+
+            let decoder = JSONDecoder()
+            let userOrg = try decoder.decode(UserOrgResponse.self, from: response.data)
+
+            await MainActor.run {
+                self.currentUserOrganizationID = userOrg.organization_id
+                UserDefaults.standard.set(userOrg.organization_id, forKey: "userOrganizationID")
+            }
+
+            print("🔄 UserManager: Force refreshed organization ID to '\(userOrg.organization_id)'")
+            return userOrg.organization_id
+        } catch {
+            print("❌ UserManager: Failed to force refresh organization ID: \(error.localizedDescription)")
+            return nil
         }
     }
     
@@ -165,14 +201,14 @@ class UserManager: ObservableObject {
         let supabase = SupabaseManager.shared.client
 
         // Create a new channel for this user
-        let channel = supabase.channel("user-\(uid.lowercased())")
+        let channel = supabase.channel("user-\(uid)")
 
         // Set up postgres change listener for user changes
         _ = channel.onPostgresChange(
             AnyAction.self,
             schema: "public",
             table: "users",
-            filter: "id=eq.\(uid.lowercased())"
+            filter: "id=eq.\(uid)"
         ) { [weak self] _ in
             // Refetch user data when changes are detected
             Task { @MainActor in
@@ -188,7 +224,7 @@ class UserManager: ObservableObject {
 
         // Store the channel reference
         self.userChannel = channel
-        print("🔄 UserManager: Started Supabase realtime listener for user \(uid.lowercased())")
+        print("🔄 UserManager: Started Supabase realtime listener for user \(uid)")
     }
 
     // Fetch and update user profile data
@@ -203,7 +239,7 @@ class UserManager: ObservableObject {
             let users: [UserOrgResponse] = try await supabase
                 .from("users")
                 .select("organization_id")
-                .eq("id", value: userId.lowercased())
+                .eq("id", value: userId)
                 .limit(1)
                 .execute()
                 .value

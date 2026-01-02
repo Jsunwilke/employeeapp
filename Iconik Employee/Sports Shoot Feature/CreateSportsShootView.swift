@@ -123,10 +123,6 @@ struct CreateSportsShootView: View {
                 // Create button section
                 Section {
                     Button(action: {
-                        print("Create button tapped")
-                        print("Selected School: \(selectedSchool?.value ?? "nil")")
-                        print("Sport Name: '\(sportName)'")
-                        print("isLoading: \(isLoading)")
                         createSportsShoot()
                     }) {
                         if isLoading {
@@ -194,42 +190,30 @@ struct CreateSportsShootView: View {
 
         isLoading = true
 
-        // Create a new SportsShoot object
-        let newShootId = UUID().uuidString.lowercased()
-
         Task {
             do {
-                let supabase = SupabaseManager.shared.client
+                // Create a new SportsShoot with UUID
+                let newShoot = SportsShoot(
+                    id: UUID(),
+                    organizationId: storedUserOrganizationID,
+                    schoolName: school.value,
+                    schoolId: school.id,
+                    sportName: sportName,
+                    seasonType: seasonType,
+                    shootDate: shootDate,
+                    location: location,
+                    photographer: photographer,
+                    additionalNotes: additionalNotes,
+                    sessionId: linkToSession ? selectedSession?.id : nil,
+                    isArchived: false
+                )
 
-                // Build the data for Supabase insert
-                var insertData: [String: AnyJSON] = [
-                    "id": .string(newShootId),
-                    "school_name": .string(school.value),
-                    "school_id": .string(school.id),
-                    "sport_name": .string(sportName),
-                    "season_type": .string(seasonType),
-                    "shoot_date": .string(shootDate.ISO8601Format()),
-                    "location": .string(location),
-                    "photographer": .string(photographer),
-                    "roster": .array([]),  // Empty roster initially
-                    "group_images": .array([]),  // Empty group images initially
-                    "additional_notes": .string(additionalNotes),
-                    "organization_id": .string(storedUserOrganizationID.lowercased()),
-                    "is_archived": .bool(false)
-                ]
-
-                // Add session_id if linking to a session
-                if linkToSession, let sessionId = selectedSession?.id {
-                    insertData["session_id"] = .string(sessionId)
-                }
-
-                try await supabase
-                    .from("sports_jobs")
-                    .insert(insertData)
-                    .execute()
+                // Use the service to create
+                _ = try await SportsShootService.shared.createSportsShoot(newShoot)
 
                 // If linked to a session, update the session's has_sports_job flag
                 if linkToSession, let sessionId = selectedSession?.id {
+                    let supabase = SupabaseManager.shared.client
                     let updateData: [String: AnyJSON] = [
                         "has_sports_job": .bool(true)
                     ]
@@ -265,7 +249,6 @@ struct CreateSportsShootView: View {
             do {
                 schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
             } catch {
-                print("Error loading schools: \(error)")
             }
         }
     }
@@ -273,15 +256,14 @@ struct CreateSportsShootView: View {
     private func loadSessions() {
         guard !storedUserOrganizationID.isEmpty else { return }
 
-        SportsShootService.shared.fetchUpcomingSessions(forOrganization: storedUserOrganizationID) { result in
-            switch result {
-            case .success(let fetchedSessions):
-                DispatchQueue.main.async {
+        Task {
+            do {
+                let fetchedSessions = try await SportsShootService.shared.fetchUpcomingSessions(forOrganization: storedUserOrganizationID)
+                await MainActor.run {
                     self.sessions = fetchedSessions
-                    print("Loaded \(fetchedSessions.count) upcoming sessions")
                 }
-            case .failure(let error):
-                print("Error loading sessions: \(error)")
+            } catch {
+                print("Failed to load sessions: \(error)")
             }
         }
     }

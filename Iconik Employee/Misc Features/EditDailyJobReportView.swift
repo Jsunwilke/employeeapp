@@ -183,7 +183,7 @@ struct EditDailyJobReportView: View {
             // Photos section
             if !existingPhotoURLs.isEmpty {
                 Section(header: Text("Attached Photos")) {
-                    FirebasePhotoGallery(photoURLs: existingPhotoURLs, columns: 3)
+                    StoragePhotoGallery(photoURLs: existingPhotoURLs, columns: 3)
                         .padding(.vertical, 8)
                 }
             }

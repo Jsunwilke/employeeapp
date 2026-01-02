@@ -136,7 +136,7 @@ struct SchoolInfoListView: View {
                     .from("daily_job_reports")
                     .select("total_mileage")
                     .eq("school_or_destination", value: school.name)
-                    .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                    .eq("organization_id", value: storedUserOrganizationID)
                     .gte("date", value: seasonStart.ISO8601Format())
                     .lte("date", value: seasonEnd.ISO8601Format())
                     .execute()

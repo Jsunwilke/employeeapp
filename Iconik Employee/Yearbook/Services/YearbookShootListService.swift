@@ -30,7 +30,7 @@ class YearbookShootListService: ObservableObject {
         let shootLists: [YearbookShootList] = try await supabase
             .from(tableName)
             .select()
-            .eq("school_id", value: schoolId.lowercased())
+            .eq("school_id", value: schoolId)
             .eq("school_year", value: schoolYear)
             .limit(1)
             .execute()
@@ -52,7 +52,7 @@ class YearbookShootListService: ObservableObject {
         let lists: [YearbookShootList] = try await supabase
             .from(tableName)
             .select()
-            .eq("organization_id", value: organizationId.lowercased())
+            .eq("organization_id", value: organizationId)
             .order("school_year", ascending: false)
             .execute()
             .value
@@ -73,8 +73,8 @@ class YearbookShootListService: ObservableObject {
         let results: [YearResult] = try await supabase
             .from(tableName)
             .select("school_year")
-            .eq("organization_id", value: organizationId.lowercased())
-            .eq("school_id", value: schoolId.lowercased())
+            .eq("organization_id", value: organizationId)
+            .eq("school_id", value: schoolId)
             .execute()
             .value
 
@@ -92,7 +92,7 @@ class YearbookShootListService: ObservableObject {
         let lists: [YearbookShootList] = try await supabase
             .from(tableName)
             .select()
-            .eq("organization_id", value: organizationId.lowercased())
+            .eq("organization_id", value: organizationId)
             .eq("school_year", value: currentYear)
             .eq("is_active", value: true)
             .execute()
@@ -127,8 +127,8 @@ class YearbookShootListService: ObservableObject {
 
         let insertData = InsertData(
             id: newId,
-            organization_id: list.organization_id.lowercased(),
-            school_id: list.school_id.lowercased(),
+            organization_id: list.organization_id,
+            school_id: list.school_id,
             school_name: list.school_name,
             school_year: list.school_year,
             start_date: list.start_date,
@@ -188,7 +188,7 @@ class YearbookShootListService: ObservableObject {
         let newList = YearbookShootList(
             id: UUID().uuidString.lowercased(),
             organization_id: sourceList.organization_id,
-            school_id: toSchoolId.lowercased(),
+            school_id: toSchoolId,
             school_name: toSchoolName,
             school_year: toSchoolYear,
             start_date: dates.start,
@@ -391,7 +391,7 @@ class YearbookShootListService: ObservableObject {
             AnyAction.self,
             schema: "public",
             table: tableName,
-            filter: "school_id=eq.\(schoolId.lowercased())"
+            filter: "school_id=eq.\(schoolId)"
         )
 
         Task {
@@ -451,7 +451,7 @@ class YearbookShootListService: ObservableObject {
             AnyAction.self,
             schema: "public",
             table: tableName,
-            filter: "organization_id=eq.\(organizationId.lowercased())"
+            filter: "organization_id=eq.\(organizationId)"
         )
 
         Task {

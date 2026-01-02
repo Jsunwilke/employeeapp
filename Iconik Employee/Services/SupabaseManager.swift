@@ -63,7 +63,7 @@ class SupabaseManager {
 
     /// Get the current user ID
     var currentUserId: String? {
-        return client.auth.currentUser?.id.uuidString
+        return client.auth.currentUser?.id.uuidString.lowercased()
     }
 
     /// Get the current session

@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		4DA3DF6967B24AF9ECB29C28 /* Pods_Iconik_Employee.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 72D6A6C54BBCF2ED26D7EFAE /* Pods_Iconik_Employee.framework */; };
 		7A023CB02EFE51C70085EAD5 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CAF2EFE51C70085EAD5 /* Auth */; };
 		7A023CB22EFE51C70085EAD5 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CB12EFE51C70085EAD5 /* Functions */; };
 		7A023CB42EFE51C70085EAD5 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CB32EFE51C70085EAD5 /* PostgREST */; };
@@ -35,9 +34,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		72D6A6C54BBCF2ED26D7EFAE /* Pods_Iconik_Employee.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Iconik_Employee.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		8AEFE71B965E82824FAE7963 /* Pods-Iconik Employee.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Iconik Employee.debug.xcconfig"; path = "Target Support Files/Pods-Iconik Employee/Pods-Iconik Employee.debug.xcconfig"; sourceTree = "<group>"; };
-		967A0006ED4B8E645B0BFC98 /* Pods-Iconik Employee.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Iconik Employee.release.xcconfig"; path = "Target Support Files/Pods-Iconik Employee/Pods-Iconik Employee.release.xcconfig"; sourceTree = "<group>"; };
 		C389745A2D74DACE00F75F9F /* Iconik Employee.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Iconik Employee.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C389746C2D74DAD000F75F9F /* Iconik EmployeeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Iconik EmployeeTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C38974762D74DAD000F75F9F /* Iconik EmployeeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Iconik EmployeeUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -69,7 +65,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				C3B8E9752DC7D5080014357D /* Metal.framework in Frameworks */,
-				4DA3DF6967B24AF9ECB29C28 /* Pods_Iconik_Employee.framework in Frameworks */,
 				7A023CB82EFE51C70085EAD5 /* Storage in Frameworks */,
 				7A023CB22EFE51C70085EAD5 /* Functions in Frameworks */,
 				7AD701182EFF4E4900094E9C /* Supabase in Frameworks */,
@@ -101,18 +96,8 @@
 			children = (
 				C3B8E9742DC7D5080014357D /* Metal.framework */,
 				C3B8E5AD2D81229A0014357D /* FirebaseMessaging.framework */,
-				72D6A6C54BBCF2ED26D7EFAE /* Pods_Iconik_Employee.framework */,
 			);
 			name = Frameworks;
-			sourceTree = "<group>";
-		};
-		14D4503A2F7BC571FF62F283 /* Pods */ = {
-			isa = PBXGroup;
-			children = (
-				8AEFE71B965E82824FAE7963 /* Pods-Iconik Employee.debug.xcconfig */,
-				967A0006ED4B8E645B0BFC98 /* Pods-Iconik Employee.release.xcconfig */,
-			);
-			path = Pods;
 			sourceTree = "<group>";
 		};
 		C38974512D74DACE00F75F9F = {
@@ -122,7 +107,6 @@
 				C389746F2D74DAD000F75F9F /* Iconik EmployeeTests */,
 				C38974792D74DAD000F75F9F /* Iconik EmployeeUITests */,
 				C389745B2D74DACE00F75F9F /* Products */,
-				14D4503A2F7BC571FF62F283 /* Pods */,
 				00E61A83016F9BE00270878F /* Frameworks */,
 			);
 			sourceTree = "<group>";
@@ -144,7 +128,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = C38974802D74DAD000F75F9F /* Build configuration list for PBXNativeTarget "Iconik Employee" */;
 			buildPhases = (
-				F18F99457B2C60CEE0674334 /* [CP] Check Pods Manifest.lock */,
 				C38974562D74DACE00F75F9F /* Sources */,
 				C38974572D74DACE00F75F9F /* Frameworks */,
 				C38974582D74DACE00F75F9F /* Resources */,
@@ -274,30 +257,6 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
-/* Begin PBXShellScriptBuildPhase section */
-		F18F99457B2C60CEE0674334 /* [CP] Check Pods Manifest.lock */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
-				"${PODS_ROOT}/Manifest.lock",
-			);
-			name = "[CP] Check Pods Manifest.lock";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(DERIVED_FILE_DIR)/Pods-Iconik Employee-checkManifestLockResult.txt",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
-			showEnvVarsInLog = 0;
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		C38974562D74DACE00F75F9F /* Sources */ = {

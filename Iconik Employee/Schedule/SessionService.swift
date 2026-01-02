@@ -71,9 +71,11 @@ class SessionService: ObservableObject {
     }
 
     /// Fetch sessions for a specific organization
-    func fetchSessions(organizationID: String, includeUnpublished: Bool = false) async throws -> [Session] {
-        // Check cache first
-        if let lastUpdate = lastCacheUpdate,
+    /// - Parameter forceRefresh: If true, bypasses cache and fetches fresh data (used by real-time handlers)
+    func fetchSessions(organizationID: String, includeUnpublished: Bool = false, forceRefresh: Bool = false) async throws -> [Session] {
+        // Check cache first (skip if forceRefresh)
+        if !forceRefresh,
+           let lastUpdate = lastCacheUpdate,
            Date().timeIntervalSince(lastUpdate) < cacheValidityDuration,
            !sessionsCache.isEmpty {
             print("📅 SessionService: Returning \(sessionsCache.count) cached sessions")
@@ -140,7 +142,8 @@ class SessionService: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 do {
-                    let sessions = try await self?.fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished) ?? []
+                    // Use forceRefresh: true to bypass cache on real-time updates
+                    let sessions = try await self?.fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished, forceRefresh: true) ?? []
                     onChange(sessions)
                 } catch {
                     print("❌ Error fetching sessions after realtime update: \(error)")

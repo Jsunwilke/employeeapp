@@ -208,7 +208,7 @@ class UserProfileService: ObservableObject {
             let profile: UserProfile = try await supabase
                 .from("users")
                 .select()
-                .eq("id", value: uid.lowercased())
+                .eq("id", value: uid)
                 .single()
                 .execute()
                 .value
@@ -217,7 +217,7 @@ class UserProfileService: ObservableObject {
             updateAppStorage(with: profile)
 
             // Update current profile if it's the current user
-            if uid == supabase.auth.currentUser?.id.uuidString {
+            if uid == supabase.auth.currentUser?.id.uuidString.lowercased() {
                 self.currentUserProfile = profile
             }
 
@@ -243,7 +243,7 @@ class UserProfileService: ObservableObject {
 
     // Refresh current user's profile
     func refreshCurrentUserProfile() async {
-        guard let uid = supabase.auth.currentUser?.id.uuidString else { return }
+        guard let uid = supabase.auth.currentUser?.id.uuidString.lowercased() else { return }
 
         do {
             let profile = try await fetchUserProfile(uid: uid)
@@ -255,7 +255,7 @@ class UserProfileService: ObservableObject {
 
     // Update user profile in Supabase
     func updateUserProfile(_ profile: UserProfile) async throws {
-        guard profile.uid == supabase.auth.currentUser?.id.uuidString else {
+        guard profile.uid == supabase.auth.currentUser?.id.uuidString.lowercased() else {
             throw NSError(domain: "UserProfileService", code: -1,
                          userInfo: [NSLocalizedDescriptionKey: "Can only update own profile"])
         }
@@ -297,7 +297,7 @@ class UserProfileService: ObservableObject {
 
     // Update specific fields only (using snake_case field names)
     func updateUserFields(_ fields: [String: AnyJSON]) async throws {
-        guard let uid = supabase.auth.currentUser?.id.uuidString else {
+        guard let uid = supabase.auth.currentUser?.id.uuidString.lowercased() else {
             throw NSError(domain: "UserProfileService", code: -1,
                          userInfo: [NSLocalizedDescriptionKey: "No authenticated user"])
         }
@@ -312,7 +312,7 @@ class UserProfileService: ObservableObject {
             try await supabase
                 .from("users")
                 .update(fields)
-                .eq("id", value: uid.lowercased())
+                .eq("id", value: uid)
                 .execute()
 
             // Refresh the profile to get the updated data

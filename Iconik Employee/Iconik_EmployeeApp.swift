@@ -13,12 +13,9 @@ struct EmployeeAppApp: App {
         _ = SupabaseManager.shared
         print("✅ Supabase initialized and ready")
 
-        // Migrate existing JSON cache to CoreData (one-time migration)
-        LocalSportsShootRepository.shared.migrateFromJSONCache()
-
-        // Start background sync service for offline-first architecture
-        BackgroundSyncService.shared.startMonitoring()
-        print("🔄 BackgroundSyncService started monitoring for pending changes")
+        // Start SyncEngine for offline-first architecture
+        SyncEngine.shared.startSyncing()
+        print("🔄 SyncEngine started monitoring for pending changes")
 
         // Apply the saved theme immediately during app initialization
         applyAppTheme()

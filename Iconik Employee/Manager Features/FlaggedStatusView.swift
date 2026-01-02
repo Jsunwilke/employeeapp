@@ -61,7 +61,7 @@ struct FlaggedStatusView: View {
                 let response: UserFlagData = try await supabase
                     .from("users")
                     .select("is_flagged, flag_note")
-                    .eq("id", value: currentUserID.lowercased())
+                    .eq("id", value: currentUserID)
                     .single()
                     .execute()
                     .value
@@ -87,7 +87,7 @@ struct FlaggedStatusView: View {
                 try await supabase
                     .from("users")
                     .update(updateData)
-                    .eq("id", value: currentUserID.lowercased())
+                    .eq("id", value: currentUserID)
                     .execute()
 
                 await MainActor.run {

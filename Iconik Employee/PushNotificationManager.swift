@@ -109,7 +109,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                     .update([
                         "apns_token": AnyJSON.string(token)
                     ])
-                    .eq("id", value: userId.lowercased())
+                    .eq("id", value: userId)
                     .execute()
 
                 print("✅ Successfully saved APNs token to Supabase")

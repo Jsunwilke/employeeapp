@@ -73,7 +73,7 @@ class ManagerJobBoxViewModel: ObservableObject {
         let shift_uid: String?
         let status: String?
         let photographer: String?
-        let timestamp: Date?
+        let updated_at: Date?
         let box_number: String?
         let organization_id: String?
         let school: String?
@@ -148,17 +148,17 @@ class ManagerJobBoxViewModel: ObservableObject {
                     jobBoxes = try await supabase
                         .from("job_boxes")
                         .select()
-                        .eq("organization_id", value: organizationID.lowercased())
-                        .gte("timestamp", value: startOfDay.ISO8601Format())
-                        .lt("timestamp", value: endOfDay.ISO8601Format())
+                        .eq("organization_id", value: organizationID)
+                        .gte("updated_at", value: startOfDay.ISO8601Format())
+                        .lt("updated_at", value: endOfDay.ISO8601Format())
                         .execute()
                         .value
                 } else {
                     jobBoxes = try await supabase
                         .from("job_boxes")
                         .select()
-                        .eq("organization_id", value: organizationID.lowercased())
-                        .gte("timestamp", value: thirtyDaysAgo.ISO8601Format())
+                        .eq("organization_id", value: organizationID)
+                        .gte("updated_at", value: thirtyDaysAgo.ISO8601Format())
                         .execute()
                         .value
                 }
@@ -185,7 +185,7 @@ class ManagerJobBoxViewModel: ObservableObject {
                 shift_uid: record.shift_uid ?? "",
                 status: record.status ?? "Unknown",
                 photographer: record.photographer ?? record.scanned_by ?? "Unknown",
-                timestamp: record.timestamp,
+                updated_at: record.updated_at,
                 box_number: record.box_number ?? record.jobbox_number,
                 organization_id: record.organization_id ?? "",
                 school: record.school,
@@ -196,7 +196,7 @@ class ManagerJobBoxViewModel: ObservableObject {
             let schoolName = record.school ?? "Unknown School"
             let jobboxNumber = record.jobbox_number ?? record.box_number ?? ""
             let cardNumber = record.card_number ?? record.card_id ?? ""
-            let date = record.event_date ?? jobBox.timestamp ?? Date()
+            let date = record.event_date ?? jobBox.updated_at ?? Date()
             let photographerName = record.scanned_by ?? record.photographer ?? "Unknown"
 
             // Create JobBoxWithEvent object
@@ -334,7 +334,7 @@ class ManagerJobBoxViewModel: ObservableObject {
             do {
                 let updateData: [String: AnyJSON] = [
                     "status": .string(newStatus.rawValue),
-                    "timestamp": .string(Date().ISO8601Format())
+                    "updated_at": .string(Date().ISO8601Format())
                 ]
 
                 try await supabase

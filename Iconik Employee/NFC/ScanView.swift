@@ -12,7 +12,7 @@ struct ScanView: View {
     @State private var isSaving = false
     @State private var showAlert = false
     @State private var alertMessage = ""
-    @State private var lastRecord: FirestoreRecord? = nil
+    @State private var lastRecord: NFCRecord? = nil
     @State private var lastJobBoxRecord: JobBox? = nil
     
     // State for loading overlay
@@ -308,14 +308,14 @@ struct ScanView: View {
 
         // Use Supabase realtime for job box updates
         let supabase = SupabaseManager.shared.client
-        let channelKey = "job_boxes_scan_\(orgID.lowercased())"
+        let channelKey = "job_boxes_scan_\(orgID)"
         let channel = supabase.channel(channelKey)
 
         let changeStream = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: "job_boxes",
-            filter: "organization_id=eq.\(orgID.lowercased())"
+            filter: "organization_id=eq.\(orgID)"
         )
 
         Task {
@@ -360,7 +360,7 @@ struct ScanView: View {
         let currentTime = Date()
         
         // First, we need to find all box numbers
-        FirestoreManager.shared.fetchJobBoxRecords(field: "all", value: "", organizationID: orgID) { result in
+        DatabaseManager.shared.fetchJobBoxRecords(field: "all", value: "", organizationID: orgID) { result in
             switch result {
             case .success(let allRecords):
                 print("DEBUG: Found \(allRecords.count) total job box records")
@@ -482,7 +482,7 @@ struct ScanView: View {
             return
         }
         
-        FirestoreManager.shared.saveRecord(
+        DatabaseManager.shared.saveRecord(
             timestamp: timestamp,
             photographer: photographer,
             cardNumber: cardNumber,
@@ -547,7 +547,7 @@ struct ScanView: View {
         // This ensures we maintain the shiftUid even when transitioning from one status to another
         let effectiveShiftUid = shiftUid ?? (status.lowercased() != "packed" ? lastJobBoxRecord?.shiftUid : nil)
         
-        FirestoreManager.shared.saveJobBoxRecord(
+        DatabaseManager.shared.saveJobBoxRecord(
             timestamp: timestamp,
             photographer: photographer,
             boxNumber: boxNumber,
@@ -602,7 +602,7 @@ struct ScanView: View {
             return
         }
         
-        FirestoreManager.shared.fetchRecords(field: "cardNumber", value: cardNumber, organizationID: orgID) { result in
+        DatabaseManager.shared.fetchRecords(field: "cardNumber", value: cardNumber, organizationID: orgID) { result in
             isLoading = false
             
             switch result {
@@ -660,7 +660,7 @@ struct ScanView: View {
             return
         }
         
-        FirestoreManager.shared.fetchJobBoxRecords(field: "boxNumber", value: boxNumber, organizationID: orgID) { result in
+        DatabaseManager.shared.fetchJobBoxRecords(field: "boxNumber", value: boxNumber, organizationID: orgID) { result in
             isLoading = false
 
             switch result {

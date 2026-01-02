@@ -1486,7 +1486,7 @@ struct SlingWeeklyView: View {
                 entry.photographerId == currentUserID
             }
         }
-        
+
         let hasTimeOff = timeOffToCheck.contains { timeOffEntry in
             let entryDate = calendar.startOfDay(for: timeOffEntry.date)
             let targetDate = calendar.startOfDay(for: date)

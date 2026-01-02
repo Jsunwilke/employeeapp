@@ -1294,7 +1294,7 @@ struct ShiftDetailView: View {
                 let users: [UserRecord] = try await supabase
                     .from("users")
                     .select("id, photo_url, first_name, last_name")
-                    .eq("id", value: userID.lowercased())
+                    .eq("id", value: userID)
                     .limit(1)
                     .execute()
                     .value
@@ -1383,7 +1383,7 @@ struct ShiftDetailView: View {
                     let users: [UserRecord] = try await supabase
                         .from("users")
                         .select("id, photo_url")
-                        .eq("id", value: photographerID.lowercased())
+                        .eq("id", value: photographerID)
                         .limit(1)
                         .execute()
                         .value
@@ -1444,7 +1444,7 @@ struct ShiftDetailView: View {
                 let schools: [SchoolRecord] = try await supabase
                     .from("schools")
                     .select("id, location_photos")
-                    .eq("organization_id", value: orgID.lowercased())
+                    .eq("organization_id", value: orgID)
                     .eq("value", value: self.session.schoolName)
                     .limit(1)
                     .execute()
@@ -2026,7 +2026,7 @@ struct ShiftDetailView: View {
                     let users: [UserContact] = try await supabase
                         .from("users")
                         .select("id, first_name, phone")
-                        .eq("organization_id", value: orgID.lowercased())
+                        .eq("organization_id", value: orgID)
                         .eq("first_name", value: queryName)
                         .limit(1)
                         .execute()

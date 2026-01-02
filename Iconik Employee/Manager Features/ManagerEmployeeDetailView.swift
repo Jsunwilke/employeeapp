@@ -172,7 +172,7 @@ struct ManagerEmployeeDetailView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 ForEach(record.photoURLs.prefix(5), id: \.self) { photoURL in
-                                    FirebaseImageThumbnail(imageURL: photoURL, size: 60)
+                                    StorageImageThumbnail(imageURL: photoURL, size: 60)
                                 }
                                 if record.photoURLs.count > 5 {
                                     ZStack {

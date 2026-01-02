@@ -7,7 +7,7 @@ struct SearchView: View {
     
     @State private var searchField = "cardNumber"
     @State private var searchValue = ""
-    @State private var searchResults: [FirestoreRecord] = []
+    @State private var searchResults: [NFCRecord] = []
     @State private var jobBoxSearchResults: [JobBox] = []
     @State private var isLoading = false
     @State private var showAlert = false
@@ -19,7 +19,7 @@ struct SearchView: View {
     @State private var photographerNames: [String] = []
     
     @State private var statusSearchPerformed = false
-    @State private var recordToDelete: FirestoreRecord? = nil
+    @State private var recordToDelete: NFCRecord? = nil
     @State private var jobBoxRecordToDelete: JobBox? = nil
     @State private var showDeleteConfirmation = false
     
@@ -265,7 +265,7 @@ struct SearchView: View {
            let cachedNames = try? JSONDecoder().decode([String].self, from: data) {
             self.photographerNames = cachedNames
         }
-        FirestoreManager.shared.listenForPhotographers(inOrgID: orgID) { names in
+        DatabaseManager.shared.listenForPhotographers(inOrgID: orgID) { names in
             self.photographerNames = names
         }
         
@@ -274,7 +274,7 @@ struct SearchView: View {
            let cachedSchools = try? JSONDecoder().decode([SchoolItem].self, from: data) {
             self.schools = cachedSchools
         }
-        FirestoreManager.shared.listenForSchoolsData(forOrgID: orgID) { schoolItems in
+        DatabaseManager.shared.listenForSchoolsData(forOrgID: orgID) { schoolItems in
             self.schools = schoolItems
         }
         
@@ -287,7 +287,7 @@ struct SearchView: View {
     }
     
     func fetchInitialSDCardRecords(orgID: String) {
-        FirestoreManager.shared.fetchRecords(field: "all", value: "", organizationID: orgID) { result in
+        DatabaseManager.shared.fetchRecords(field: "all", value: "", organizationID: orgID) { result in
             switch result {
             case .success(let records):
                 let sortedRecords = records.sorted { $0.timestamp > $1.timestamp }
@@ -300,7 +300,7 @@ struct SearchView: View {
     }
     
     func fetchInitialJobBoxRecords(orgID: String) {
-        FirestoreManager.shared.fetchJobBoxRecords(field: "all", value: "", organizationID: orgID) { result in
+        DatabaseManager.shared.fetchJobBoxRecords(field: "all", value: "", organizationID: orgID) { result in
             switch result {
             case .success(let records):
                 let sortedRecords = records.sorted { $0.timestampDate > $1.timestampDate }
@@ -334,7 +334,7 @@ struct SearchView: View {
     func performSDCardSearch(orgID: String) {
         if searchField.lowercased() == "status" {
             statusSearchPerformed = true
-            FirestoreManager.shared.fetchRecords(field: "all", value: "", organizationID: orgID) { result in
+            DatabaseManager.shared.fetchRecords(field: "all", value: "", organizationID: orgID) { result in
                 isLoading = false
                 switch result {
                 case .success(let records):
@@ -357,7 +357,7 @@ struct SearchView: View {
                 }
             }
         } else {
-            FirestoreManager.shared.fetchRecords(field: searchField, value: searchValue, organizationID: orgID) { result in
+            DatabaseManager.shared.fetchRecords(field: searchField, value: searchValue, organizationID: orgID) { result in
                 isLoading = false
                 switch result {
                 case .success(let records):
@@ -380,7 +380,7 @@ struct SearchView: View {
         
         if fieldToSearch.lowercased() == "status" {
             statusSearchPerformed = true
-            FirestoreManager.shared.fetchJobBoxRecords(field: "all", value: "", organizationID: orgID) { result in
+            DatabaseManager.shared.fetchJobBoxRecords(field: "all", value: "", organizationID: orgID) { result in
                 isLoading = false
                 switch result {
                 case .success(let records):
@@ -403,7 +403,7 @@ struct SearchView: View {
                 }
             }
         } else {
-            FirestoreManager.shared.fetchJobBoxRecords(field: fieldToSearch, value: searchValue, organizationID: orgID) { result in
+            DatabaseManager.shared.fetchJobBoxRecords(field: fieldToSearch, value: searchValue, organizationID: orgID) { result in
                 isLoading = false
                 switch result {
                 case .success(let records):
@@ -422,7 +422,7 @@ struct SearchView: View {
     }
     
     // Function to show confirmation dialog for SD card record
-    func confirmDeleteRecord(_ record: FirestoreRecord) {
+    func confirmDeleteRecord(_ record: NFCRecord) {
         confirmationConfig = AlertConfiguration(
             title: "Confirm Deletion",
             message: "Are you sure you want to delete the record for card #\(record.cardNumber)? This action cannot be undone.",
@@ -460,7 +460,7 @@ struct SearchView: View {
     }
     
     func deleteRecord(recordID: String) {
-        FirestoreManager.shared.deleteRecord(recordID: recordID) { result in
+        DatabaseManager.shared.deleteRecord(recordID: recordID) { result in
             switch result {
             case .success(let message):
                 alertMessage = message
@@ -475,7 +475,7 @@ struct SearchView: View {
     }
     
     func deleteJobBoxRecord(recordID: String) {
-        FirestoreManager.shared.deleteJobBoxRecord(recordID: recordID) { result in
+        DatabaseManager.shared.deleteJobBoxRecord(recordID: recordID) { result in
             switch result {
             case .success(let message):
                 alertMessage = message

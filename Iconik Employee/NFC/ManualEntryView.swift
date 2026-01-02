@@ -23,7 +23,7 @@ struct ManualEntryView: View {
     @State private var isSubmitting = false
     @State private var showAlert = false
     @State private var alertMessage = ""
-    @State private var lastRecord: FirestoreRecord? = nil
+    @State private var lastRecord: NFCRecord? = nil
     @State private var lastJobBoxRecord: JobBox? = nil
     
     // For session selection
@@ -294,7 +294,7 @@ struct ManualEntryView: View {
         }
         
         // Force refresh from server
-        FirestoreManager.shared.refreshSchoolsFromServer(forOrgID: orgID) { schoolItems in
+        DatabaseManager.shared.refreshSchoolsFromServer(forOrgID: orgID) { schoolItems in
             DispatchQueue.main.async {
                 self.schools = schoolItems
                 self.isRefreshing = false
@@ -328,7 +328,7 @@ struct ManualEntryView: View {
             self.photographerNames = cachedNames
             print("ManualEntryView: Loaded \(cachedNames.count) cached photographers")
         }
-        FirestoreManager.shared.listenForPhotographers(inOrgID: orgID) { names in
+        DatabaseManager.shared.listenForPhotographers(inOrgID: orgID) { names in
             DispatchQueue.main.async {
                 self.photographerNames = names
                 print("ManualEntryView: Updated photographers list with \(names.count) names")
@@ -342,7 +342,7 @@ struct ManualEntryView: View {
             print("ManualEntryView: Loaded \(cachedSchools.count) cached schools")
         }
         // First refresh from server to get latest schools
-        FirestoreManager.shared.refreshSchoolsFromServer(forOrgID: orgID) { schoolItems in
+        DatabaseManager.shared.refreshSchoolsFromServer(forOrgID: orgID) { schoolItems in
             DispatchQueue.main.async {
                 self.schools = schoolItems
                 print("ManualEntryView: Refreshed schools from server with \(schoolItems.count) schools")
@@ -350,7 +350,7 @@ struct ManualEntryView: View {
         }
         
         // Then listen for real-time updates
-        FirestoreManager.shared.listenForSchoolsData(forOrgID: orgID) { schoolItems in
+        DatabaseManager.shared.listenForSchoolsData(forOrgID: orgID) { schoolItems in
             DispatchQueue.main.async {
                 self.schools = schoolItems
                 print("ManualEntryView: Updated schools list with \(schoolItems.count) schools: \(schoolItems.map { $0.name })")
@@ -375,7 +375,7 @@ struct ManualEntryView: View {
         let orgID = userManager.currentUserOrganizationID
         guard !orgID.isEmpty else { return }
         
-        FirestoreManager.shared.fetchRecords(field: "cardNumber", value: cardNumber, organizationID: orgID) { result in
+        DatabaseManager.shared.fetchRecords(field: "cardNumber", value: cardNumber, organizationID: orgID) { result in
             switch result {
             case .success(let records):
                 let sortedRecords = records.sorted { $0.timestamp > $1.timestamp }
@@ -391,7 +391,7 @@ struct ManualEntryView: View {
         let orgID = userManager.currentUserOrganizationID
         guard !orgID.isEmpty else { return }
         
-        FirestoreManager.shared.fetchJobBoxRecords(field: "boxNumber", value: boxNumber, organizationID: orgID) { result in
+        DatabaseManager.shared.fetchJobBoxRecords(field: "boxNumber", value: boxNumber, organizationID: orgID) { result in
             switch result {
             case .success(let records):
                 let sortedRecords = records.sorted { $0.timestampDate > $1.timestampDate }
@@ -518,7 +518,7 @@ struct ManualEntryView: View {
             return
         }
         
-        FirestoreManager.shared.saveRecord(
+        DatabaseManager.shared.saveRecord(
             timestamp: timestamp,
             photographer: localPhotographer,
             cardNumber: cardNumber,
@@ -565,7 +565,7 @@ struct ManualEntryView: View {
             effectiveShiftUid = nil
         }
         
-        FirestoreManager.shared.saveJobBoxRecord(
+        DatabaseManager.shared.saveJobBoxRecord(
             timestamp: timestamp,
             photographer: localPhotographer,
             boxNumber: boxNumber,

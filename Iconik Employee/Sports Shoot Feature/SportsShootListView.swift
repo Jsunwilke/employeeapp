@@ -10,10 +10,14 @@ class SportsShootListViewModel: ObservableObject {
     @Published var errorMessage = ""
     @Published var showingErrorAlert = false
     @Published var showArchived = false // Toggle between active and archived shoots
-    
+
     // Network status
     @Published var isOnline = true
-    
+
+    // Roster and Groups data (fetched separately via services)
+    @Published var rosterEntries: [RosterEntry] = []
+    @Published var groupImages: [GroupImage] = []
+
     // States for roster management
     @Published var showingAddRosterEntry = false
     @Published var showingBatchAdd = false
@@ -34,9 +38,9 @@ class SportsShootListViewModel: ObservableObject {
     @Published var showingCreateSportsShoot = false // New state for creating sports shoot
     
     // Field editing state
-    @Published var currentlyEditingEntry: String? = nil // ID of entry being edited
+    @Published var currentlyEditingEntry: UUID? = nil // ID of entry being edited
     @Published var editingImageNumber: String = ""
-    @Published var lockedEntries: [String: String] = [:] // [entryID: editorName]
+    @Published var lockedEntries: [UUID: String] = [:] // [entryID: editorName]
     
     // UI state - header collapsed in landscape
     @Published var isHeaderCollapsed = true
@@ -49,10 +53,7 @@ class SportsShootListViewModel: ObservableObject {
     
     // Track if value has changed for save-on-blur
     @Published var hasUnsavedChanges: Bool = false
-    
-    // Shoot status cache to avoid unnecessary UI updates
-    private var shootStatusCache: [String: OfflineManager.CacheStatus] = [:]
-    
+
     // Enum moved from the view to the view model
     enum ImageFilterType {
         case all
@@ -69,43 +70,32 @@ class SportsShootListViewModel: ObservableObject {
     
     // Method to archive/unarchive a shoot
     func toggleArchiveStatus(for shoot: SportsShoot) {
-        if shoot.isArchived {
-            SportsShootService.shared.unarchiveSportsShoot(id: shoot.id) { [weak self] result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success:
-                        // Update local copy
-                        if let index = self?.sportsShoots.firstIndex(where: { $0.id == shoot.id }) {
-                            self?.sportsShoots[index].isArchived = false
-                        }
-                        // If we're viewing archived and unarchived the selected shoot, clear selection
-                        if self?.showArchived == true && self?.selectedShoot?.id == shoot.id {
-                            self?.selectedShoot = nil
-                        }
-                    case .failure(let error):
-                        self?.errorMessage = "Failed to unarchive: \(error.localizedDescription)"
-                        self?.showingErrorAlert = true
+        Task { @MainActor in
+            do {
+                if shoot.isArchived {
+                    try await SportsShootService.shared.unarchiveSportsShoot(id: shoot.id)
+                    // Update local copy
+                    if let index = sportsShoots.firstIndex(where: { $0.id == shoot.id }) {
+                        sportsShoots[index].isArchived = false
+                    }
+                    // If we're viewing archived and unarchived the selected shoot, clear selection
+                    if showArchived == true && selectedShoot?.id == shoot.id {
+                        selectedShoot = nil
+                    }
+                } else {
+                    try await SportsShootService.shared.archiveSportsShoot(id: shoot.id)
+                    // Update local copy
+                    if let index = sportsShoots.firstIndex(where: { $0.id == shoot.id }) {
+                        sportsShoots[index].isArchived = true
+                    }
+                    // If we're viewing active and archived the selected shoot, clear selection
+                    if showArchived == false && selectedShoot?.id == shoot.id {
+                        selectedShoot = nil
                     }
                 }
-            }
-        } else {
-            SportsShootService.shared.archiveSportsShoot(id: shoot.id) { [weak self] result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success:
-                        // Update local copy
-                        if let index = self?.sportsShoots.firstIndex(where: { $0.id == shoot.id }) {
-                            self?.sportsShoots[index].isArchived = true
-                        }
-                        // If we're viewing active and archived the selected shoot, clear selection
-                        if self?.showArchived == false && self?.selectedShoot?.id == shoot.id {
-                            self?.selectedShoot = nil
-                        }
-                    case .failure(let error):
-                        self?.errorMessage = "Failed to archive: \(error.localizedDescription)"
-                        self?.showingErrorAlert = true
-                    }
-                }
+            } catch {
+                errorMessage = "Failed to \(shoot.isArchived ? "unarchive" : "archive"): \(error.localizedDescription)"
+                showingErrorAlert = true
             }
         }
     }
@@ -117,30 +107,6 @@ class SportsShootListViewModel: ObservableObject {
             self.objectWillChange.send()
         }
     }
-    
-    // Get sync status with caching to avoid unnecessary UI updates
-    func syncStatusForShoot(id: String) -> OfflineManager.CacheStatus {
-        let newStatus = OfflineManager.shared.cacheStatusForShoot(id: id)
-        
-        // Only trigger UI updates when status changes
-        if shootStatusCache[id] != newStatus {
-            shootStatusCache[id] = newStatus
-            // No need to explicitly trigger update here as the view will use this value directly
-        }
-        
-        return newStatus
-    }
-    
-    // Clear cache for a specific shoot when needed
-    func clearStatusCache(for shootID: String) {
-        shootStatusCache.removeValue(forKey: shootID)
-    }
-    
-    // Clear all status caches when needed
-    func clearAllStatusCaches() {
-        shootStatusCache.removeAll()
-    }
-    
 }
 
 struct SportsShootListView: View {
@@ -172,7 +138,10 @@ struct SportsShootListView: View {
     
     // Track if view is visible to optimize timers
     @State private var isViewVisible = false
-    
+
+    // Track expanded schools in archived view
+    @State private var expandedSchools: Set<String> = []
+
     // Supabase realtime listener reference
     @State private var shootListener: ListenerRegistrationWrapper?
     private var supabase: SupabaseClient { SupabaseManager.shared.client }
@@ -187,11 +156,18 @@ struct SportsShootListView: View {
     private var isIPhone: Bool {
         UIDevice.current.userInterfaceIdiom == .phone
     }
-    
+
+    // Group archived jobs by school for folder display
+    private var archivedJobsBySchool: [(school: String, shoots: [SportsShoot])] {
+        let grouped = Dictionary(grouping: viewModel.filteredSportsShoots) { $0.schoolName }
+        return grouped.map { (school: $0.key.isEmpty ? "No School" : $0.key, shoots: $0.value) }
+            .sorted { $0.school < $1.school }
+    }
+
     // MARK: - Helper Functions
     
     // Check if a lock is owned by this device
-    private func isOwnLock(_ lockId: String) -> Bool {
+    private func isOwnLock(_ lockId: UUID) -> Bool {
         return viewModel.lockedEntries[lockId] == currentEditorIdentifier
     }
     
@@ -207,9 +183,9 @@ struct SportsShootListView: View {
     
     // Function to get all unique group names from the current roster
     private func allGroupNames() -> [String] {
-        guard let shoot = viewModel.selectedShoot else { return [] }
-        
-        let allGroups = Set(shoot.roster.map { $0.group })
+        guard viewModel.selectedShoot != nil else { return [] }
+
+        let allGroups = Set(viewModel.rosterEntries.map { $0.groupName })
         return Array(allGroups).filter { !$0.isEmpty }.sorted()
     }
     
@@ -224,7 +200,7 @@ struct SportsShootListView: View {
         if !viewModel.selectedFilters.isEmpty || !viewModel.selectedSpecialFilters.isEmpty {
             filteredRoster = roster.filter { entry in
                 // Check if entry matches any selected group filter
-                let matchesGroup = viewModel.selectedFilters.contains(entry.group)
+                let matchesGroup = viewModel.selectedFilters.contains(entry.groupName)
                 
                 // Check if entry matches any selected special filter
                 let matchesSpecial = (viewModel.selectedSpecialFilters.contains("Seniors") && entry.teacher.lowercased() == "s") ||
@@ -347,35 +323,88 @@ struct SportsShootListView: View {
                     .listRowBackground(Color.clear)
                 } else {
                     // Sports shoots list with NavigationLinks for iPhone
-                    ForEach(viewModel.filteredSportsShoots) { sportsShoot in
-                        NavigationLink(destination: SportsShootDetailView(shootID: sportsShoot.id)) {
-                            SportsShootRow(
-                                shoot: sportsShoot,
-                                isSelected: false,
-                                onSelect: { },
-                                onSyncNow: {
-                                    OfflineManager.shared.syncShoot(shootID: sportsShoot.id)
-                                    viewModel.clearStatusCache(for: sportsShoot.id)
-                                },
-                                onMakeAvailableOffline: {
-                                    cacheShootForOffline(id: sportsShoot.id)
-                                },
-                                isInsideNavigationLink: true // Tell the row it's inside a NavigationLink
-                            )
+                    if viewModel.showArchived {
+                        // Archived: Show grouped by school in collapsible folders
+                        ForEach(archivedJobsBySchool, id: \.school) { group in
+                            DisclosureGroup(
+                                isExpanded: Binding(
+                                    get: { expandedSchools.contains(group.school) },
+                                    set: { isExpanded in
+                                        if isExpanded {
+                                            expandedSchools.insert(group.school)
+                                        } else {
+                                            expandedSchools.remove(group.school)
+                                        }
+                                    }
+                                )
+                            ) {
+                                ForEach(group.shoots) { sportsShoot in
+                                    NavigationLink(destination: SportsShootDetailView(shootID: sportsShoot.id)) {
+                                        SportsShootRow(
+                                            shoot: sportsShoot,
+                                            isSelected: false,
+                                            onSelect: { },
+                                            onSyncNow: {
+                                                Task { await SyncEngine.shared.syncNow() }
+                                            },
+                                            onMakeAvailableOffline: {
+                                                Task { await SyncEngine.shared.syncNow() }
+                                            },
+                                            isInsideNavigationLink: true
+                                        )
+                                    }
+                                    .swipeActions(edge: .trailing) {
+                                        Button(action: {
+                                            viewModel.toggleArchiveStatus(for: sportsShoot)
+                                        }) {
+                                            Label("Unarchive", systemImage: "tray.and.arrow.up")
+                                        }
+                                        .tint(.green)
+                                    }
+                                }
+                            } label: {
+                                HStack {
+                                    Image(systemName: "folder.fill")
+                                        .foregroundColor(.blue)
+                                    Text(group.school)
+                                        .font(.headline)
+                                    Spacer()
+                                    Text("\(group.shoots.count)")
+                                        .foregroundColor(.secondary)
+                                        .font(.subheadline)
+                                }
+                            }
                         }
-                        .swipeActions(edge: .trailing) {
-                            Button(action: {
-                                viewModel.toggleArchiveStatus(for: sportsShoot)
-                            }) {
-                                Label(
-                                    viewModel.showArchived ? "Unarchive" : "Archive",
-                                    systemImage: viewModel.showArchived ? "tray.and.arrow.up" : "archivebox"
+                    } else {
+                        // Active: Show flat list
+                        ForEach(viewModel.filteredSportsShoots) { sportsShoot in
+                            NavigationLink(destination: SportsShootDetailView(shootID: sportsShoot.id)) {
+                                SportsShootRow(
+                                    shoot: sportsShoot,
+                                    isSelected: false,
+                                    onSelect: { },
+                                    onSyncNow: {
+                                        Task {
+                                            await SyncEngine.shared.syncNow()
+                                        }
+                                    },
+                                    onMakeAvailableOffline: {
+                                        Task { await SyncEngine.shared.syncNow() }
+                                    },
+                                    isInsideNavigationLink: true
                                 )
                             }
-                            .tint(viewModel.showArchived ? .green : .orange)
+                            .swipeActions(edge: .trailing) {
+                                Button(action: {
+                                    viewModel.toggleArchiveStatus(for: sportsShoot)
+                                }) {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                                .tint(.orange)
+                            }
                         }
                     }
-                    
+
                     // Quick tools section
                     Section(header: Text("Quick Tools")) {
                         Button(action: {
@@ -399,7 +428,6 @@ struct SportsShootListView: View {
             }
             .navigationTitle(viewModel.showArchived ? "Archived Sports Shoots" : "Sports Shoots")
             .refreshable {
-                viewModel.clearAllStatusCaches()
                 loadSportsShoots()
             }
         }
@@ -453,49 +481,106 @@ struct SportsShootListView: View {
                     .listRowBackground(Color.clear)
                 } else {
                     // Sports shoots list
-                    ForEach(viewModel.filteredSportsShoots) { sportsShoot in
-                        SportsShootRow(
-                            shoot: sportsShoot,
-                            isSelected: viewModel.selectedShoot?.id == sportsShoot.id,
-                            onSelect: {
-                                viewModel.selectedShoot = sportsShoot
-                                // Collapse sidebar when an item is selected
-                                collapseSidebarAfterSelection()
-                            },
-                            onSyncNow: {
-                                OfflineManager.shared.syncShoot(shootID: sportsShoot.id)
-                                // Clear status cache for this shoot to ensure UI updates
-                                viewModel.clearStatusCache(for: sportsShoot.id)
-                            },
-                            onMakeAvailableOffline: {
-                                cacheShootForOffline(id: sportsShoot.id)
-                            }
-                        )
-                        .background(viewModel.selectedShoot?.id == sportsShoot.id ? Color.blue.opacity(0.1) : Color.clear)
-                        .cornerRadius(8)
-                        .contextMenu {
-                            Button(action: {
-                                viewModel.toggleArchiveStatus(for: sportsShoot)
-                            }) {
-                                Label(
-                                    viewModel.showArchived ? "Unarchive" : "Archive",
-                                    systemImage: viewModel.showArchived ? "tray.and.arrow.up" : "archivebox"
+                    if viewModel.showArchived {
+                        // Archived: Show grouped by school in collapsible folders
+                        ForEach(archivedJobsBySchool, id: \.school) { group in
+                            DisclosureGroup(
+                                isExpanded: Binding(
+                                    get: { expandedSchools.contains(group.school) },
+                                    set: { isExpanded in
+                                        if isExpanded {
+                                            expandedSchools.insert(group.school)
+                                        } else {
+                                            expandedSchools.remove(group.school)
+                                        }
+                                    }
                                 )
+                            ) {
+                                ForEach(group.shoots) { sportsShoot in
+                                    SportsShootRow(
+                                        shoot: sportsShoot,
+                                        isSelected: viewModel.selectedShoot?.id == sportsShoot.id,
+                                        onSelect: {
+                                            viewModel.selectedShoot = sportsShoot
+                                            collapseSidebarAfterSelection()
+                                        },
+                                        onSyncNow: {
+                                            Task { await SyncEngine.shared.syncNow() }
+                                        },
+                                        onMakeAvailableOffline: {
+                                            Task { await SyncEngine.shared.syncNow() }
+                                        }
+                                    )
+                                    .background(viewModel.selectedShoot?.id == sportsShoot.id ? Color.blue.opacity(0.1) : Color.clear)
+                                    .cornerRadius(8)
+                                    .contextMenu {
+                                        Button(action: {
+                                            viewModel.toggleArchiveStatus(for: sportsShoot)
+                                        }) {
+                                            Label("Unarchive", systemImage: "tray.and.arrow.up")
+                                        }
+                                    }
+                                    .swipeActions(edge: .trailing) {
+                                        Button(action: {
+                                            viewModel.toggleArchiveStatus(for: sportsShoot)
+                                        }) {
+                                            Label("Unarchive", systemImage: "tray.and.arrow.up")
+                                        }
+                                        .tint(.green)
+                                    }
+                                }
+                            } label: {
+                                HStack {
+                                    Image(systemName: "folder.fill")
+                                        .foregroundColor(.blue)
+                                    Text(group.school)
+                                        .font(.headline)
+                                    Spacer()
+                                    Text("\(group.shoots.count)")
+                                        .foregroundColor(.secondary)
+                                        .font(.subheadline)
+                                }
                             }
                         }
-                        .swipeActions(edge: .trailing) {
-                            Button(action: {
-                                viewModel.toggleArchiveStatus(for: sportsShoot)
-                            }) {
-                                Label(
-                                    viewModel.showArchived ? "Unarchive" : "Archive",
-                                    systemImage: viewModel.showArchived ? "tray.and.arrow.up" : "archivebox"
-                                )
+                    } else {
+                        // Active: Show flat list
+                        ForEach(viewModel.filteredSportsShoots) { sportsShoot in
+                            SportsShootRow(
+                                shoot: sportsShoot,
+                                isSelected: viewModel.selectedShoot?.id == sportsShoot.id,
+                                onSelect: {
+                                    viewModel.selectedShoot = sportsShoot
+                                    collapseSidebarAfterSelection()
+                                },
+                                onSyncNow: {
+                                    Task {
+                                        await SyncEngine.shared.syncNow()
+                                    }
+                                },
+                                onMakeAvailableOffline: {
+                                    Task { await SyncEngine.shared.syncNow() }
+                                }
+                            )
+                            .background(viewModel.selectedShoot?.id == sportsShoot.id ? Color.blue.opacity(0.1) : Color.clear)
+                            .cornerRadius(8)
+                            .contextMenu {
+                                Button(action: {
+                                    viewModel.toggleArchiveStatus(for: sportsShoot)
+                                }) {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
                             }
-                            .tint(viewModel.showArchived ? .green : .orange)
+                            .swipeActions(edge: .trailing) {
+                                Button(action: {
+                                    viewModel.toggleArchiveStatus(for: sportsShoot)
+                                }) {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                                .tint(.orange)
+                            }
                         }
                     }
-                    
+
                     // Quick tools section for all actions
                     Section(header: Text("Quick Tools")) {
                         Button(action: {
@@ -545,30 +630,18 @@ struct SportsShootListView: View {
                         .disabled(viewModel.selectedShoot == nil)
                         .opacity(viewModel.selectedShoot == nil ? 0.5 : 1.0)
                         
-                        // New offline functionality section
-                        if let shoot = viewModel.selectedShoot {
-                            if OfflineManager.shared.isShootCached(id: shoot.id) {
-                                Button(action: {
-                                    OfflineManager.shared.syncShoot(shootID: shoot.id)
-                                    viewModel.clearStatusCache(for: shoot.id)
-                                }) {
-                                    HStack {
-                                        Image(systemName: "arrow.triangle.2.circlepath")
-                                            .foregroundColor(.blue)
-                                        Text("Sync Now")
-                                            .foregroundColor(.blue)
-                                    }
+                        // Sync button - syncs pending changes via SyncEngine
+                        if viewModel.selectedShoot != nil {
+                            Button(action: {
+                                Task {
+                                    await SyncEngine.shared.syncNow()
                                 }
-                            } else {
-                                Button(action: {
-                                    cacheShootForOffline(id: shoot.id)
-                                }) {
-                                    HStack {
-                                        Image(systemName: "arrow.down.to.line")
-                                            .foregroundColor(.blue)
-                                        Text("Make Available Offline")
-                                            .foregroundColor(.blue)
-                                    }
+                            }) {
+                                HStack {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .foregroundColor(.blue)
+                                    Text("Sync Now")
+                                        .foregroundColor(.blue)
                                 }
                             }
                         }
@@ -586,7 +659,6 @@ struct SportsShootListView: View {
             }
             .navigationTitle(viewModel.showArchived ? "Archived Sports Shoots" : "Sports Shoots")
             .refreshable {
-                viewModel.clearAllStatusCaches() // Clear all caches on refresh
                 loadSportsShoots()
             }
             
@@ -898,30 +970,37 @@ struct SportsShootListView: View {
                     
                     // Clean up stale locks immediately on view load
                     if let shootID = viewModel.selectedShoot?.id {
-                        EntryLockManager.shared.cleanupStaleLocks(shootID: shootID)
+                        Task {
+                            try? await RosterEntryService.shared.releaseExpiredLocks(forJob: shootID)
+                            try? await GroupImageService.shared.releaseExpiredLocks(forJob: shootID)
+                        }
                     }
                 }
                 .onDisappear {
                     // Remove orientation notification observer
                     NotificationCenter.default.removeObserver(self, name: UIDevice.orientationDidChangeNotification, object: nil)
-                    
+
                     // Remove realtime listener
                     shootListener?.remove()
                     shootListener = nil
-                    
-                    // Save and release any locks when leaving the view
-                    if let entryID = viewModel.currentlyEditingEntry, let shootID = viewModel.selectedShoot?.id {
+
+                    // Release any locks when leaving the view
+                    if let entryID = viewModel.currentlyEditingEntry {
                         saveCurrentEditingEntry()
-                        releaseLock(shootID: shootID, entryID: entryID)
+                        Task {
+                            await LockManager.shared.releaseRosterEntryLock(entryId: entryID)
+                        }
                     }
                 }
                 .onChange(of: shoot.id) { newShootID in
                     // When the selected shoot changes, set up listeners for the new shoot
-                    print("Selected shoot changed to: \(newShootID)")
                     setupRealtimeListeners()
-                    
+
                     // Clean up stale locks for the new shoot
-                    EntryLockManager.shared.cleanupStaleLocks(shootID: newShootID)
+                    Task {
+                        try? await RosterEntryService.shared.releaseExpiredLocks(forJob: newShootID)
+                        try? await GroupImageService.shared.releaseExpiredLocks(forJob: newShootID)
+                    }
                 }
             } else {
                 // Initial detail view (secondary/detail view) when no item is selected
@@ -996,7 +1075,6 @@ struct SportsShootListView: View {
                 AddGroupImageView(
                     shootID: shoot.id,
                     existingGroup: viewModel.selectedGroupImage,
-                    sportsShoot: shoot,
                     onComplete: { success in
                         if success {
                             refreshSelectedShoot()
@@ -1158,10 +1236,10 @@ struct SportsShootListView: View {
         }
         
         private func updateStatus() {
-            // Get status from LocalSportsShootRepository and PendingSyncManager
-            let newIsFullyCached = LocalSportsShootRepository.shared.isFullyCached(shootId: shoot.id)
-            let newPendingCount = PendingSyncManager.shared.pendingChangeCount(for: shoot.id)
-            let newOnline = NetworkMonitor.shared.isConnected
+            // Get status from SyncEngine
+            let newIsFullyCached = true // In new architecture, data is always available
+            let newPendingCount = SyncEngine.shared.pendingCount
+            let newOnline = SyncEngine.shared.isOnline
 
             // Only update if status actually changed to avoid UI flashing
             if isFullyCached != newIsFullyCached || pendingChangeCount != newPendingCount || isOnline != newOnline {
@@ -1185,15 +1263,6 @@ struct SportsShootListView: View {
                 }
             }
             
-            NotificationCenter.default.addObserver(
-                forName: NSNotification.Name("OfflineManagerNetworkStatusChanged"),
-                object: nil,
-                queue: .main
-            ) { notification in
-                if let isConnected = notification.userInfo?["isOnline"] as? Bool {
-                    self.updateStatus()
-                }
-            }
         }
         
         private func formatDate(_ date: Date) -> String {
@@ -1228,57 +1297,45 @@ struct SportsShootListView: View {
         networkMonitor.startMonitoring { isConnected in
             DispatchQueue.main.async {
                 self.viewModel.isOnline = isConnected
-                
-                // If we just came back online, try to sync any modified shoots
+
+                // If we just came back online, sync pending changes via SyncEngine
                 if isConnected {
-                    OfflineManager.shared.syncModifiedShoots()
+                    Task {
+                        await SyncEngine.shared.syncNow()
+                    }
                 }
             }
         }
     }
     
     // MARK: - Conflict Handling
-    
+
     private func setupConflictHandling() {
-        // Listen for sync conflict notifications
+        // Listen for sync conflict notifications from SyncEngine
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("SyncConflictsDetected"),
             object: nil,
             queue: .main
-        ) { notification in
-            guard let userInfo = notification.userInfo,
-                  let shootID = userInfo["shootID"] as? String,
-                  let entryConflicts = userInfo["entryConflicts"] as? [OfflineManager.EntryConflict],
-                  let groupConflicts = userInfo["groupConflicts"] as? [OfflineManager.GroupConflict],
-                  let localShoot = userInfo["localShoot"] as? SportsShoot,
-                  let remoteShoot = userInfo["remoteShoot"] as? SportsShoot else {
-                return
-            }
-            
-            // Show conflict resolution view
+        ) { _ in
+            // Check if there are active conflicts
+            guard !SyncEngine.shared.activeConflicts.isEmpty else { return }
+
+            // Present conflict resolution view
             DispatchQueue.main.async {
-                // Present conflict resolution view
                 let keyWindow = UIApplication.shared.connectedScenes
                     .filter { $0.activationState == .foregroundActive }
                     .compactMap { $0 as? UIWindowScene }
                     .first?.windows
                     .filter { $0.isKeyWindow }.first
                 if let rootVC = keyWindow?.rootViewController {
-                    // Create and present the conflict resolution view
                     let conflictView = ConflictResolutionView(
-                        shootID: shootID,
-                        entryConflicts: entryConflicts,
-                        groupConflicts: groupConflicts,
-                        localShoot: localShoot,
-                        remoteShoot: remoteShoot,
                         onComplete: { success in
                             if success {
-                                // Refresh data after conflict resolution
                                 self.refreshSelectedShoot()
                             }
                         }
                     )
-                    
+
                     let hostingController = UIHostingController(rootView: conflictView)
                     rootVC.present(hostingController, animated: true)
                 }
@@ -1611,7 +1668,7 @@ struct SportsShootListView: View {
             
             // Athlete count display
             HStack {
-                let filteredRoster = filterRoster(shoot.roster)
+                let filteredRoster = filterRoster(viewModel.rosterEntries)
                 let athleteCount = filteredRoster.filter { !$0.lastName.isEmpty }.count
                 Text("Athletes: \(athleteCount)")
                     .font(.system(size: 14, weight: .medium))
@@ -1625,7 +1682,7 @@ struct SportsShootListView: View {
             // List of roster entries
             List {
                 // Sort roster based on current sort field and direction
-                ForEach(Array(sortedRoster(filterRoster(shoot.roster)).enumerated()), id: \.element.id) { index, entry in
+                ForEach(Array(sortedRoster(filterRoster(viewModel.rosterEntries)).enumerated()), id: \.element.id) { index, entry in
                     rosterEntryRow(shoot: shoot, entry: entry, isEven: index % 2 == 0)
                         .listRowInsets(EdgeInsets(
                             top: 4,
@@ -1690,13 +1747,13 @@ struct SportsShootListView: View {
         let isCurrentlyEditing = viewModel.currentlyEditingEntry == entry.id
         
         // Generate a consistent color for each group
-        let groupColor = colorForGroup(entry.group)
+        let groupColor = colorForGroup(entry.groupName)
         
         // Determine font size based on group name length
         let fontSize: CGFloat
-        if entry.group.count < 15 {
+        if entry.groupName.count < 15 {
             fontSize = 20 // Larger font for short names
-        } else if entry.group.count < 30 {
+        } else if entry.groupName.count < 30 {
             fontSize = 12 // Medium font for medium names
         } else {
             fontSize = 10 // Smaller font for very long names
@@ -1752,7 +1809,6 @@ struct SportsShootListView: View {
                         placeholder: "Enter image numbers",
                         context: "\(entry.firstName) - \(entry.lastName)",
                         onTapOutside: {
-                            print("📝 onTapOutside triggered for entry \(entry.id)")
                             // Just call the centralized save function
                             saveCurrentEditingEntry()
                         },
@@ -1821,8 +1877,8 @@ struct SportsShootListView: View {
                     }
                 
                 // Right side - Group/Team tag
-                if !entry.group.isEmpty {
-                    Text(entry.group)
+                if !entry.groupName.isEmpty {
+                    Text(entry.groupName)
                         .font(.system(size: fontSize)) // Dynamic font size
                         .foregroundColor(.white)
                         .padding(.horizontal, 10)
@@ -1874,7 +1930,7 @@ struct SportsShootListView: View {
                 }
                 
                 Button(role: .destructive, action: {
-                    deleteRosterEntry(shoot: shoot, id: entry.id)
+                    deleteRosterEntry(entryID: entry.id)
                 }) {
                     Label("Delete", systemImage: "trash")
                 }
@@ -1887,7 +1943,7 @@ struct SportsShootListView: View {
     private func groupImagesListView(_ shoot: SportsShoot) -> some View {
         VStack {
             List {
-                ForEach(shoot.groupImages) { group in
+                ForEach(viewModel.groupImages) { group in
                     Button(action: {
                         viewModel.selectedGroupImage = group
                         viewModel.showingAddGroupImage = true
@@ -1929,7 +1985,7 @@ struct SportsShootListView: View {
                                                 }
                                                 
                                                 Button(role: .destructive, action: {
-                                                    deleteGroupImage(shoot: shoot, id: group.id)
+                                                    deleteGroupImage(groupID: group.id)
                                                 }) {
                                                     Label("Delete", systemImage: "trash")
                                                 }
@@ -1956,11 +2012,11 @@ struct SportsShootListView: View {
                             }
                             
                             // Function to move to the next editable entry when pressing Enter or Down arrow
-                            private func moveToNextEditableEntry(currentID: String) {
+                            private func moveToNextEditableEntry(currentID: UUID) {
                                 guard let shoot = viewModel.selectedShoot else { return }
                                 
                                 // Get the filtered and sorted roster as displayed in the list
-                                let displayedRoster = sortedRoster(filterRoster(shoot.roster))
+                                let displayedRoster = sortedRoster(filterRoster(viewModel.rosterEntries))
                                 
                                 // Find the index of the current entry
                                 guard let currentIndex = displayedRoster.firstIndex(where: { $0.id == currentID }) else {
@@ -2013,11 +2069,11 @@ struct SportsShootListView: View {
                             }
                             
                             // Function to move to the previous editable entry when pressing Up arrow
-                            private func moveToPreviousEditableEntry(currentID: String) {
+                            private func moveToPreviousEditableEntry(currentID: UUID) {
                                 guard let shoot = viewModel.selectedShoot else { return }
                                 
                                 // Get the filtered and sorted roster as displayed in the list
-                                let displayedRoster = sortedRoster(filterRoster(shoot.roster))
+                                let displayedRoster = sortedRoster(filterRoster(viewModel.rosterEntries))
                                 
                                 // Find the index of the current entry
                                 guard let currentIndex = displayedRoster.firstIndex(where: { $0.id == currentID }) else {
@@ -2139,8 +2195,8 @@ struct SportsShootListView: View {
                                         result = a.firstName.lowercased() < b.firstName.lowercased()
                                     case "teacher":
                                         result = a.teacher.lowercased() < b.teacher.lowercased()
-                                    case "group":
-                                        result = a.group.lowercased() < b.group.lowercased()
+                                    case "groupName":
+                                        result = a.groupName.lowercased() < b.groupName.lowercased()
                                     default:
                                         result = a.lastName.lowercased() < b.lastName.lowercased()
                                     }
@@ -2152,29 +2208,37 @@ struct SportsShootListView: View {
                             // MARK: - Data Loading and Actions
                             
                             private func loadSportsShoots() {
+                                print("[DEBUG] loadSportsShoots called, storedUserOrganizationID: '\(storedUserOrganizationID)'")
                                 guard !storedUserOrganizationID.isEmpty else {
+                                    print("[DEBUG] ERROR: storedUserOrganizationID is empty")
                                     viewModel.errorMessage = "No organization ID found. Please sign in again."
                                     viewModel.showingErrorAlert = true
                                     return
                                 }
-                                
+
                                 viewModel.isLoading = true
-                                print("Fetching sports shoots with organization ID: \(storedUserOrganizationID)")
-                                
-                                SportsShootService.shared.fetchAllSportsShoots(forOrganization: storedUserOrganizationID) { result in
-                                    DispatchQueue.main.async {
-                                        self.viewModel.isLoading = false
-                                        
-                                        switch result {
-                                        case .success(let shoots):
-                                            print("Successfully fetched \(shoots.count) sports shoots")
+
+                                Task {
+                                    do {
+                                        let shoots = try await SportsShootService.shared.fetchAllSportsShoots(forOrganization: storedUserOrganizationID)
+                                        await MainActor.run {
+                                            self.viewModel.isLoading = false
+                                            print("[DEBUG] loadSportsShoots SUCCESS: received \(shoots.count) shoots")
+                                            for shoot in shoots {
+                                                print("[DEBUG] Shoot: '\(shoot.schoolName)' - isArchived=\(shoot.isArchived)")
+                                            }
                                             self.viewModel.sportsShoots = shoots
-                                            
+                                            print("[DEBUG] viewModel.sportsShoots count = \(self.viewModel.sportsShoots.count)")
+                                            print("[DEBUG] viewModel.showArchived = \(self.viewModel.showArchived)")
+                                            print("[DEBUG] viewModel.filteredSportsShoots count = \(self.viewModel.filteredSportsShoots.count)")
+
                                             // Check if we have a selected session from the widget
                                             self.checkForSelectedSession()
-                                            
-                                        case .failure(let error):
-                                            print("Error loading sports shoots: \(error.localizedDescription)")
+                                        }
+                                    } catch {
+                                        await MainActor.run {
+                                            self.viewModel.isLoading = false
+                                            print("[DEBUG] loadSportsShoots FAILURE: \(error)")
                                             self.viewModel.errorMessage = "Failed to load sports shoots: \(error.localizedDescription)"
                                             self.viewModel.showingErrorAlert = true
                                         }
@@ -2192,11 +2256,9 @@ struct SportsShootListView: View {
                                     // Find the shoot in our list and select it
                                     if let match = viewModel.sportsShoots.first(where: { $0.id == selectedShoot.id }) {
                                         viewModel.selectedShoot = match
-                                        print("Auto-selected sports shoot from widget: \(match.schoolName) - \(match.sportName)")
                                     } else {
                                         // If not in list, add it and select it
                                         viewModel.selectedShoot = selectedShoot
-                                        print("Selected sports shoot from widget (not in list): \(selectedShoot.schoolName) - \(selectedShoot.sportName)")
                                     }
                                     return
                                 }
@@ -2229,24 +2291,18 @@ struct SportsShootListView: View {
                                 // If we found a match, select it
                                 if let match = matchingShoot {
                                     viewModel.selectedShoot = match
-                                    print("Auto-selected sports shoot: \(match.schoolName) - \(match.sportName)")
                                 } else {
-                                    print("No matching sports shoot found for session: \(selectedSession.schoolName)")
                                 }
                             }
                             
-                            private func onShootUpdated(_ updatedShootID: String, entry: RosterEntry? = nil) {
+                            private func onShootUpdated(_ updatedShootID: UUID, entry: RosterEntry? = nil) {
                                 // Only refresh if the updated shoot is the one currently displayed
                                 if let currentShoot = viewModel.selectedShoot, currentShoot.id == updatedShootID {
                                     // If we received a specific entry update, apply it immediately
                                     if let updatedEntry = entry {
-                                        if var currentRoster = viewModel.selectedShoot?.roster {
-                                            // Find and replace the updated entry
-                                            if let index = currentRoster.firstIndex(where: { $0.id == updatedEntry.id }) {
-                                                currentRoster[index] = updatedEntry
-                                                viewModel.selectedShoot?.roster = currentRoster
-                                                
-                                            }
+                                        // Find and replace the updated entry in the viewModel's roster
+                                        if let index = viewModel.rosterEntries.firstIndex(where: { $0.id == updatedEntry.id }) {
+                                            viewModel.rosterEntries[index] = updatedEntry
                                         }
                                     } else {
                                         // Otherwise refresh the entire shoot data
@@ -2257,20 +2313,27 @@ struct SportsShootListView: View {
                             
                             private func refreshSelectedShoot() {
                                 guard let currentShoot = viewModel.selectedShoot else { return }
-                                
-                                SportsShootService.shared.fetchSportsShoot(id: currentShoot.id) { result in
-                                    DispatchQueue.main.async {
-                                        switch result {
-                                        case .success(let updatedShoot):
+
+                                Task {
+                                    do {
+                                        let updatedShoot = try await SportsShootService.shared.fetchSportsShoot(id: currentShoot.id)
+                                        // Also fetch roster and groups
+                                        let entries = try await RosterEntryService.shared.fetchEntries(forJob: currentShoot.id)
+                                        let groups = try await GroupImageService.shared.fetchGroups(forJob: currentShoot.id)
+
+                                        await MainActor.run {
                                             // Update the selected shoot
                                             self.viewModel.selectedShoot = updatedShoot
-                                            
+                                            self.viewModel.rosterEntries = entries
+                                            self.viewModel.groupImages = groups
+
                                             // Also update this shoot in the list
                                             if let index = self.viewModel.sportsShoots.firstIndex(where: { $0.id == updatedShoot.id }) {
                                                 self.viewModel.sportsShoots[index] = updatedShoot
                                             }
-                                            
-                                        case .failure(let error):
+                                        }
+                                    } catch {
+                                        await MainActor.run {
                                             self.viewModel.errorMessage = "Failed to refresh: \(error.localizedDescription)"
                                             self.viewModel.showingErrorAlert = true
                                         }
@@ -2278,13 +2341,16 @@ struct SportsShootListView: View {
                                 }
                             }
                             
-                            private func deleteRosterEntry(shoot: SportsShoot, id: String) {
-                                SportsShootService.shared.deleteRosterEntry(shootID: shoot.id, entryID: id) { result in
-                                    DispatchQueue.main.async {
-                                        switch result {
-                                        case .success:
-                                            refreshSelectedShoot()
-                                        case .failure(let error):
+                            private func deleteRosterEntry(entryID: UUID) {
+                                Task {
+                                    do {
+                                        try await RosterEntryService.shared.deleteEntry(id: entryID)
+                                        await MainActor.run {
+                                            // Remove from local state
+                                            viewModel.rosterEntries.removeAll { $0.id == entryID }
+                                        }
+                                    } catch {
+                                        await MainActor.run {
                                             self.viewModel.errorMessage = "Failed to delete athlete: \(error.localizedDescription)"
                                             self.viewModel.showingErrorAlert = true
                                         }
@@ -2292,13 +2358,16 @@ struct SportsShootListView: View {
                                 }
                             }
                             
-                            private func deleteGroupImage(shoot: SportsShoot, id: String) {
-                                SportsShootService.shared.deleteGroupImage(shootID: shoot.id, groupID: id) { result in
-                                    DispatchQueue.main.async {
-                                        switch result {
-                                        case .success:
-                                            refreshSelectedShoot()
-                                        case .failure(let error):
+                            private func deleteGroupImage(groupID: UUID) {
+                                Task {
+                                    do {
+                                        try await GroupImageService.shared.deleteGroup(id: groupID)
+                                        await MainActor.run {
+                                            // Remove from local state
+                                            viewModel.groupImages.removeAll { $0.id == groupID }
+                                        }
+                                    } catch {
+                                        await MainActor.run {
                                             self.viewModel.errorMessage = "Failed to delete group: \(error.localizedDescription)"
                                             self.viewModel.showingErrorAlert = true
                                         }
@@ -2310,29 +2379,6 @@ struct SportsShootListView: View {
                                 let formatter = DateFormatter()
                                 formatter.dateStyle = .medium
                                 return formatter.string(from: date)
-                            }
-                            
-                            // MARK: - Offline Features
-                            
-                            // Cache a shoot for offline use
-                            private func cacheShootForOffline(id: String) {
-                                SportsShootService.shared.cacheShootForOffline(id: id) { success in
-                                    DispatchQueue.main.async {
-                                        if success {
-                                            // Refresh the UI to show the updated sync status
-                                            self.viewModel.triggerUpdate()
-                                            viewModel.clearStatusCache(for: id)
-                                            
-                                            // Show success message
-                                            self.viewModel.errorMessage = "This shoot is now available offline"
-                                            self.viewModel.showingErrorAlert = true
-                                        } else {
-                                            // Show error message
-                                            self.viewModel.errorMessage = "Failed to save for offline use. Please try again."
-                                            self.viewModel.showingErrorAlert = true
-                                        }
-                                    }
-                                }
                             }
                             
                             // MARK: - Orientation Management
@@ -2481,12 +2527,11 @@ struct SportsShootListView: View {
                             }
                             
                             // Set up a real-time listener for shoot data changes
-                            private func setupShootListener(shootID: String) {
+                            private func setupShootListener(shootID: UUID) {
                                 // Remove any existing listener first
                                 shootListener?.remove()
                                 shootListener = nil
 
-                                print("Setting up real-time listener for shoot: \(shootID)")
 
                                 // Set up Supabase realtime subscription
                                 Task {
@@ -2523,77 +2568,59 @@ struct SportsShootListView: View {
                             }
 
                             // Helper to fetch and update shoot data
-                            private func fetchAndUpdateShoot(shootID: String) async {
+                            private func fetchAndUpdateShoot(shootID: UUID) async {
                                 do {
-                                    // Fetch the updated shoot from Supabase using existing service
-                                    let updatedShoot = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<SportsShoot, Error>) in
-                                        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
-                                            switch result {
-                                            case .success(let shoot):
-                                                continuation.resume(returning: shoot)
-                                            case .failure(let error):
-                                                continuation.resume(throwing: error)
-                                            }
-                                        }
-                                    }
-
-                                    print("Successfully fetched updated shoot data")
+                                    // Fetch the updated shoot and its data from Supabase
+                                    let updatedShoot = try await SportsShootService.shared.fetchSportsShoot(id: shootID)
+                                    let updatedEntries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+                                    let updatedGroups = try await GroupImageService.shared.fetchGroups(forJob: shootID)
 
                                     // Update individual roster entries without disrupting active editing
                                     await MainActor.run {
+                                        var needsUpdate = false
+
                                         // Update roster entries that aren't currently being edited
-                                        if var currentShoot = self.viewModel.selectedShoot {
-                                            var needsUpdate = false
-
-                                            // Update roster entries
-                                            print("Checking \(updatedShoot.roster.count) roster entries for updates")
-                                            for updatedEntry in updatedShoot.roster {
-                                                // Skip if we're currently editing this entry
-                                                if self.viewModel.currentlyEditingEntry == updatedEntry.id {
-                                                    print("Skipping update for entry \(updatedEntry.id) - currently editing")
-                                                    continue
-                                                }
-
-                                                // Find and update the entry in our local roster
-                                                if let index = currentShoot.roster.firstIndex(where: { $0.id == updatedEntry.id }) {
-                                                    let currentImageNumbers = currentShoot.roster[index].imageNumbers
-                                                    let updatedImageNumbers = updatedEntry.imageNumbers
-
-                                                    if currentImageNumbers != updatedImageNumbers {
-                                                        currentShoot.roster[index] = updatedEntry
-                                                        needsUpdate = true
-                                                        print("✅ Updated image numbers for entry \(updatedEntry.id): '\(currentImageNumbers)' -> '\(updatedImageNumbers)'")
-                                                    }
-                                                } else {
-                                                    print("⚠️ Could not find entry \(updatedEntry.id) in local roster")
-                                                }
+                                        for updatedEntry in updatedEntries {
+                                            // Skip if we're currently editing this entry
+                                            if self.viewModel.currentlyEditingEntry == updatedEntry.id {
+                                                continue
                                             }
 
-                                            // Also update group images
-                                            if currentShoot.groupImages != updatedShoot.groupImages {
-                                                currentShoot.groupImages = updatedShoot.groupImages
+                                            // Find and update the entry in our local roster
+                                            if let index = self.viewModel.rosterEntries.firstIndex(where: { $0.id == updatedEntry.id }) {
+                                                let currentImageNumbers = self.viewModel.rosterEntries[index].imageNumbers
+                                                let updatedImageNumbers = updatedEntry.imageNumbers
+
+                                                if currentImageNumbers != updatedImageNumbers {
+                                                    self.viewModel.rosterEntries[index] = updatedEntry
+                                                    needsUpdate = true
+                                                }
+                                            } else {
+                                                // New entry, add it
+                                                self.viewModel.rosterEntries.append(updatedEntry)
                                                 needsUpdate = true
                                             }
+                                        }
 
-                                            // Apply updates if needed
-                                            if needsUpdate {
-                                                print("📱 Applying updates to UI")
-                                                self.viewModel.selectedShoot = currentShoot
+                                        // Also update group images
+                                        if self.viewModel.groupImages != updatedGroups {
+                                            self.viewModel.groupImages = updatedGroups
+                                            needsUpdate = true
+                                        }
 
-                                                // Also update in the main list
-                                                if let listIndex = self.viewModel.sportsShoots.firstIndex(where: { $0.id == shootID }) {
-                                                    self.viewModel.sportsShoots[listIndex] = currentShoot
-                                                }
+                                        // Update shoot metadata
+                                        self.viewModel.selectedShoot = updatedShoot
+                                        if let listIndex = self.viewModel.sportsShoots.firstIndex(where: { $0.id == shootID }) {
+                                            self.viewModel.sportsShoots[listIndex] = updatedShoot
+                                        }
 
-                                                // Force UI update
-                                                self.viewModel.objectWillChange.send()
-                                            } else {
-                                                print("No updates needed")
-                                            }
+                                        // Force UI update if needed
+                                        if needsUpdate {
+                                            self.viewModel.objectWillChange.send()
                                         }
                                     }
                                 } catch {
-                                    print("Error fetching shoot document: \(error.localizedDescription)")
+                                    // Silent failure - realtime updates are best-effort
                                 }
                             }
                             
@@ -2606,34 +2633,30 @@ struct SportsShootListView: View {
                             
                             private func setupLockListener() {
                                 guard let shootID = viewModel.selectedShoot?.id else { return }
-                                
-                                // Set up a real-time listener for locks
-                                // Use SnapshotListener instead of a direct query to get real-time updates
-                                EntryLockManager.shared.listenForLocks(shootID: shootID) { locks in
-                                    DispatchQueue.main.async {
+
+                                // Set up realtime subscription to track roster entry locks
+                                Task {
+                                    await RosterEntryService.shared.subscribeToChanges(jobId: shootID) { entries in
+                                        // Extract locked entries from the realtime update
+                                        var locks: [UUID: String] = [:]
+                                        for entry in entries {
+                                            if let lockedByName = entry.lockedByName, !lockedByName.isEmpty {
+                                                locks[entry.id] = lockedByName
+                                            }
+                                        }
                                         self.viewModel.lockedEntries = locks
-                                        
-                                        // Debug info
-                                        print("Lock update received: \(locks)")
+
+                                        // Also update roster entries
+                                        self.viewModel.rosterEntries = entries
                                     }
                                 }
                             }
                             
-                            private func acquireLock(shootID: String, entryID: String) {
-                                let editorID = UserManager.shared.getCurrentUserIDUnified() ?? UUID().uuidString
-                                let editorName = currentEditorIdentifier // Uses device-specific identifier
-                                
-                                print("Attempting to acquire lock: \(entryID)")
-                                EntryLockManager.shared.acquireLock(shootID: shootID, entryID: entryID, editorID: editorID, editorName: editorName) { success in
-                                    if success {
-                                        DispatchQueue.main.async {
-                                            print("Lock acquired successfully for: \(entryID)")
-                                            // currentlyEditingEntry is already set synchronously in startEditing
-                                        }
-                                    } else {
-                                        // Show error if lock acquisition fails
-                                        DispatchQueue.main.async {
-                                            print("Failed to acquire lock for: \(entryID)")
+                            private func acquireLock(shootID: UUID, entryID: UUID) {
+                                Task {
+                                    let success = await LockManager.shared.acquireRosterEntryLock(entryId: entryID)
+                                    if !success {
+                                        await MainActor.run {
                                             self.viewModel.errorMessage = "This entry is being edited by someone else. Please try again later."
                                             self.viewModel.showingErrorAlert = true
                                         }
@@ -2641,18 +2664,10 @@ struct SportsShootListView: View {
                                 }
                             }
                             
-                            private func releaseLock(shootID: String, entryID: String) {
-                                let editorID = UserManager.shared.getCurrentUserIDUnified() ?? ""
-
-                                print("Attempting to release lock: \(entryID)")
-                                EntryLockManager.shared.releaseLock(shootID: shootID, entryID: entryID, editorID: editorID) { success in
-                                    DispatchQueue.main.async {
-                                        if success {
-                                            print("Lock released successfully for: \(entryID)")
-                                        } else {
-                                            print("Failed to release lock for: \(entryID)")
-                                        }
-                                        
+                            private func releaseLock(shootID: UUID, entryID: UUID) {
+                                Task {
+                                    await LockManager.shared.releaseRosterEntryLock(entryId: entryID)
+                                    await MainActor.run {
                                         if self.viewModel.currentlyEditingEntry == entryID {
                                             // Save before clearing the editing state
                                             self.saveCurrentEditingEntry()
@@ -2670,43 +2685,35 @@ struct SportsShootListView: View {
                             private func saveCurrentEditingEntry() {
                                 // Check authentication first
                                 guard UserManager.shared.getCurrentUserIDUnified() != nil else {
-                                    print("📝 Save error: User not authenticated")
                                     viewModel.errorMessage = "You must be signed in to save changes"
                                     viewModel.showingErrorAlert = true
                                     return
                                 }
-                                
+
                                 guard let entryID = viewModel.currentlyEditingEntry,
-                                      let shootID = viewModel.selectedShoot?.id,
-                                      let currentEntry = viewModel.selectedShoot?.roster.first(where: { $0.id == entryID }),
+                                      let currentEntry = viewModel.rosterEntries.first(where: { $0.id == entryID }),
                                       viewModel.editingImageNumber != currentEntry.imageNumbers else {
-                                    print("📝 No save needed - no changes or entry not found")
                                     return
                                 }
-                                
+
                                 var updatedEntry = currentEntry
                                 updatedEntry.imageNumbers = viewModel.editingImageNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-                                
-                                print("📝 Saving current entry: '\(updatedEntry.imageNumbers)' for entry \(entryID) (was: '\(currentEntry.imageNumbers)')")
-                                print("📝 User: \(UserManager.shared.getCurrentUserIDUnified() ?? "unknown"), OrgID: \(storedUserOrganizationID)")
 
-                                SportsShootService.shared.updateRosterEntry(shootID: shootID, entry: updatedEntry) { result in
-                                    DispatchQueue.main.async {
-                                        switch result {
-                                        case .success:
-                                            print("📝 Successfully saved entry \(entryID)")
+                                Task {
+                                    do {
+                                        let savedEntry = try await RosterEntryService.shared.updateEntry(updatedEntry)
+                                        await MainActor.run {
                                             // Update the local roster to reflect the change
-                                            if let index = self.viewModel.selectedShoot?.roster.firstIndex(where: { $0.id == entryID }) {
-                                                self.viewModel.selectedShoot?.roster[index] = updatedEntry
+                                            if let index = self.viewModel.rosterEntries.firstIndex(where: { $0.id == entryID }) {
+                                                self.viewModel.rosterEntries[index] = savedEntry
                                             }
-                                        case .failure(let error):
-                                            print("📝 Save error for entry \(entryID): \(error.localizedDescription)")
-                                            
+                                        }
+                                    } catch {
+                                        await MainActor.run {
                                             // Check if it's a permission error
                                             let errorMessage = error.localizedDescription.lowercased()
                                             if errorMessage.contains("permission") || errorMessage.contains("insufficient") {
                                                 self.viewModel.errorMessage = "Permission denied. Please contact your administrator to ensure you have access to edit this sports shoot."
-                                                print("📝 Permission error details - ShootID: \(shootID), OrgID: \(self.storedUserOrganizationID)")
                                             } else {
                                                 self.viewModel.errorMessage = "Failed to save: \(error.localizedDescription)"
                                             }
@@ -2716,16 +2723,7 @@ struct SportsShootListView: View {
                                 }
                             }
                             
-                            private func startEditing(shootID: String, entry: RosterEntry) {
-                                print("Attempting to start editing entry: \(entry.id)")
-                                
-                                // Show who is editing this entry (for debugging)
-                                if let editor = viewModel.lockedEntries[entry.id] {
-                                    print("Entry is locked by: \(editor)")
-                                } else {
-                                    print("Entry is not currently locked")
-                                }
-                                
+                            private func startEditing(shootID: UUID, entry: RosterEntry) {
                                 // Check if anyone else is editing this entry
                                 if let editor = viewModel.lockedEntries[entry.id], !isOwnLock(entry.id) {
                                     // Entry is locked by someone else - show an alert
@@ -2733,26 +2731,25 @@ struct SportsShootListView: View {
                                     viewModel.showingErrorAlert = true
                                     return
                                 }
-                                
+
                                 // Check if we already have a lock on this entry
                                 if isOwnLock(entry.id) {
-                                    print("Already have a lock on this entry - resuming edit")
                                     // We already have the lock, just start editing without acquiring a new lock
                                     viewModel.currentlyEditingEntry = entry.id
                                     viewModel.editingImageNumber = entry.imageNumbers
                                     return
                                 }
-                                
+
                                 // Save and release any previous lock
                                 if let previousEntryID = viewModel.currentlyEditingEntry {
                                     saveCurrentEditingEntry()
                                     releaseLock(shootID: shootID, entryID: previousEntryID)
                                 }
-                                
+
                                 // Set up editing state
                                 viewModel.editingImageNumber = entry.imageNumbers
                                 viewModel.currentlyEditingEntry = entry.id // Set synchronously to avoid placeholder showing
-                                
+
                                 // Acquire lock for this entry
                                 acquireLock(shootID: shootID, entryID: entry.id)
                             }

@@ -72,7 +72,7 @@ struct SearchableSchoolPicker: View {
         guard !isRefreshing else { return }
         isRefreshing = true
         
-        FirestoreManager.shared.refreshSchoolsFromServer(forOrgID: organizationID) { schoolItems in
+        DatabaseManager.shared.refreshSchoolsFromServer(forOrgID: organizationID) { schoolItems in
             DispatchQueue.main.async {
                 self.schools = schoolItems
                 self.isRefreshing = false

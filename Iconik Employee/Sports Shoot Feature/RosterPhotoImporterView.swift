@@ -9,7 +9,7 @@ import SwiftUI
 import UIKit
 
 struct RosterPhotoImporterView: View {
-    let shootID: String
+    let shootID: UUID
     let onComplete: (Bool) -> Void
     
     @State private var showImagePicker = false
@@ -212,8 +212,8 @@ struct RosterPhotoImporterView: View {
                                 .foregroundColor(.secondary)
                         }
                         
-                        if !entry.group.isEmpty {
-                            Text("Sport/Team: \(entry.group)")
+                        if !entry.groupName.isEmpty {
+                            Text("Sport/Team: \(entry.groupName)")
                                 .font(.caption)
                         }
                         
@@ -259,21 +259,18 @@ struct RosterPhotoImporterView: View {
     
     // Load existing roster to determine next available Subject ID
     private func loadExistingRoster() {
-        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
-            switch result {
-            case .success(let shoot):
+        Task {
+            do {
+                let entries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
                 // Find the highest Subject ID value across all entries
-                let highestID = shoot.roster.compactMap { entry -> Int? in
+                let highestID = entries.compactMap { entry -> Int? in
                     return Int(entry.firstName)
                 }.max() ?? 100 // Default to 100 if no entries exist
-                
-                DispatchQueue.main.async {
+
+                await MainActor.run {
                     self.nextSubjectID = highestID + 1
-                    print("Next available Subject ID: \(self.nextSubjectID)")
                 }
-                
-            case .failure(let error):
-                print("Error loading sports shoot: \(error.localizedDescription)")
+            } catch {
                 // Keep the default starting ID if there's an error
             }
         }
@@ -281,9 +278,9 @@ struct RosterPhotoImporterView: View {
     
     private func processImage(_ image: UIImage) {
         isProcessing = true
-        
+
         // Use the actual API implementation with the next available Subject ID
-        ClaudeRosterService.shared.extractRosterFromImage(image, startingSubjectID: nextSubjectID) { result in
+        ClaudeRosterService.shared.extractRosterFromImage(image, sportsJobId: shootID, startingSubjectID: nextSubjectID) { result in
             DispatchQueue.main.async {
                 isProcessing = false
                 
@@ -307,41 +304,31 @@ struct RosterPhotoImporterView: View {
     
     private func saveExtractedRoster() {
         guard !extractedRoster.isEmpty else { return }
-        
+
         isProcessing = true
-        
-        // Use a dispatch group to track all operations
-        let group = DispatchGroup()
-        var errorOccurred = false
-        
-        // Add each entry to the sports shoot
-        for entry in extractedRoster {
-            group.enter()
-            
-            SportsShootService.shared.addRosterEntry(shootID: shootID, entry: entry) { result in
-                switch result {
-                case .success:
-                    // Entry added successfully
-                    break
-                case .failure:
-                    errorOccurred = true
+
+        Task {
+            do {
+                // Ensure all entries have the correct sportsJobId
+                let entriesToSave = extractedRoster.map { entry in
+                    var newEntry = entry
+                    newEntry.sportsJobId = shootID
+                    return newEntry
                 }
-                
-                group.leave()
-            }
-        }
-        
-        // When all operations are complete
-        group.notify(queue: .main) {
-            isProcessing = false
-            
-            if errorOccurred {
-                errorMessage = "Some entries could not be added. Please try again."
-                showingErrorAlert = true
-            } else {
-                // Notify completion and dismiss
-                onComplete(true)
-                presentationMode.wrappedValue.dismiss()
+
+                try await RosterEntryService.shared.createEntries(entriesToSave)
+
+                await MainActor.run {
+                    isProcessing = false
+                    onComplete(true)
+                    presentationMode.wrappedValue.dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    isProcessing = false
+                    errorMessage = "Some entries could not be added. Please try again."
+                    showingErrorAlert = true
+                }
             }
         }
     }
@@ -350,7 +337,7 @@ struct RosterPhotoImporterView: View {
 struct RosterPhotoImporterView_Previews: PreviewProvider {
     static var previews: some View {
         RosterPhotoImporterView(
-            shootID: "previewID",
+            shootID: UUID(),
             onComplete: { _ in }
         )
     }

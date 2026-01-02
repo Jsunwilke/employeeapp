@@ -39,7 +39,7 @@ class ClassGroupJobService: ObservableObject {
                 let jobs: [ClassGroupJob] = try await supabase
                     .from(tableName)
                     .select()
-                    .eq("organization_id", value: orgId.lowercased())
+                    .eq("organization_id", value: orgId)
                     .order("session_date", ascending: false)
                     .execute()
                     .value
@@ -102,7 +102,7 @@ class ClassGroupJobService: ObservableObject {
                 let allSessions: [Session] = try await supabase
                     .from(sessionsTable)
                     .select()
-                    .eq("organization_id", value: organizationId.lowercased())
+                    .eq("organization_id", value: organizationId)
                     .gte("date", value: startDateStr)
                     .lte("date", value: endDateStr)
                     .order("date")
@@ -132,7 +132,7 @@ class ClassGroupJobService: ObservableObject {
                 let existingJobs: [ClassGroupJob] = try await supabase
                     .from(tableName)
                     .select("session_id")
-                    .eq("organization_id", value: organizationId.lowercased())
+                    .eq("organization_id", value: organizationId)
                     .eq("job_type", value: jobType)
                     .in("session_id", values: sessionIds)
                     .execute()
@@ -406,7 +406,7 @@ class ClassGroupJobService: ObservableObject {
                 let jobs: [ClassGroupJob] = try await supabase
                     .from(tableName)
                     .select()
-                    .eq("organization_id", value: organizationId.lowercased())
+                    .eq("organization_id", value: organizationId)
                     .order("session_date", ascending: false)
                     .execute()
                     .value
@@ -431,7 +431,7 @@ class ClassGroupJobService: ObservableObject {
             AnyAction.self,
             schema: "public",
             table: tableName,
-            filter: "organization_id=eq.\(organizationId.lowercased())"
+            filter: "organization_id=eq.\(organizationId)"
         )
 
         Task {
@@ -441,7 +441,7 @@ class ClassGroupJobService: ObservableObject {
                     let jobs: [ClassGroupJob] = try await supabase
                         .from(tableName)
                         .select()
-                        .eq("organization_id", value: organizationId.lowercased())
+                        .eq("organization_id", value: organizationId)
                         .order("session_date", ascending: false)
                         .execute()
                         .value

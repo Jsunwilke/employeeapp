@@ -63,7 +63,6 @@ struct DocumentScannerView: UIViewControllerRepresentable {
         }
         
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) {
-            print("Document scanner failed with error: \(error.localizedDescription)")
             parent.presentationMode.wrappedValue.dismiss()
         }
     }

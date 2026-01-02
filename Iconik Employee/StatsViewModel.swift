@@ -183,7 +183,7 @@ class StatsViewModel: ObservableObject {
             let reports: [ReportRecord] = try await supabase
                 .from("daily_job_reports")
                 .select("date, your_name, total_mileage")
-                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .eq("organization_id", value: storedUserOrganizationID)
                 .gte("date", value: startDate.ISO8601Format())
                 .lte("date", value: endDate.ISO8601Format())
                 .execute()
@@ -265,7 +265,7 @@ class StatsViewModel: ObservableObject {
             let schoolDocs: [SchoolRecord] = try await supabase
                 .from("schools")
                 .select("id, value")
-                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .eq("organization_id", value: storedUserOrganizationID)
                 .execute()
                 .value
 
@@ -289,7 +289,7 @@ class StatsViewModel: ObservableObject {
             let reports: [ReportRecord] = try await supabase
                 .from("daily_job_reports")
                 .select("school_or_destination, total_mileage, date")
-                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .eq("organization_id", value: storedUserOrganizationID)
                 .gte("date", value: startDate.ISO8601Format())
                 .lte("date", value: endDate.ISO8601Format())
                 .execute()
@@ -359,7 +359,7 @@ class StatsViewModel: ObservableObject {
             let reports: [ReportRecord] = try await supabase
                 .from("daily_job_reports")
                 .select("job_descriptions")
-                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .eq("organization_id", value: storedUserOrganizationID)
                 .gte("date", value: startDate.ISO8601Format())
                 .lte("date", value: endDate.ISO8601Format())
                 .execute()
@@ -403,7 +403,7 @@ class StatsViewModel: ObservableObject {
             let userDocs: [UserRecord] = try await supabase
                 .from("users")
                 .select("first_name")
-                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .eq("organization_id", value: storedUserOrganizationID)
                 .execute()
                 .value
 
@@ -427,7 +427,7 @@ class StatsViewModel: ObservableObject {
             let reports: [ReportRecord] = try await supabase
                 .from("daily_job_reports")
                 .select("your_name, total_mileage, start_time, end_time")
-                .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                .eq("organization_id", value: storedUserOrganizationID)
                 .gte("date", value: startDate.ISO8601Format())
                 .lte("date", value: endDate.ISO8601Format())
                 .execute()

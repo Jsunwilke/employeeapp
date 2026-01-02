@@ -24,7 +24,7 @@ struct JobBox: Identifiable, Codable {
     let shift_uid: String
     let status: String
     let photographer: String
-    let timestamp: Date?
+    let updated_at: Date?
 
     // New fields from updated schema
     let box_number: String?
@@ -46,7 +46,7 @@ struct JobBox: Identifiable, Codable {
     }
 
     var timestampDate: Date {
-        timestamp ?? Date()
+        updated_at ?? Date()
     }
 
     enum CodingKeys: String, CodingKey {
@@ -54,7 +54,7 @@ struct JobBox: Identifiable, Codable {
         case shift_uid
         case status
         case photographer
-        case timestamp
+        case updated_at
         case box_number
         case organization_id
         case school
@@ -119,7 +119,7 @@ class JobBoxService {
                     .from("job_boxes")
                     .select()
                     .eq("shift_uid", value: shiftUid)
-                    .eq("organization_id", value: organizationID.lowercased())
+                    .eq("organization_id", value: organizationID)
                     .execute()
                     .value
 
@@ -156,7 +156,7 @@ class JobBoxService {
                         .from("job_boxes")
                         .select()
                         .eq("shift_uid", value: shiftUid)
-                        .eq("organization_id", value: organizationID.lowercased())
+                        .eq("organization_id", value: organizationID)
                         .execute()
                         .value
 

@@ -5,7 +5,7 @@ struct FormView: View {
     @Binding var selectedSchool: String
     @Binding var selectedStatus: String
     let localStatuses: [String]
-    let lastRecord: FirestoreRecord?
+    let lastRecord: NFCRecord?
     
     var onSubmit: (String, String, String, String, @escaping (Bool) -> Void) -> Void
     var onCancel: () -> Void
@@ -142,7 +142,7 @@ struct FormView: View {
                 }
                 let orgID = userManager.currentUserOrganizationID
                 if !orgID.isEmpty {
-                    FirestoreManager.shared.listenForPhotographers(inOrgID: orgID) { names in
+                    DatabaseManager.shared.listenForPhotographers(inOrgID: orgID) { names in
                         DispatchQueue.main.async {
                             self.photographerNames = names
                         }
@@ -156,7 +156,7 @@ struct FormView: View {
                 }
                 let schoolOrgID = userManager.currentUserOrganizationID
                 if !schoolOrgID.isEmpty {
-                    FirestoreManager.shared.listenForSchoolsData(forOrgID: schoolOrgID) { records in
+                    DatabaseManager.shared.listenForSchoolsData(forOrgID: schoolOrgID) { records in
                         DispatchQueue.main.async {
                             self.schools = records
                             // Ensure a default school is selected if none exists.

@@ -181,7 +181,7 @@ struct JobBoxFormView: View {
         
         let orgID = userManager.currentUserOrganizationID
         if !orgID.isEmpty {
-            FirestoreManager.shared.listenForPhotographers(inOrgID: orgID) { names in
+            DatabaseManager.shared.listenForPhotographers(inOrgID: orgID) { names in
                 DispatchQueue.main.async {
                     self.photographerNames = names
                 }
@@ -196,7 +196,7 @@ struct JobBoxFormView: View {
         
         let schoolOrgID = userManager.currentUserOrganizationID
         if !schoolOrgID.isEmpty {
-            FirestoreManager.shared.listenForSchoolsData(forOrgID: schoolOrgID) { records in
+            DatabaseManager.shared.listenForSchoolsData(forOrgID: schoolOrgID) { records in
                 DispatchQueue.main.async {
                     self.schools = records
                 }

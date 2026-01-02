@@ -1,0 +1,15 @@
+{
+  "name": "firebase-supabase-migration",
+  "version": "1.0.0",
+  "description": "Migrate sportsJobs from Firebase to Supabase",
+  "main": "migrate-firebase-to-supabase.js",
+  "scripts": {
+    "export": "node export-firebase.js",
+    "import": "node import-to-supabase.js",
+    "migrate": "npm run export && npm run import"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "uuid": "^9.0.0"
+  }
+}

@@ -7,7 +7,7 @@ struct StatisticsView: View {
     // Callback for navigation to search
     var onNavigateToSearch: ((String, Bool) -> Void)?
     
-    @State private var records: [FirestoreRecord] = []
+    @State private var records: [NFCRecord] = []
     @State private var jobBoxRecords: [JobBox] = []
     @State private var isLoading = false
     @State private var showAlert = false
@@ -862,7 +862,7 @@ struct StatisticsView: View {
                 let jobBoxes = records.compactMap { $0 as? JobBox }
                 uniqueCount = Set(jobBoxes.map { $0.boxNumber }).count
             } else {
-                let sdCards = records.compactMap { $0 as? FirestoreRecord }
+                let sdCards = records.compactMap { $0 as? NFCRecord }
                 uniqueCount = Set(sdCards.map { $0.cardNumber }).count
             }
             
@@ -873,7 +873,7 @@ struct StatisticsView: View {
         .map { $0 } // Convert to array
     }
     
-    func calculateCardLifecycles(_ records: [FirestoreRecord]) {
+    func calculateCardLifecycles(_ records: [NFCRecord]) {
         // Group all records by card number
         let cardGroups = Dictionary(grouping: records, by: { $0.cardNumber })
         
@@ -1127,14 +1127,14 @@ struct StatisticsView: View {
         isLoading = true
         
         // Load SD card records
-        FirestoreManager.shared.fetchRecords(field: "all", value: "", organizationID: orgID) { result in
+        DatabaseManager.shared.fetchRecords(field: "all", value: "", organizationID: orgID) { result in
             switch result {
             case .success(let fetchedRecords):
                 print("DEBUG: Loaded \(fetchedRecords.count) SD card records")
                 self.records = fetchedRecords
                 
                 // Now load job box records
-                FirestoreManager.shared.fetchJobBoxRecords(field: "all", value: "", organizationID: orgID) { jobBoxResult in
+                DatabaseManager.shared.fetchJobBoxRecords(field: "all", value: "", organizationID: orgID) { jobBoxResult in
                     self.isLoading = false
                     
                     switch jobBoxResult {
@@ -1164,7 +1164,7 @@ struct StatisticsView: View {
         }
     }
     
-    func filterRecordsByTimeFrame(_ records: [FirestoreRecord]) -> [FirestoreRecord] {
+    func filterRecordsByTimeFrame(_ records: [NFCRecord]) -> [NFCRecord] {
         let calendar = Calendar.current
         let now = Date()
         
@@ -1210,12 +1210,12 @@ struct StatisticsView: View {
         }
     }
     
-    func calculateStatusDistribution(_ records: [FirestoreRecord]) {
+    func calculateStatusDistribution(_ records: [NFCRecord]) {
         // Group records by card number
         let cardGroups = Dictionary(grouping: records, by: { $0.cardNumber })
         
         // Get the latest status for each card
-        var latestRecords: [FirestoreRecord] = []
+        var latestRecords: [NFCRecord] = []
         for (_, cardRecords) in cardGroups {
             if let latestRecord = cardRecords.sorted(by: { $0.timestamp > $1.timestamp }).first {
                 latestRecords.append(latestRecord)
@@ -1260,7 +1260,7 @@ struct StatisticsView: View {
         }.sorted { $0.count > $1.count }
     }
     
-    func calculateAverageTimeInStatus(_ records: [FirestoreRecord]) {
+    func calculateAverageTimeInStatus(_ records: [NFCRecord]) {
         // Group records by card number
         let cardGroups = Dictionary(grouping: records, by: { $0.cardNumber })
         

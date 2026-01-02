@@ -59,7 +59,7 @@ class PhotoCritiqueService: ObservableObject {
                 .from("photo_critiques")
                 .select()
                 .eq("target_photographer_id", value: userId.lowercased())
-                .eq("organization_id", value: organizationId.lowercased())
+                .eq("organization_id", value: organizationId)
                 .eq("status", value: "published")
                 .order("created_at", ascending: false)
                 .execute()
@@ -118,7 +118,7 @@ class PhotoCritiqueService: ObservableObject {
                 if let data = try? JSONSerialization.data(withJSONObject: record.mapValues { $0.value }),
                    let critique = try? JSONDecoder().decode(Critique.self, from: data) {
                     await MainActor.run {
-                        if critique.status == "published" && critique.organization_id.lowercased() == organizationId.lowercased() {
+                        if critique.status == "published" && critique.organization_id == organizationId {
                             self.critiques.insert(critique, at: 0)
                         }
                     }

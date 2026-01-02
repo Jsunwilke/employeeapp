@@ -107,7 +107,6 @@ struct AutosaveTextField: View {
             }
             // Set up initial focus
             .onAppear {
-                print("📝 AutosaveTextField onAppear: text = '\(text)', hasAppeared = \(hasAppeared)")
                 
                 if !hasAppeared {
                     hasAppeared = true

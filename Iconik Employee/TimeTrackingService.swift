@@ -27,7 +27,6 @@ class TimeTrackingService: ObservableObject {
 
     func setupUser() {
         // Get user ID from Supabase auth (synchronously access current session)
-        // Note: Database stores UUIDs in lowercase, but Swift's uuidString is uppercase
         if let user = supabase.auth.currentUser {
             self.currentUserId = user.id.uuidString.lowercased()
         } else {
@@ -88,7 +87,7 @@ class TimeTrackingService: ObservableObject {
         }
 
         let insertData = InsertData(
-            id: UUID().uuidString.lowercased(),
+            id: UUID().uuidString,
             user_id: userId,
             organization_id: orgId,
             start_time: Date(),
@@ -485,7 +484,7 @@ class TimeTrackingService: ObservableObject {
         }
 
         let insertData = InsertData(
-            id: UUID().uuidString.lowercased(),
+            id: UUID().uuidString,
             user_id: userId,
             organization_id: orgId,
             start_time: startTime,

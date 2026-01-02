@@ -195,7 +195,7 @@ struct MileageDetailView: View {
                 let schools: [SchoolRecord] = try await supabase
                     .from("schools")
                     .select("id, value")
-                    .eq("organization_id", value: storedUserOrganizationID.lowercased())
+                    .eq("organization_id", value: storedUserOrganizationID)
                     .eq("type", value: "school")
                     .execute()
                     .value

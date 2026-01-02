@@ -91,7 +91,6 @@ class Anthropic {
         do {
             return try decoder.decode(MessageResponse.self, from: data)
         } catch {
-            print("Decoding error: \(error)")
             throw AnthropicAPIError(type: .responseParsingFailed, message: "Failed to parse response: \(error.localizedDescription)")
         }
     }

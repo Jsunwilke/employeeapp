@@ -2,33 +2,33 @@ import SwiftUI
 import Combine
 
 struct AddRosterEntryView: View {
-    let shootID: String
+    let shootID: UUID
     let existingEntry: RosterEntry?
     let onComplete: (Bool) -> Void
-    
+
     @State private var lastName: String = ""
     @State private var firstName: String = ""
     @State private var teacher: String = ""
-    @State private var group: String = ""
+    @State private var groupName: String = ""
     @State private var email: String = ""
     @State private var phone: String = ""
     @State private var imageNumbers: String = ""
     @State private var notes: String = ""
-    
+
     @State private var isLoading = false
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
     @State private var isLoadingSubjectID = false
-    
+
     // Focus state for keyboard navigation
     @FocusState private var focusedField: String?
-    
+
     @Environment(\.presentationMode) var presentationMode
-    
+
     var isEditing: Bool {
         existingEntry != nil
     }
-    
+
     var body: some View {
         NavigationView {
             Form {
@@ -38,7 +38,7 @@ struct AddRosterEntryView: View {
                         .focused($focusedField, equals: "lastName")
                         .submitLabel(.next)
                         .onSubmit { focusedField = "firstName" }
-                    
+
                     HStack {
                         TextField("Subject ID", text: $firstName)
                             .autocapitalization(.words)
@@ -46,26 +46,26 @@ struct AddRosterEntryView: View {
                             .submitLabel(.next)
                             .onSubmit { focusedField = "teacher" }
                             .disabled(isLoadingSubjectID)
-                        
+
                         if isLoadingSubjectID {
                             ProgressView()
                                 .scaleEffect(0.8)
                         }
                     }
-                    
+
                     TextField("Special", text: $teacher)
                         .autocapitalization(.words)
                         .focused($focusedField, equals: "teacher")
                         .submitLabel(.next)
-                        .onSubmit { focusedField = "group" }
-                    
-                    TextField("Sport/Team", text: $group)
+                        .onSubmit { focusedField = "groupName" }
+
+                    TextField("Sport/Team", text: $groupName)
                         .autocapitalization(.words)
-                        .focused($focusedField, equals: "group")
+                        .focused($focusedField, equals: "groupName")
                         .submitLabel(.next)
                         .onSubmit { focusedField = "email" }
                 }
-                
+
                 Section(header: Text("Contact Information")) {
                     TextField("Email", text: $email)
                         .keyboardType(.emailAddress)
@@ -74,14 +74,14 @@ struct AddRosterEntryView: View {
                         .focused($focusedField, equals: "email")
                         .submitLabel(.next)
                         .onSubmit { focusedField = "phone" }
-                    
+
                     TextField("Phone", text: $phone)
                         .keyboardType(.phonePad)
                         .focused($focusedField, equals: "phone")
                         .submitLabel(.next)
                         .onSubmit { focusedField = "imageNumbers" }
                 }
-                
+
                 Section(header: Text("Image Information")) {
                     NumericTextField(
                         text: $imageNumbers,
@@ -92,17 +92,17 @@ struct AddRosterEntryView: View {
                     .font(.body)
                     .padding(.vertical, 6)
                     .frame(minHeight: 44)
-                    
+
                     TextView(text: $notes, placeholder: "Notes (optional)")
                         .frame(minHeight: 100)
                 }
-                
+
                 Section(header: Text("Field Mapping Information")) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("In Captura Workflow:")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        
+
                         HStack {
                             Text("Name")
                                 .fontWeight(.semibold)
@@ -111,7 +111,7 @@ struct AddRosterEntryView: View {
                                 .foregroundColor(.blue)
                         }
                         .font(.caption)
-                        
+
                         HStack {
                             Text("Subject ID")
                                 .fontWeight(.semibold)
@@ -120,7 +120,7 @@ struct AddRosterEntryView: View {
                                 .foregroundColor(.blue)
                         }
                         .font(.caption)
-                        
+
                         HStack {
                             Text("Special")
                                 .fontWeight(.semibold)
@@ -129,7 +129,7 @@ struct AddRosterEntryView: View {
                                 .foregroundColor(.blue)
                         }
                         .font(.caption)
-                        
+
                         HStack {
                             Text("Sport/Team")
                                 .fontWeight(.semibold)
@@ -141,7 +141,7 @@ struct AddRosterEntryView: View {
                     }
                     .padding(.vertical, 8)
                 }
-                
+
                 if isLoading {
                     HStack {
                         Spacer()
@@ -157,7 +157,7 @@ struct AddRosterEntryView: View {
                         presentationMode.wrappedValue.dismiss()
                     }
                 }
-                
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(isEditing ? "Update" : "Save") {
                         saveRosterEntry()
@@ -177,7 +177,7 @@ struct AddRosterEntryView: View {
                     lastName = entry.lastName
                     firstName = entry.firstName
                     teacher = entry.teacher
-                    group = entry.group
+                    groupName = entry.groupName
                     email = entry.email
                     phone = entry.phone
                     imageNumbers = entry.imageNumbers
@@ -189,25 +189,27 @@ struct AddRosterEntryView: View {
             }
         }
     }
-    
+
     private func loadNextSubjectID() {
         isLoadingSubjectID = true
-        
-        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let shoot):
-                    // Find the highest Subject ID value
-                    let highestID = shoot.roster.compactMap { entry -> Int? in
-                        return Int(entry.firstName)
-                    }.max() ?? 100  // Default to 100 if no entries
-                    
+
+        Task {
+            do {
+                // Fetch roster entries for this job to find the highest Subject ID
+                let entries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+
+                // Find the highest Subject ID value
+                let highestID = entries.compactMap { entry -> Int? in
+                    return Int(entry.firstName)
+                }.max() ?? 100  // Default to 100 if no entries
+
+                await MainActor.run {
                     // Set the next available ID
                     self.firstName = "\(highestID + 1)"
                     self.isLoadingSubjectID = false
-                    
-                case .failure(let error):
-                    print("Error loading sports shoot for Subject ID: \(error.localizedDescription)")
+                }
+            } catch {
+                await MainActor.run {
                     // Use default starting ID on error
                     self.firstName = "101"
                     self.isLoadingSubjectID = false
@@ -215,55 +217,52 @@ struct AddRosterEntryView: View {
             }
         }
     }
-    
+
     private func saveRosterEntry() {
         isLoading = true
-        
+
         let trimmedLastName = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasLastName = !trimmedLastName.isEmpty
-        
+
+        // Create or update the roster entry
         let entry = RosterEntry(
-            id: existingEntry?.id ?? UUID().uuidString,
+            id: existingEntry?.id ?? UUID(),
+            sportsJobId: shootID,
             lastName: trimmedLastName,
             firstName: firstName.trimmingCharacters(in: .whitespacesAndNewlines),
             teacher: teacher.trimmingCharacters(in: .whitespacesAndNewlines),
-            group: group.trimmingCharacters(in: .whitespacesAndNewlines),
+            groupName: groupName.trimmingCharacters(in: .whitespacesAndNewlines),
             email: email.trimmingCharacters(in: .whitespacesAndNewlines),
             phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
             imageNumbers: imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines),
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
-            wasBlank: existingEntry?.wasBlank ?? true,  // New entries always have wasBlank = true
-            isFilledBlank: hasLastName  // Set to true if lastName is not empty
+            sortOrder: existingEntry?.sortOrder ?? 0,
+            version: existingEntry?.version ?? 1,
+            updatedAt: Date(),
+            updatedBy: nil,
+            lockedBy: nil,
+            lockedByName: nil,
+            lockedAt: nil,
+            createdAt: existingEntry?.createdAt ?? Date()
         )
-        
-        if isEditing {
-            SportsShootService.shared.updateRosterEntry(shootID: shootID, entry: entry) { result in
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                    
-                    switch result {
-                    case .success:
-                        self.onComplete(true)
-                        self.presentationMode.wrappedValue.dismiss()
-                    case .failure(let error):
-                        self.errorMessage = "Failed to update athlete: \(error.localizedDescription)"
-                        self.showingErrorAlert = true
-                    }
+
+        Task {
+            do {
+                if isEditing {
+                    _ = try await RosterEntryService.shared.updateEntry(entry)
+                } else {
+                    _ = try await RosterEntryService.shared.createEntry(entry)
                 }
-            }
-        } else {
-            SportsShootService.shared.addRosterEntry(shootID: shootID, entry: entry) { result in
-                DispatchQueue.main.async {
+
+                await MainActor.run {
                     self.isLoading = false
-                    
-                    switch result {
-                    case .success:
-                        self.onComplete(true)
-                        self.presentationMode.wrappedValue.dismiss()
-                    case .failure(let error):
-                        self.errorMessage = "Failed to add athlete: \(error.localizedDescription)"
-                        self.showingErrorAlert = true
-                    }
+                    self.onComplete(true)
+                    self.presentationMode.wrappedValue.dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = "Failed to \(isEditing ? "update" : "add") athlete: \(error.localizedDescription)"
+                    self.showingErrorAlert = true
                 }
             }
         }
@@ -275,11 +274,11 @@ struct TextView: UIViewRepresentable {
     @Binding var text: String
     var placeholder: String
     var onCommit: (() -> Void)? = nil
-    
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
-    
+
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
         textView.delegate = context.coordinator
@@ -291,7 +290,7 @@ struct TextView: UIViewRepresentable {
         textView.autocorrectionType = .default
         textView.backgroundColor = UIColor.clear
         textView.returnKeyType = .done // Set return key to "Done"
-        
+
         // Add a toolbar with Done button for better keyboard experience
         let toolbar = UIToolbar()
         toolbar.sizeToFit()
@@ -299,7 +298,7 @@ struct TextView: UIViewRepresentable {
         let doneButton = UIBarButtonItem(barButtonSystemItem: .done, target: context.coordinator, action: #selector(Coordinator.doneButtonTapped))
         toolbar.items = [flexSpace, doneButton]
         textView.inputAccessoryView = toolbar
-        
+
         if text.isEmpty {
             textView.text = placeholder
             textView.textColor = UIColor.placeholderText
@@ -307,10 +306,10 @@ struct TextView: UIViewRepresentable {
             textView.text = text
             textView.textColor = UIColor.label
         }
-        
+
         return textView
     }
-    
+
     func updateUIView(_ uiView: UITextView, context: Context) {
         if text.isEmpty && !uiView.isFirstResponder {
             uiView.text = placeholder
@@ -323,32 +322,32 @@ struct TextView: UIViewRepresentable {
             uiView.textColor = UIColor.label
         }
     }
-    
+
     class Coordinator: NSObject, UITextViewDelegate {
         var parent: TextView
-        
+
         init(_ parent: TextView) {
             self.parent = parent
         }
-        
+
         func textViewDidBeginEditing(_ textView: UITextView) {
             if textView.text == parent.placeholder {
                 textView.text = ""
                 textView.textColor = UIColor.label
             }
         }
-        
+
         func textViewDidEndEditing(_ textView: UITextView) {
             if textView.text.isEmpty {
                 textView.text = parent.placeholder
                 textView.textColor = UIColor.placeholderText
             }
         }
-        
+
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
         }
-        
+
         // Handle the return key
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
             if text == "\n" {
@@ -358,7 +357,7 @@ struct TextView: UIViewRepresentable {
             }
             return true
         }
-        
+
         @objc func doneButtonTapped() {
             // Get a reference to the first responder
             let keyWindow = UIApplication.shared.connectedScenes
@@ -370,7 +369,7 @@ struct TextView: UIViewRepresentable {
                 while let presentedViewController = topController.presentedViewController {
                     topController = presentedViewController
                 }
-                
+
                 // Find the active text view
                 if let activeTextView = topController.view.findFirstResponder() as? UITextView {
                     activeTextView.resignFirstResponder()
@@ -384,7 +383,7 @@ struct TextView: UIViewRepresentable {
 struct AddRosterEntryView_Previews: PreviewProvider {
     static var previews: some View {
         AddRosterEntryView(
-            shootID: "previewID",
+            shootID: UUID(),
             existingEntry: nil,
             onComplete: { _ in }
         )

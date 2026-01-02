@@ -70,7 +70,6 @@ struct CustomNumberKeyboard: View {
                         NumberButton(text: "\(number)", compactMode: compactMode) {
                             text.append("\(number)")
                             displayText = text  // Update display text
-                            print("DEBUG: Appended \(number), text is now: \(text)")
                         }
                     }
                 }

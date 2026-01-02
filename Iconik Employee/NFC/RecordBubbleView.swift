@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct RecordBubbleView: View {
-    let record: FirestoreRecord
+    let record: NFCRecord
     
     private var formattedDate: String {
         let formatter = DateFormatter()

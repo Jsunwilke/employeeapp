@@ -9,11 +9,10 @@
 import SwiftUI
 
 struct AddGroupImageView: View {
-    let shootID: String
+    let shootID: UUID
     let existingGroup: GroupImage?
-    let sportsShoot: SportsShoot?  // Pass the sports shoot to get available sports
     let onComplete: (Bool) -> Void
-    
+
     @State private var description: String = ""
     @State private var imageNumbers: String = ""
     @State private var notes: String = ""
@@ -21,29 +20,39 @@ struct AddGroupImageView: View {
     @State private var selectedGender: String = ""
     @State private var selectedTeamLevel: String = ""
     @State private var useCustomDescription: Bool = false
-    
+    @State private var availableSports: [String] = []
+    @State private var isLoadingSports = true
+
     // Gender options
     let genderOptions = ["Boys", "Girls", "Co-ed"]
-    
+
     // Team level options
     let teamLevels = ["Varsity", "Junior Varsity (JV)", "C-Team", "Freshman", "Sophomore", "Modified", "Custom"]
-    
+
     @State private var isLoading = false
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
-    
+
     @Environment(\.presentationMode) var presentationMode
-    
+
     var isEditing: Bool {
         existingGroup != nil
     }
-    
+
     var body: some View {
         NavigationView {
             Form {
                 Section(header: Text("Group Information")) {
                     // Sport selection
-                    if let availableSports = availableSports, !availableSports.isEmpty {
+                    if isLoadingSports {
+                        HStack {
+                            Text("Loading sports...")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        }
+                    } else if !availableSports.isEmpty {
                         Picker("Sport/Team", selection: $selectedSport) {
                             Text("Select Sport").tag("")
                             ForEach(availableSports, id: \.self) { sport in
@@ -54,7 +63,7 @@ struct AddGroupImageView: View {
                             updateDescription()
                         }
                     }
-                    
+
                     // Gender selection
                     if !selectedSport.isEmpty {
                         Picker("Gender", selection: $selectedGender) {
@@ -67,7 +76,7 @@ struct AddGroupImageView: View {
                             updateDescription()
                         }
                     }
-                    
+
                     // Team level selection
                     if !selectedSport.isEmpty {
                         Picker("Team Level", selection: $selectedTeamLevel) {
@@ -80,27 +89,27 @@ struct AddGroupImageView: View {
                             updateDescription()
                         }
                     }
-                    
+
                     // Description field
                     VStack(alignment: .leading) {
                         Toggle("Custom Description", isOn: $useCustomDescription)
                             .font(.caption)
-                        
+
                         TextField("Description", text: $description)
                             .autocapitalization(.sentences)
                             .disabled(!useCustomDescription && !selectedSport.isEmpty)
                     }
                 }
-                
+
                 Section(header: Text("Image Information")) {
                     TextField("Image Numbers", text: $imageNumbers)
                         .keyboardType(.asciiCapable)
                         .autocapitalization(.none)
-                    
+
                     TextView(text: $notes, placeholder: "Notes (optional)")
                         .frame(minHeight: 100)
                 }
-                
+
                 if isLoading {
                     HStack {
                         Spacer()
@@ -116,7 +125,7 @@ struct AddGroupImageView: View {
                         presentationMode.wrappedValue.dismiss()
                     }
                 }
-                
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(isEditing ? "Update" : "Save") {
                         saveGroupImage()
@@ -132,111 +141,129 @@ struct AddGroupImageView: View {
                 )
             }
             .onAppear {
-                if let group = existingGroup {
-                    description = group.description
-                    imageNumbers = group.imageNumbers
-                    notes = group.notes
-                    selectedSport = group.sport ?? ""
-                    selectedGender = group.gender ?? ""
-                    selectedTeamLevel = group.teamLevel ?? ""
-                    // Check if description was auto-generated
-                    useCustomDescription = !isAutoGeneratedDescription()
-                } else {
+                loadExistingGroupData()
+                loadAvailableSports()
+            }
+        }
+    }
+
+    private func loadExistingGroupData() {
+        if let group = existingGroup {
+            description = group.description
+            imageNumbers = group.imageNumbers
+            notes = group.notes
+            selectedSport = group.sport
+            selectedGender = group.gender
+            selectedTeamLevel = group.teamLevel
+            // Check if description was auto-generated
+            useCustomDescription = !isAutoGeneratedDescription()
+        }
+    }
+
+    private func loadAvailableSports() {
+        isLoadingSports = true
+
+        Task {
+            do {
+                let entries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+                let allGroups = Set(entries.map { $0.groupName })
+                let sports = Array(allGroups).filter { !$0.isEmpty }.sorted()
+
+                await MainActor.run {
+                    self.availableSports = sports
+                    self.isLoadingSports = false
+
                     // For new groups, check if there's only one sport in the roster
-                    if let sports = availableSports, sports.count == 1 {
+                    if existingGroup == nil && sports.count == 1 {
                         selectedSport = sports[0]
                         updateDescription()
                     }
                 }
+            } catch {
+                await MainActor.run {
+                    self.isLoadingSports = false
+                }
             }
         }
     }
-    
-    // Computed property to get available sports from roster
-    private var availableSports: [String]? {
-        guard let shoot = sportsShoot else { return nil }
-        let allGroups = Set(shoot.roster.map { $0.group })
-        return Array(allGroups).filter { !$0.isEmpty }.sorted()
-    }
-    
+
     // Update description based on selections
     private func updateDescription() {
         guard !useCustomDescription else { return }
-        
+
         if !selectedSport.isEmpty {
             var components = [selectedSport]
-            
+
             if !selectedGender.isEmpty {
                 components.append(selectedGender)
             }
-            
+
             if !selectedTeamLevel.isEmpty && selectedTeamLevel != "Custom" {
                 components.append(selectedTeamLevel)
             }
-            
+
             description = components.joined(separator: " - ")
         }
     }
-    
+
     // Check if current description matches auto-generated format
     private func isAutoGeneratedDescription() -> Bool {
         if selectedSport.isEmpty { return false }
-        
+
         var components = [selectedSport]
-        
+
         if !selectedGender.isEmpty {
             components.append(selectedGender)
         }
-        
+
         if !selectedTeamLevel.isEmpty && selectedTeamLevel != "Custom" {
             components.append(selectedTeamLevel)
         }
-        
+
         let expectedDescription = components.joined(separator: " - ")
         return description == expectedDescription
     }
-    
+
     private func saveGroupImage() {
         isLoading = true
-        
+
         let group = GroupImage(
-            id: existingGroup?.id ?? UUID().uuidString,
+            id: existingGroup?.id ?? UUID(),
+            sportsJobId: shootID,
             description: description.trimmingCharacters(in: .whitespacesAndNewlines),
             imageNumbers: imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines),
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
-            sport: selectedSport.isEmpty ? nil : selectedSport,
-            gender: selectedGender.isEmpty ? nil : selectedGender,
-            teamLevel: selectedTeamLevel.isEmpty ? nil : selectedTeamLevel
+            sport: selectedSport,
+            gender: selectedGender,
+            teamLevel: selectedTeamLevel,
+            sortOrder: existingGroup?.sortOrder ?? 0,
+            version: existingGroup?.version ?? 1,
+            updatedAt: Date(),
+            updatedBy: existingGroup?.updatedBy,
+            lockedBy: existingGroup?.lockedBy,
+            lockedByName: existingGroup?.lockedByName,
+            lockedAt: existingGroup?.lockedAt,
+            createdAt: existingGroup?.createdAt ?? Date()
         )
-        
-        if isEditing {
-            SportsShootService.shared.updateGroupImage(shootID: shootID, groupImage: group) { result in
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                    
-                    switch result {
-                    case .success:
-                        self.onComplete(true)
-                        self.presentationMode.wrappedValue.dismiss()
-                    case .failure(let error):
-                        self.errorMessage = "Failed to update group: \(error.localizedDescription)"
-                        self.showingErrorAlert = true
-                    }
+
+        Task {
+            do {
+                if isEditing {
+                    _ = try await GroupImageService.shared.updateGroup(group)
+                } else {
+                    _ = try await GroupImageService.shared.createGroup(group)
                 }
-            }
-        } else {
-            SportsShootService.shared.addGroupImage(shootID: shootID, groupImage: group) { result in
-                DispatchQueue.main.async {
+
+                await MainActor.run {
                     self.isLoading = false
-                    
-                    switch result {
-                    case .success:
-                        self.onComplete(true)
-                        self.presentationMode.wrappedValue.dismiss()
-                    case .failure(let error):
-                        self.errorMessage = "Failed to add group: \(error.localizedDescription)"
-                        self.showingErrorAlert = true
-                    }
+                    self.onComplete(true)
+                    self.presentationMode.wrappedValue.dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = "Failed to \(isEditing ? "update" : "add") group: \(error.localizedDescription)"
+                    self.showingErrorAlert = true
                 }
             }
         }
@@ -246,9 +273,8 @@ struct AddGroupImageView: View {
 struct AddGroupImageView_Previews: PreviewProvider {
     static var previews: some View {
         AddGroupImageView(
-            shootID: "previewID",
+            shootID: UUID(),
             existingGroup: nil,
-            sportsShoot: nil,
             onComplete: { _ in }
         )
     }

@@ -162,7 +162,7 @@ struct WriteNFCView: View {
         
         if isJobBox {
             // Save Job Box record
-            FirestoreManager.shared.saveJobBoxRecord(
+            DatabaseManager.shared.saveJobBoxRecord(
                 timestamp: timestamp,
                 photographer: "",
                 boxNumber: cardNumber,
@@ -183,7 +183,7 @@ struct WriteNFCView: View {
             }
         } else {
             // Save SD Card record
-            FirestoreManager.shared.saveRecord(
+            DatabaseManager.shared.saveRecord(
                 timestamp: timestamp,
                 photographer: "",
                 cardNumber: cardNumber,
@@ -212,7 +212,7 @@ struct WriteNFCView: View {
         
         if isJobBox {
             // Fetch highest job box number
-            FirestoreManager.shared.getHighestBoxNumber(organizationID: orgID) { result in
+            DatabaseManager.shared.getHighestBoxNumber(organizationID: orgID) { result in
                 switch result {
                 case .success(let highestNumber):
                     DispatchQueue.main.async {
@@ -234,7 +234,7 @@ struct WriteNFCView: View {
             }
         } else {
             // Fetch highest SD card number
-            FirestoreManager.shared.fetchRecords(field: "all", value: "", organizationID: orgID) { result in
+            DatabaseManager.shared.fetchRecords(field: "all", value: "", organizationID: orgID) { result in
                 switch result {
                 case .success(let records):
                     let numbers = records.compactMap { Int($0.cardNumber.trimmingCharacters(in: .whitespacesAndNewlines)) }

@@ -9,9 +9,9 @@ import SwiftUI
 import UIKit
 
 struct MultiPhotoRosterImporterView: View {
-    let shootID: String
+    let shootID: UUID
     let onComplete: (Bool) -> Void
-    
+
     // State for managing photos and processing
     @State private var capturedImages: [UIImage] = []
     @State private var showDocumentScanner = false
@@ -27,13 +27,13 @@ struct MultiPhotoRosterImporterView: View {
     @State private var teamLabels: [Int: String] = [:]
     @State private var selectedImage: UIImage? = nil
     @State private var nextSubjectID: Int = 101 // Default starting ID
-    
+
     // Environment objects
     @Environment(\.presentationMode) var presentationMode
-    
+
     // Testing mode flag
     private let useClaudeMock = false  // Set to false for production
-    
+
     var body: some View {
         VStack {
             if showPreview {
@@ -51,7 +51,7 @@ struct MultiPhotoRosterImporterView: View {
                     presentationMode.wrappedValue.dismiss()
                 }
             }
-            
+
             if !isProcessing && !showPreview && !capturedImages.isEmpty {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Process All") {
@@ -88,9 +88,9 @@ struct MultiPhotoRosterImporterView: View {
             loadExistingRoster()
         }
     }
-    
+
     // MARK: - Photo Collection View
-    
+
     private var photoCollectionView: some View {
         VStack(spacing: 16) {
             if capturedImages.isEmpty {
@@ -107,7 +107,7 @@ struct MultiPhotoRosterImporterView: View {
                 .padding(.horizontal, 10)
                 .background(Color.blue.opacity(0.1))
                 .cornerRadius(8)
-                
+
                 // Image grid
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
@@ -118,7 +118,7 @@ struct MultiPhotoRosterImporterView: View {
                     .padding(.horizontal)
                 }
             }
-            
+
             // Bottom buttons for adding photos - always visible and at the bottom
             VStack(spacing: 12) {
                 Button(action: {
@@ -136,7 +136,7 @@ struct MultiPhotoRosterImporterView: View {
                     .foregroundColor(.white)
                     .cornerRadius(10)
                 }
-                
+
                 Button(action: {
                     showPhotoLibrary = true
                 }) {
@@ -157,17 +157,17 @@ struct MultiPhotoRosterImporterView: View {
             .padding(.bottom, 10)
         }
     }
-    
+
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "doc.text.viewfinder")
                 .font(.system(size: 50))
                 .foregroundColor(.blue)
-            
+
             Text("Import Multiple Team Rosters")
                 .font(.title2)
                 .fontWeight(.bold)
-                
+
             // Subject ID info - now read-only
             Text("Next athlete will be assigned ID: \(nextSubjectID)")
                 .font(.headline)
@@ -176,18 +176,18 @@ struct MultiPhotoRosterImporterView: View {
                 .padding(.horizontal, 16)
                 .background(Color.blue.opacity(0.1))
                 .cornerRadius(8)
-            
+
             Text("Scan paper rosters or select images from your gallery.")
                 .font(.body)
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
-            
+
             // Condensed tips
             VStack(alignment: .leading, spacing: 6) {
                 Text("Tips for best results:")
                     .font(.subheadline)
                     .fontWeight(.medium)
-                
+
                 VStack(alignment: .leading, spacing: 4) {
                     bulletPoint("One team roster per scan")
                     bulletPoint("Make sure the entire roster is visible")
@@ -203,7 +203,7 @@ struct MultiPhotoRosterImporterView: View {
         }
         .padding()
     }
-    
+
     private func imageCell(image: UIImage, index: Int) -> some View {
         VStack {
             ZStack(alignment: .topTrailing) {
@@ -214,7 +214,7 @@ struct MultiPhotoRosterImporterView: View {
                     .clipped()
                     .cornerRadius(8)
                     .shadow(radius: 2)
-                
+
                 // Delete button
                 Button(action: {
                     deleteImage(at: index)
@@ -226,7 +226,7 @@ struct MultiPhotoRosterImporterView: View {
                 }
                 .padding(8)
             }
-            
+
             // Team label input field
             TextField("Team Name", text: Binding(
                 get: { teamLabels[index] ?? "" },
@@ -237,7 +237,7 @@ struct MultiPhotoRosterImporterView: View {
             .cornerRadius(5)
             .padding(.horizontal, 4)
             .padding(.top, 4)
-            
+
             // Process single image button
             Button(action: {
                 processSingleImage(index: index)
@@ -256,16 +256,16 @@ struct MultiPhotoRosterImporterView: View {
         .background(Color(.secondarySystemBackground))
         .cornerRadius(12)
     }
-    
+
     // MARK: - Processing View
-    
+
     private var processingView: some View {
         VStack(spacing: 16) {
             // Processing indicator
             if let index = currentlyProcessingIndex {
                 Text("Processing Roster \(index + 1) of \(capturedImages.count)")
                     .font(.headline)
-                
+
                 // Show the current image being processed
                 if index < capturedImages.count {
                     Image(uiImage: capturedImages[index])
@@ -275,20 +275,20 @@ struct MultiPhotoRosterImporterView: View {
                         .cornerRadius(8)
                 }
             }
-            
+
             ProgressView(value: processingProgress)
                 .progressViewStyle(LinearProgressViewStyle())
                 .padding(.horizontal)
-            
+
             ProgressView()
                 .scaleEffect(1.5)
                 .padding()
-            
+
             Text("Using Claude AI to read and process rosters...")
                 .font(.title3)
                 .fontWeight(.medium)
                 .multilineTextAlignment(.center)
-            
+
             Text("This may take a few moments. New athletes will be numbered starting from \(nextSubjectID).")
                 .multilineTextAlignment(.center)
                 .font(.body)
@@ -297,9 +297,9 @@ struct MultiPhotoRosterImporterView: View {
         }
         .padding()
     }
-    
+
     // MARK: - Preview View
-    
+
     private var rosterPreviewView: some View {
         VStack {
             if allExtractedRosters.isEmpty {
@@ -309,7 +309,7 @@ struct MultiPhotoRosterImporterView: View {
                     Text("Extracted \(allExtractedRosters.count) Athletes")
                         .font(.headline)
                         .padding(.top)
-                    
+
                     List {
                         ForEach(Array(extractedRostersByImage.keys).sorted(), id: \.self) { imageIndex in
                             if let entries = extractedRostersByImage[imageIndex], !entries.isEmpty {
@@ -319,24 +319,24 @@ struct MultiPhotoRosterImporterView: View {
                                             HStack {
                                                 Text("\(entry.lastName)")
                                                     .font(.headline)
-                                                
+
                                                 Spacer()
-                                                
+
                                                 Text("ID: \(entry.firstName)")
                                                     .font(.caption)
                                                     .foregroundColor(.secondary)
                                             }
-                                            
-                                            if !entry.group.isEmpty {
-                                                Text("Sport/Team: \(entry.group)")
+
+                                            if !entry.groupName.isEmpty {
+                                                Text("Sport/Team: \(entry.groupName)")
                                                     .font(.caption)
                                             }
-                                            
+
                                             if !entry.teacher.isEmpty {
                                                 Text("Special: \(entry.teacher)")
                                                     .font(.caption)
                                             }
-                                            
+
                                             if !entry.email.isEmpty {
                                                 Text("Email: \(entry.email)")
                                                     .font(.caption)
@@ -350,7 +350,7 @@ struct MultiPhotoRosterImporterView: View {
                         }
                     }
                     .listStyle(InsetGroupedListStyle())
-                    
+
                     VStack(spacing: 15) {
                         Button(action: {
                             saveAllImportedRosters()
@@ -367,7 +367,7 @@ struct MultiPhotoRosterImporterView: View {
                             .foregroundColor(.white)
                             .cornerRadius(10)
                         }
-                        
+
                         Button(action: {
                             // Reset to photo collection view
                             showPreview = false
@@ -384,23 +384,23 @@ struct MultiPhotoRosterImporterView: View {
             }
         }
     }
-    
+
     private var noResultsView: some View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 50))
                 .foregroundColor(.orange)
-            
+
             Text("No Data Detected")
                 .font(.title2)
                 .fontWeight(.bold)
-            
+
             Text("We couldn't extract any roster data from these images. Please try again with clearer images.")
                 .multilineTextAlignment(.center)
                 .font(.body)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
-            
+
             Button(action: {
                 showPreview = false
             }) {
@@ -417,9 +417,9 @@ struct MultiPhotoRosterImporterView: View {
         }
         .padding()
     }
-    
+
     // MARK: - Helper Views
-    
+
     private func bulletPoint(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Text("•")
@@ -431,64 +431,62 @@ struct MultiPhotoRosterImporterView: View {
             Spacer()
         }
     }
-    
+
     // MARK: - Image Processing Methods
-    
+
     // Load existing roster to determine next available Subject ID
     private func loadExistingRoster() {
-        SportsShootService.shared.fetchSportsShoot(id: shootID) { result in
-            switch result {
-            case .success(let shoot):
+        Task {
+            do {
+                let entries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+
                 // Find the highest Subject ID value across all entries
-                let highestID = shoot.roster.compactMap { entry -> Int? in
+                let highestID = entries.compactMap { entry -> Int? in
                     return Int(entry.firstName)
                 }.max() ?? 100 // Default to 100 if no entries exist
-                
-                DispatchQueue.main.async {
+
+                await MainActor.run {
                     self.nextSubjectID = highestID + 1
-                    print("Next available Subject ID: \(self.nextSubjectID)")
                 }
-                
-            case .failure(let error):
-                print("Error loading sports shoot: \(error.localizedDescription)")
+            } catch {
                 // Keep the default starting ID if there's an error
             }
         }
     }
-    
+
     private func addImage(_ image: UIImage) {
         capturedImages.append(image)
         teamLabels[capturedImages.count - 1] = ""
     }
-    
+
     private func deleteImage(at index: Int) {
         guard index < capturedImages.count else { return }
         capturedImages.remove(at: index)
         teamLabels.removeValue(forKey: index)
-        
+
         // Reindex team labels
         var newTeamLabels: [Int: String] = [:]
         for (idx, (_, label)) in teamLabels.enumerated() {
             newTeamLabels[idx] = label
         }
         teamLabels = newTeamLabels
-        
+
         // Remove any extracted data for this image
         extractedRostersByImage.removeValue(forKey: index)
     }
-    
+
     private func processSingleImage(index: Int) {
         guard index < capturedImages.count else { return }
-        
+
         isProcessing = true
         currentlyProcessingIndex = index
         processingProgress = 0
-        
+
         let image = capturedImages[index]
-        
+
         if useClaudeMock {
             // Use mock for testing
-            ClaudeRosterService.shared.mockExtractRoster { result in
+            ClaudeRosterService.shared.mockExtractRoster(sportsJobId: shootID) { result in
                 DispatchQueue.main.async {
                     self.handleProcessingResult(result, for: index)
                     self.isProcessing = false
@@ -497,12 +495,12 @@ struct MultiPhotoRosterImporterView: View {
             }
         } else {
             // Use Claude API with the next available Subject ID
-            ClaudeRosterService.shared.extractRosterFromImage(image, startingSubjectID: nextSubjectID) { result in
+            ClaudeRosterService.shared.extractRosterFromImage(image, sportsJobId: shootID, startingSubjectID: nextSubjectID) { result in
                 DispatchQueue.main.async {
                     self.handleProcessingResult(result, for: index)
                     self.isProcessing = false
                     self.showPreview = true
-                    
+
                     // Update nextSubjectID based on how many entries were added
                     if case .success(let entries) = result {
                         self.nextSubjectID += entries.count
@@ -511,24 +509,24 @@ struct MultiPhotoRosterImporterView: View {
             }
         }
     }
-    
+
     private func processAllImages() {
         guard !capturedImages.isEmpty else { return }
-        
+
         isProcessing = true
         currentlyProcessingIndex = 0
         processingProgress = 0
-        
+
         // Clear previous results
         extractedRostersByImage = [:]
         allExtractedRosters = []
-        
+
         // Track the current subject ID as we process each image
         let currentSubjectID = nextSubjectID
-        
+
         processNextImage(startingAt: 0, currentSubjectID: currentSubjectID)
     }
-    
+
     private func processNextImage(startingAt index: Int, currentSubjectID: Int) {
         guard index < capturedImages.count else {
             // All images processed, show preview
@@ -537,47 +535,47 @@ struct MultiPhotoRosterImporterView: View {
             showPreview = true
             return
         }
-        
+
         currentlyProcessingIndex = index
         processingProgress = Double(index) / Double(capturedImages.count)
-        
+
         let image = capturedImages[index]
-        
+
         if useClaudeMock {
             // Use mock for testing
-            ClaudeRosterService.shared.mockExtractRoster { result in
+            ClaudeRosterService.shared.mockExtractRoster(sportsJobId: shootID) { result in
                 DispatchQueue.main.async {
                     self.handleProcessingResult(result, for: index)
-                    
+
                     // Calculate next subject ID based on entries added
                     var nextID = currentSubjectID
                     if case .success(let entries) = result {
                         nextID += entries.count
                     }
-                    
+
                     // Process next image with updated subject ID
                     self.processNextImage(startingAt: index + 1, currentSubjectID: nextID)
                 }
             }
         } else {
             // Use Claude API with the current subject ID
-            ClaudeRosterService.shared.extractRosterFromImage(image, startingSubjectID: currentSubjectID) { result in
+            ClaudeRosterService.shared.extractRosterFromImage(image, sportsJobId: shootID, startingSubjectID: currentSubjectID) { result in
                 DispatchQueue.main.async {
                     self.handleProcessingResult(result, for: index)
-                    
+
                     // Calculate next subject ID based on entries added
                     var nextID = currentSubjectID
                     if case .success(let entries) = result {
                         nextID += entries.count
                     }
-                    
+
                     // Process next image with updated subject ID
                     self.processNextImage(startingAt: index + 1, currentSubjectID: nextID)
                 }
             }
         }
     }
-    
+
     private func handleProcessingResult(_ result: Result<[RosterEntry], Error>, for index: Int) {
         switch result {
         case .success(var entries):
@@ -585,9 +583,9 @@ struct MultiPhotoRosterImporterView: View {
             if let teamName = teamLabels[index], !teamName.isEmpty {
                 entries = entries.map { entry in
                     var updatedEntry = entry
-                    // Only override group if it's empty or if the team name was manually specified
-                    if entry.group.isEmpty || !teamName.isEmpty {
-                        updatedEntry.group = teamName
+                    // Only override groupName if it's empty or if the team name was manually specified
+                    if entry.groupName.isEmpty || !teamName.isEmpty {
+                        updatedEntry.groupName = teamName
                     }
                     return updatedEntry
                 }
@@ -601,54 +599,38 @@ struct MultiPhotoRosterImporterView: View {
 
             // Add to the complete list
             allExtractedRosters.append(contentsOf: entries)
-            
+
         case .failure(let error):
-            print("Error processing image \(index): \(error.localizedDescription)")
             extractedRostersByImage[index] = []
-            
+
             // Show error but continue processing other images
             errorMessage = "Error processing image \(index + 1): \(error.localizedDescription)"
             showingErrorAlert = true
         }
     }
-    
+
     private func saveAllImportedRosters() {
         guard !allExtractedRosters.isEmpty else { return }
-        
+
         isProcessing = true
-        
-        // Use a dispatch group to track all operations
-        let group = DispatchGroup()
-        var errorOccurred = false
-        
-        // Add each entry to the sports shoot
-        for entry in allExtractedRosters {
-            group.enter()
-            
-            SportsShootService.shared.addRosterEntry(shootID: shootID, entry: entry) { result in
-                switch result {
-                case .success:
-                    // Entry added successfully
-                    break
-                case .failure:
-                    errorOccurred = true
+
+        Task {
+            do {
+                // Use batch create for efficiency
+                _ = try await RosterEntryService.shared.createEntries(allExtractedRosters)
+
+                await MainActor.run {
+                    self.isProcessing = false
+                    // Notify completion and dismiss
+                    self.onComplete(true)
+                    self.presentationMode.wrappedValue.dismiss()
                 }
-                
-                group.leave()
-            }
-        }
-        
-        // When all operations are complete
-        group.notify(queue: .main) {
-            self.isProcessing = false
-            
-            if errorOccurred {
-                self.errorMessage = "Some entries could not be added. Please try again."
-                self.showingErrorAlert = true
-            } else {
-                // Notify completion and dismiss
-                self.onComplete(true)
-                self.presentationMode.wrappedValue.dismiss()
+            } catch {
+                await MainActor.run {
+                    self.isProcessing = false
+                    self.errorMessage = "Failed to save entries: \(error.localizedDescription)"
+                    self.showingErrorAlert = true
+                }
             }
         }
     }
@@ -657,7 +639,7 @@ struct MultiPhotoRosterImporterView: View {
 struct MultiPhotoRosterImporterView_Previews: PreviewProvider {
     static var previews: some View {
         MultiPhotoRosterImporterView(
-            shootID: "previewID",
+            shootID: UUID(),
             onComplete: { _ in }
         )
     }

@@ -28,7 +28,7 @@ class SupabaseAuthService: ObservableObject {
     // MARK: - Computed Properties
 
     var currentUserId: String? {
-        return currentUser?.id.uuidString
+        return currentUser?.id.uuidString.lowercased()
     }
 
     var currentUserEmail: String? {
