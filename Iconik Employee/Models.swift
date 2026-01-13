@@ -10,19 +10,22 @@ struct SchoolItem: Identifiable, Hashable, Codable, Equatable {
 // MARK: - Template Models (Supabase)
 
 /// Report template for Supabase - uses snake_case for database fields
+/// Database schema: id, organization_id, name, sections (jsonb), is_active, updated_at
 struct ReportTemplate: Codable, Identifiable {
     let id: String
     let organization_id: String
     let name: String
-    var description: String?
-    let shoot_type: String
-    var fields: [TemplateField]
-    var is_default: Bool
+    var fields: [TemplateField]  // Stored as 'sections' in DB
     var is_active: Bool
-    var version: Int
-    let created_by: String
-    let created_at: Date?
     let updated_at: Date?
+
+    // Local-only properties (not in database, for app convenience)
+    var description: String? = nil
+    var shoot_type: String = ""
+    var is_default: Bool = false
+    var version: Int = 1
+    var created_by: String = ""
+    var created_at: Date? = nil
 
     // Computed properties for backward compatibility
     var organizationID: String { organization_id }
@@ -34,9 +37,31 @@ struct ReportTemplate: Codable, Identifiable {
     var updatedAt: Date? { updated_at }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, fields, version
-        case organization_id, shoot_type, is_default, is_active
-        case created_by, created_at, updated_at
+        case id, name
+        case organization_id
+        case sections  // DB column name
+        case is_active
+        case updated_at
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        organization_id = try container.decodeIfPresent(String.self, forKey: .organization_id) ?? ""
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        fields = try container.decodeIfPresent([TemplateField].self, forKey: .sections) ?? []
+        is_active = try container.decodeIfPresent(Bool.self, forKey: .is_active) ?? true
+        updated_at = try container.decodeIfPresent(Date.self, forKey: .updated_at)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(organization_id, forKey: .organization_id)
+        try container.encode(name, forKey: .name)
+        try container.encode(fields, forKey: .sections)
+        try container.encode(is_active, forKey: .is_active)
+        try container.encodeIfPresent(updated_at, forKey: .updated_at)
     }
 
     init(
@@ -44,12 +69,12 @@ struct ReportTemplate: Codable, Identifiable {
         organizationID: String,
         name: String,
         description: String? = nil,
-        shootType: String,
+        shootType: String = "",
         fields: [TemplateField] = [],
         isDefault: Bool = false,
         isActive: Bool = true,
         version: Int = 1,
-        createdBy: String,
+        createdBy: String = "",
         createdAt: Date? = nil,
         updatedAt: Date? = nil
     ) {
@@ -500,6 +525,7 @@ struct TimeEntry: Identifiable, Codable {
     let session_id: String?
     let session_name: String? // Optional, added by migration
     let notes: String? // Optional, added by migration
+    let task_id: String? // Task this time entry is associated with
     let created_at: Date
     let updated_at: Date
 
@@ -510,6 +536,7 @@ struct TimeEntry: Identifiable, Codable {
     var clockOutTime: Date? { end_time }  // iOS uses clockOutTime
     var sessionId: String? { session_id }
     var sessionName: String? { session_name }
+    var taskId: String? { task_id }
     var createdAt: Date { created_at }
     var updatedAt: Date { updated_at }
 
@@ -526,6 +553,7 @@ struct TimeEntry: Identifiable, Codable {
         case session_id
         case session_name
         case notes
+        case task_id
         case created_at
         case updated_at
     }
@@ -542,6 +570,7 @@ struct TimeEntry: Identifiable, Codable {
         sessionId: String? = nil,
         sessionName: String? = nil,
         notes: String? = nil,
+        taskId: String? = nil,
         createdAt: Date?,
         updatedAt: Date?
     ) {
@@ -556,6 +585,7 @@ struct TimeEntry: Identifiable, Codable {
         self.session_id = sessionId
         self.session_name = sessionName
         self.notes = notes
+        self.task_id = taskId
         self.created_at = createdAt ?? Date()
         self.updated_at = updatedAt ?? Date()
     }

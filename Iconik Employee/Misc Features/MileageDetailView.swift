@@ -189,22 +189,21 @@ struct MileageDetailView: View {
 
                 struct SchoolRecord: Decodable {
                     let id: String
-                    let value: String?
+                    let name: String?
                 }
 
                 let schools: [SchoolRecord] = try await supabase
                     .from("schools")
-                    .select("id, value")
+                    .select("id, name")
                     .eq("organization_id", value: storedUserOrganizationID)
-                    .eq("type", value: "school")
                     .execute()
                     .value
 
                 await MainActor.run {
                     var temp: [MileageSchoolItem] = []
                     for school in schools {
-                        if let value = school.value {
-                            temp.append(MileageSchoolItem(id: school.id, name: value))
+                        if let name = school.name {
+                            temp.append(MileageSchoolItem(id: school.id, name: name))
                         }
                     }
                     temp.sort { $0.name.lowercased() < $1.name.lowercased() }
@@ -242,6 +241,8 @@ struct MileageDetailView: View {
             do {
                 let supabase = SupabaseManager.shared.client
 
+                print("📝 Saving mileage - ID: \(record.id), Mileage: \(mileage), School: \(localSchoolName)")
+
                 let updateData: [String: AnyJSON] = [
                     "total_mileage": .double(mileage),
                     "school_or_destination": .string(localSchoolName)
@@ -249,13 +250,16 @@ struct MileageDetailView: View {
                 try await supabase
                     .from("daily_job_reports")
                     .update(updateData)
-                    .eq("id", value: record.id.lowercased())
+                    .eq("id", value: record.id)
                     .execute()
+
+                print("✅ Mileage saved successfully")
 
                 await MainActor.run {
                     showingSuccessAlert = true
                 }
             } catch {
+                print("❌ Mileage save error: \(error)")
                 await MainActor.run {
                     errorMessage = error.localizedDescription
                     showingErrorAlert = true

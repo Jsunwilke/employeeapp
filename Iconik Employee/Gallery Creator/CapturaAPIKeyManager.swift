@@ -5,7 +5,6 @@ import Supabase
 class CapturaAPIKeyManager {
     static let shared = CapturaAPIKeyManager()
 
-    private let debugMode = true
     private let supabase = SupabaseManager.shared.client
 
     // Keys for storing credentials
@@ -34,32 +33,23 @@ class CapturaAPIKeyManager {
     }
 
     /// Fetches Captura credentials from available sources
-    /// Priority: Info.plist > UserDefaults > Environment > Supabase
+    /// Priority: Info.plist > UserDefaults/Keychain > Environment > Supabase
     func getCredentials(completion: @escaping (Result<CapturaCredentials, Error>) -> Void) {
         // Check cached credentials first
         if let cached = cachedCredentials, cached.isValid {
-            if debugMode {
-                print("📦 CapturaAPIKeyManager: Using cached credentials")
-            }
             completion(.success(cached))
             return
         }
 
         // Try Info.plist first (from xcconfig)
         if let credentials = getCredentialsFromInfoPlist(), credentials.isValid {
-            if debugMode {
-                print("📦 CapturaAPIKeyManager: Found credentials in Info.plist")
-            }
             cachedCredentials = credentials
             completion(.success(credentials))
             return
         }
 
-        // Try UserDefaults
+        // Try UserDefaults/Keychain
         if let credentials = getCredentialsFromUserDefaults(), credentials.isValid {
-            if debugMode {
-                print("📦 CapturaAPIKeyManager: Found credentials in UserDefaults")
-            }
             cachedCredentials = credentials
             completion(.success(credentials))
             return
@@ -67,9 +57,6 @@ class CapturaAPIKeyManager {
 
         // Try Environment variables
         if let credentials = getCredentialsFromEnvironment(), credentials.isValid {
-            if debugMode {
-                print("📦 CapturaAPIKeyManager: Found credentials in Environment")
-            }
             cachedCredentials = credentials
             completion(.success(credentials))
             return
@@ -78,15 +65,9 @@ class CapturaAPIKeyManager {
         // Try Supabase
         fetchCredentialsFromSupabase { [weak self] credentials in
             if let credentials = credentials, credentials.isValid {
-                if self?.debugMode == true {
-                    print("📦 CapturaAPIKeyManager: Found credentials in Supabase")
-                }
                 self?.cachedCredentials = credentials
                 completion(.success(credentials))
             } else {
-                if self?.debugMode == true {
-                    print("📦 CapturaAPIKeyManager: No valid credentials found")
-                }
                 completion(.failure(CapturaCredentialsError.noCredentialsFound))
             }
         }
@@ -109,14 +90,19 @@ class CapturaAPIKeyManager {
         )
     }
 
-    /// Get credentials from UserDefaults
+    /// Get credentials from UserDefaults (non-secrets) and Keychain (secrets)
     private func getCredentialsFromUserDefaults() -> CapturaCredentials? {
         let defaults = UserDefaults.standard
 
+        // Non-sensitive values from UserDefaults
         guard let clientID = defaults.string(forKey: Keys.clientID),
-              let clientSecret = defaults.string(forKey: Keys.clientSecret),
               let accountID = defaults.string(forKey: Keys.accountID),
               let googleClientID = defaults.string(forKey: Keys.googleClientID) else {
+            return nil
+        }
+
+        // Sensitive client secret from Keychain
+        guard let clientSecret = KeychainService.shared.get(.capturaClientSecret) else {
             return nil
         }
 
@@ -151,9 +137,6 @@ class CapturaAPIKeyManager {
     private func fetchCredentialsFromSupabase(completion: @escaping (CapturaCredentials?) -> Void) {
         guard let orgID = UserDefaults.standard.string(forKey: "userOrganizationID"),
               !orgID.isEmpty else {
-            if debugMode {
-                print("📦 CapturaAPIKeyManager: No organization ID found")
-            }
             completion(nil)
             return
         }
@@ -199,42 +182,36 @@ class CapturaAPIKeyManager {
                     )
                     completion(credentials)
                 } else {
-                    if self.debugMode {
-                        print("📦 CapturaAPIKeyManager: No Captura config found in organization settings")
-                    }
                     completion(nil)
                 }
             } catch {
-                if self.debugMode {
-                    print("📦 CapturaAPIKeyManager: Supabase error: \(error.localizedDescription)")
-                }
                 completion(nil)
             }
         }
     }
 
-    /// Save credentials to UserDefaults
+    /// Save credentials to UserDefaults (non-secrets) and Keychain (secrets)
     func saveCredentialsToUserDefaults(_ credentials: CapturaCredentials) {
         let defaults = UserDefaults.standard
+
+        // Non-sensitive values to UserDefaults
         defaults.set(credentials.clientID, forKey: Keys.clientID)
-        defaults.set(credentials.clientSecret, forKey: Keys.clientSecret)
         defaults.set(credentials.accountID, forKey: Keys.accountID)
         defaults.set(credentials.googleClientID, forKey: Keys.googleClientID)
 
+        // Sensitive client secret to Keychain
+        _ = KeychainService.shared.save(credentials.clientSecret, for: .capturaClientSecret)
+
+        // Remove any legacy client secret from UserDefaults for security
+        defaults.removeObject(forKey: Keys.clientSecret)
+
         // Update cache
         cachedCredentials = credentials
-
-        if debugMode {
-            print("📦 CapturaAPIKeyManager: Saved credentials to UserDefaults")
-        }
     }
 
     /// Clear cached credentials
     func clearCache() {
         cachedCredentials = nil
-        if debugMode {
-            print("📦 CapturaAPIKeyManager: Cleared credential cache")
-        }
     }
 }
 

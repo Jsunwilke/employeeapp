@@ -252,19 +252,20 @@ struct EmployeeInfoView: View {
         
         isSaving = true
         
+        // Use snake_case field names to match Supabase schema
         let updatedFields: [String: Any] = [
-            "firstName": firstName.trimmingCharacters(in: .whitespacesAndNewlines),
-            "lastName": lastName.trimmingCharacters(in: .whitespacesAndNewlines),
-            "displayName": displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+            "first_name": firstName.trimmingCharacters(in: .whitespacesAndNewlines),
+            "last_name": lastName.trimmingCharacters(in: .whitespacesAndNewlines),
+            "display_name": displayName.trimmingCharacters(in: .whitespacesAndNewlines),
             "email": email.trimmingCharacters(in: .whitespacesAndNewlines),
             "phone": phone.trimmingCharacters(in: .whitespacesAndNewlines),
-            "homeAddress": coordinates,  // Store coordinates in homeAddress
+            "home_address": coordinates,  // Store coordinates in home_address
             "bio": bio.trimmingCharacters(in: .whitespacesAndNewlines),
             "position": position.trimmingCharacters(in: .whitespacesAndNewlines),
             "address": fullAddress.trimmingCharacters(in: .whitespacesAndNewlines),  // Store full address as single string
             "city": city.trimmingCharacters(in: .whitespacesAndNewlines),  // Keep individual components
             "state": state.trimmingCharacters(in: .whitespacesAndNewlines),
-            "zipCode": zipCode.trimmingCharacters(in: .whitespacesAndNewlines),
+            "zip_code": zipCode.trimmingCharacters(in: .whitespacesAndNewlines),
             "country": storedUserCountry
         ]
         

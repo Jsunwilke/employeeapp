@@ -11,6 +11,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case chatMessage = "chat_message"
         case sessionNew = "session_new"
         case sessionUpdate = "session_update"
+        case sessionDelete = "session_delete"
         case clockReminder = "clock_reminder"
         case reportReminder = "report_reminder"
         case photoCritique = "photo_critique"
@@ -83,7 +84,6 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         // Convert device token to hex string for APNs
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        print("📱 APNs device token: \(tokenString)")
 
         // Save APNs token to Supabase
         saveAPNsTokenToSupabase(token: tokenString)
@@ -95,7 +95,6 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     /// Save APNs device token to Supabase users table
     private func saveAPNsTokenToSupabase(token: String) {
         guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
-            print("⚠️ No user ID available for APNs token save")
             return
         }
 
@@ -111,10 +110,8 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                     ])
                     .eq("id", value: userId)
                     .execute()
-
-                print("✅ Successfully saved APNs token to Supabase")
             } catch {
-                print("❌ Error updating APNs token in Supabase: \(error.localizedDescription)")
+                print("Error updating APNs token: \(error.localizedDescription)")
             }
         }
     }
@@ -163,6 +160,9 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case .sessionUpdate:
             // Process session update notification
             handleSessionNotification(userInfo: userInfo, isNew: false)
+        case .sessionDelete:
+            // Process session deletion notification
+            handleSessionDeleteNotification(userInfo: userInfo)
         case .clockReminder:
             // Process clock reminder notification
             handleClockReminderNotification(userInfo: userInfo)
@@ -233,7 +233,25 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                                  object: nil,
                                  userInfo: userInfo)
     }
-    
+
+    /// Handle session deletion notifications
+    private func handleSessionDeleteNotification(userInfo: [AnyHashable: Any]) {
+        guard let sessionId = userInfo["sessionId"] as? String,
+              let schoolName = userInfo["schoolName"] as? String else {
+            print("Missing required session delete notification data")
+            return
+        }
+
+        let sessionDate = userInfo["sessionDate"] as? String ?? "Unknown date"
+
+        print("Received session delete notification: Session: \(sessionId), School: \(schoolName), Date: \(sessionDate)")
+
+        // Post a notification that Views can listen for
+        notificationCenter.post(name: Notification.Name("didReceiveSessionDeleteNotification"),
+                                 object: nil,
+                                 userInfo: userInfo)
+    }
+
     /// Handle clock reminder notifications
     private func handleClockReminderNotification(userInfo: [AnyHashable: Any]) {
         guard let reminderType = userInfo["reminderType"] as? String else {

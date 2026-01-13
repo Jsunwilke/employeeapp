@@ -21,26 +21,9 @@ struct ProfilePhotoView: View {
             Text("Profile Photo")
                 .font(.headline)
 
-            // Display current photo if we have a URL
-            if let url = URL(string: storedUserPhotoURL), !storedUserPhotoURL.isEmpty {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 120, height: 120)
-                            .clipShape(Circle())
-                    case .failure(_):
-                        Image(systemName: "person.crop.circle.badge.exclam")
-                            .resizable()
-                            .frame(width: 120, height: 120)
-                    @unknown default:
-                        EmptyView()
-                    }
-                }
+            // Display current photo using SupabaseAvatarView for signed URL support
+            if !storedUserPhotoURL.isEmpty {
+                SupabaseAvatarView(storageURL: storedUserPhotoURL, size: 120)
             } else {
                 // Fallback if no photo set
                 Image(systemName: "person.crop.circle")

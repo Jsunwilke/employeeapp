@@ -59,6 +59,9 @@ struct SportsShootDetailView: View {
     @State private var showSyncNotification = false
     @State private var syncNotificationMessage = ""
 
+    // Unique subscription ID for this view instance (prevents overwriting other subscribers)
+    private let subscriptionId = UUID()
+
     // Environment
     @Environment(\.scenePhase) var scenePhase
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
@@ -91,6 +94,10 @@ struct SportsShootDetailView: View {
             .task { await performInitialLoad() }
             .onDisappear { handleDisappear() }
             .onChange(of: scenePhase) { handleScenePhaseChange($0) }
+            .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+                // Re-subscribe when app returns to foreground
+                Task { await setupRealtimeSubscriptions() }
+            }
             .onChange(of: editingValues) { handleEditingValueChange($0) }
             .alert(isPresented: $showingErrorAlert) { errorAlert }
             .sheet(isPresented: $showingAddRosterEntry) { addRosterEntrySheet }
@@ -200,8 +207,9 @@ struct SportsShootDetailView: View {
             if let entryId = currentlyEditingEntryId {
                 await lockManager.releaseRosterEntryLock(entryId: entryId)
             }
-            await RosterEntryService.shared.unsubscribe()
-            await GroupImageService.shared.unsubscribe()
+            // Unsubscribe only this view's subscription, not others
+            await RosterEntryService.shared.unsubscribe(subscriptionId: subscriptionId)
+            await GroupImageService.shared.unsubscribe(subscriptionId: subscriptionId)
         }
     }
 
@@ -1071,11 +1079,19 @@ struct SportsShootDetailView: View {
         }
     }
 
-    // MARK: - Data Loading
+    // MARK: - Data Loading (Offline-First)
 
     private func loadSportsShoot() async {
-        isLoading = true
+        // First, try to load from cache for instant display (offline-first)
+        if let cachedShoot = LocalSportsRepository.shared.loadSportsShoot(id: shootID) {
+            self.sportsShoot = cachedShoot
+            self.rosterEntries = LocalSportsRepository.shared.loadRosterEntries(forJob: shootID) ?? []
+            self.groupImages = LocalSportsRepository.shared.loadGroupImages(forJob: shootID) ?? []
+            isLoading = false
+            print("SportsShootDetailView: Loaded from cache, now refreshing from network...")
+        }
 
+        // Then try to refresh from network (services handle caching)
         do {
             // Fetch shoot info
             let shoot = try await SportsShootService.shared.fetchSportsShoot(id: shootID)
@@ -1090,9 +1106,14 @@ struct SportsShootDetailView: View {
 
             isLoading = false
         } catch {
-            isLoading = false
-            errorMessage = "Failed to load: \(error.localizedDescription)"
-            showingErrorAlert = true
+            // If we already have cached data displayed, don't show error alert
+            if sportsShoot != nil {
+                print("SportsShootDetailView: Network refresh failed, continuing with cached data")
+            } else {
+                isLoading = false
+                errorMessage = "Failed to load: \(error.localizedDescription)"
+                showingErrorAlert = true
+            }
         }
     }
 
@@ -1113,13 +1134,13 @@ struct SportsShootDetailView: View {
     }
 
     private func setupRealtimeSubscriptions() async {
-        // Subscribe to roster entry changes
-        await RosterEntryService.shared.subscribeToChanges(jobId: shootID) { entries in
+        // Subscribe to roster entry changes with unique subscription ID
+        await RosterEntryService.shared.subscribeToChanges(subscriptionId: subscriptionId, jobId: shootID) { entries in
             self.rosterEntries = entries
         }
 
-        // Subscribe to group image changes
-        await GroupImageService.shared.subscribeToChanges(jobId: shootID) { groups in
+        // Subscribe to group image changes with unique subscription ID
+        await GroupImageService.shared.subscribeToChanges(subscriptionId: subscriptionId, jobId: shootID) { groups in
             self.groupImages = groups
         }
     }

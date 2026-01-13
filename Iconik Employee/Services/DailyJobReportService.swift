@@ -235,9 +235,6 @@ class DailyJobReportService: ObservableObject {
         if let jobDescriptionText = report.job_description_text {
             reportData["job_description_text"] = .string(jobDescriptionText)
         }
-        if let photoshootNoteID = report.photoshoot_note_id {
-            reportData["photoshoot_note_id"] = .string(photoshootNoteID)
-        }
         if let photoshootNoteText = report.photoshoot_note_text {
             reportData["photoshoot_note_text"] = .string(photoshootNoteText)
         }
@@ -348,9 +345,6 @@ class DailyJobReportService: ObservableObject {
         }
         if let jobDescriptionText = report.job_description_text {
             updateData["job_description_text"] = .string(jobDescriptionText)
-        }
-        if let photoshootNoteID = report.photoshoot_note_id {
-            updateData["photoshoot_note_id"] = .string(photoshootNoteID)
         }
         if let photoshootNoteText = report.photoshoot_note_text {
             updateData["photoshoot_note_text"] = .string(photoshootNoteText)

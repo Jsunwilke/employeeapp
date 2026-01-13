@@ -102,7 +102,7 @@ struct Subtask: Identifiable, Codable, Equatable {
         case completedBy = "completed_by"
     }
 
-    init(id: String = UUID().uuidString, title: String, completed: Bool = false, completedAt: Date? = nil, completedBy: String? = nil) {
+    init(id: String = UUID().uuidString.lowercased(), title: String, completed: Bool = false, completedAt: Date? = nil, completedBy: String? = nil) {
         self.id = id
         self.title = title
         self.completed = completed
@@ -136,33 +136,27 @@ struct TaskItem: Identifiable, Codable {
     var createdAt: Date
     var updatedAt: Date
     var dueDate: Date?
-    var startDate: Date?
     var completedAt: Date?
     var completedBy: String?
 
     // Estimation & Tracking
     var estimatedHours: Double
-    var order: Int
+    var sortOrder: Int
 
     // Subtasks
     var subtasks: [Subtask]
 
     // Comments & Activity
     var commentCount: Int
-    var timeEntryIds: [String]
 
     // Workflow Integration (Optional - only if type === "workflow")
     var workflowId: String?
     var workflowStepId: String?
     var workflowName: String?
     var workflowStepName: String?
-    var autoCreated: Bool?
-    var syncWithWorkflow: Bool?
 
     // Session Integration (Optional - only if type === "session")
     var sessionId: String?
-    var sessionName: String?
-    var sessionDate: Date?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -178,23 +172,17 @@ struct TaskItem: Identifiable, Codable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case dueDate = "due_date"
-        case startDate = "start_date"
         case completedAt = "completed_at"
         case completedBy = "completed_by"
         case estimatedHours = "estimated_hours"
-        case order = "task_order"
+        case sortOrder = "sort_order"
         case subtasks
         case commentCount = "comment_count"
-        case timeEntryIds = "time_entry_ids"
         case workflowId = "workflow_id"
         case workflowStepId = "workflow_step_id"
         case workflowName = "workflow_name"
         case workflowStepName = "workflow_step_name"
-        case autoCreated = "auto_created"
-        case syncWithWorkflow = "sync_with_workflow"
         case sessionId = "session_id"
-        case sessionName = "session_name"
-        case sessionDate = "session_date"
     }
 
     // MARK: - Custom Decoder (Handle Missing Fields)
@@ -220,17 +208,15 @@ struct TaskItem: Identifiable, Codable {
         assignedTo = try container.decodeIfPresent([String].self, forKey: .assignedTo) ?? []
         watchers = try container.decodeIfPresent([String].self, forKey: .watchers) ?? []
         subtasks = try container.decodeIfPresent([Subtask].self, forKey: .subtasks) ?? []
-        timeEntryIds = try container.decodeIfPresent([String].self, forKey: .timeEntryIds) ?? []
 
         // Optional dates
         dueDate = try container.decodeIfPresent(Date.self, forKey: .dueDate)
-        startDate = try container.decodeIfPresent(Date.self, forKey: .startDate)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
         completedBy = try container.decodeIfPresent(String.self, forKey: .completedBy)
 
         // Numbers with defaults
         estimatedHours = try container.decodeIfPresent(Double.self, forKey: .estimatedHours) ?? 0
-        order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
+        sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
         commentCount = try container.decodeIfPresent(Int.self, forKey: .commentCount) ?? 0
 
         // Workflow fields
@@ -238,13 +224,9 @@ struct TaskItem: Identifiable, Codable {
         workflowStepId = try container.decodeIfPresent(String.self, forKey: .workflowStepId)
         workflowName = try container.decodeIfPresent(String.self, forKey: .workflowName)
         workflowStepName = try container.decodeIfPresent(String.self, forKey: .workflowStepName)
-        autoCreated = try container.decodeIfPresent(Bool.self, forKey: .autoCreated)
-        syncWithWorkflow = try container.decodeIfPresent(Bool.self, forKey: .syncWithWorkflow)
 
         // Session fields
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
-        sessionName = try container.decodeIfPresent(String.self, forKey: .sessionName)
-        sessionDate = try container.decodeIfPresent(Date.self, forKey: .sessionDate)
     }
 
     // MARK: - Initializer
@@ -263,23 +245,17 @@ struct TaskItem: Identifiable, Codable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         dueDate: Date? = nil,
-        startDate: Date? = nil,
         completedAt: Date? = nil,
         completedBy: String? = nil,
         estimatedHours: Double = 0,
-        order: Int = 0,
+        sortOrder: Int = 0,
         subtasks: [Subtask] = [],
         commentCount: Int = 0,
-        timeEntryIds: [String] = [],
         workflowId: String? = nil,
         workflowStepId: String? = nil,
         workflowName: String? = nil,
         workflowStepName: String? = nil,
-        autoCreated: Bool? = nil,
-        syncWithWorkflow: Bool? = nil,
-        sessionId: String? = nil,
-        sessionName: String? = nil,
-        sessionDate: Date? = nil
+        sessionId: String? = nil
     ) {
         self.id = id
         self.organizationID = organizationID
@@ -294,23 +270,17 @@ struct TaskItem: Identifiable, Codable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.dueDate = dueDate
-        self.startDate = startDate
         self.completedAt = completedAt
         self.completedBy = completedBy
         self.estimatedHours = estimatedHours
-        self.order = order
+        self.sortOrder = sortOrder
         self.subtasks = subtasks
         self.commentCount = commentCount
-        self.timeEntryIds = timeEntryIds
         self.workflowId = workflowId
         self.workflowStepId = workflowStepId
         self.workflowName = workflowName
         self.workflowStepName = workflowStepName
-        self.autoCreated = autoCreated
-        self.syncWithWorkflow = syncWithWorkflow
         self.sessionId = sessionId
-        self.sessionName = sessionName
-        self.sessionDate = sessionDate
     }
 
     // MARK: - Note
@@ -339,12 +309,12 @@ struct TaskItem: Identifiable, Codable {
 
     /// Check if task is assigned to a specific user
     func isAssignedTo(userId: String) -> Bool {
-        return assignedTo.contains(userId)
+        return assignedTo.contains { $0.lowercased() == userId.lowercased() }
     }
 
     /// Check if user is watching this task
     func isWatchedBy(userId: String) -> Bool {
-        return watchers.contains(userId)
+        return watchers.contains { $0.lowercased() == userId.lowercased() }
     }
 
     /// Get display text for assignment (e.g., "3 assignees")
@@ -376,7 +346,7 @@ extension TaskItem {
     /// Duplicate an existing task
     func duplicate() -> TaskItem {
         var duplicated = self
-        duplicated.id = UUID().uuidString
+        duplicated.id = UUID().uuidString.lowercased()
         duplicated.title = "\(title) (Copy)"
         duplicated.createdAt = Date()
         duplicated.updatedAt = Date()
@@ -384,12 +354,11 @@ extension TaskItem {
         duplicated.completedAt = nil
         duplicated.completedBy = nil
         duplicated.commentCount = 0
-        duplicated.timeEntryIds = []
 
         // Reset subtasks completion status
         duplicated.subtasks = subtasks.map { subtask in
             var newSubtask = subtask
-            newSubtask.id = UUID().uuidString
+            newSubtask.id = UUID().uuidString.lowercased()
             newSubtask.completed = false
             newSubtask.completedAt = nil
             newSubtask.completedBy = nil

@@ -21,7 +21,7 @@ class TasksViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     private var currentUserId: String {
-        return UserManager.shared.getCurrentUserIDUnified() ?? ""
+        return (UserManager.shared.getCurrentUserIDUnified() ?? "").lowercased()
     }
 
     private var currentOrganizationId: String {
@@ -228,10 +228,10 @@ class TasksViewModel: ObservableObject {
             // Exclude done tasks from "All" view
             filtered = filtered.filter { $0.status != .completed }
         case .myTasks:
-            // Show only user's tasks, excluding done
-            filtered = filtered.filter {
-                ($0.isAssignedTo(userId: currentUserId) || $0.createdBy == currentUserId) &&
-                $0.status != .completed
+            // Show only tasks ASSIGNED to user (not tasks they created for others)
+            filtered = filtered.filter { task in
+                task.assignedTo.contains { $0.lowercased() == currentUserId } &&
+                task.status != .completed
             }
         case .today:
             // Show only tasks due today, excluding done
@@ -289,9 +289,9 @@ class TasksViewModel: ObservableObject {
         case .all:
             return nil  // Don't show count for "all"
         case .myTasks:
-            return tasks.filter {
-                ($0.isAssignedTo(userId: currentUserId) || $0.createdBy == currentUserId) &&
-                $0.status != .completed
+            return tasks.filter { task in
+                task.assignedTo.contains { $0.lowercased() == currentUserId } &&
+                task.status != .completed
             }.count
         case .today:
             return tasks.filter { task in

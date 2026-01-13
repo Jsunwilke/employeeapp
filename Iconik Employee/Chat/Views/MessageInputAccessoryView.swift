@@ -164,8 +164,13 @@ struct GifPickerView: View {
     @State private var gifs: [GifItem] = []
     @State private var isLoading = false
     
-    // Giphy API Configuration
-    private let giphyAPIKey = "pHkSkJcH9UL5jvSjTFpPh8dRXxzX5iSO"
+    // Giphy API Configuration - read from Info.plist (injected from Config.xcconfig)
+    private var giphyAPIKey: String {
+        if let key = Bundle.main.infoDictionary?["GIPHY_API_KEY"] as? String, !key.isEmpty, !key.hasPrefix("$") {
+            return key
+        }
+        fatalError("GIPHY_API_KEY not configured in Info.plist")
+    }
     private let giphyBaseURL = "https://api.giphy.com/v1/gifs"
     
     struct GifItem: Identifiable {

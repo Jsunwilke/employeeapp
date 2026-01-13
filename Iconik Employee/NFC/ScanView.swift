@@ -158,7 +158,6 @@ struct ScanView: View {
         }
         // Load cached school data and check for job boxes onAppear
         .onAppear {
-            print("DEBUG: ScanView appeared")
             if let data = UserDefaults.standard.data(forKey: "dropdownRecords"),
                let cachedDropdowns = try? JSONDecoder().decode([DropdownRecord].self, from: data) {
                 if !cachedDropdowns.isEmpty, school.isEmpty {
@@ -306,10 +305,10 @@ struct ScanView: View {
 
         print("DEBUG: Setting up real-time job box listener for org \(orgID)")
 
-        // Use Supabase realtime for job box updates
+        // Use Supabase realtime for job box updates (realtimeV2)
         let supabase = SupabaseManager.shared.client
         let channelKey = "job_boxes_scan_\(orgID)"
-        let channel = supabase.channel(channelKey)
+        let channel = supabase.realtimeV2.channel(channelKey)
 
         let changeStream = channel.postgresChange(
             AnyAction.self,

@@ -69,23 +69,39 @@ struct TaskComment: Identifiable, Codable {
     var id: String
     var taskId: String
     var userId: String
-    var userName: String
     var text: String
     var mentions: [CommentMention]
     var attachments: [CommentAttachment]
     var createdAt: Date
     var updatedAt: Date
 
+    // Not stored in database - populated from user lookup
+    var userName: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case taskId = "task_id"
         case userId = "user_id"
-        case userName = "user_name"
         case text
         case mentions
         case attachments
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+
+    // MARK: - Custom Decoder (userName not in database)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        taskId = try container.decode(String.self, forKey: .taskId)
+        userId = try container.decode(String.self, forKey: .userId)
+        text = try container.decode(String.self, forKey: .text)
+        mentions = try container.decodeIfPresent([CommentMention].self, forKey: .mentions) ?? []
+        attachments = try container.decodeIfPresent([CommentAttachment].self, forKey: .attachments) ?? []
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        userName = nil // Must be populated separately via user lookup
     }
 
     // MARK: - Initializer
@@ -94,7 +110,7 @@ struct TaskComment: Identifiable, Codable {
         id: String = UUID().uuidString,
         taskId: String,
         userId: String,
-        userName: String,
+        userName: String? = nil,
         text: String,
         mentions: [CommentMention] = [],
         attachments: [CommentAttachment] = [],
@@ -110,6 +126,11 @@ struct TaskComment: Identifiable, Codable {
         self.attachments = attachments
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    /// Display name - returns userName if available, otherwise a fallback
+    var displayName: String {
+        return userName ?? "Unknown User"
     }
 
     // MARK: - Note

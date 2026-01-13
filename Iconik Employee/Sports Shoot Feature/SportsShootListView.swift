@@ -120,11 +120,9 @@ struct SportsShootListView: View {
     @ObservedObject private var tabBarManager = TabBarManager.shared
     
     // Device session ID - unique to this app instance
-    private static let deviceSessionID = UUID().uuidString
-    
-    // Current user identifier combines name and device
+    // Use LockManager's editor identifier for consistency
     private var currentEditorIdentifier: String {
-        return "\(storedUserFirstName) \(storedUserLastName) (\(Self.deviceSessionID.prefix(8)))"
+        return LockManager.shared.currentEditorIdentifier
     }
     
     // Use the view model for state management
@@ -138,6 +136,9 @@ struct SportsShootListView: View {
     
     // Track if view is visible to optimize timers
     @State private var isViewVisible = false
+
+    // Unique subscription ID for this view instance (prevents overwriting other subscribers)
+    private let subscriptionId = UUID()
 
     // Track expanded schools in archived view
     @State private var expandedSchools: Set<String> = []
@@ -249,12 +250,25 @@ struct SportsShootListView: View {
         .customKeyboardOverlay() // Add custom keyboard support
         .onAppear {
             isViewVisible = true
+
+            // Initialize LockManager with current user
+            if let userId = SupabaseManager.shared.client.auth.currentUser?.id {
+                LockManager.shared.setCurrentUser(
+                    userId: userId,
+                    userName: "\(storedUserFirstName) \(storedUserLastName)"
+                )
+            }
+
             loadSportsShoots()
             setupNetworkMonitoring()
             setupConflictHandling()
         }
         .onDisappear {
             isViewVisible = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+            // Re-load data when app returns to foreground
+            loadSportsShoots()
         }
         .onReceive(syncStatusTimer) { _ in
             if isViewVisible {
@@ -983,6 +997,11 @@ struct SportsShootListView: View {
                     // Remove realtime listener
                     shootListener?.remove()
                     shootListener = nil
+
+                    // Unsubscribe from roster entry realtime changes
+                    Task {
+                        await RosterEntryService.shared.unsubscribe(subscriptionId: subscriptionId)
+                    }
 
                     // Release any locks when leaving the view
                     if let entryID = viewModel.currentlyEditingEntry {
@@ -2205,8 +2224,8 @@ struct SportsShootListView: View {
                                 }
                             }
                             
-                            // MARK: - Data Loading and Actions
-                            
+                            // MARK: - Data Loading and Actions (Offline-First)
+
                             private func loadSportsShoots() {
                                 print("[DEBUG] loadSportsShoots called, storedUserOrganizationID: '\(storedUserOrganizationID)'")
                                 guard !storedUserOrganizationID.isEmpty else {
@@ -2216,17 +2235,24 @@ struct SportsShootListView: View {
                                     return
                                 }
 
-                                viewModel.isLoading = true
+                                // First, try to load from cache for instant display (offline-first)
+                                if let cachedShoots = LocalSportsRepository.shared.loadSportsShoots(forOrg: storedUserOrganizationID) {
+                                    self.viewModel.sportsShoots = cachedShoots
+                                    self.viewModel.isLoading = false
+                                    print("[DEBUG] loadSportsShoots: Loaded \(cachedShoots.count) shoots from cache, refreshing from network...")
+                                    // Check for selected session with cached data
+                                    self.checkForSelectedSession()
+                                } else {
+                                    viewModel.isLoading = true
+                                }
 
+                                // Then refresh from network (service handles caching)
                                 Task {
                                     do {
                                         let shoots = try await SportsShootService.shared.fetchAllSportsShoots(forOrganization: storedUserOrganizationID)
                                         await MainActor.run {
                                             self.viewModel.isLoading = false
-                                            print("[DEBUG] loadSportsShoots SUCCESS: received \(shoots.count) shoots")
-                                            for shoot in shoots {
-                                                print("[DEBUG] Shoot: '\(shoot.schoolName)' - isArchived=\(shoot.isArchived)")
-                                            }
+                                            print("[DEBUG] loadSportsShoots SUCCESS: received \(shoots.count) shoots from network")
                                             self.viewModel.sportsShoots = shoots
                                             print("[DEBUG] viewModel.sportsShoots count = \(self.viewModel.sportsShoots.count)")
                                             print("[DEBUG] viewModel.showArchived = \(self.viewModel.showArchived)")
@@ -2237,10 +2263,15 @@ struct SportsShootListView: View {
                                         }
                                     } catch {
                                         await MainActor.run {
-                                            self.viewModel.isLoading = false
-                                            print("[DEBUG] loadSportsShoots FAILURE: \(error)")
-                                            self.viewModel.errorMessage = "Failed to load sports shoots: \(error.localizedDescription)"
-                                            self.viewModel.showingErrorAlert = true
+                                            // If we already have cached data displayed, don't show error alert
+                                            if !self.viewModel.sportsShoots.isEmpty {
+                                                print("[DEBUG] loadSportsShoots: Network refresh failed, continuing with cached data")
+                                            } else {
+                                                self.viewModel.isLoading = false
+                                                print("[DEBUG] loadSportsShoots FAILURE: \(error)")
+                                                self.viewModel.errorMessage = "Failed to load sports shoots: \(error.localizedDescription)"
+                                                self.viewModel.showingErrorAlert = true
+                                            }
                                         }
                                     }
                                 }
@@ -2533,10 +2564,10 @@ struct SportsShootListView: View {
                                 shootListener = nil
 
 
-                                // Set up Supabase realtime subscription
+                                // Set up Supabase realtime subscription using realtimeV2
                                 Task {
                                     let channelKey = "shoot_\(shootID)"
-                                    let channel = supabase.channel(channelKey)
+                                    let channel = supabase.realtimeV2.channel(channelKey)
 
                                     // Listen for changes to this specific sports job
                                     let changeStream = channel.postgresChange(
@@ -2634,9 +2665,9 @@ struct SportsShootListView: View {
                             private func setupLockListener() {
                                 guard let shootID = viewModel.selectedShoot?.id else { return }
 
-                                // Set up realtime subscription to track roster entry locks
+                                // Set up realtime subscription to track roster entry locks with unique subscription ID
                                 Task {
-                                    await RosterEntryService.shared.subscribeToChanges(jobId: shootID) { entries in
+                                    await RosterEntryService.shared.subscribeToChanges(subscriptionId: subscriptionId, jobId: shootID) { entries in
                                         // Extract locked entries from the realtime update
                                         var locks: [UUID: String] = [:]
                                         for entry in entries {

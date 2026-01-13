@@ -328,16 +328,37 @@ class UserProfileService: ObservableObject {
     func updateUserFields(_ fields: [String: Any], completion: @escaping (Result<Void, Error>) -> Void) {
         Task {
             do {
-                // Convert [String: Any] to [String: AnyJSON]
-                let jsonFields = try fields.mapValues { value -> AnyJSON in
-                    let data = try JSONSerialization.data(withJSONObject: value)
-                    return try JSONDecoder().decode(AnyJSON.self, from: data)
+                // Convert [String: Any] to [String: AnyJSON] using direct type conversion
+                let jsonFields = fields.compactMapValues { value -> AnyJSON? in
+                    return convertToAnyJSON(value)
                 }
                 try await updateUserFields(jsonFields)
                 completion(.success(()))
             } catch {
                 completion(.failure(error))
             }
+        }
+    }
+
+    // Helper to convert Any to AnyJSON without JSONSerialization
+    private func convertToAnyJSON(_ value: Any) -> AnyJSON? {
+        switch value {
+        case let string as String:
+            return .string(string)
+        case let int as Int:
+            return .integer(int)
+        case let double as Double:
+            return .double(double)
+        case let bool as Bool:
+            return .bool(bool)
+        case let array as [Any]:
+            return .array(array.compactMap { convertToAnyJSON($0) })
+        case let dict as [String: Any]:
+            return .object(dict.compactMapValues { convertToAnyJSON($0) })
+        case is NSNull:
+            return .null
+        default:
+            return nil
         }
     }
     
@@ -380,31 +401,36 @@ class UserProfileService: ObservableObject {
     
     // Listen for real-time updates to user profile using Supabase channels
     func listenToUserProfile(uid: String, onChange: @escaping (UserProfile?) -> Void) -> RealtimeChannelV2 {
-        let channel = supabase.channel("user-profile-\(uid)")
+        let channelKey = "user-profile-\(uid)"
+        let channel = supabase.realtimeV2.channel(channelKey)
 
         // Set up the postgres change listener
-        _ = channel.onPostgresChange(
+        let changes = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: "users",
             filter: "id=eq.\(uid)"
-        ) { [weak self] _ in
-            // Refetch the profile when changes are detected
-            Task { @MainActor in
+        )
+
+        // Subscribe to the channel and start listening
+        Task { [weak self] in
+            await channel.subscribe()
+
+            // Listen for changes using async sequence
+            for await _ in changes {
                 do {
                     guard let self = self else { return }
                     let profile = try await self.fetchUserProfile(uid: uid)
-                    onChange(profile)
+                    await MainActor.run {
+                        onChange(profile)
+                    }
                 } catch {
                     print("❌ Error fetching updated user profile: \(error.localizedDescription)")
-                    onChange(nil)
+                    await MainActor.run {
+                        onChange(nil)
+                    }
                 }
             }
-        }
-
-        // Subscribe to the channel
-        Task {
-            await channel.subscribe()
         }
 
         return channel
@@ -412,6 +438,6 @@ class UserProfileService: ObservableObject {
 
     // Helper to unsubscribe from a channel
     func unsubscribe(from channel: RealtimeChannelV2) async {
-        await supabase.removeChannel(channel)
+        await channel.unsubscribe()
     }
 }

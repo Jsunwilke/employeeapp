@@ -131,6 +131,9 @@ struct ChatMessage: Codable, Identifiable {
     let text: String
     let type: MessageType
     let file_url: String?
+    let file_data: [String: AnyCodable]?  // Additional file metadata (jsonb)
+    let status: String?  // Message delivery status
+    let read_by: [String: AnyCodable]?  // Read receipts (jsonb)
     let timestamp: Date
     let created_at: Date
 
@@ -150,6 +153,8 @@ struct ChatMessage: Codable, Identifiable {
     var senderId: String? { sender_id }
     var senderName: String? { sender_name }
     var fileUrl: String? { file_url }
+    var fileData: [String: AnyCodable]? { file_data }
+    var readBy: [String: AnyCodable]? { read_by }
     var createdAt: Date { created_at }
     var systemAction: String? { system_action }
     var addedBy: String? { added_by }

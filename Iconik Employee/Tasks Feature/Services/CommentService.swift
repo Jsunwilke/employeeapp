@@ -28,15 +28,16 @@ class CommentService: ObservableObject {
     // MARK: - Create Comment
 
     /// Add a new comment to a task
+    /// Note: userName is optional and only used for local display - not stored in database
     func addComment(
         to taskId: String,
         text: String,
         userId: String,
-        userName: String,
+        userName: String? = nil,
         mentions: [CommentMention] = [],
         attachments: [CommentAttachment] = []
     ) async throws -> TaskComment {
-        var comment = TaskComment(
+        let comment = TaskComment(
             id: UUID().uuidString,
             taskId: taskId,
             userId: userId,
@@ -118,24 +119,16 @@ class CommentService: ObservableObject {
         stopListening(taskId: taskId)
 
         let channelKey = "comments-\(taskId)"
-        let channel = supabase.channel(channelKey)
+        let channel = supabase.realtimeV2.channel(channelKey)
 
-        _ = channel.onPostgresChange(
+        let changes = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: commentsTable,
             filter: "task_id=eq.\(taskId)"
-        ) { [weak self] _ in
-            Task { @MainActor in
-                do {
-                    let fetchedComments = try await self?.fetchComments(for: taskId) ?? []
-                    self?.comments = fetchedComments
-                } catch {
-                    print("❌ Comment listener error: \(error.localizedDescription)")
-                    self?.error = error
-                }
-            }
-        }
+        )
+
+        channels[taskId] = channel
 
         Task {
             await channel.subscribe()
@@ -143,13 +136,30 @@ class CommentService: ObservableObject {
             // Initial fetch
             do {
                 let fetchedComments = try await fetchComments(for: taskId)
-                comments = fetchedComments
+                await MainActor.run {
+                    self.comments = fetchedComments
+                }
             } catch {
                 print("❌ Error on initial comments fetch: \(error)")
             }
-        }
 
-        channels[taskId] = channel
+            // Listen for changes
+            Task {
+                for await _ in changes {
+                    do {
+                        let fetchedComments = try await self.fetchComments(for: taskId)
+                        await MainActor.run {
+                            self.comments = fetchedComments
+                        }
+                    } catch {
+                        print("❌ Comment listener error: \(error.localizedDescription)")
+                        await MainActor.run {
+                            self.error = error
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Stop listening to comments for a specific task

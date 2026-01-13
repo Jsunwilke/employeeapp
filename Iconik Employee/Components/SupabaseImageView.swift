@@ -96,6 +96,8 @@ struct SupabaseImageView: View {
             return
         }
 
+        print("SupabaseImageView: Input URL: \(storageURL)")
+
         // Extract the path from the full URL
         guard let path = extractStoragePath(from: storageURL) else {
             print("SupabaseImageView: Could not extract path from URL: \(storageURL)")
@@ -104,18 +106,21 @@ struct SupabaseImageView: View {
             return
         }
 
+        print("SupabaseImageView: Extracted path: \(path) from bucket: \(bucket)")
+
         do {
             let supabase = SupabaseManager.shared.client
             let url = try await supabase.storage
                 .from(bucket)
                 .createSignedURL(path: path, expiresIn: 3600) // 1 hour
 
+            print("SupabaseImageView: ✅ Generated signed URL successfully")
             await MainActor.run {
                 self.signedURL = url
                 self.isLoading = false
             }
         } catch {
-            print("SupabaseImageView: Error generating signed URL: \(error.localizedDescription)")
+            print("SupabaseImageView: ❌ Error generating signed URL for path '\(path)': \(error.localizedDescription)")
             await MainActor.run {
                 self.isLoading = false
                 self.hasError = true
@@ -123,14 +128,16 @@ struct SupabaseImageView: View {
         }
     }
 
-    /// Extracts the storage path from a full Supabase storage URL
-    /// Input: https://xxx.supabase.co/storage/v1/object/public/user-photos/userId/avatar.jpg
-    /// Output: userId/avatar.jpg
+    /// Extracts the storage path from a full Supabase storage URL or path
+    /// Handles multiple formats:
+    /// - Full URL: https://xxx.supabase.co/storage/v1/object/public/user-photos/userId/avatar.jpg -> userId/avatar.jpg
+    /// - Path with bucket: user-photos/userId/avatar.jpg -> userId/avatar.jpg
+    /// - Path without bucket: userId/avatar.jpg -> userId/avatar.jpg
     private func extractStoragePath(from url: String) -> String? {
         // Pattern: .../storage/v1/object/public/{bucket}/{path}
         // We need to extract the path after the bucket name
 
-        // First try to find the bucket in the URL
+        // First try to find the bucket in a full URL
         if let bucketRange = url.range(of: "/\(bucket)/") {
             let pathStart = bucketRange.upperBound
             let path = String(url[pathStart...])
@@ -148,7 +155,13 @@ struct SupabaseImageView: View {
             return String(url[pathStart...])
         }
 
-        // If it's just a path without the full URL, return as-is
+        // If it's a path that starts with the bucket name (e.g., "user-photos/userId/file.jpg")
+        if url.hasPrefix("\(bucket)/") {
+            let pathStart = url.index(url.startIndex, offsetBy: bucket.count + 1)
+            return String(url[pathStart...])
+        }
+
+        // If it's just a path without the full URL or bucket prefix, return as-is
         if !url.hasPrefix("http") {
             return url
         }

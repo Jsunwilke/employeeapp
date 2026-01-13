@@ -42,12 +42,14 @@ class SupabaseManager {
 
         // Initialize Supabase client with session persistence enabled
         // Note: Session persistence is enabled by default in Supabase Swift SDK 2.x
+        // emitLocalSessionAsInitialSession ensures locally stored session is always emitted
         self.client = SupabaseClient(
             supabaseURL: url,
             supabaseKey: key,
             options: SupabaseClientOptions(
                 auth: .init(
-                    autoRefreshToken: true
+                    autoRefreshToken: true,
+                    emitLocalSessionAsInitialSession: true
                 )
             )
         )

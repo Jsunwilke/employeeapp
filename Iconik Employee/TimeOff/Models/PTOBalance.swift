@@ -8,6 +8,8 @@ struct PTOBalance: Identifiable, Codable {
     let user_id: String
     let organization_id: String
     var balance: Double              // Current available PTO hours (DB column name)
+    var accrued: Double              // Total hours accrued this year
+    var used: Double                 // Total hours used this year
     var pending_balance: Double      // Hours reserved for pending requests
     var banking_balance: Double      // Excess hours over max accrual
     var processed_periods: [String]  // Array of processed pay periods (e.g., ["2024-01", "2024-02"])
@@ -48,6 +50,8 @@ struct PTOBalance: Identifiable, Codable {
         userId: String,
         organizationID: String,
         balance: Double = 0.0,
+        accrued: Double = 0.0,
+        used: Double = 0.0,
         pendingBalance: Double = 0.0,
         bankingBalance: Double = 0.0,
         processedPeriods: [String] = [],
@@ -57,6 +61,8 @@ struct PTOBalance: Identifiable, Codable {
         self.user_id = userId
         self.organization_id = organizationID
         self.balance = balance
+        self.accrued = accrued
+        self.used = used
         self.pending_balance = pendingBalance
         self.banking_balance = bankingBalance
         self.processed_periods = processedPeriods
@@ -75,6 +81,8 @@ struct PTOBalance: Identifiable, Codable {
         case user_id
         case organization_id
         case balance
+        case accrued
+        case used
         case pending_balance
         case banking_balance
         case processed_periods
@@ -92,9 +100,9 @@ extension PTOBalance {
         return max(0, balance - pending_balance)
     }
 
-    // Total accrued (including banking) - Note: usedThisYear not stored in DB
+    // Total accrued (including banking)
     var totalAccrued: Double {
-        return balance + banking_balance + usedThisYear
+        return balance + banking_balance + used
     }
 
     // Check if balance needs year-end reset
@@ -122,7 +130,8 @@ extension PTOBalance {
     mutating func useHours(_ hours: Double) {
         pending_balance = max(0, pending_balance - hours)
         balance = max(0, balance - hours)
-        usedThisYear += hours
+        used += hours
+        usedThisYear += hours  // Keep for backward compatibility
         updated_at = Date()
     }
 
@@ -156,7 +165,8 @@ extension PTOBalance {
     // Year-end reset
     mutating func performYearEndReset(rolloverLimit: Double?) {
         // Reset used hours for new year
-        usedThisYear = 0
+        used = 0
+        usedThisYear = 0  // Keep for backward compatibility
 
         // Apply rollover limit if specified
         if let limit = rolloverLimit {

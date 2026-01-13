@@ -24,51 +24,34 @@ class ClaudeRosterService {
         }
     }
     
-    // Claude API key from Info.plist (compiled from Config.xcconfig)
+    // Claude API key - fetched from Supabase app_config table
+    // Returns cached key if available, empty string otherwise (triggers async fetch)
     private var apiKey: String {
-        // First check Info.plist for the API key (compiled from Config.xcconfig)
+        // Return cached key if we have one
+        if let cached = cachedAPIKey, !cached.isEmpty {
+            if debugMode {
+                print("[ClaudeRosterService] Using cached API key")
+            }
+            return cached
+        }
+
+        // Check Info.plist as secondary option (compiled from Config.xcconfig)
         if let infoPlistKey = Bundle.main.object(forInfoDictionaryKey: "CLAUDE_API_KEY") as? String,
            !infoPlistKey.isEmpty,
            !infoPlistKey.contains("YOUR-API-KEY-HERE"),
-           !infoPlistKey.contains("$(") {  // Check that variable substitution worked
+           !infoPlistKey.contains("YOUR_API_KEY_HERE"),
+           !infoPlistKey.contains("$("),  // Check that variable substitution worked
+           infoPlistKey.hasPrefix("sk-") {  // Verify it looks like a real API key
             if debugMode {
+                print("[ClaudeRosterService] Using Info.plist API key")
             }
             return infoPlistKey.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        
-        // Fallback to UserDefaults for existing installations
-        if let key = UserDefaults.standard.string(forKey: "CLAUDE_API_KEY"),
-           !key.isEmpty,
-           !key.contains("YOUR-API-KEY-HERE"),
-           !key.contains("$(") {  // Check that variable substitution worked
-            if debugMode {
-            }
-            return key.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        
-        // Try to load from environment (development only)
-        if let envKey = ProcessInfo.processInfo.environment["CLAUDE_API_KEY"],
-           !envKey.isEmpty,
-           !envKey.contains("$(") {  // Check that variable substitution worked
-            if debugMode {
-            }
-            return envKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        
-        // Then try the organization-level settings - this is a placeholder
-        // The actual key will be fetched asynchronously by fetchAPIKeyFromSupabase
+
+        // No key available - will trigger async fetch
         if debugMode {
+            print("[ClaudeRosterService] No cached API key, will fetch from Supabase")
         }
-        
-        if let cachedKey = self.cachedAPIKey,
-           !cachedKey.isEmpty,
-           !cachedKey.contains("$(") {  // Check that variable substitution worked
-            if debugMode {
-            }
-            return cachedKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        
-        // Return an empty string if no key is available yet
         return ""
     }
     
@@ -131,7 +114,58 @@ class ClaudeRosterService {
             }
         }
     }
-    
+
+    // Fetch API key from Supabase app_config table (shared across all organizations)
+    func fetchAPIKeyFromAppConfig(completion: @escaping (String?) -> Void) {
+        if debugMode {
+            print("[ClaudeRosterService] Fetching API key from app_config table...")
+        }
+
+        Task {
+            do {
+                let supabase = SupabaseManager.shared.client
+
+                struct AppConfig: Decodable {
+                    let claude_api_key: String?
+                }
+
+                let configs: [AppConfig] = try await supabase
+                    .from("app_config")
+                    .select("claude_api_key")
+                    .limit(1)
+                    .execute()
+                    .value
+
+                if let apiKey = configs.first?.claude_api_key, !apiKey.isEmpty {
+                    if self.debugMode {
+                        print("[ClaudeRosterService] Successfully retrieved API key from app_config")
+                    }
+
+                    // Cache it in memory
+                    self.cachedAPIKey = apiKey
+
+                    await MainActor.run {
+                        completion(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                } else {
+                    if self.debugMode {
+                        print("[ClaudeRosterService] No API key found in app_config table")
+                    }
+                    await MainActor.run {
+                        completion(nil)
+                    }
+                }
+            } catch {
+                if self.debugMode {
+                    print("[ClaudeRosterService] Error fetching from app_config: \(error.localizedDescription)")
+                }
+                await MainActor.run {
+                    completion(nil)
+                }
+            }
+        }
+    }
+
     // Claude model to use
     private let modelName = "claude-sonnet-4-5-20250929"  // Latest Claude Sonnet 4.5 model
     
@@ -230,15 +264,14 @@ class ClaudeRosterService {
     func extractRosterFromImage(_ image: UIImage, sportsJobId: UUID = UUID(), startingSubjectID: Int = 101, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Get and verify API key first
         if apiKey.isEmpty {
-            // Try to fetch the API key from Supabase
-            fetchAPIKeyFromSupabase { [weak self] fetchedKey in
+            // Try to fetch the API key from app_config table first (shared key)
+            fetchAPIKeyFromAppConfig { [weak self] fetchedKey in
                 guard let self = self else { return }
-                
+
                 if let key = fetchedKey, !key.isEmpty {
                     // Verify the key before using it
                     self.verifyAPIKey(apiKey: key) { isValid, errorMessage in
                         if isValid {
-                            // Now try the extraction again with the valid key
                             self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
                         } else {
                             let error = NSError(domain: "ClaudeRosterService", code: 101,
@@ -247,9 +280,24 @@ class ClaudeRosterService {
                         }
                     }
                 } else {
-                    let error = NSError(domain: "ClaudeRosterService", code: 101,
-                                        userInfo: [NSLocalizedDescriptionKey: "Could not find a valid Claude API key. Please contact your administrator."])
-                    completion(.failure(error))
+                    // Fallback: try organization-specific key
+                    self.fetchAPIKeyFromSupabase { fetchedOrgKey in
+                        if let key = fetchedOrgKey, !key.isEmpty {
+                            self.verifyAPIKey(apiKey: key) { isValid, errorMessage in
+                                if isValid {
+                                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
+                                } else {
+                                    let error = NSError(domain: "ClaudeRosterService", code: 101,
+                                                        userInfo: [NSLocalizedDescriptionKey: "API key validation failed: \(errorMessage ?? "Unknown error")"])
+                                    completion(.failure(error))
+                                }
+                            }
+                        } else {
+                            let error = NSError(domain: "ClaudeRosterService", code: 101,
+                                                userInfo: [NSLocalizedDescriptionKey: "Could not find a valid Claude API key. Please contact your administrator."])
+                            completion(.failure(error))
+                        }
+                    }
                 }
             }
         } else {

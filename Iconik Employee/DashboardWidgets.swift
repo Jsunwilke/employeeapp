@@ -1485,8 +1485,9 @@ struct PhotoshootNotesWidget: View {
     @State private var todaySessions: [Session] = []
     @State private var isLoading = false
     @State private var showingFullView = false
-    
+
     private let sessionService = SessionService.shared
+    private let subscriptionId = UUID()
     
     private var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
@@ -1712,6 +1713,13 @@ struct PhotoshootNotesWidget: View {
             loadSchoolOptions()
             loadScheduleForToday()
         }
+        .onDisappear {
+            sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+            // Re-subscribe when app returns to foreground
+            loadScheduleForToday()
+        }
         .sheet(isPresented: $showingFullView) {
             NavigationView {
                 PhotoshootNotesView()
@@ -1826,6 +1834,7 @@ struct PhotoshootNotesWidget: View {
 
         // Use startListeningToSessions with immediate removal for one-time fetch
         sessionService.startListeningToSessions(
+            subscriptionId: subscriptionId,
             organizationID: organizationID,
             includeUnpublished: false  // Dashboard shows only published sessions
         ) { sessions in
@@ -1848,7 +1857,7 @@ struct PhotoshootNotesWidget: View {
 
         // Remove listener after first callback for one-time fetch
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            sessionService.stopListeningToSessions(organizationID: organizationID, includeUnpublished: false)
+            sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
         }
     }
     
@@ -1879,9 +1888,13 @@ struct TasksWidget: View {
     @State private var selectedTask: TaskItem? = nil
 
     private var urgentTasks: [TaskItem] {
-        // Get all incomplete tasks, sorted with urgent first, limit to 5
-        viewModel.tasks
-            .filter { $0.status != .completed }
+        // Get tasks ASSIGNED to current user (not tasks they created for others)
+        let currentUserId = (UserManager.shared.getCurrentUserIDUnified() ?? "").lowercased()
+        return viewModel.tasks
+            .filter { task in
+                task.status != .completed &&
+                task.assignedTo.contains { $0.lowercased() == currentUserId }
+            }
             .sorted { lhs, rhs in
                 // Sort overdue first, then by priority, then by due date
                 if lhs.isOverdue != rhs.isOverdue {

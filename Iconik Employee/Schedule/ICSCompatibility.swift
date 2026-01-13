@@ -100,8 +100,12 @@ class ICSParser {
             return
         }
 
+        // Create a unique subscription ID for this one-time fetch
+        let subscriptionId = UUID()
+
         Task { @MainActor in
             sessionService.startListeningToSessions(
+                subscriptionId: subscriptionId,
                 organizationID: organizationID,
                 includeUnpublished: false  // ICS export shows only published
             ) { sessions in
@@ -109,6 +113,9 @@ class ICSParser {
                     ICSEvent(from: session)
                 }
                 completion(icsEvents)
+
+                // Clean up the subscription after returning results
+                sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
             }
         }
     }

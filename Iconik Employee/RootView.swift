@@ -2,14 +2,18 @@ import SwiftUI
 import Supabase
 
 struct RootView: View {
+    @State private var isCheckingAuth = true
     @State private var isSignedIn = false
     @StateObject private var userManager = UserManager.shared
     @StateObject private var profileService = UserProfileService.shared
     @StateObject private var authService = SupabaseAuthService()
+    @EnvironmentObject var passwordResetVM: PasswordResetViewModel
     
     var body: some View {
         Group {
-            if isSignedIn {
+            if isCheckingAuth {
+                ProgressView()
+            } else if isSignedIn {
                 MainEmployeeView(isSignedIn: $isSignedIn)
             } else {
                 SignInView(isSignedIn: $isSignedIn)
@@ -40,6 +44,12 @@ struct RootView: View {
                     // NOW show the main view
                     await MainActor.run {
                         isSignedIn = true
+                        isCheckingAuth = false
+                    }
+                } else {
+                    // No session - show sign in view
+                    await MainActor.run {
+                        isCheckingAuth = false
                     }
                 }
             }
@@ -53,12 +63,17 @@ struct RootView: View {
 
                     await MainActor.run {
                         isSignedIn = true
+                        isCheckingAuth = false
                     }
                 }
             } else {
                 // Sign out - update immediately
                 isSignedIn = false
+                isCheckingAuth = false
             }
+        }
+        .sheet(isPresented: $passwordResetVM.showingResetPassword) {
+            ResetPasswordView(viewModel: passwordResetVM)
         }
     }
 }

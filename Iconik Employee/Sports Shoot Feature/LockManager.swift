@@ -24,9 +24,18 @@ struct ActiveLock {
 class LockManager: ObservableObject {
     static let shared = LockManager()
 
+    // Device session ID - unique per app launch, used to distinguish same user on different devices
+    static let deviceSessionID = UUID().uuidString
+
     // Current user info (should be set on login)
     @Published var currentUserId: UUID?
     @Published var currentUserName: String = ""
+
+    // Full editor identifier including device session (used for lock comparison)
+    var currentEditorIdentifier: String {
+        guard !currentUserName.isEmpty else { return "" }
+        return "\(currentUserName) (\(String(Self.deviceSessionID.prefix(8))))"
+    }
 
     // Active locks held by this user
     @Published private(set) var activeLocks: [ActiveLock] = []
@@ -64,10 +73,11 @@ class LockManager: ObservableObject {
         }
 
         do {
+            // Use full editor identifier (includes device session ID) for lock name
             let acquired = try await RosterEntryService.shared.acquireLock(
                 entryId: entryId,
                 userId: userId,
-                userName: currentUserName
+                userName: currentEditorIdentifier
             )
 
             if acquired {
@@ -91,10 +101,11 @@ class LockManager: ObservableObject {
         }
 
         do {
+            // Use full editor identifier (includes device session ID) for lock name
             let acquired = try await GroupImageService.shared.acquireLock(
                 groupId: groupId,
                 userId: userId,
-                userName: currentUserName
+                userName: currentEditorIdentifier
             )
 
             if acquired {
@@ -114,10 +125,10 @@ class LockManager: ObservableObject {
 
     /// Release a lock on a roster entry
     func releaseRosterEntryLock(entryId: UUID) async {
-        guard let userId = currentUserId else { return }
+        guard currentUserId != nil else { return }
 
         do {
-            try await RosterEntryService.shared.releaseLock(entryId: entryId, userId: userId)
+            try await RosterEntryService.shared.releaseLock(entryId: entryId, userName: currentEditorIdentifier)
             activeLocks.removeAll { $0.id == entryId && $0.type == .rosterEntry }
             stopHeartbeatIfNoLocks()
         } catch {
@@ -127,10 +138,10 @@ class LockManager: ObservableObject {
 
     /// Release a lock on a group image
     func releaseGroupImageLock(groupId: UUID) async {
-        guard let userId = currentUserId else { return }
+        guard currentUserId != nil else { return }
 
         do {
-            try await GroupImageService.shared.releaseLock(groupId: groupId, userId: userId)
+            try await GroupImageService.shared.releaseLock(groupId: groupId, userName: currentEditorIdentifier)
             activeLocks.removeAll { $0.id == groupId && $0.type == .groupImage }
             stopHeartbeatIfNoLocks()
         } catch {
@@ -140,15 +151,15 @@ class LockManager: ObservableObject {
 
     /// Release all active locks
     func releaseAllLocks() async {
-        guard let userId = currentUserId else { return }
+        guard currentUserId != nil else { return }
 
         for lock in activeLocks {
             do {
                 switch lock.type {
                 case .rosterEntry:
-                    try await RosterEntryService.shared.releaseLock(entryId: lock.id, userId: userId)
+                    try await RosterEntryService.shared.releaseLock(entryId: lock.id, userName: currentEditorIdentifier)
                 case .groupImage:
-                    try await GroupImageService.shared.releaseLock(groupId: lock.id, userId: userId)
+                    try await GroupImageService.shared.releaseLock(groupId: lock.id, userName: currentEditorIdentifier)
                 }
             } catch {
                 print("LockManager: Failed to release lock \(lock.id): \(error)")
@@ -201,15 +212,15 @@ class LockManager: ObservableObject {
 
     /// Refresh all active locks to prevent expiration
     private func refreshAllLocks() async {
-        guard let userId = currentUserId else { return }
+        guard currentUserId != nil else { return }
 
         for lock in activeLocks {
             do {
                 switch lock.type {
                 case .rosterEntry:
-                    try await RosterEntryService.shared.refreshLock(entryId: lock.id, userId: userId)
+                    try await RosterEntryService.shared.refreshLock(entryId: lock.id, userName: currentEditorIdentifier)
                 case .groupImage:
-                    try await GroupImageService.shared.refreshLock(groupId: lock.id, userId: userId)
+                    try await GroupImageService.shared.refreshLock(groupId: lock.id, userName: currentEditorIdentifier)
                 }
             } catch {
                 print("LockManager: Failed to refresh lock \(lock.id): \(error)")

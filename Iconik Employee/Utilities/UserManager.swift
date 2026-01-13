@@ -196,35 +196,43 @@ class UserManager: ObservableObject {
     
     // Start listening to real-time updates for user profile using Supabase
     private func startListeningToUserProfile(uid: String) {
-        stopListeningToUserProfile()
+        Task {
+            await startListeningToUserProfileAsync(uid: uid)
+        }
+    }
+
+    private func startListeningToUserProfileAsync(uid: String) async {
+        await stopListeningToUserProfileAsync()
 
         let supabase = SupabaseManager.shared.client
 
-        // Create a new channel for this user
-        let channel = supabase.channel("user-\(uid)")
+        // Create a new channel using realtimeV2
+        let channelKey = "user-\(uid)"
+        let channel = supabase.realtimeV2.channel(channelKey)
 
-        // Set up postgres change listener for user changes
-        _ = channel.onPostgresChange(
+        // Set up postgres change listener
+        let changes = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: "users",
             filter: "id=eq.\(uid)"
-        ) { [weak self] _ in
-            // Refetch user data when changes are detected
-            Task { @MainActor in
-                guard let self = self else { return }
+        )
+
+        // Subscribe to the channel
+        await channel.subscribe()
+
+        // Store the channel reference
+        await MainActor.run {
+            self.userChannel = channel
+        }
+        print("🔄 UserManager: Started Supabase realtime listener for user \(uid)")
+
+        // Listen for changes using async sequence
+        Task {
+            for await _ in changes {
                 await self.fetchAndUpdateUserProfile(userId: uid)
             }
         }
-
-        // Subscribe to the channel
-        Task {
-            await channel.subscribe()
-        }
-
-        // Store the channel reference
-        self.userChannel = channel
-        print("🔄 UserManager: Started Supabase realtime listener for user \(uid)")
     }
 
     // Fetch and update user profile data
@@ -260,12 +268,17 @@ class UserManager: ObservableObject {
 
     // Stop listening to user profile updates
     private func stopListeningToUserProfile() {
+        Task {
+            await stopListeningToUserProfileAsync()
+        }
+    }
+
+    private func stopListeningToUserProfileAsync() async {
         if let channel = userChannel {
-            Task {
-                let supabase = SupabaseManager.shared.client
-                await supabase.removeChannel(channel)
+            await channel.unsubscribe()
+            await MainActor.run {
+                self.userChannel = nil
             }
-            userChannel = nil
         }
     }
 

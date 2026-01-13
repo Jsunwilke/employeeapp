@@ -49,7 +49,7 @@ class DatabaseManager: ObservableObject {
                         "status": .string(status),
                         "user_id": .string(userId),
                         "organization_id": .string(organizationID),
-                        "updated_at": .string(timestamp.ISO8601Format())
+                        "timestamp": .string(timestamp.ISO8601Format())
                     ]
 
                     // Add upload location fields if status is "Uploaded"
@@ -253,15 +253,15 @@ class DatabaseManager: ObservableObject {
                     let jobBoxId = UUID().uuidString.lowercased()
 
                     // Create job box data with snake_case field names
-                    // Note: photographer name is derived from user_id via join, not stored directly
                     var jobBoxData: [String: AnyJSON] = [
                         "id": .string(jobBoxId),
                         "box_number": .string(boxNumber),
                         "school": .string(school),
                         "status": .string(status),
+                        "photographer": .string(photographer),
                         "user_id": .string(userId),
                         "organization_id": .string(organizationID),
-                        "updated_at": .string(timestamp.ISO8601Format())
+                        "timestamp": .string(timestamp.ISO8601Format())
                     ]
 
                     // Add optional fields if present
@@ -338,16 +338,16 @@ class DatabaseManager: ObservableObject {
             Task {
                 do {
                     // Decodable struct for Supabase response
-                    // Note: photographer name is not stored directly - use user_id to join with users table
                     struct JobBoxDTO: Decodable {
                         let id: String
                         let box_number: String?
                         let school: String?
                         let school_id: String?
                         let status: String?
+                        let photographer: String?
                         let user_id: String?
                         let organization_id: String?
-                        let updated_at: Date?
+                        let timestamp: Date?
                         let shift_uid: String?
                     }
 
@@ -364,14 +364,13 @@ class DatabaseManager: ObservableObject {
                     let jobBoxDTOs: [JobBoxDTO] = try await query.execute().value
 
                     // Convert DTOs to JobBox
-                    // Note: photographer name will need to be looked up via user_id join
                     let records = jobBoxDTOs.map { dto -> JobBox in
                         JobBox(
                             id: dto.id,
                             shift_uid: dto.shift_uid ?? "",
                             status: dto.status ?? "",
-                            photographer: "", // Name looked up via user_id
-                            updated_at: dto.updated_at,
+                            photographer: dto.photographer ?? "",
+                            updated_at: dto.timestamp,
                             box_number: dto.box_number,
                             organization_id: dto.organization_id ?? "",
                             school: dto.school,
@@ -412,7 +411,7 @@ class DatabaseManager: ObservableObject {
                 await existingChannel.unsubscribe()
             }
 
-            let channel = supabase.channel(channelKey)
+            let channel = supabase.realtimeV2.channel(channelKey)
 
             // Listen for changes to users for this organization
             let changeStream = channel.postgresChange(
@@ -492,7 +491,7 @@ class DatabaseManager: ObservableObject {
                 await existingChannel.unsubscribe()
             }
 
-            let channel = supabase.channel(channelKey)
+            let channel = supabase.realtimeV2.channel(channelKey)
 
             // Listen for changes to schools for this organization
             let changeStream = channel.postgresChange(

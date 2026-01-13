@@ -197,6 +197,14 @@ class SyncEngine: ObservableObject {
             baseVersion: entry.version
         )
 
+        // Update local cache for immediate UI consistency (offline-first)
+        switch operation {
+        case .insert, .update:
+            LocalSportsRepository.shared.updateRosterEntry(entry, forJob: jobId)
+        case .delete:
+            LocalSportsRepository.shared.deleteRosterEntry(id: entry.id, forJob: jobId)
+        }
+
         addToQueue(item)
     }
 
@@ -222,6 +230,14 @@ class SyncEngine: ObservableObject {
             payload: payload,
             baseVersion: group.version
         )
+
+        // Update local cache for immediate UI consistency (offline-first)
+        switch operation {
+        case .insert, .update:
+            LocalSportsRepository.shared.updateGroupImage(group, forJob: jobId)
+        case .delete:
+            LocalSportsRepository.shared.deleteGroupImage(id: group.id, forJob: jobId)
+        }
 
         addToQueue(item)
     }

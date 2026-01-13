@@ -89,6 +89,9 @@ struct ShiftDetailView: View {
 
     // Real-time listener (using SessionService)
     @State private var sessionListenerActive: Bool = false
+
+    // Unique subscription ID for this view instance (prevents overwriting other subscribers)
+    private let subscriptionId = UUID()
     
     // Loading state for initial data
     @State private var isInitializing = true
@@ -317,10 +320,14 @@ struct ShiftDetailView: View {
             // Remove the job box listener
             jobBoxListener?.remove()
             // Stop session listener via SessionService
-            sessionService.stopListeningToSessions(organizationID: session.organizationID, includeUnpublished: false)
+            sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
             sessionListenerActive = false
             // Remove notification observer
             NotificationCenter.default.removeObserver(self)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+            // Re-subscribe when app returns to foreground
+            startSessionListener()
         }
         .alert(isPresented: .constant(!errorMessage.isEmpty)) {
             Alert(title: Text("Error"),
@@ -1007,15 +1014,11 @@ struct ShiftDetailView: View {
     
     // Get the color for a step based on its state
     private func getStepColor(isActive: Bool, isCompleted: Bool) -> Color {
-        print("DEBUG-JOBBOX-COLOR - isActive: \(isActive), isCompleted: \(isCompleted)")
         if isCompleted {
-            print("DEBUG-JOBBOX-COLOR - Returning GREEN")
             return .green
         } else if isActive {
-            print("DEBUG-JOBBOX-COLOR - Returning BLUE")
             return .blue
         } else {
-            print("DEBUG-JOBBOX-COLOR - Returning GRAY")
             return Color(.systemGray4)
         }
     }
@@ -2293,6 +2296,7 @@ struct ShiftDetailView: View {
         }
 
         sessionService.startListeningToSessions(
+            subscriptionId: subscriptionId,
             organizationID: organizationID,
             includeUnpublished: true  // Admin/manager views should see all sessions
         ) { sessions in

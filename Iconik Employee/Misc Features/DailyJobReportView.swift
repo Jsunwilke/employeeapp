@@ -179,7 +179,8 @@ struct DailyJobReportView: View {
     
     // Full ICS URL from Sling
     private let sessionService = SessionService.shared
-    
+    private let subscriptionId = UUID()
+
     // MARK: - Form Sections Enum
     
     enum FormSection: String, CaseIterable, Identifiable {
@@ -265,7 +266,11 @@ struct DailyJobReportView: View {
             self.keyboardHeight = height
         }
         .onDisappear {
-            // No cleanup needed for Supabase
+            sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+            // Re-subscribe when app returns to foreground
+            loadScheduleForDate(reportDate)
         }
         .alert("Permission Error", isPresented: $showPermissionError) {
             Button("OK", role: .cancel) {}
@@ -1086,6 +1091,7 @@ struct DailyJobReportView: View {
 
         // Load sessions from Supabase with real-time updates
         sessionService.startListeningToSessions(
+            subscriptionId: subscriptionId,
             organizationID: organizationID,
             includeUnpublished: false  // Regular users see only published
         ) { sessions in

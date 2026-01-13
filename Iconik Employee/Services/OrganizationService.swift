@@ -76,38 +76,38 @@ class OrganizationService: ObservableObject {
         // Remove existing channel if any
         if let channel = organizationChannel {
             Task {
-                await supabase.removeChannel(channel)
+                await channel.unsubscribe()
             }
+            organizationChannel = nil
         }
 
-        // Create a new channel for this organization
-        let channel = supabase.channel("organization-\(organizationID)")
+        // Create a new channel for this organization using realtimeV2
+        let channel = supabase.realtimeV2.channel("organization-\(organizationID)")
 
         // Set up postgres change listener
-        _ = channel.onPostgresChange(
+        let changes = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: "organizations",
             filter: "id=eq.\(organizationID)"
-        ) { [weak self] _ in
-            // Refetch organization data when changes are detected
-            Task { @MainActor in
-                guard let self = self else { return }
-                await self.fetchAndUpdateOrganization(organizationID: organizationID)
-            }
-        }
-
-        // Subscribe to the channel
-        Task {
-            await channel.subscribe()
-        }
+        )
 
         // Store the channel reference
         self.organizationChannel = channel
 
-        // Initial fetch
         Task {
+            // Subscribe to the channel
+            await channel.subscribe()
+
+            // Initial fetch
             await fetchAndUpdateOrganization(organizationID: organizationID)
+
+            // Listen for changes
+            Task {
+                for await _ in changes {
+                    await self.fetchAndUpdateOrganization(organizationID: organizationID)
+                }
+            }
         }
     }
 
@@ -233,7 +233,7 @@ class OrganizationService: ObservableObject {
     func stopListening() {
         if let channel = organizationChannel {
             Task {
-                await supabase.removeChannel(channel)
+                await channel.unsubscribe()
             }
             organizationChannel = nil
         }

@@ -81,6 +81,7 @@ struct RosterEntry: Identifiable, Codable, Hashable {
     var lockedAt: Date?
 
     var createdAt: Date
+    var isFilledBlank: Bool?  // Indicates if this is a filled blank entry
 
     // CodingKeys to map snake_case database fields to camelCase Swift properties
     enum CodingKeys: String, CodingKey {
@@ -97,6 +98,7 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         case lockedByName = "locked_by_name"
         case lockedAt = "locked_at"
         case createdAt = "created_at"
+        case isFilledBlank = "is_filled_blank"
     }
 
     // Custom decoder to handle missing fields with defaults
@@ -120,6 +122,7 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         lockedByName = try container.decodeIfPresent(String.self, forKey: .lockedByName)
         lockedAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .lockedAt))
         createdAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .createdAt)) ?? Date()
+        isFilledBlank = try container.decodeIfPresent(Bool.self, forKey: .isFilledBlank)
     }
 
     init(id: UUID = UUID(),
@@ -139,7 +142,8 @@ struct RosterEntry: Identifiable, Codable, Hashable {
          lockedBy: UUID? = nil,
          lockedByName: String? = nil,
          lockedAt: Date? = nil,
-         createdAt: Date = Date()) {
+         createdAt: Date = Date(),
+         isFilledBlank: Bool? = nil) {
         self.id = id
         self.sportsJobId = sportsJobId
         self.lastName = lastName
@@ -158,6 +162,7 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         self.lockedByName = lockedByName
         self.lockedAt = lockedAt
         self.createdAt = createdAt
+        self.isFilledBlank = isFilledBlank
     }
 
     // Check if entry is currently locked by someone else
@@ -372,31 +377,65 @@ class SportsShootService {
 
     private init() {}
 
-    // MARK: - Fetch
+    // MARK: - Fetch (Cache-First Pattern)
 
     func fetchSportsShoot(id: UUID) async throws -> SportsShoot {
-        let shoot: SportsShoot = try await supabase
-            .from(tableName)
-            .select()
-            .eq("id", value: id)
-            .single()
-            .execute()
-            .value
-        return shoot
+        // Try to get from cache first
+        let cached = LocalSportsRepository.shared.loadSportsShoot(id: id)
+
+        do {
+            // Fetch from network
+            let shoot: SportsShoot = try await supabase
+                .from(tableName)
+                .select()
+                .eq("id", value: id)
+                .single()
+                .execute()
+                .value
+
+            // Save to cache for offline use
+            LocalSportsRepository.shared.saveSportsShoot(shoot)
+            return shoot
+        } catch {
+            // If network fails but we have cache, return cached data
+            if let cached = cached {
+                print("SportsShootService: Network failed, returning cached shoot \(id)")
+                return cached
+            }
+            // No cache and network failed - rethrow error
+            throw error
+        }
     }
 
     func fetchAllSportsShoots(forOrganization orgID: String) async throws -> [SportsShoot] {
         print("DEBUG: Fetching sports shoots for org: '\(orgID)'")
 
-        let shoots: [SportsShoot] = try await supabase
-            .from(tableName)
-            .select()
-            .eq("organization_id", value: orgID)
-            .order("shoot_date", ascending: false)
-            .execute()
-            .value
-        print("DEBUG: Successfully decoded \(shoots.count) shoots")
-        return shoots
+        // Try to get from cache first
+        let cached = LocalSportsRepository.shared.loadSportsShoots(forOrg: orgID)
+
+        do {
+            // Fetch from network
+            let shoots: [SportsShoot] = try await supabase
+                .from(tableName)
+                .select()
+                .eq("organization_id", value: orgID)
+                .order("shoot_date", ascending: false)
+                .execute()
+                .value
+            print("DEBUG: Successfully decoded \(shoots.count) shoots")
+
+            // Save to cache for offline use
+            LocalSportsRepository.shared.saveSportsShoots(shoots, forOrg: orgID)
+            return shoots
+        } catch {
+            // If network fails but we have cache, return cached data
+            if let cached = cached {
+                print("SportsShootService: Network failed, returning \(cached.count) cached shoots")
+                return cached
+            }
+            // No cache and network failed - rethrow error
+            throw error
+        }
     }
 
     // MARK: - Create

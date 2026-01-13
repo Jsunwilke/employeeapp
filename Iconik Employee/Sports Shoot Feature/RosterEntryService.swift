@@ -15,24 +15,41 @@ class RosterEntryService {
     private var supabase: SupabaseClient { SupabaseManager.shared.client }
     private let tableName = "roster_entries"
 
-    // Realtime channel for subscriptions
-    private var realtimeChannel: RealtimeChannelV2?
+    // Realtime channels for subscriptions - keyed by subscription ID for per-caller tracking
+    private var realtimeChannels: [UUID: RealtimeChannelV2] = [:]
 
     private init() {}
 
-    // MARK: - CRUD Operations
+    // MARK: - CRUD Operations (Cache-First Pattern)
 
     /// Fetch all roster entries for a sports job
     func fetchEntries(forJob jobId: UUID) async throws -> [RosterEntry] {
-        let entries: [RosterEntry] = try await supabase
-            .from(tableName)
-            .select()
-            .eq("sports_job_id", value: jobId)
-            .order("sort_order", ascending: true)
-            .order("last_name", ascending: true)
-            .execute()
-            .value
-        return entries
+        // Try to get from cache first
+        let cached = LocalSportsRepository.shared.loadRosterEntries(forJob: jobId)
+
+        do {
+            // Fetch from network
+            let entries: [RosterEntry] = try await supabase
+                .from(tableName)
+                .select()
+                .eq("sports_job_id", value: jobId)
+                .order("sort_order", ascending: true)
+                .order("last_name", ascending: true)
+                .execute()
+                .value
+
+            // Save to cache for offline use
+            LocalSportsRepository.shared.saveRosterEntries(entries, forJob: jobId)
+            return entries
+        } catch {
+            // If network fails but we have cache, return cached data
+            if let cached = cached {
+                print("RosterEntryService: Network failed, returning \(cached.count) cached entries")
+                return cached
+            }
+            // No cache and network failed - rethrow error
+            throw error
+        }
     }
 
     /// Fetch a single roster entry by ID
@@ -108,51 +125,60 @@ class RosterEntryService {
 
     // MARK: - Locking Operations
 
-    /// Attempt to acquire a lock on a roster entry
+    /// Attempt to acquire a lock on a roster entry using atomic UPDATE
     /// Returns true if lock was acquired, false if already locked by someone else
+    /// When offline, returns true to allow local editing (SyncEngine handles conflicts)
     func acquireLock(entryId: UUID, userId: UUID, userName: String) async throws -> Bool {
-        // Try to acquire lock only if:
-        // 1. Entry is not locked (locked_by is NULL), OR
-        // 2. Lock has expired (locked_at is more than 2 minutes ago)
+        // If offline, allow local editing - SyncEngine will handle conflicts when back online
+        let isOnline = await MainActor.run { SyncEngine.shared.isOnline }
+        guard isOnline else {
+            print("RosterEntryService: Offline - allowing local edit without remote lock")
+            return true
+        }
+
+        // Use atomic UPDATE with conditions to prevent race conditions
+        // Lock can be acquired if:
+        // 1. Entry is not locked (locked_by_name is NULL), OR
+        // 2. Already locked by this device (locked_by_name matches - includes device session ID), OR
+        // 3. Lock has expired (locked_at is more than 2 minutes ago)
         let twoMinutesAgo = Date().addingTimeInterval(-120)
+        let twoMinutesAgoISO = twoMinutesAgo.ISO8601Format()
 
-        // First, check if we can acquire the lock
-        let entries: [RosterEntry] = try await supabase
-            .from(tableName)
-            .select()
-            .eq("id", value: entryId)
-            .execute()
-            .value
+        do {
+            // Atomic UPDATE: only succeeds if conditions are met
+            // Using OR filter with locked_by_name for per-device locking (same user on different devices = different locks)
+            try await supabase
+                .from(tableName)
+                .update([
+                    "locked_by": userId.uuidString,
+                    "locked_by_name": userName,
+                    "locked_at": Date().ISO8601Format()
+                ])
+                .eq("id", value: entryId)
+                .or("locked_by_name.is.null,locked_by_name.eq.\(userName),locked_at.lt.\(twoMinutesAgoISO)")
+                .execute()
 
-        guard let entry = entries.first else {
-            throw NSError(domain: "RosterEntryService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Entry not found"])
+            // Verify we actually got the lock by fetching current state (check name for per-device locking)
+            let entry = try await fetchEntry(id: entryId)
+            return entry.lockedByName == userName
+        } catch {
+            // Network error - allow local editing, SyncEngine handles conflicts
+            print("RosterEntryService: Network error acquiring lock - allowing local edit: \(error)")
+            return true
         }
-
-        // Check if locked by someone else and lock hasn't expired
-        if let lockedBy = entry.lockedBy, let lockedAt = entry.lockedAt {
-            if lockedBy != userId && lockedAt > twoMinutesAgo {
-                // Locked by someone else and lock is still valid
-                return false
-            }
-        }
-
-        // Acquire the lock
-        try await supabase
-            .from(tableName)
-            .update([
-                "locked_by": userId.uuidString,
-                "locked_by_name": userName,
-                "locked_at": Date().ISO8601Format()
-            ])
-            .eq("id", value: entryId)
-            .execute()
-
-        return true
     }
 
     /// Release a lock on a roster entry
-    func releaseLock(entryId: UUID, userId: UUID) async throws {
-        // Only release if we own the lock
+    /// When offline, skips gracefully - lock will expire naturally in ≤2 minutes
+    func releaseLock(entryId: UUID, userName: String) async throws {
+        // If offline, skip - lock will expire naturally
+        let isOnline = await MainActor.run { SyncEngine.shared.isOnline }
+        guard isOnline else {
+            print("RosterEntryService: Offline - skipping lock release, will expire in ≤2 min")
+            return
+        }
+
+        // Only release if this device owns the lock (check by name which includes device session)
         let updateData: [String: AnyJSON] = [
             "locked_by": AnyJSON.null,
             "locked_by_name": AnyJSON.null,
@@ -162,17 +188,26 @@ class RosterEntryService {
             .from(tableName)
             .update(updateData)
             .eq("id", value: entryId)
-            .eq("locked_by", value: userId)
+            .eq("locked_by_name", value: userName)
             .execute()
     }
 
     /// Refresh/extend a lock (heartbeat)
-    func refreshLock(entryId: UUID, userId: UUID) async throws {
+    /// When offline, skips gracefully - lock will expire if we stay offline
+    func refreshLock(entryId: UUID, userName: String) async throws {
+        // If offline, skip - lock will expire if we stay offline too long
+        let isOnline = await MainActor.run { SyncEngine.shared.isOnline }
+        guard isOnline else {
+            print("RosterEntryService: Offline - skipping lock refresh")
+            return
+        }
+
+        // Only refresh if this device owns the lock (check by name which includes device session)
         try await supabase
             .from(tableName)
             .update(["locked_at": Date().ISO8601Format()])
             .eq("id", value: entryId)
-            .eq("locked_by", value: userId)
+            .eq("locked_by_name", value: userName)
             .execute()
     }
 
@@ -195,11 +230,14 @@ class RosterEntryService {
     // MARK: - Realtime Subscriptions
 
     /// Subscribe to changes for a specific sports job
-    func subscribeToChanges(jobId: UUID, onChange: @escaping ([RosterEntry]) -> Void) async {
-        // Unsubscribe from any existing channel first
-        await unsubscribe()
+    /// Each caller should provide a unique subscriptionId to maintain their own subscription
+    func subscribeToChanges(subscriptionId: UUID, jobId: UUID, onChange: @escaping ([RosterEntry]) -> Void) async {
+        // Unsubscribe from any existing channel with this subscription ID first
+        await unsubscribe(subscriptionId: subscriptionId)
 
-        let channel = supabase.realtimeV2.channel("roster_entries_\(jobId.uuidString)")
+        // Create unique channel name per subscription to avoid conflicts
+        let channelName = "roster_entries_\(jobId.uuidString)_\(subscriptionId.uuidString)"
+        let channel = supabase.realtimeV2.channel(channelName)
 
         let changes = channel.postgresChange(
             AnyAction.self,
@@ -209,6 +247,9 @@ class RosterEntryService {
         )
 
         await channel.subscribe()
+
+        // Store this subscription
+        realtimeChannels[subscriptionId] = channel
 
         // Listen for changes in a separate task
         Task {
@@ -224,16 +265,22 @@ class RosterEntryService {
                 }
             }
         }
-
-        self.realtimeChannel = channel
     }
 
-    /// Unsubscribe from realtime changes
-    func unsubscribe() async {
-        if let channel = realtimeChannel {
+    /// Unsubscribe a specific subscription
+    func unsubscribe(subscriptionId: UUID) async {
+        if let channel = realtimeChannels[subscriptionId] {
             await channel.unsubscribe()
-            realtimeChannel = nil
+            realtimeChannels.removeValue(forKey: subscriptionId)
         }
+    }
+
+    /// Unsubscribe from all realtime changes (for cleanup)
+    func unsubscribeAll() async {
+        for (_, channel) in realtimeChannels {
+            await channel.unsubscribe()
+        }
+        realtimeChannels.removeAll()
     }
 
     // MARK: - Conflict Detection

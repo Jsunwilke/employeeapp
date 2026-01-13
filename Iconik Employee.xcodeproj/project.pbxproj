@@ -257,7 +257,6 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
-
 /* Begin PBXSourcesBuildPhase section */
 		C38974562D74DACE00F75F9F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -423,14 +422,13 @@
 		};
 		C38974812D74DAD000F75F9F /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 8AEFE71B965E82824FAE7963 /* Pods-Iconik Employee.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -468,14 +466,13 @@
 		};
 		C38974822D74DAD000F75F9F /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 967A0006ED4B8E645B0BFC98 /* Pods-Iconik Employee.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 20;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;

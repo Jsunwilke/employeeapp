@@ -117,17 +117,13 @@ class TemplateService: ObservableObject {
             return .object(fieldDict)
         }
 
+        // Only include columns that exist in the database schema
         let templateData: [String: AnyJSON] = [
             "id": .string(template.id),
             "organization_id": .string(template.organization_id),
             "name": .string(template.name),
-            "description": template.description != nil ? .string(template.description!) : .null,
-            "shoot_type": .string(template.shoot_type),
-            "fields": .array(fieldsJSON),
-            "is_default": .bool(template.is_default),
-            "is_active": .bool(template.is_active),
-            "version": .integer(template.version),
-            "created_by": .string(template.created_by)
+            "sections": .array(fieldsJSON),  // DB uses 'sections', not 'fields'
+            "is_active": .bool(template.is_active)
         ]
 
         do {
@@ -191,18 +187,12 @@ class TemplateService: ObservableObject {
             return .object(fieldDict)
         }
 
-        var updateData: [String: AnyJSON] = [
+        // Only include columns that exist in the database schema
+        let updateData: [String: AnyJSON] = [
             "name": .string(template.name),
-            "shoot_type": .string(template.shoot_type),
-            "fields": .array(fieldsJSON),
-            "is_default": .bool(template.is_default),
-            "is_active": .bool(template.is_active),
-            "version": .integer(template.version)
+            "sections": .array(fieldsJSON),  // DB uses 'sections', not 'fields'
+            "is_active": .bool(template.is_active)
         ]
-
-        if let description = template.description {
-            updateData["description"] = .string(description)
-        }
 
         do {
             try await supabase

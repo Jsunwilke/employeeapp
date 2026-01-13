@@ -163,13 +163,16 @@ class SupabaseAuthService: ObservableObject {
     }
 
     /// Send password reset email
-    func resetPassword(email: String) async throws {
+    func resetPassword(email: String, redirectTo: URL? = nil) async throws {
         isLoading = true
         defer { isLoading = false }
 
         do {
-            try await supabase.auth.resetPasswordForEmail(email)
-            print("[SupabaseAuthService] Password reset email sent to: \(email)")
+            try await supabase.auth.resetPasswordForEmail(
+                email,
+                redirectTo: redirectTo
+            )
+            print("[SupabaseAuthService] Password reset email sent to \(email)")
         } catch {
             print("[SupabaseAuthService] Password reset error: \(error.localizedDescription)")
             throw error

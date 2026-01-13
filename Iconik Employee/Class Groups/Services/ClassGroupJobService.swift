@@ -66,7 +66,7 @@ class ClassGroupJobService: ObservableObject {
                 let jobs: [ClassGroupJob] = try await supabase
                     .from(tableName)
                     .select()
-                    .eq("session_id", value: sessionId.lowercased())
+                    .eq("session_id", value: sessionId)
                     .limit(1)
                     .execute()
                     .value
@@ -217,7 +217,7 @@ class ClassGroupJobService: ObservableObject {
                 let jobs: [ClassGroupJob] = try await supabase
                     .from(tableName)
                     .select()
-                    .eq("id", value: jobId.lowercased())
+                    .eq("id", value: jobId)
                     .limit(1)
                     .execute()
                     .value
@@ -244,7 +244,7 @@ class ClassGroupJobService: ObservableObject {
                         updated_at: Date(),
                         last_modified_by: UserManager.shared.getCurrentUserIDUnified() ?? ""
                     ))
-                    .eq("id", value: jobId.lowercased())
+                    .eq("id", value: jobId)
                     .execute()
 
                 print("Successfully added class group to job: \(jobId)")
@@ -268,7 +268,7 @@ class ClassGroupJobService: ObservableObject {
                 let jobs: [ClassGroupJob] = try await supabase
                     .from(tableName)
                     .select()
-                    .eq("id", value: jobId.lowercased())
+                    .eq("id", value: jobId)
                     .limit(1)
                     .execute()
                     .value
@@ -297,7 +297,7 @@ class ClassGroupJobService: ObservableObject {
                         updated_at: Date(),
                         last_modified_by: UserManager.shared.getCurrentUserIDUnified() ?? ""
                     ))
-                    .eq("id", value: jobId.lowercased())
+                    .eq("id", value: jobId)
                     .execute()
 
                 print("Successfully updated class group in job: \(jobId)")
@@ -321,7 +321,7 @@ class ClassGroupJobService: ObservableObject {
                 let jobs: [ClassGroupJob] = try await supabase
                     .from(tableName)
                     .select()
-                    .eq("id", value: jobId.lowercased())
+                    .eq("id", value: jobId)
                     .limit(1)
                     .execute()
                     .value
@@ -347,7 +347,7 @@ class ClassGroupJobService: ObservableObject {
                         updated_at: Date(),
                         last_modified_by: UserManager.shared.getCurrentUserIDUnified() ?? ""
                     ))
-                    .eq("id", value: jobId.lowercased())
+                    .eq("id", value: jobId)
                     .execute()
 
                 print("Successfully deleted class group from job: \(jobId)")
@@ -372,7 +372,7 @@ class ClassGroupJobService: ObservableObject {
                 try await supabase
                     .from(tableName)
                     .delete()
-                    .eq("id", value: id.lowercased())
+                    .eq("id", value: id)
                     .execute()
 
                 print("Successfully deleted class group job: \(id)")
@@ -424,8 +424,8 @@ class ClassGroupJobService: ObservableObject {
             }
         }
 
-        // Set up realtime subscription
-        let channel = supabase.channel("class_group_jobs_\(organizationId)")
+        // Set up realtime subscription using realtimeV2
+        let channel = supabase.realtimeV2.channel("class_group_jobs_\(organizationId)")
 
         let changeStream = channel.postgresChange(
             AnyAction.self,
@@ -479,7 +479,7 @@ class ClassGroupJobService: ObservableObject {
                 let jobs: [ClassGroupJob] = try await supabase
                     .from(tableName)
                     .select()
-                    .eq("id", value: jobId.lowercased())
+                    .eq("id", value: jobId)
                     .limit(1)
                     .execute()
                     .value
@@ -494,14 +494,14 @@ class ClassGroupJobService: ObservableObject {
             }
         }
 
-        // Set up realtime subscription for this specific job
-        let channel = supabase.channel("class_group_job_\(jobId)")
+        // Set up realtime subscription for this specific job using realtimeV2
+        let channel = supabase.realtimeV2.channel("class_group_job_\(jobId)")
 
         let changeStream = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: tableName,
-            filter: "id=eq.\(jobId.lowercased())"
+            filter: "id=eq.\(jobId)"
         )
 
         Task {
@@ -511,7 +511,7 @@ class ClassGroupJobService: ObservableObject {
                     let jobs: [ClassGroupJob] = try await supabase
                         .from(tableName)
                         .select()
-                        .eq("id", value: jobId.lowercased())
+                        .eq("id", value: jobId)
                         .limit(1)
                         .execute()
                         .value
@@ -545,7 +545,7 @@ class ClassGroupJobService: ObservableObject {
             try await supabase
                 .from(sessionsTable)
                 .update([fieldName: hasJob])
-                .eq("id", value: sessionId.lowercased())
+                .eq("id", value: sessionId)
                 .execute()
 
             print("Successfully updated session \(sessionId) \(fieldName) to \(hasJob)")

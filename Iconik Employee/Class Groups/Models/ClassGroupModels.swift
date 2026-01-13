@@ -10,6 +10,7 @@ struct ClassGroupJob: Identifiable, Codable, Hashable {
     var organization_id: String
     var job_type: String // "classGroups" or "classCandids"
     var class_groups: [ClassGroup]
+    var notes: String?  // Job-level notes
     var created_at: Date
     var updated_at: Date
     var created_by: String
@@ -41,6 +42,7 @@ struct ClassGroupJob: Identifiable, Codable, Hashable {
         organizationId: String = "",
         jobType: String = "classGroups",
         classGroups: [ClassGroup] = [],
+        notes: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         createdBy: String = "",
@@ -54,6 +56,7 @@ struct ClassGroupJob: Identifiable, Codable, Hashable {
         self.organization_id = organizationId
         self.job_type = jobType
         self.class_groups = classGroups
+        self.notes = notes
         self.created_at = createdAt
         self.updated_at = updatedAt
         self.created_by = createdBy

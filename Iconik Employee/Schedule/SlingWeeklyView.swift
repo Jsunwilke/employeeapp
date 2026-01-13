@@ -27,6 +27,7 @@ struct SlingWeeklyView: View {
     @State private var showingTimeOffDetail = false
     
     @State private var scheduleMode: ScheduleMode = .myShifts
+    @State private var isTogglingMode = false  // Loading state for mode toggle
     @State private var showCreateSession = false
     @State private var isPublishingDay = false
     @State private var publishError: String?
@@ -40,6 +41,9 @@ struct SlingWeeklyView: View {
     
     // Session listener state (Supabase Realtime)
     @State private var isListeningToSessions: Bool = false
+
+    // Unique subscription ID for this view instance (prevents overwriting other subscribers)
+    private let subscriptionId = UUID()
     
     // User's first and last name from AppStorage (used in filtering "My Shifts")
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
@@ -56,7 +60,10 @@ struct SlingWeeklyView: View {
     // Time off service and data
     private let timeOffService = TimeOffService.shared
     @State private var timeOffEntries: [TimeOffCalendarEntry] = []
-    
+
+    // Cached event indicators for performance (pre-computed to avoid repeated filtering)
+    @State private var daysWithEvents: Set<Date> = []
+
     // Environment for color scheme
     @Environment(\.colorScheme) var colorScheme
     
@@ -147,10 +154,14 @@ struct SlingWeeklyView: View {
             }
             .onDisappear {
                 // Stop Supabase realtime listener
-                let includeUnpublished = (userRole == "admin" || userRole == "manager")
-                sessionService.stopListeningToSessions(organizationID: organizationID, includeUnpublished: includeUnpublished)
+                sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
                 isListeningToSessions = false
                 organizationService.stopListening()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+                // Re-subscribe when app returns to foreground
+                isListeningToSessions = false
+                loadSessions()
             }
             .onChange(of: weekOffset) { _ in
                 updateDisplayedSessions()
@@ -265,22 +276,45 @@ struct SlingWeeklyView: View {
             
             // Interactive pill button that toggles between My Shifts and All Shifts
             Button(action: {
-                withAnimation(.spring()) {
-                    scheduleMode = scheduleMode == .myShifts ? .allShifts : .myShifts
-                    filterSessions()
+                guard !isTogglingMode else { return }
+                let newMode: ScheduleMode = scheduleMode == .myShifts ? .allShifts : .myShifts
+
+                isTogglingMode = true
+
+                // Short delay to force UI to render spinner before filtering
+                Task {
+                    try? await Task.sleep(for: .milliseconds(50))
+                    await MainActor.run {
+                        scheduleMode = newMode
+                        filterSessions()
+                        isTogglingMode = false
+                    }
                 }
             }) {
-                Text(scheduleMode.rawValue)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color(.systemBackground))
-                    .cornerRadius(16)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color(.systemGray4), lineWidth: 1)
-                    )
+                HStack(spacing: 6) {
+                    ZStack {
+                        ProgressView()
+                            .tint(.blue)
+                            .opacity(isTogglingMode ? 1 : 0)
+                        Image(systemName: "arrow.left.arrow.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .opacity(isTogglingMode ? 0 : 1)
+                    }
+                    .frame(width: 16, height: 16)
+                    Text(scheduleMode.rawValue)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(.systemBackground))
+                .cornerRadius(16)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color(.systemGray4), lineWidth: 1)
+                )
+                .animation(.easeInOut(duration: 0.15), value: isTogglingMode)
             }
             .buttonStyle(PlainButtonStyle())
         }
@@ -1283,6 +1317,7 @@ struct SlingWeeklyView: View {
 
             isListeningToSessions = true
             sessionService.startListeningToSessions(
+                subscriptionId: subscriptionId,
                 organizationID: organizationID,
                 includeUnpublished: includeUnpublished
             ) { sessions in
@@ -1343,11 +1378,43 @@ struct SlingWeeklyView: View {
         
         // Sort by date
         filtered.sort { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) }
-        
+
         filteredSessions = filtered
         print("📊 Final filteredSessions count: \(filteredSessions.count)")
+
+        // Pre-compute which days have events (for calendar indicators)
+        updateDaysWithEvents()
     }
-    
+
+    /// Pre-compute which days have events to avoid repeated filtering in hasEvents()
+    private func updateDaysWithEvents() {
+        var eventDays = Set<Date>()
+        let calendar = Calendar.current
+
+        // Add days with sessions
+        for session in filteredSessions {
+            if let date = session.startDate {
+                eventDays.insert(calendar.startOfDay(for: date))
+            }
+        }
+
+        // Add days with time off
+        var timeOffToCheck = timeOffEntries
+        if scheduleMode == .myShifts {
+            if let currentUserID = userManager.getCurrentUserID() {
+                timeOffToCheck = timeOffToCheck.filter { $0.photographerId == currentUserID }
+            } else {
+                timeOffToCheck = []
+            }
+        }
+
+        for entry in timeOffToCheck {
+            eventDays.insert(calendar.startOfDay(for: entry.date))
+        }
+
+        daysWithEvents = eventDays
+    }
+
     private func getDaysInWeek(forOffset offset: Int = 0) -> [Date] {
         let calendar = Calendar.current
         let today = Date()
@@ -1449,51 +1516,9 @@ struct SlingWeeklyView: View {
     }
     
     private func hasEvents(on date: Date) -> Bool {
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: date)
-        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-        
-        var sessionsToCheck = sessions
-        
-        if scheduleMode == .myShifts {
-            guard let currentUserID = userManager.getCurrentUserID() else {
-                return false
-            }
-
-            // Get current user email for fallback matching
-            let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail")
-
-            sessionsToCheck = sessionsToCheck.filter { session in
-                session.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail)
-            }
-        }
-        
-        let hasSessions = sessionsToCheck.contains { session in
-            guard let sessionDate = session.startDate else { return false }
-            return sessionDate >= startOfDay && sessionDate < endOfDay
-        }
-        
-        // Check for time off on this date
-        var timeOffToCheck = timeOffEntries
-        
-        // Filter by user if in "My Shifts" mode
-        if scheduleMode == .myShifts {
-            guard let currentUserID = userManager.getCurrentUserID() else {
-                return hasSessions // Return only session status if no user ID
-            }
-            
-            timeOffToCheck = timeOffToCheck.filter { entry in
-                entry.photographerId == currentUserID
-            }
-        }
-
-        let hasTimeOff = timeOffToCheck.contains { timeOffEntry in
-            let entryDate = calendar.startOfDay(for: timeOffEntry.date)
-            let targetDate = calendar.startOfDay(for: date)
-            return entryDate == targetDate
-        }
-        
-        return hasSessions || hasTimeOff
+        // Use pre-computed cache for O(1) lookup instead of filtering
+        let startOfDay = Calendar.current.startOfDay(for: date)
+        return daysWithEvents.contains(startOfDay)
     }
     
     private func isToday(_ date: Date) -> Bool {

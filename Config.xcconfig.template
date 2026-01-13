@@ -2,6 +2,16 @@
 // Copy this file to Config.xcconfig and fill in your actual values
 // NEVER commit Config.xcconfig with real values to version control
 
+// Supabase Configuration
+SUPABASE_URL = https:/$()/your-project-id.supabase.co
+SUPABASE_ANON_KEY = your-supabase-anon-key-here
+
+// Google API Configuration
+GOOGLE_PLACES_API_KEY = your-google-places-api-key-here
+
+// Giphy API Configuration
+GIPHY_API_KEY = your-giphy-api-key-here
+
 // Captura API Configuration
 CAPTURA_CLIENT_ID = your-captura-client-id-here
 CAPTURA_CLIENT_SECRET = your-captura-client-secret-here

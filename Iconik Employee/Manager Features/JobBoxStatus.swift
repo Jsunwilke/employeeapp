@@ -78,39 +78,20 @@ class JobBoxService {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyyMMdd" // Date only, no time component
         let dateString = dateFormatter.string(from: date)
-        
-        // DEBUG: Print input parameters
-        print("DEBUG-SHIFTUID - Generating shift UID with inputs:")
-        print("DEBUG-SHIFTUID - School Name: '\(schoolName)'")
-        print("DEBUG-SHIFTUID - Date: \(date)")
-        print("DEBUG-SHIFTUID - Formatted Date String: \(dateString)")
-        
-        // FIXED: Modified normalization to match the other app's format
-        // 1. Convert to lowercase
-        // 2. Replace spaces with underscores
-        // 3. Keep hyphens (do not remove them)
+
+        // Normalize school name: lowercase and replace spaces with underscores
         let normalizedSchool = schoolName.lowercased().replacingOccurrences(of: " ", with: "_")
-        print("DEBUG-SHIFTUID - Normalized School Name: '\(normalizedSchool)'")
-        
-        // FIXED: Create the custom UID with the correct format to match the other app
-        // 1. Added underscore after "shift"
-        // 2. Added underscore before the date
+
+        // Create the custom UID
         let shiftUid = "shift_\(normalizedSchool)_\(dateString)"
-        print("DEBUG-SHIFTUID - Generated shift UID: '\(shiftUid)'")
-        
+
         return shiftUid
     }
     
     // Listen for job box updates for a specific shift
     func listenForJobBoxes(forShift event: ICSEvent, organizationID: String, completion: @escaping ([JobBox]) -> Void) -> ListenerRegistrationWrapper {
-        print("DEBUG-JOBBOX-LISTEN - ===== LISTENER SETUP START =====")
-        print("DEBUG-JOBBOX-LISTEN - Event ID (Session ID): '\(event.id)'")
-        print("DEBUG-JOBBOX-LISTEN - School Name: '\(event.schoolName)'")
-        print("DEBUG-JOBBOX-LISTEN - Organization ID: '\(organizationID)'")
-
         // Use the event ID (which is the session ID) as the shiftUid
         let shiftUid = event.id
-        print("DEBUG-JOBBOX-LISTEN - Using shiftUid: '\(shiftUid)'")
 
         // Initial fetch from Supabase
         Task {
@@ -123,22 +104,20 @@ class JobBoxService {
                     .execute()
                     .value
 
-                print("DEBUG-JOBBOX-LISTEN - Found \(jobBoxes.count) job box documents")
-
                 await MainActor.run {
                     completion(jobBoxes)
                 }
             } catch {
-                print("ERROR-JOBBOX-LISTEN - Error fetching job boxes: \(error.localizedDescription)")
+                print("Error fetching job boxes: \(error.localizedDescription)")
                 await MainActor.run {
                     completion([])
                 }
             }
         }
 
-        // Set up realtime subscription
+        // Set up realtime subscription using realtimeV2
         let channelKey = "jobbox_\(shiftUid)_\(organizationID)"
-        let channel = supabase.channel(channelKey)
+        let channel = supabase.realtimeV2.channel(channelKey)
 
         let changeStream = channel.postgresChange(
             AnyAction.self,
@@ -148,8 +127,7 @@ class JobBoxService {
         )
 
         Task {
-            for await change in changeStream {
-                print("DEBUG-JOBBOX-LISTEN - Realtime change detected")
+            for await _ in changeStream {
                 // Re-fetch all job boxes on any change
                 do {
                     let jobBoxes: [JobBox] = try await supabase
@@ -164,18 +142,16 @@ class JobBoxService {
                         completion(jobBoxes)
                     }
                 } catch {
-                    print("ERROR-JOBBOX-LISTEN - Error re-fetching job boxes: \(error.localizedDescription)")
+                    print("Error re-fetching job boxes: \(error.localizedDescription)")
                 }
             }
         }
 
         Task {
             await channel.subscribe()
-            print("DEBUG-JOBBOX-LISTEN - Subscribed to realtime channel: \(channelKey)")
         }
 
         activeChannels[channelKey] = channel
-        print("DEBUG-JOBBOX-LISTEN - ===== LISTENER SETUP END =====")
 
         return ListenerRegistrationWrapper {
             Task {
@@ -187,39 +163,23 @@ class JobBoxService {
     
     // Process a job box notification payload
     func processJobBoxNotification(userInfo: [AnyHashable: Any]) -> (status: JobBoxStatus, scannedBy: String)? {
-        print("DEBUG-JOBBOX-NOTIFY - Processing notification payload: \(userInfo)")
-        
         guard let statusString = userInfo["status"] as? String,
-              let scannedBy = userInfo["photographer"] as? String else {  // FIXED: Use photographer field instead of scannedBy
-            print("ERROR-JOBBOX-NOTIFY - Missing required fields in notification payload")
+              let scannedBy = userInfo["photographer"] as? String else {
             return nil
         }
-        
-        print("DEBUG-JOBBOX-NOTIFY - Extracted status: '\(statusString)', scannedBy: '\(scannedBy)'")
-        
-        // Check if shiftUid is present in the notification
-        if let notificationShiftUid = userInfo["shiftUid"] as? String {
-            print("DEBUG-JOBBOX-NOTIFY - Notification contains shiftUid: '\(notificationShiftUid)'")
-        } else {
-            print("DEBUG-JOBBOX-NOTIFY - Warning: Notification does not contain shiftUid")
-        }
-        
+
         let status = JobBoxStatus(rawValue: statusString) ?? .unknown
-        print("DEBUG-JOBBOX-NOTIFY - Final processed status: \(status.rawValue)")
-        
         return (status: status, scannedBy: scannedBy)
     }
     
     // Register device token for push notifications
     func registerDeviceToken(_ deviceToken: Data) {
         guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
-            print("ERROR-JOBBOX-TOKEN - Cannot register device token: No user is signed in")
             return
         }
 
         // Convert token to string format
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        print("DEBUG-JOBBOX-TOKEN - Registering device token for user \(userId): \(tokenString)")
 
         // Store the token in Supabase
         Task {
@@ -229,18 +189,14 @@ class JobBoxService {
                     .update(["fcm_token": tokenString])
                     .eq("id", value: userId.lowercased())
                     .execute()
-
-                print("DEBUG-JOBBOX-TOKEN - Successfully registered device token for job box notifications")
             } catch {
-                print("ERROR-JOBBOX-TOKEN - Error registering device token: \(error.localizedDescription)")
+                print("Error registering device token: \(error.localizedDescription)")
             }
         }
     }
     
-    // DEBUG: Query all job boxes to check for any matching records
+    // Query all job boxes (for debugging purposes)
     func debugQueryAllJobBoxes(completion: @escaping ([JobBox]) -> Void) {
-        print("DEBUG-JOBBOX-QUERY - Querying all job boxes in the collection")
-
         Task {
             do {
                 let jobBoxes: [JobBox] = try await supabase
@@ -250,18 +206,10 @@ class JobBoxService {
                     .execute()
                     .value
 
-                print("DEBUG-JOBBOX-QUERY - Found \(jobBoxes.count) job box documents in the collection")
-
-                // Print the shiftUid of each document for debugging
-                jobBoxes.forEach { jobBox in
-                    print("DEBUG-JOBBOX-QUERY - Document ID: \(jobBox.id), shiftUid: '\(jobBox.shiftUid)'")
-                }
-
                 await MainActor.run {
                     completion(jobBoxes)
                 }
             } catch {
-                print("ERROR-JOBBOX-QUERY - Error querying job boxes: \(error.localizedDescription)")
                 await MainActor.run {
                     completion([])
                 }
@@ -269,10 +217,8 @@ class JobBoxService {
         }
     }
 
-    // DEBUG: Query job boxes using partial matching
+    // Query job boxes using partial matching (for debugging purposes)
     func debugQueryJobBoxesByPartialShiftID(partialID: String, completion: @escaping ([JobBox]) -> Void) {
-        print("DEBUG-JOBBOX-PARTIAL - Querying job boxes with partial shiftUid: '\(partialID)'")
-
         Task {
             do {
                 let jobBoxes: [JobBox] = try await supabase
@@ -283,17 +229,10 @@ class JobBoxService {
                     .execute()
                     .value
 
-                print("DEBUG-JOBBOX-PARTIAL - Found \(jobBoxes.count) job box documents with partial ID: '\(partialID)'")
-
-                jobBoxes.forEach { jobBox in
-                    print("DEBUG-JOBBOX-PARTIAL - Document ID: \(jobBox.id), shiftUid: '\(jobBox.shiftUid)'")
-                }
-
                 await MainActor.run {
                     completion(jobBoxes)
                 }
             } catch {
-                print("ERROR-JOBBOX-PARTIAL - Error querying job boxes: \(error.localizedDescription)")
                 await MainActor.run {
                     completion([])
                 }

@@ -5,8 +5,15 @@ import Combine
 // Google Places API Service
 class GooglePlacesService: ObservableObject {
     static let shared = GooglePlacesService()
-    
-    private let apiKey = "AIzaSyA3kS7YLt4XqYodsfn8TAo8Y4Hcu3UJnSE"
+
+    private var apiKey: String {
+        // Read from Info.plist (injected from Config.xcconfig)
+        if let key = Bundle.main.infoDictionary?["GOOGLE_PLACES_API_KEY"] as? String, !key.isEmpty, !key.hasPrefix("$") {
+            return key
+        }
+        // Fallback - should not happen in production
+        fatalError("GOOGLE_PLACES_API_KEY not configured in Info.plist")
+    }
     private let baseURL = "https://places.googleapis.com/v1/places"
     private let legacyBaseURL = "https://maps.googleapis.com/maps/api/place"
     private let geocodeURL = "https://maps.googleapis.com/maps/api/geocode"

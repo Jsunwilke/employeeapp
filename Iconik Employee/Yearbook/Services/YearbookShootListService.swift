@@ -384,8 +384,8 @@ class YearbookShootListService: ObservableObject {
             }
         }
 
-        // Set up realtime subscription
-        let channel = supabase.channel("yearbook_list_\(schoolId)_\(schoolYear)")
+        // Set up realtime subscription using realtimeV2
+        let channel = supabase.realtimeV2.channel("yearbook_list_\(schoolId)_\(schoolYear)")
 
         let changeStream = channel.postgresChange(
             AnyAction.self,
@@ -444,8 +444,8 @@ class YearbookShootListService: ObservableObject {
             }
         }
 
-        // Set up realtime subscription
-        let channel = supabase.channel("yearbook_org_\(organizationId)")
+        // Set up realtime subscription using realtimeV2
+        let channel = supabase.realtimeV2.channel("yearbook_org_\(organizationId)")
 
         let changeStream = channel.postgresChange(
             AnyAction.self,

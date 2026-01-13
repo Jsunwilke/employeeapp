@@ -1,5 +1,10 @@
 import SwiftUI
 
+// Notification for when app returns to foreground - views can listen to re-subscribe
+extension Notification.Name {
+    static let appDidBecomeActive = Notification.Name("appDidBecomeActive")
+}
+
 @main
 struct EmployeeAppApp: App {
     // Use PushNotificationManager as your app delegate.
@@ -7,6 +12,12 @@ struct EmployeeAppApp: App {
 
     // Access the AppStorage value for app theme
     @AppStorage("appTheme") private var appTheme: String = "system"
+
+    // Track scene phase for background/foreground handling
+    @Environment(\.scenePhase) private var scenePhase
+
+    // Password reset view model for deep link handling
+    @StateObject private var passwordResetVM = PasswordResetViewModel()
 
     init() {
         // Initialize Supabase (singleton pattern - initialized on first access)
@@ -24,10 +35,68 @@ struct EmployeeAppApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environmentObject(passwordResetVM)
                 .onAppear {
                     // Also apply theme when root view appears, for good measure
                     applyAppTheme()
                 }
+                .onChange(of: scenePhase) { newPhase in
+                    handleScenePhaseChange(newPhase)
+                }
+                .onOpenURL { url in
+                    handleDeepLink(url: url)
+                }
+        }
+    }
+
+    // Handle deep links (password reset, etc.)
+    private func handleDeepLink(url: URL) {
+        print("📱 Received deep link: \(url)")
+
+        // Handle password reset deep links
+        if url.scheme == "iconik" && url.host == "reset-password" {
+            Task {
+                await passwordResetVM.handleDeepLink(url: url)
+            }
+        }
+    }
+
+    // Handle app going to background/foreground
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            print("📱 App entering background - pausing subscriptions")
+            // Stop all realtime subscriptions to save resources
+            Task {
+                // Schedule services
+                SessionService.shared.stopAllListeners()
+
+                // Sports roster services
+                await RosterEntryService.shared.unsubscribeAll()
+                await GroupImageService.shared.unsubscribeAll()
+
+                // Task services
+                TaskService.shared.stopListening()
+                CommentService.shared.stopAllListeners()
+
+                // Time off
+                await TimeOffService.shared.stopListening()
+
+                // Organization
+                OrganizationService.shared.stopListening()
+            }
+
+        case .active:
+            print("📱 App becoming active - notifying views to re-subscribe")
+            // Post notification so views can re-establish their subscriptions
+            NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
+
+        case .inactive:
+            // Transitional state, no action needed
+            break
+
+        @unknown default:
+            break
         }
     }
     

@@ -11,7 +11,7 @@ import SwiftUI
 struct TasksMainView: View {
     @StateObject private var viewModel = TasksViewModel()
     @State private var searchText = ""
-    @State private var selectedFilter: TaskFilter = .all
+    @State private var selectedFilter: TaskFilter = .myTasks
     @State private var selectedStatus: TaskStatus? = nil
     @State private var selectedPriority: TaskPriority? = nil
     @State private var showingCreateTask = false

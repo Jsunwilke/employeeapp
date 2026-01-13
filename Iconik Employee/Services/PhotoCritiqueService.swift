@@ -85,8 +85,8 @@ class PhotoCritiqueService: ObservableObject {
             await existingChannel.unsubscribe()
         }
 
-        // Create a new channel for photo_critiques changes
-        channel = supabase.channel("photo_critiques_\(userId)")
+        // Create a new channel for photo_critiques changes using realtimeV2
+        channel = supabase.realtimeV2.channel("photo_critiques_\(userId)")
 
         // Subscribe to changes
         let insertions = channel?.postgresChange(

@@ -93,8 +93,24 @@ class TimeOffService: ObservableObject {
         await requestsChannel?.unsubscribe()
         hasActiveListener = true
 
+        // Set up real-time channel using realtimeV2
+        let channelKey = "timeoff-\(orgId)"
+        let channel = supabase.realtimeV2.channel(channelKey)
+
+        // Set up postgres change listener
+        let changes = channel.postgresChange(
+            AnyAction.self,
+            schema: "public",
+            table: "time_off_requests",
+            filter: "organization_id=eq.\(orgId)"
+        )
+
+        // Subscribe to the channel
+        await channel.subscribe()
+        self.requestsChannel = channel
+
+        // Initial fetch
         do {
-            // Initial fetch
             let response: [TimeOffRequest] = try await supabase.database
                 .from("time_off_requests")
                 .select()
@@ -107,33 +123,21 @@ class TimeOffService: ObservableObject {
             self.lastCacheUpdate = Date()
             updateFilteredLists()
 
-            // Set up real-time channel for live updates
-            let channel = supabase.channel("timeoff-\(orgId)")
-
-            _ = channel.onPostgresChange(
-                AnyAction.self,
-                schema: "public",
-                table: "time_off_requests",
-                filter: "organization_id=eq.\(orgId)"
-            ) { [weak self] action in
-                Task { @MainActor in
-                    await self?.handleRealtimeChange(action)
-                }
-            }
-
-            Task {
-                await channel.subscribe()
-            }
-
-            self.requestsChannel = channel
-
         } catch {
             errorMessage = "Error loading requests: \(error.localizedDescription)"
             print("❌ TimeOffService: \(error)")
         }
+
+        // Listen for changes using async sequence
+        Task { [weak self] in
+            for await _ in changes {
+                guard let self = self else { return }
+                await self.handleRealtimeChange()
+            }
+        }
     }
 
-    private func handleRealtimeChange(_ change: AnyAction) async {
+    private func handleRealtimeChange() async {
         do {
             // Re-fetch all requests to ensure data consistency
             guard let orgId = currentOrgId else { return }

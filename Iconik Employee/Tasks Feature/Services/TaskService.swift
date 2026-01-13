@@ -31,10 +31,10 @@ class TaskService: ObservableObject {
     func createTask(_ task: TaskItem) async throws -> TaskItem {
         var taskToCreate = task
 
-        // Calculate order for new task (append to end of status column)
+        // Calculate sortOrder for new task (append to end of status column)
         let existingTasks = try await fetchTasks(organizationID: task.organizationID, status: task.status)
-        let maxOrder = existingTasks.map { $0.order }.max() ?? -1
-        taskToCreate.order = maxOrder + 1
+        let maxOrder = existingTasks.map { $0.sortOrder }.max() ?? -1
+        taskToCreate.sortOrder = maxOrder + 1
 
         // Set timestamps
         taskToCreate.createdAt = Date()
@@ -103,7 +103,7 @@ class TaskService: ObservableObject {
             .select()
             .eq("organization_id", value: organizationID)
             .eq("status", value: status.rawValue)
-            .order("order", ascending: true)
+            .order("sort_order", ascending: true)
             .execute()
             .value
 
@@ -146,23 +146,16 @@ class TaskService: ObservableObject {
         stopListening()
 
         let channelKey = "tasks-\(organizationID)"
-        let channel = supabase.channel(channelKey)
+        let channel = supabase.realtimeV2.channel(channelKey)
 
-        _ = channel.onPostgresChange(
+        let changes = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: tasksTable,
             filter: "organization_id=eq.\(organizationID)"
-        ) { [weak self] payload in
-            Task { @MainActor in
-                do {
-                    let fetchedTasks = try await self?.fetchTasks(organizationID: organizationID) ?? []
-                    self?.tasks = fetchedTasks
-                } catch {
-                    self?.error = error
-                }
-            }
-        }
+        )
+
+        channels["main"] = channel
 
         Task {
             await channel.subscribe()
@@ -170,13 +163,29 @@ class TaskService: ObservableObject {
             // Initial fetch
             do {
                 let fetchedTasks = try await fetchTasks(organizationID: organizationID)
-                tasks = fetchedTasks
+                await MainActor.run {
+                    self.tasks = fetchedTasks
+                }
             } catch {
                 // Handle error silently or log if needed
             }
-        }
 
-        channels["main"] = channel
+            // Listen for changes
+            Task {
+                for await _ in changes {
+                    do {
+                        let fetchedTasks = try await self.fetchTasks(organizationID: organizationID)
+                        await MainActor.run {
+                            self.tasks = fetchedTasks
+                        }
+                    } catch {
+                        await MainActor.run {
+                            self.error = error
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Stop listening to real-time updates
@@ -371,7 +380,7 @@ class TaskService: ObservableObject {
         // For better performance, we could use a stored procedure or parallel updates
         for update in updates {
             var task = try await getTask(id: update.taskId)
-            task.order = update.newOrder
+            task.sortOrder = update.newOrder
             task.updatedAt = Date()
 
             try await supabase
@@ -382,7 +391,7 @@ class TaskService: ObservableObject {
 
             // Update local state
             if let index = tasks.firstIndex(where: { $0.id == update.taskId }) {
-                tasks[index].order = update.newOrder
+                tasks[index].sortOrder = update.newOrder
             }
         }
     }
@@ -391,7 +400,7 @@ class TaskService: ObservableObject {
     func reorderTask(taskId: String, from sourceIndex: Int, to destinationIndex: Int, status: TaskStatus) async throws {
         // Get all tasks with this status
         var statusTasks = tasks.filter { $0.status == status }
-            .sorted { $0.order < $1.order }
+            .sorted { $0.sortOrder < $1.sortOrder }
 
         guard sourceIndex < statusTasks.count else {
             throw NSError(domain: "TaskService", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid source index"])

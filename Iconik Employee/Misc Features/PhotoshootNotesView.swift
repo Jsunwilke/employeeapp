@@ -31,6 +31,7 @@ struct PhotoshootNotesView: View {
     
     // Session service for Supabase operations
     private let sessionService = SessionService.shared
+    private let subscriptionId = UUID()
 
     // A simple date/time formatter for the list display.
     private var dateFormatter: DateFormatter {
@@ -369,7 +370,11 @@ struct PhotoshootNotesView: View {
             loadScheduleForToday()
         }
         .onDisappear {
-            // SessionService handles its own cleanup
+            sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+            // Re-subscribe when app returns to foreground
+            loadScheduleForToday()
         }
         .confirmationDialog(
             "Select School for Note",
@@ -682,6 +687,7 @@ struct PhotoshootNotesView: View {
 
         // Load sessions from Supabase with real-time updates
         sessionService.startListeningToSessions(
+            subscriptionId: subscriptionId,
             organizationID: organizationID,
             includeUnpublished: false  // Regular users see only published
         ) { sessions in

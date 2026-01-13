@@ -55,6 +55,9 @@ class MainEmployeeViewModel: ObservableObject {
     // Session service for Supabase operations
     private let sessionService = SessionService.shared
 
+    // Unique subscription ID for this view model
+    private let subscriptionId = UUID()
+
     // Track if we have an active listener
     @Published var hasActiveListener: Bool = false
 
@@ -81,26 +84,50 @@ class MainEmployeeViewModel: ObservableObject {
     ]
     
     private let employeeOrderKey = "employeeFeatureOrder"
-    
+
+    // Observer for app becoming active
+    private var foregroundObserver: NSObjectProtocol?
+
     // Removed: ICS URL no longer needed - using Supabase sessions
-    
+
     init() {
         loadEmployeeFeatureOrder()
+
+        // Listen for app returning to foreground to re-subscribe
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: .appDidBecomeActive,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppBecameActive()
+        }
     }
     
     deinit {
+        // Remove notification observer
+        if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
         // Clean up the session listener
         // Capture values BEFORE the Task closure to avoid capturing self
         // This prevents recursive deallocation that was causing the crash
-        guard hasActiveListener && !organizationID.isEmpty else { return }
+        guard hasActiveListener else { return }
 
-        let orgID = organizationID
+        let subId = subscriptionId
         let service = sessionService
 
-        // Use Task with pre-captured values - service and orgID don't reference self
+        // Use Task with pre-captured values - service and subId don't reference self
         Task { @MainActor in
-            service.stopListeningToSessions(organizationID: orgID, includeUnpublished: false)
+            service.stopListeningToSessions(subscriptionId: subId)
         }
+    }
+
+    // Called when app returns to foreground - re-establish subscription
+    private func handleAppBecameActive() {
+        // Reset flag so fetchUpcomingEvents will re-subscribe
+        hasActiveListener = false
+        fetchUpcomingEvents(employeeName: "")
     }
     
     func loadEmployeeFeatureOrder() {
@@ -153,7 +180,7 @@ class MainEmployeeViewModel: ObservableObject {
 
         // Load sessions from Supabase with real-time updates
         Task { @MainActor in
-            sessionService.startListeningToSessions(organizationID: organizationID, includeUnpublished: false) { [weak self] sessions in
+            sessionService.startListeningToSessions(subscriptionId: subscriptionId, organizationID: organizationID, includeUnpublished: false) { [weak self] sessions in
                 // Get current user ID for filtering
                 guard let currentUserID = UserManager.shared.getCurrentUserIDUnified() else {
                     self?.upcomingShifts = []
@@ -302,9 +329,9 @@ class MainEmployeeViewModel: ObservableObject {
     
     // Cleanup method to remove listener
     func cleanup() {
-        if hasActiveListener && !organizationID.isEmpty {
+        if hasActiveListener {
             Task { @MainActor in
-                sessionService.stopListeningToSessions(organizationID: organizationID, includeUnpublished: false)
+                sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
             }
             hasActiveListener = false
         }
@@ -1096,9 +1123,9 @@ struct MainEmployeeView: View {
             await loadFlagStatusFromSupabase(userId: currentUID)
         }
 
-        // Set up realtime subscription
+        // Set up realtime subscription using realtimeV2
         let supabase = SupabaseManager.shared.client
-        let channel = supabase.channel("user_flag_\(currentUID)")
+        let channel = supabase.realtimeV2.channel("user_flag_\(currentUID)")
 
         let changeStream = channel.postgresChange(
             AnyAction.self,

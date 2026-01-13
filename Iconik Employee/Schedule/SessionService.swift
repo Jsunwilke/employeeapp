@@ -45,8 +45,8 @@ class SessionService: ObservableObject {
     private var lastCacheUpdate: Date?
     private let cacheValidityDuration: TimeInterval = 300 // 5 minutes
 
-    // Track active Supabase realtime channels
-    private var activeChannels: [String: RealtimeChannelV2] = [:]
+    // Track active Supabase realtime channels - keyed by subscription ID for per-caller tracking
+    private var activeChannels: [UUID: RealtimeChannelV2] = [:]
 
     // Pagination support
     private let pageSize = 50
@@ -108,77 +108,97 @@ class SessionService: ObservableObject {
     }
 
     /// Start listening to sessions with Supabase Realtime
-    func startListeningToSessions(organizationID: String, includeUnpublished: Bool = false, onChange: @escaping ([Session]) -> Void) {
-        let channelKey = "sessions-org-\(organizationID)-unpub-\(includeUnpublished)"
-
-        // If channel already exists and subscribed, just fetch and call callback immediately
-        if activeChannels[channelKey] != nil {
-            print("📅 SessionService: Channel already exists, fetching sessions directly...")
-            Task {
-                do {
-                    let sessions = try await fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished)
-                    print("📅 SessionService: Calling onChange callback with \(sessions.count) sessions (existing channel)")
-                    await MainActor.run {
-                        onChange(sessions)
-                    }
-                } catch {
-                    print("❌ Error fetching sessions (existing channel): \(describeDecodingError(error))")
-                    await MainActor.run {
-                        onChange([])
-                    }
-                }
-            }
-            return
+    /// Each caller should provide a unique subscriptionId to maintain their own subscription
+    func startListeningToSessions(subscriptionId: UUID, organizationID: String, includeUnpublished: Bool = false, onChange: @escaping ([Session]) -> Void) {
+        Task {
+            await startListeningToSessionsAsync(subscriptionId: subscriptionId, organizationID: organizationID, includeUnpublished: includeUnpublished, onChange: onChange)
         }
+    }
 
-        // Create new channel
-        let channel = supabase.channel(channelKey)
+    /// Async implementation matching RosterEntryService pattern exactly
+    private func startListeningToSessionsAsync(subscriptionId: UUID, organizationID: String, includeUnpublished: Bool, onChange: @escaping ([Session]) -> Void) async {
+        // Unsubscribe from any existing channel with this subscription ID first
+        await stopListeningToSessionsAsync(subscriptionId: subscriptionId)
 
-        _ = channel.onPostgresChange(
+        // Create unique channel name per subscription to avoid conflicts
+        let channelKey = "sessions-\(organizationID)-\(subscriptionId.uuidString)"
+
+        // Use realtimeV2 API (same as RosterEntryService which works)
+        let channel = supabase.realtimeV2.channel(channelKey)
+
+        print("📡 SessionService: Setting up postgres change listener for org: \(organizationID)")
+
+        let changes = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: "sessions",
             filter: "organization_id=eq.\(organizationID)"
-        ) { [weak self] _ in
-            Task { @MainActor in
-                do {
-                    // Use forceRefresh: true to bypass cache on real-time updates
-                    let sessions = try await self?.fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished, forceRefresh: true) ?? []
-                    onChange(sessions)
-                } catch {
-                    print("❌ Error fetching sessions after realtime update: \(error)")
-                    onChange([])
-                }
-            }
+        )
+
+        print("📡 SessionService: Subscribing to channel \(channelKey)...")
+        await channel.subscribe()
+
+        // Store this subscription
+        activeChannels[subscriptionId] = channel
+        print("📡 SessionService: Channel status after subscribe: \(channel.status)")
+        print("📅 SessionService: Channel \(subscriptionId) subscribed, starting initial fetch...")
+
+        // Initial fetch - always force refresh to get latest data when starting a new subscription
+        do {
+            let sessions = try await fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished, forceRefresh: true)
+            print("📅 SessionService: Calling onChange callback with \(sessions.count) sessions")
+            onChange(sessions)
+        } catch {
+            print("❌ Error on initial sessions fetch: \(describeDecodingError(error))")
+            onChange([])
         }
 
+        // Listen for changes in a separate task (matching RosterEntryService exactly)
         Task {
-            await channel.subscribe()
-            activeChannels[channelKey] = channel
-            print("📅 SessionService: Channel subscribed, starting initial fetch...")
+            for await change in changes {
+                print("📡 SessionService: Received realtime event! Change: \(change)")
+                do {
+                    let sessions = try await self.fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished, forceRefresh: true)
+                    print("📡 SessionService: Fetched \(sessions.count) sessions after realtime update")
+                    await MainActor.run {
+                        onChange(sessions)
+                    }
+                } catch {
+                    print("❌ Error fetching sessions after realtime update: \(error)")
+                }
+            }
+            print("📡 SessionService: Changes stream ended for \(subscriptionId)")
+        }
+    }
 
-            // Initial fetch
-            do {
-                let sessions = try await fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished)
-                print("📅 SessionService: Calling onChange callback with \(sessions.count) sessions")
-                onChange(sessions)
-            } catch {
-                print("❌ Error on initial sessions fetch: \(describeDecodingError(error))")
-                onChange([])
+    private func stopListeningToSessionsAsync(subscriptionId: UUID) async {
+        if let channel = activeChannels[subscriptionId] {
+            await channel.unsubscribe()
+            activeChannels.removeValue(forKey: subscriptionId)
+            print("📅 SessionService: Unsubscribed channel \(subscriptionId)")
+        }
+    }
+
+    /// Stop listening to sessions for a specific subscription
+    func stopListeningToSessions(subscriptionId: UUID) {
+        if let channel = activeChannels[subscriptionId] {
+            Task {
+                await channel.unsubscribe()
+                activeChannels.removeValue(forKey: subscriptionId)
+                print("📅 SessionService: Unsubscribed channel \(subscriptionId)")
             }
         }
     }
 
-    /// Stop listening to sessions
-    func stopListeningToSessions(organizationID: String, includeUnpublished: Bool = false) {
-        let channelKey = "sessions-org-\(organizationID)-unpub-\(includeUnpublished)"
-
-        if let channel = activeChannels[channelKey] {
+    /// Stop all session listeners (for cleanup)
+    func stopAllListeners() {
+        for (_, channel) in activeChannels {
             Task {
-                await supabase.removeChannel(channel)
-                activeChannels.removeValue(forKey: channelKey)
+                await channel.unsubscribe()
             }
         }
+        activeChannels.removeAll()
+        print("📅 SessionService: Unsubscribed all channels")
     }
 
     /// Fetch a single session by ID

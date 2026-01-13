@@ -247,7 +247,6 @@ struct StatisticsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(UIColor.systemBackground).ignoresSafeArea())
         .onAppear {
-            print("DEBUG: StatisticsView appeared")
             loadData()
         }
         .alert(isPresented: $showAlert) {

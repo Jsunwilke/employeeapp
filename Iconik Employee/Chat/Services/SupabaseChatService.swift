@@ -211,24 +211,14 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
 
     func subscribeToUserConversations(userId: String, completion: @escaping ([Conversation]) -> Void) -> RealtimeChannelV2 {
         let channelKey = "conversations-user-\(userId)"
-        let channel = supabase.channel(channelKey)
+        let channel = supabase.realtimeV2.channel(channelKey)
 
-        _ = channel.onPostgresChange(
+        let changes = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: "conversations",
             filter: "participants=cs.{\(userId)}" // Contains filter
-        ) { [weak self] _ in
-            Task { @MainActor in
-                do {
-                    let conversations = try await self?.getUserConversations(userId: userId) ?? []
-                    completion(conversations)
-                } catch {
-                    print("❌ Error fetching conversations after realtime update: \(error)")
-                    completion([])
-                }
-            }
-        }
+        )
 
         Task {
             await channel.subscribe()
@@ -241,6 +231,20 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
                 print("❌ Error on initial conversations fetch: \(error)")
                 completion([])
             }
+
+            // Listen for changes
+            Task {
+                for await _ in changes {
+                    do {
+                        let conversations = try await self.getUserConversations(userId: userId)
+                        await MainActor.run {
+                            completion(conversations)
+                        }
+                    } catch {
+                        print("❌ Error fetching conversations after realtime update: \(error)")
+                    }
+                }
+            }
         }
 
         return channel
@@ -248,24 +252,14 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
 
     func subscribeToConversationMessages(conversationId: String, completion: @escaping ([ChatMessage]) -> Void) -> RealtimeChannelV2 {
         let channelKey = "messages-\(conversationId)"
-        let channel = supabase.channel(channelKey)
+        let channel = supabase.realtimeV2.channel(channelKey)
 
-        _ = channel.onPostgresChange(
+        let changes = channel.postgresChange(
             AnyAction.self,
             schema: "public",
             table: "messages",
             filter: "conversation_id=eq.\(conversationId)"
-        ) { [weak self] _ in
-            Task { @MainActor in
-                do {
-                    let (messages, _) = try await self?.getConversationMessages(conversationId: conversationId, limit: 100, offset: 0) ?? ([], false)
-                    completion(messages)
-                } catch {
-                    print("❌ Error fetching messages after realtime update: \(error)")
-                    completion([])
-                }
-            }
-        }
+        )
 
         Task {
             await channel.subscribe()
@@ -277,6 +271,20 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
             } catch {
                 print("❌ Error on initial messages fetch: \(error)")
                 completion([])
+            }
+
+            // Listen for changes
+            Task {
+                for await _ in changes {
+                    do {
+                        let (messages, _) = try await self.getConversationMessages(conversationId: conversationId, limit: 100, offset: 0)
+                        await MainActor.run {
+                            completion(messages)
+                        }
+                    } catch {
+                        print("❌ Error fetching messages after realtime update: \(error)")
+                    }
+                }
             }
         }
 

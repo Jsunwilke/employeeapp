@@ -21,7 +21,7 @@ struct CachedTaskData: Codable {
 class TaskCacheService {
     static let shared = TaskCacheService()
 
-    private let cacheVersion = "1.1"
+    private let cacheVersion = "1.2"  // Bumped for schema changes: removed fields, order → sortOrder
     private let cacheAge: TimeInterval = 24 * 60 * 60  // 24 hours
     private let userDefaults = UserDefaults.standard
 

@@ -2,11 +2,13 @@ import SwiftUI
 
 struct SignInView: View {
   @Binding var isSignedIn: Bool
+  @EnvironmentObject var passwordResetVM: PasswordResetViewModel
 
   @State private var email = ""
   @State private var password = ""
   @State private var errorMessage = ""
   @State private var isLoading = false
+  @State private var showingForgotPassword = false
 
   // AppStorage for user data (now including last name)
   @AppStorage("userOrganizationID") var storedUserOrganizationID: String = ""
@@ -36,6 +38,17 @@ struct SignInView: View {
         SecureField("Password", text: $password)
           .textFieldStyle(RoundedBorderTextFieldStyle())
           .disabled(isLoading)
+
+        // Forgot password link
+        HStack {
+          Spacer()
+          Button("Forgot password?") {
+            showingForgotPassword = true
+          }
+          .font(.subheadline)
+          .foregroundColor(.blue)
+          .disabled(isLoading)
+        }
 
         Button(action: signIn) {
           if isLoading {
@@ -69,21 +82,23 @@ struct SignInView: View {
       .padding()
     }
     .navigationViewStyle(StackNavigationViewStyle())
+    .sheet(isPresented: $showingForgotPassword) {
+      NavigationView {
+        ForgotPasswordView(viewModel: passwordResetVM)
+      }
+    }
   }
   
   func signIn() {
-    print("🔍 [SignInView] signIn() called with email: \(email)")
     errorMessage = ""
     isLoading = true
 
     Task {
       do {
-        print("🔍 [SignInView] Attempting Supabase sign in...")
         // Sign in with Supabase
         try await authService.signIn(email: email, password: password)
 
         guard let userId = authService.currentUserId else {
-          print("🔍 [SignInView] ❌ Failed to get user ID after sign in")
           await MainActor.run {
             errorMessage = "Failed to get user ID"
             isLoading = false
@@ -91,13 +106,10 @@ struct SignInView: View {
           return
         }
 
-        print("🔍 [SignInView] ✅ Successfully signed in, user ID: \(userId)")
-        print("🔍 [SignInView] Fetching user profile...")
         // Fetch user profile from Supabase
         await fetchUserProfile(userId: userId)
 
       } catch {
-        print("🔍 [SignInView] ❌ Sign in failed: \(error.localizedDescription)")
         await MainActor.run {
           errorMessage = error.localizedDescription
           isLoading = false
@@ -134,12 +146,6 @@ struct SignInView: View {
 
       // Save user data to AppStorage
       await MainActor.run {
-        print("🔍 [SignInView] Saving user profile data to AppStorage")
-        print("🔍 [SignInView]   - organization_id: '\(profile.organization_id ?? "nil")'")
-        print("🔍 [SignInView]   - first_name: '\(profile.first_name ?? "nil")'")
-        print("🔍 [SignInView]   - last_name: '\(profile.last_name ?? "nil")'")
-        print("🔍 [SignInView]   - role: '\(profile.role ?? "nil")'")
-
         storedUserOrganizationID = profile.organization_id ?? ""
         storedUserFirstName = profile.first_name ?? ""
         storedUserLastName = profile.last_name ?? ""
@@ -147,15 +153,11 @@ struct SignInView: View {
         storedUserCoordinates = profile.coordinates ?? ""
         userRole = profile.role ?? "employee"
 
-        print("🔍 [SignInView] ✅ Saved organization ID to UserDefaults: '\(storedUserOrganizationID)'")
-        print("🔍 [SignInView] Setting isSignedIn = true")
-
         isLoading = false
         isSignedIn = true
       }
 
     } catch {
-      print("Warning: Failed to fetch user profile: \(error.localizedDescription)")
       // Still sign in even if profile fetch fails
       await MainActor.run {
         isLoading = false
@@ -168,6 +170,7 @@ struct SignInView: View {
 struct SignInView_Previews: PreviewProvider {
   static var previews: some View {
     SignInView(isSignedIn: .constant(false))
+      .environmentObject(PasswordResetViewModel())
   }
 }
 
