@@ -230,7 +230,7 @@ struct AddRosterEntryView: View {
             lastName: trimmedLastName,
             firstName: firstName.trimmingCharacters(in: .whitespacesAndNewlines),
             teacher: teacher.trimmingCharacters(in: .whitespacesAndNewlines),
-            groupName: groupName.trimmingCharacters(in: .whitespacesAndNewlines),
+            groupName: groupName.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
             email: email.trimmingCharacters(in: .whitespacesAndNewlines),
             phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
             imageNumbers: imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines),

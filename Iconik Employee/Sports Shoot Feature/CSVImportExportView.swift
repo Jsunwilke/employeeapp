@@ -240,7 +240,7 @@ struct CSVImportExportView: View {
                 lastName: nameIndex != nil && fields.count > nameIndex! ? fields[nameIndex!] : "",
                 firstName: subjectIdIndex != nil && fields.count > subjectIdIndex! ? fields[subjectIdIndex!] : "",
                 teacher: specialIndex != nil && fields.count > specialIndex! ? fields[specialIndex!] : "",
-                groupName: sportIndex != nil && fields.count > sportIndex! ? fields[sportIndex!] : "",
+                groupName: (sportIndex != nil && fields.count > sportIndex! ? fields[sportIndex!] : "").uppercased(),
                 email: emailIndex != nil && fields.count > emailIndex! ? fields[emailIndex!] : "",
                 phone: phoneIndex != nil && fields.count > phoneIndex! ? fields[phoneIndex!] : "",
                 imageNumbers: imagesIndex != nil && fields.count > imagesIndex! ? fields[imagesIndex!] : "",

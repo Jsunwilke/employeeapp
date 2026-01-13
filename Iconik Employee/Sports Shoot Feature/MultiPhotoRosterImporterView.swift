@@ -121,6 +121,25 @@ struct MultiPhotoRosterImporterView: View {
 
             // Bottom buttons for adding photos - always visible and at the bottom
             VStack(spacing: 12) {
+                // Process All button - only shows when photos are added
+                if !capturedImages.isEmpty {
+                    Button(action: {
+                        processAllImages()
+                    }) {
+                        HStack {
+                            Image(systemName: "text.viewfinder")
+                                .font(.title3)
+                            Text("Process All")
+                                .fontWeight(.semibold)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.green)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                }
+
                 Button(action: {
                     showDocumentScanner = true
                 }) {
@@ -236,20 +255,6 @@ struct MultiPhotoRosterImporterView: View {
             .background(Color.secondary.opacity(0.1))
             .cornerRadius(5)
             .padding(.horizontal, 4)
-            .padding(.top, 4)
-
-            // Process single image button
-            Button(action: {
-                processSingleImage(index: index)
-            }) {
-                Text("Process")
-                    .fontWeight(.medium)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 16)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
-            }
             .padding(.top, 4)
             .padding(.bottom, 8)
         }
@@ -585,7 +590,7 @@ struct MultiPhotoRosterImporterView: View {
                     var updatedEntry = entry
                     // Only override groupName if it's empty or if the team name was manually specified
                     if entry.groupName.isEmpty || !teamName.isEmpty {
-                        updatedEntry.groupName = teamName
+                        updatedEntry.groupName = teamName.uppercased()
                     }
                     return updatedEntry
                 }

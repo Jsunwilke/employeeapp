@@ -26,7 +26,7 @@ struct BatchAddAthletesView: View {
             PreviewEntry(
                 id: UUID(),
                 subjectID: "\(startingSubjectID + index)",
-                groupName: sportName,
+                groupName: sportName.uppercased(),
                 teacher: specialField
             )
         }
@@ -238,7 +238,7 @@ struct BatchAddAthletesView: View {
                         lastName: "",
                         firstName: "\(startingSubjectID + index)",
                         teacher: specialField,
-                        groupName: sportName,
+                        groupName: sportName.uppercased(),
                         sortOrder: index
                     )
                     _ = try await RosterEntryService.shared.createEntry(entry)

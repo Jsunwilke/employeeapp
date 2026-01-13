@@ -167,7 +167,7 @@ class ClaudeRosterService {
     }
 
     // Claude model to use
-    private let modelName = "claude-sonnet-4-5-20250929"  // Latest Claude Sonnet 4.5 model
+    private let modelName = "claude-opus-4-5-20251101"  // Claude Opus 4.5 for best accuracy
     
     // Get the next available Subject ID from existing roster
     func getNextAvailableSubjectID(existingRoster: [RosterEntry]) -> Int {
@@ -516,16 +516,36 @@ class ClaudeRosterService {
                 // Check HTTP status code
                 if let httpResponse = response as? HTTPURLResponse {
                     if httpResponse.statusCode != 200 {
-                        var errorMessage = "HTTP Error: \(httpResponse.statusCode)"
-                        
-                        // Try to extract more detailed error message from response body
+                        // Extract API error message if available
+                        var apiMessage: String? = nil
                         if let data = data, let responseJSON = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                            let error = responseJSON["error"] as? [String: Any],
                            let message = error["message"] as? String {
-                            errorMessage = message
+                            apiMessage = message
                         }
-                        
-                        let nsError = NSError(domain: "ClaudeRosterService", code: 104,
+
+                        // Provide clear, user-friendly error messages based on status code
+                        let errorMessage: String
+                        switch httpResponse.statusCode {
+                        case 400:
+                            errorMessage = "Bad request: \(apiMessage ?? "Invalid parameters sent to API")"
+                        case 401:
+                            errorMessage = "Invalid API key. Please check your Claude API key in Supabase."
+                        case 403:
+                            errorMessage = "Access denied. The model may not be available for your API key. \(apiMessage ?? "")"
+                        case 404:
+                            errorMessage = "Model not found: \(self.modelName). Please check the model name is correct."
+                        case 429:
+                            errorMessage = "Rate limit exceeded. Please wait a moment and try again."
+                        case 500:
+                            errorMessage = "Claude API server error. Please try again later."
+                        case 529:
+                            errorMessage = "Claude API is overloaded. Please try again in a few minutes."
+                        default:
+                            errorMessage = apiMessage ?? "HTTP Error \(httpResponse.statusCode)"
+                        }
+
+                        let nsError = NSError(domain: "ClaudeRosterService", code: httpResponse.statusCode,
                                             userInfo: [NSLocalizedDescriptionKey: errorMessage])
                         DispatchQueue.main.async {
                             completion(.failure(nsError))
@@ -615,6 +635,10 @@ class ClaudeRosterService {
                 for (index, _) in rosterEntries.enumerated() {
                     rosterEntries[index].firstName = String(startingSubjectID + index)
                 }
+                // Append 10 blank rows after the scanned entries
+                let nextSubjectID = startingSubjectID + rosterEntries.count
+                let groupName = rosterEntries.first?.groupName ?? ""
+                self.appendBlankEntries(to: &rosterEntries, sportsJobId: sportsJobId, startingFromID: nextSubjectID, groupName: groupName)
                 DispatchQueue.main.async {
                     completion(.success(rosterEntries))
                 }
@@ -630,6 +654,10 @@ class ClaudeRosterService {
                     for (index, _) in rosterEntries.enumerated() {
                         rosterEntries[index].firstName = String(startingSubjectID + index)
                     }
+                    // Append 10 blank rows after the scanned entries
+                    let nextSubjectID = startingSubjectID + rosterEntries.count
+                    let groupName = rosterEntries.first?.groupName ?? ""
+                    self.appendBlankEntries(to: &rosterEntries, sportsJobId: sportsJobId, startingFromID: nextSubjectID, groupName: groupName)
                     DispatchQueue.main.async {
                         completion(.success(rosterEntries))
                     }
@@ -654,9 +682,24 @@ class ClaudeRosterService {
             lastName: claudeEntry.lastName,
             firstName: claudeEntry.firstName,
             teacher: claudeEntry.teacher,
-            groupName: claudeEntry.group,
+            groupName: claudeEntry.group.uppercased(),
             email: claudeEntry.email
         )
+    }
+
+    // Append blank entries after scanned roster entries
+    private func appendBlankEntries(to rosterEntries: inout [RosterEntry], sportsJobId: UUID, startingFromID: Int, groupName: String, count: Int = 10) {
+        for i in 0..<count {
+            let blankEntry = RosterEntry(
+                sportsJobId: sportsJobId,
+                lastName: "",
+                firstName: String(startingFromID + i),
+                teacher: "",
+                groupName: groupName,
+                email: ""
+            )
+            rosterEntries.append(blankEntry)
+        }
     }
     
     // Mock implementation for testing without using actual API
