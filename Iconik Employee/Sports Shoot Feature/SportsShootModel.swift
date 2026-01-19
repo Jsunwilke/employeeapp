@@ -377,65 +377,36 @@ class SportsShootService {
 
     private init() {}
 
-    // MARK: - Fetch (Cache-First Pattern)
+    // MARK: - Fetch
+    // NOTE: PowerSync handles offline caching for sports_jobs table automatically
 
     func fetchSportsShoot(id: UUID) async throws -> SportsShoot {
-        // Try to get from cache first
-        let cached = LocalSportsRepository.shared.loadSportsShoot(id: id)
+        // Fetch from network (Supabase)
+        let shoot: SportsShoot = try await supabase
+            .from(tableName)
+            .select()
+            .eq("id", value: id)
+            .single()
+            .execute()
+            .value
 
-        do {
-            // Fetch from network
-            let shoot: SportsShoot = try await supabase
-                .from(tableName)
-                .select()
-                .eq("id", value: id)
-                .single()
-                .execute()
-                .value
-
-            // Save to cache for offline use
-            LocalSportsRepository.shared.saveSportsShoot(shoot)
-            return shoot
-        } catch {
-            // If network fails but we have cache, return cached data
-            if let cached = cached {
-                print("SportsShootService: Network failed, returning cached shoot \(id)")
-                return cached
-            }
-            // No cache and network failed - rethrow error
-            throw error
-        }
+        return shoot
     }
 
     func fetchAllSportsShoots(forOrganization orgID: String) async throws -> [SportsShoot] {
         print("DEBUG: Fetching sports shoots for org: '\(orgID)'")
 
-        // Try to get from cache first
-        let cached = LocalSportsRepository.shared.loadSportsShoots(forOrg: orgID)
+        // Fetch from network (Supabase)
+        let shoots: [SportsShoot] = try await supabase
+            .from(tableName)
+            .select()
+            .eq("organization_id", value: orgID)
+            .order("shoot_date", ascending: false)
+            .execute()
+            .value
+        print("DEBUG: Successfully decoded \(shoots.count) shoots")
 
-        do {
-            // Fetch from network
-            let shoots: [SportsShoot] = try await supabase
-                .from(tableName)
-                .select()
-                .eq("organization_id", value: orgID)
-                .order("shoot_date", ascending: false)
-                .execute()
-                .value
-            print("DEBUG: Successfully decoded \(shoots.count) shoots")
-
-            // Save to cache for offline use
-            LocalSportsRepository.shared.saveSportsShoots(shoots, forOrg: orgID)
-            return shoots
-        } catch {
-            // If network fails but we have cache, return cached data
-            if let cached = cached {
-                print("SportsShootService: Network failed, returning \(cached.count) cached shoots")
-                return cached
-            }
-            // No cache and network failed - rethrow error
-            throw error
-        }
+        return shoots
     }
 
     // MARK: - Create

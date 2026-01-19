@@ -239,6 +239,42 @@ class LocalSportsRepository {
         saveGroupImages(groups, forJob: jobId)
     }
 
+    // MARK: - Schools (for offline sports shoot creation)
+
+    /// Save schools for an organization
+    func saveSchools(_ schools: [School], forOrg orgId: String) {
+        let filename = "schools_\(orgId).json"
+        let fileURL = cacheDirectory.appendingPathComponent(filename)
+
+        do {
+            let data = try encoder.encode(schools)
+            try data.write(to: fileURL, options: .atomic)
+            print("LocalSportsRepository: Saved \(schools.count) schools for org \(orgId)")
+        } catch {
+            print("LocalSportsRepository: Failed to save schools - \(error)")
+        }
+    }
+
+    /// Load schools for an organization
+    func loadSchools(forOrg orgId: String) -> [School]? {
+        let filename = "schools_\(orgId).json"
+        let fileURL = cacheDirectory.appendingPathComponent(filename)
+
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return nil
+        }
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let schools = try decoder.decode([School].self, from: data)
+            print("LocalSportsRepository: Loaded \(schools.count) cached schools for org \(orgId)")
+            return schools
+        } catch {
+            print("LocalSportsRepository: Failed to load schools - \(error)")
+            return nil
+        }
+    }
+
     // MARK: - Cache Management
 
     /// Clear all cached data for a specific job

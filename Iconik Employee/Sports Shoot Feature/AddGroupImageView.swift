@@ -13,6 +13,10 @@ struct AddGroupImageView: View {
     let existingGroup: GroupImage?
     let onComplete: (Bool) -> Void
 
+    // PowerSync for offline-first operations
+    @StateObject private var powerSync = PowerSyncManager.shared
+    @StateObject private var lockManager = LockManager.shared
+
     @State private var description: String = ""
     @State private var imageNumbers: String = ""
     @State private var notes: String = ""
@@ -33,6 +37,11 @@ struct AddGroupImageView: View {
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
 
+    // Lock state for editing existing groups
+    @State private var lockAcquired = false
+    @State private var lockError: String?
+    @State private var isAcquiringLock = false
+
     @Environment(\.presentationMode) var presentationMode
 
     var isEditing: Bool {
@@ -41,7 +50,83 @@ struct AddGroupImageView: View {
 
     var body: some View {
         NavigationView {
-            Form {
+            // Show lock error if we couldn't get lock
+            if let error = lockError {
+                lockErrorView(error)
+            } else if isAcquiringLock {
+                acquiringLockView
+            } else {
+                formContent
+            }
+        }
+        .task {
+            await acquireLockIfNeeded()
+        }
+        .onDisappear {
+            releaseLockIfNeeded()
+        }
+    }
+
+    // MARK: - Lock Error View
+
+    private func lockErrorView(_ error: String) -> some View {
+        VStack(spacing: 20) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 60))
+                .foregroundColor(.red)
+
+            Text("Cannot Edit")
+                .font(.title2)
+                .fontWeight(.bold)
+
+            Text(error)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+
+            Button("Go Back") {
+                presentationMode.wrappedValue.dismiss()
+            }
+            .padding()
+            .background(Color.blue)
+            .foregroundColor(.white)
+            .cornerRadius(10)
+        }
+        .padding()
+        .navigationBarTitle("Locked", displayMode: .inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("Cancel") {
+                    presentationMode.wrappedValue.dismiss()
+                }
+            }
+        }
+    }
+
+    // MARK: - Acquiring Lock View
+
+    private var acquiringLockView: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .scaleEffect(1.5)
+            Text("Acquiring lock...")
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationBarTitle(isEditing ? "Edit Group" : "Add Group", displayMode: .inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("Cancel") {
+                    presentationMode.wrappedValue.dismiss()
+                }
+            }
+        }
+    }
+
+    // MARK: - Form Content
+
+    private var formContent: some View {
+        Form {
                 Section(header: Text("Group Information")) {
                     // Sport selection
                     if isLoadingSports {
@@ -144,6 +229,42 @@ struct AddGroupImageView: View {
                 loadExistingGroupData()
                 loadAvailableSports()
             }
+    }
+
+    // MARK: - Lock Management
+
+    private func acquireLockIfNeeded() async {
+        guard let group = existingGroup else {
+            // New group - no lock needed
+            lockAcquired = true
+            return
+        }
+
+        isAcquiringLock = true
+
+        // Try to acquire lock
+        let acquired = await lockManager.acquireGroupImageLock(groupId: group.id)
+
+        await MainActor.run {
+            isAcquiringLock = false
+            if acquired {
+                lockAcquired = true
+            } else {
+                // Check who has the lock
+                if let lockedByName = group.lockedByName {
+                    lockError = "This group is being edited by \(lockedByName). Please try again later."
+                } else {
+                    lockError = "This group is being edited by another photographer. Please try again later."
+                }
+            }
+        }
+    }
+
+    private func releaseLockIfNeeded() {
+        guard let group = existingGroup, lockAcquired else { return }
+
+        Task {
+            await lockManager.releaseGroupImageLock(groupId: group.id)
         }
     }
 
@@ -165,7 +286,7 @@ struct AddGroupImageView: View {
 
         Task {
             do {
-                let entries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+                let entries = try await powerSync.getRosterEntries(forJob: shootID)
                 let allGroups = Set(entries.map { $0.groupName })
                 let sports = Array(allGroups).filter { !$0.isEmpty }.sorted()
 
@@ -225,8 +346,6 @@ struct AddGroupImageView: View {
     }
 
     private func saveGroupImage() {
-        isLoading = true
-
         let group = GroupImage(
             id: existingGroup?.id ?? UUID(),
             sportsJobId: shootID,
@@ -237,7 +356,7 @@ struct AddGroupImageView: View {
             gender: selectedGender,
             teamLevel: selectedTeamLevel,
             sortOrder: existingGroup?.sortOrder ?? 0,
-            version: existingGroup?.version ?? 1,
+            version: (existingGroup?.version ?? 0) + 1,  // Increment version for conflict detection
             updatedAt: Date(),
             updatedBy: existingGroup?.updatedBy,
             lockedBy: existingGroup?.lockedBy,
@@ -246,24 +365,18 @@ struct AddGroupImageView: View {
             createdAt: existingGroup?.createdAt ?? Date()
         )
 
+        // Save to PowerSync (auto-syncs when online)
         Task {
             do {
-                if isEditing {
-                    _ = try await GroupImageService.shared.updateGroup(group)
-                } else {
-                    _ = try await GroupImageService.shared.createGroup(group)
-                }
-
+                try await powerSync.saveGroupImage(group)
                 await MainActor.run {
-                    self.isLoading = false
-                    self.onComplete(true)
-                    self.presentationMode.wrappedValue.dismiss()
+                    onComplete(true)
+                    presentationMode.wrappedValue.dismiss()
                 }
             } catch {
                 await MainActor.run {
-                    self.isLoading = false
-                    self.errorMessage = "Failed to \(isEditing ? "update" : "add") group: \(error.localizedDescription)"
-                    self.showingErrorAlert = true
+                    errorMessage = "Failed to save: \(error.localizedDescription)"
+                    showingErrorAlert = true
                 }
             }
         }

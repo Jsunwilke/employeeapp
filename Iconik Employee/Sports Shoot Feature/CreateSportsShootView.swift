@@ -4,10 +4,13 @@ import Supabase
 struct CreateSportsShootView: View {
     @Environment(\.presentationMode) var presentationMode
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
-    
+
+    // PowerSync for connectivity status
+    @StateObject private var powerSync = PowerSyncManager.shared
+
     // Match the expected function signature
     let onComplete: (_ success: Bool) -> Void
-    
+
     // Form fields
     @State private var selectedSession: Session?
     @State private var sessions: [Session] = []
@@ -188,52 +191,33 @@ struct CreateSportsShootView: View {
             return
         }
 
-        isLoading = true
+        // Create a new SportsShoot with UUID
+        let newShoot = SportsShoot(
+            id: UUID(),
+            organizationId: storedUserOrganizationID,
+            schoolName: school.value,
+            schoolId: school.id,
+            sportName: sportName,
+            seasonType: seasonType,
+            shootDate: shootDate,
+            location: location,
+            photographer: photographer,
+            additionalNotes: additionalNotes,
+            sessionId: linkToSession ? selectedSession?.id : nil,
+            isArchived: false
+        )
 
+        // Create sports shoot via service (requires network)
         Task {
             do {
-                // Create a new SportsShoot with UUID
-                let newShoot = SportsShoot(
-                    id: UUID(),
-                    organizationId: storedUserOrganizationID,
-                    schoolName: school.value,
-                    schoolId: school.id,
-                    sportName: sportName,
-                    seasonType: seasonType,
-                    shootDate: shootDate,
-                    location: location,
-                    photographer: photographer,
-                    additionalNotes: additionalNotes,
-                    sessionId: linkToSession ? selectedSession?.id : nil,
-                    isArchived: false
-                )
-
-                // Use the service to create
-                _ = try await SportsShootService.shared.createSportsShoot(newShoot)
-
-                // If linked to a session, update the session's has_sports_job flag
-                if linkToSession, let sessionId = selectedSession?.id {
-                    let supabase = SupabaseManager.shared.client
-                    let updateData: [String: AnyJSON] = [
-                        "has_sports_job": .bool(true)
-                    ]
-
-                    try? await supabase
-                        .from("sessions")
-                        .update(updateData)
-                        .eq("id", value: sessionId)
-                        .execute()
-                }
-
+                try await SportsShootService.shared.createSportsShoot(newShoot)
                 await MainActor.run {
-                    isLoading = false
                     alertTitle = "Success"
                     alertMessage = "Sports shoot created successfully."
                     showAlert = true
                 }
             } catch {
                 await MainActor.run {
-                    isLoading = false
                     alertTitle = "Error"
                     alertMessage = "Failed to create sports shoot: \(error.localizedDescription)"
                     showAlert = true

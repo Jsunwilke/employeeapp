@@ -21,6 +21,7 @@ enum SyncOperationType: String, Codable {
 enum SyncItemType: String, Codable {
     case rosterEntry
     case groupImage
+    case sportsShoot
 }
 
 enum SyncStatus: String, Codable {
@@ -127,10 +128,24 @@ class SyncEngine: ObservableObject {
         networkMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor [weak self] in
                 let wasOnline = self?.isOnline ?? false
-                self?.isOnline = path.status == .satisfied
+                let nowOnline = path.status == .satisfied
+                self?.isOnline = nowOnline
+
+                // Force NetworkMonitor to recheck its status too (keeps both monitors in sync)
+                _ = NetworkMonitor.shared.getCurrentConnectionStatus()
+
+                // Post notification when status changes so UI updates
+                if wasOnline != nowOnline {
+                    print("SyncEngine: Network status changed to \(nowOnline ? "online" : "offline")")
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("NetworkStatusChanged"),
+                        object: nil,
+                        userInfo: ["isConnected": nowOnline]
+                    )
+                }
 
                 // If we just came online, trigger sync
-                if !wasOnline && self?.isOnline == true {
+                if !wasOnline && nowOnline {
                     print("SyncEngine: Network restored, triggering sync")
                     await self?.syncNow()
                 }
@@ -242,6 +257,34 @@ class SyncEngine: ObservableObject {
         addToQueue(item)
     }
 
+    /// Add a sports shoot operation to the sync queue
+    func queueSportsShootOperation(
+        operation: SyncOperationType,
+        shoot: SportsShoot
+    ) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+
+        guard let payload = try? encoder.encode(shoot) else {
+            print("SyncEngine: Failed to encode sports shoot")
+            return
+        }
+
+        let item = SyncQueueItem(
+            itemType: .sportsShoot,
+            operation: operation,
+            recordId: shoot.id,
+            jobId: shoot.id,  // Use shoot ID as job ID for shoots
+            payload: payload,
+            baseVersion: 1  // Sports shoots don't have versioning yet
+        )
+
+        // Update local cache for immediate UI consistency (offline-first)
+        LocalSportsRepository.shared.saveSportsShoot(shoot)
+
+        addToQueue(item)
+    }
+
     private func addToQueue(_ item: SyncQueueItem) {
         // Remove any existing pending operation for the same record
         syncQueue.removeAll { $0.recordId == item.recordId && $0.status == .pending }
@@ -258,6 +301,58 @@ class SyncEngine: ObservableObject {
                 await processPendingOperations()
             }
         }
+    }
+
+    // MARK: - Pending Items Helpers
+
+    /// Get all pending roster entry operations for a job (for merging with server data)
+    func getPendingRosterOperations(forJob jobId: UUID) -> [(operation: SyncOperationType, entry: RosterEntry)] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        return syncQueue
+            .filter { $0.itemType == .rosterEntry && $0.jobId == jobId && $0.status == .pending }
+            .compactMap { item -> (SyncOperationType, RosterEntry)? in
+                guard let entry = try? decoder.decode(RosterEntry.self, from: item.payload) else { return nil }
+                return (item.operation, entry)
+            }
+    }
+
+    /// Get all pending group image operations for a job (for merging with server data)
+    func getPendingGroupOperations(forJob jobId: UUID) -> [(operation: SyncOperationType, group: GroupImage)] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        return syncQueue
+            .filter { $0.itemType == .groupImage && $0.jobId == jobId && $0.status == .pending }
+            .compactMap { item -> (SyncOperationType, GroupImage)? in
+                guard let group = try? decoder.decode(GroupImage.self, from: item.payload) else { return nil }
+                return (item.operation, group)
+            }
+    }
+
+    /// Get IDs of entries with pending operations for a job (for protecting from realtime overwrites)
+    func getPendingEntryIds(forJob jobId: UUID) -> Set<UUID> {
+        return Set(
+            syncQueue
+                .filter { $0.itemType == .rosterEntry && $0.jobId == jobId && $0.status == .pending }
+                .map { $0.recordId }
+        )
+    }
+
+    /// Get IDs of groups with pending operations for a job (for protecting from realtime overwrites)
+    func getPendingGroupIds(forJob jobId: UUID) -> Set<UUID> {
+        return Set(
+            syncQueue
+                .filter { $0.itemType == .groupImage && $0.jobId == jobId && $0.status == .pending }
+                .map { $0.recordId }
+        )
+    }
+
+    /// Clear all active conflicts (call after successful sync or manual resolution)
+    func clearAllConflicts() {
+        activeConflicts.removeAll()
+        saveSyncQueue()
     }
 
     // MARK: - Sync Processing
@@ -308,6 +403,8 @@ class SyncEngine: ObservableObject {
             try await processRosterEntry(item, decoder: decoder)
         case .groupImage:
             try await processGroupImage(item, decoder: decoder)
+        case .sportsShoot:
+            try await processSportsShoot(item, decoder: decoder)
         }
     }
 
@@ -357,6 +454,21 @@ class SyncEngine: ObservableObject {
         }
     }
 
+    private func processSportsShoot(_ item: SyncQueueItem, decoder: JSONDecoder) async throws {
+        guard let shoot = try? decoder.decode(SportsShoot.self, from: item.payload) else {
+            throw SyncError.invalidPayload
+        }
+
+        switch item.operation {
+        case .insert:
+            _ = try await SportsShootService.shared.createSportsShoot(shoot)
+        case .update:
+            try await SportsShootService.shared.updateSportsShoot(shoot)
+        case .delete:
+            try await SportsShootService.shared.deleteSportsShoot(id: shoot.id)
+        }
+    }
+
     // MARK: - Conflict Handling
 
     private func handleConflict(item: SyncQueueItem, serverData: Any) async {
@@ -380,6 +492,12 @@ class SyncEngine: ObservableObject {
             }
             if let serverGroup = serverData as? GroupImage {
                 serverVersion = serverGroup.version
+            }
+        case .sportsShoot:
+            // Sports shoots don't have conflict resolution yet - just use local version
+            if let shoot = try? decoder.decode(SportsShoot.self, from: item.payload) {
+                localData = shoot
+                serverVersion = 1
             }
         }
 
@@ -455,6 +573,21 @@ class SyncEngine: ObservableObject {
                             jobId: updatedItem.jobId,
                             payload: newPayload,
                             baseVersion: conflict.serverVersion,
+                            createdAt: updatedItem.createdAt,
+                            status: .pending
+                        )
+                    }
+                } else if conflict.itemType == .sportsShoot, let shoot = conflict.localData as? SportsShoot {
+                    // Sports shoots don't have versioning - just re-queue
+                    if let newPayload = try? JSONEncoder().encode(shoot) {
+                        syncQueue[queueIndex] = SyncQueueItem(
+                            id: updatedItem.id,
+                            itemType: updatedItem.itemType,
+                            operation: updatedItem.operation,
+                            recordId: updatedItem.recordId,
+                            jobId: updatedItem.jobId,
+                            payload: newPayload,
+                            baseVersion: 1,
                             createdAt: updatedItem.createdAt,
                             status: .pending
                         )

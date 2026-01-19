@@ -2,7 +2,7 @@
 //  SyncStatusBadge.swift
 //  Iconik Employee
 //
-//  Updated to use SyncEngine for visual sync feedback
+//  Updated to use PowerSync for visual sync feedback
 //
 
 import SwiftUI
@@ -11,7 +11,7 @@ import SwiftUI
 struct SyncStatusBadge: View {
     let shootID: UUID
 
-    @ObservedObject private var syncEngine = SyncEngine.shared
+    @ObservedObject private var powerSync = PowerSyncManager.shared
     @State private var rotationAngle: Double = 0
 
     var body: some View {
@@ -20,7 +20,7 @@ struct SyncStatusBadge: View {
 
     private var statusIcon: some View {
         Group {
-            if syncEngine.isSyncing && syncEngine.pendingCount > 0 {
+            if powerSync.isSyncing {
                 // Actively syncing - use rotation animation
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .foregroundColor(.green)
@@ -33,15 +33,7 @@ struct SyncStatusBadge: View {
                     .onDisappear {
                         rotationAngle = 0
                     }
-            } else if syncEngine.pendingCount > 0 {
-                // Has pending changes waiting to sync
-                Image(systemName: "icloud.and.arrow.up")
-                    .foregroundColor(.orange)
-            } else if !syncEngine.activeConflicts.isEmpty {
-                // Has unresolved conflicts
-                Image(systemName: "exclamationmark.icloud")
-                    .foregroundColor(.red)
-            } else if syncEngine.lastSyncTime != nil {
+            } else if powerSync.lastSyncTime != nil {
                 // Fully synced
                 Image(systemName: "checkmark.icloud")
                     .foregroundColor(.green)
@@ -50,45 +42,44 @@ struct SyncStatusBadge: View {
             }
         }
         .transition(.opacity)
-        .animation(.easeInOut(duration: 0.3), value: syncEngine.isSyncing)
-        .animation(.easeInOut(duration: 0.3), value: syncEngine.pendingCount)
+        .animation(.easeInOut(duration: 0.3), value: powerSync.isSyncing)
     }
 }
 
 // MARK: - Connection Status Indicator for Header
 struct ConnectionStatusIndicator: View {
-    @ObservedObject private var syncEngine = SyncEngine.shared
+    @ObservedObject private var powerSync = PowerSyncManager.shared
 
     var body: some View {
         HStack(spacing: 4) {
             // Status icon
-            Image(systemName: syncEngine.isOnline ? "wifi" : "wifi.slash")
-                .foregroundColor(syncEngine.isOnline ? .green : .red)
+            Image(systemName: powerSync.isConnected ? "wifi" : "wifi.slash")
+                .foregroundColor(powerSync.isConnected ? .green : .red)
                 .font(.system(size: 12))
 
             // Status text - optional, can be hidden in compact views
-            Text(syncEngine.isOnline ? "Online" : "Offline")
+            Text(powerSync.isConnected ? "Online" : "Offline")
                 .font(.caption)
-                .foregroundColor(syncEngine.isOnline ? .green : .red)
+                .foregroundColor(powerSync.isConnected ? .green : .red)
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 6)
         .background(
             RoundedRectangle(cornerRadius: 4)
-                .fill(syncEngine.isOnline ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
+                .fill(powerSync.isConnected ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
         )
-        .animation(.easeInOut(duration: 0.3), value: syncEngine.isOnline)
+        .animation(.easeInOut(duration: 0.3), value: powerSync.isConnected)
     }
 }
 
 // A compact version that just shows an icon for tight spaces
 struct CompactConnectionIndicator: View {
-    @ObservedObject private var syncEngine = SyncEngine.shared
+    @ObservedObject private var powerSync = PowerSyncManager.shared
 
     var body: some View {
-        Image(systemName: syncEngine.isOnline ? "wifi" : "wifi.slash")
-            .foregroundColor(syncEngine.isOnline ? .green : .red)
+        Image(systemName: powerSync.isConnected ? "wifi" : "wifi.slash")
+            .foregroundColor(powerSync.isConnected ? .green : .red)
             .font(.system(size: 12))
-            .animation(.easeInOut(duration: 0.3), value: syncEngine.isOnline)
+            .animation(.easeInOut(duration: 0.3), value: powerSync.isConnected)
     }
 }

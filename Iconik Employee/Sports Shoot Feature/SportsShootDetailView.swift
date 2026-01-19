@@ -22,9 +22,13 @@ struct SportsShootDetailView: View {
     @State private var showingPermissionWarning = false
     @State private var selectedTab = 0 // 0 = Athletes, 1 = Groups
 
-    // Sync engine for offline-first operations
-    @StateObject private var syncEngine = SyncEngine.shared
+    // PowerSync for offline-first operations
+    @StateObject private var powerSync = PowerSyncManager.shared
     @StateObject private var lockManager = LockManager.shared
+
+    // Watch task handles for PowerSync streams
+    @State private var rosterWatchTask: Task<Void, Never>?
+    @State private var groupWatchTask: Task<Void, Never>?
 
     // States for roster management
     @State private var showingAddRosterEntry = false
@@ -59,8 +63,8 @@ struct SportsShootDetailView: View {
     @State private var showSyncNotification = false
     @State private var syncNotificationMessage = ""
 
-    // Unique subscription ID for this view instance (prevents overwriting other subscribers)
-    private let subscriptionId = UUID()
+    // Currently editing entry for protecting from overwrites
+    @State private var currentlyEditingImageNumbers: String = ""
 
     // Environment
     @Environment(\.scenePhase) var scenePhase
@@ -94,10 +98,6 @@ struct SportsShootDetailView: View {
             .task { await performInitialLoad() }
             .onDisappear { handleDisappear() }
             .onChange(of: scenePhase) { handleScenePhaseChange($0) }
-            .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
-                // Re-subscribe when app returns to foreground
-                Task { await setupRealtimeSubscriptions() }
-            }
             .onChange(of: editingValues) { handleEditingValueChange($0) }
             .alert(isPresented: $showingErrorAlert) { errorAlert }
             .sheet(isPresented: $showingAddRosterEntry) { addRosterEntrySheet }
@@ -146,26 +146,26 @@ struct SportsShootDetailView: View {
 
     @ViewBuilder
     private var syncStatusButton: some View {
-        if syncEngine.pendingCount > 0 {
-            Button(action: { Task { await syncEngine.syncNow() } }) {
-                syncButtonLabel
+        if powerSync.isSyncing {
+            Button(action: { }) {
+                Label("Syncing...", systemImage: "arrow.triangle.2.circlepath.circle.fill")
             }
-            .disabled(syncEngine.isSyncing || !syncEngine.isOnline)
+            .disabled(true)
         }
     }
 
     @ViewBuilder
     private var syncButtonLabel: some View {
-        if syncEngine.isSyncing {
+        if powerSync.isSyncing {
             Label("Syncing...", systemImage: "arrow.triangle.2.circlepath.circle.fill")
         } else {
-            Label("Sync \(syncEngine.pendingCount) pending change\(syncEngine.pendingCount == 1 ? "" : "s")", systemImage: "arrow.triangle.2.circlepath")
+            Label("Synced", systemImage: "checkmark.circle")
         }
     }
 
     @ViewBuilder
     private var connectionStatusLabel: some View {
-        if syncEngine.isOnline {
+        if powerSync.isConnected {
             Label("Online", systemImage: "wifi")
                 .foregroundColor(.green)
         } else {
@@ -177,9 +177,9 @@ struct SportsShootDetailView: View {
     private var menuLabel: some View {
         ZStack(alignment: .topTrailing) {
             Image(systemName: "ellipsis.circle")
-            if syncEngine.pendingCount > 0 {
+            if powerSync.isSyncing {
                 Circle()
-                    .fill(Color.orange)
+                    .fill(Color.blue)
                     .frame(width: 8, height: 8)
                     .offset(x: 4, y: -4)
             }
@@ -198,18 +198,21 @@ struct SportsShootDetailView: View {
         }
 
         await loadSportsShoot()
-        await setupRealtimeSubscriptions()
-        syncEngine.startSyncing()
+        setupPowerSyncWatchers()
     }
 
     private func handleDisappear() {
+        // Cancel PowerSync watch tasks
+        rosterWatchTask?.cancel()
+        groupWatchTask?.cancel()
+        rosterWatchTask = nil
+        groupWatchTask = nil
+
+        // Release any locks
         Task {
             if let entryId = currentlyEditingEntryId {
                 await lockManager.releaseRosterEntryLock(entryId: entryId)
             }
-            // Unsubscribe only this view's subscription, not others
-            await RosterEntryService.shared.unsubscribe(subscriptionId: subscriptionId)
-            await GroupImageService.shared.unsubscribe(subscriptionId: subscriptionId)
         }
     }
 
@@ -412,26 +415,22 @@ struct SportsShootDetailView: View {
                 // Status indicators
                 HStack(spacing: 8) {
                     // Sync status indicator
-                    if syncEngine.isSyncing {
+                    if powerSync.isSyncing {
                         ProgressView()
                             .scaleEffect(0.7)
-                    } else if syncEngine.pendingCount > 0 {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 14))
-                            .foregroundColor(.orange)
                     }
 
                     // Connection indicator
-                    Image(systemName: syncEngine.isOnline ? "wifi" : "wifi.slash")
+                    Image(systemName: powerSync.isConnected ? "wifi" : "wifi.slash")
                         .font(.system(size: 14))
-                        .foregroundColor(syncEngine.isOnline ? .green : .orange)
+                        .foregroundColor(powerSync.isConnected ? .green : .orange)
                 }
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
 
             // Offline notification banner
-            if !syncEngine.isOnline {
+            if !powerSync.isConnected {
                 HStack {
                     Image(systemName: "wifi.slash")
                         .font(.caption)
@@ -1079,47 +1078,31 @@ struct SportsShootDetailView: View {
         }
     }
 
-    // MARK: - Data Loading (Offline-First)
+    // MARK: - Data Loading (Offline-First via PowerSync)
 
     private func loadSportsShoot() async {
-        // First, try to load from cache for instant display (offline-first)
-        if let cachedShoot = LocalSportsRepository.shared.loadSportsShoot(id: shootID) {
-            self.sportsShoot = cachedShoot
-            self.rosterEntries = LocalSportsRepository.shared.loadRosterEntries(forJob: shootID) ?? []
-            self.groupImages = LocalSportsRepository.shared.loadGroupImages(forJob: shootID) ?? []
-            isLoading = false
-            print("SportsShootDetailView: Loaded from cache, now refreshing from network...")
-        }
-
-        // Then try to refresh from network (services handle caching)
         do {
-            // Fetch shoot info
+            // Fetch shoot info from SportsShootService (still needed for initial load)
             let shoot = try await SportsShootService.shared.fetchSportsShoot(id: shootID)
             self.sportsShoot = shoot
 
-            // Fetch roster entries and group images in parallel
-            async let entries = RosterEntryService.shared.fetchEntries(forJob: shootID)
-            async let groups = GroupImageService.shared.fetchGroups(forJob: shootID)
-
-            self.rosterEntries = try await entries
-            self.groupImages = try await groups
+            // Load roster and groups from PowerSync local DB (instant, works offline)
+            self.rosterEntries = try await powerSync.getRosterEntries(forJob: shootID)
+            self.groupImages = try await powerSync.getGroupImages(forJob: shootID)
 
             isLoading = false
+            print("SportsShootDetailView: Loaded from PowerSync")
         } catch {
-            // If we already have cached data displayed, don't show error alert
-            if sportsShoot != nil {
-                print("SportsShootDetailView: Network refresh failed, continuing with cached data")
-            } else {
-                isLoading = false
-                errorMessage = "Failed to load: \(error.localizedDescription)"
-                showingErrorAlert = true
-            }
+            isLoading = false
+            errorMessage = "Failed to load: \(error.localizedDescription)"
+            showingErrorAlert = true
         }
     }
 
     private func refreshRosterEntries() async {
+        // PowerSync watchers auto-update, but we can also manually refresh
         do {
-            rosterEntries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+            rosterEntries = try await powerSync.getRosterEntries(forJob: shootID)
         } catch {
             print("Failed to refresh roster: \(error)")
         }
@@ -1127,21 +1110,51 @@ struct SportsShootDetailView: View {
 
     private func refreshGroupImages() async {
         do {
-            groupImages = try await GroupImageService.shared.fetchGroups(forJob: shootID)
+            groupImages = try await powerSync.getGroupImages(forJob: shootID)
         } catch {
             print("Failed to refresh groups: \(error)")
         }
     }
 
-    private func setupRealtimeSubscriptions() async {
-        // Subscribe to roster entry changes with unique subscription ID
-        await RosterEntryService.shared.subscribeToChanges(subscriptionId: subscriptionId, jobId: shootID) { entries in
-            self.rosterEntries = entries
+    /// Set up PowerSync watch streams for real-time updates
+    private func setupPowerSyncWatchers() {
+        // Cancel any existing watchers
+        rosterWatchTask?.cancel()
+        groupWatchTask?.cancel()
+
+        // Watch roster entries
+        rosterWatchTask = Task {
+            do {
+                for try await entries in powerSync.watchRosterEntries(forJob: shootID) {
+                    // Protect currently editing entry from being overwritten
+                    if let editingId = currentlyEditingEntryId,
+                       let localEntry = rosterEntries.first(where: { $0.id == editingId }) {
+                        var merged = entries
+                        if let index = merged.firstIndex(where: { $0.id == editingId }) {
+                            // Keep local editing state
+                            var preservedEntry = localEntry
+                            preservedEntry.imageNumbers = editingValues[editingId] ?? localEntry.imageNumbers
+                            merged[index] = preservedEntry
+                        }
+                        self.rosterEntries = merged
+                    } else {
+                        self.rosterEntries = entries
+                    }
+                }
+            } catch {
+                print("SportsShootDetailView: Roster watch error: \(error)")
+            }
         }
 
-        // Subscribe to group image changes with unique subscription ID
-        await GroupImageService.shared.subscribeToChanges(subscriptionId: subscriptionId, jobId: shootID) { groups in
-            self.groupImages = groups
+        // Watch group images
+        groupWatchTask = Task {
+            do {
+                for try await groups in powerSync.watchGroupImages(forJob: shootID) {
+                    self.groupImages = groups
+                }
+            } catch {
+                print("SportsShootDetailView: Groups watch error: \(error)")
+            }
         }
     }
 
@@ -1216,26 +1229,19 @@ struct SportsShootDetailView: View {
         guard var entry = rosterEntries.first(where: { $0.id == entryId }) else { return }
 
         entry.imageNumbers = imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.updatedAt = Date()
+        entry.updatedBy = SupabaseManager.shared.client.auth.currentUser?.id
 
-        // Queue for sync (works offline)
-        syncEngine.queueRosterEntryOperation(
-            operation: .update,
-            entry: entry,
-            jobId: shootID
-        )
-
-        // Update local state
+        // Update local state immediately
         if let index = rosterEntries.firstIndex(where: { $0.id == entryId }) {
             rosterEntries[index] = entry
         }
 
-        // Try to sync immediately if online
-        if syncEngine.isOnline {
-            do {
-                _ = try await RosterEntryService.shared.updateEntry(entry)
-            } catch {
-                print("Failed to sync entry update: \(error)")
-            }
+        // Save to PowerSync (auto-syncs when online)
+        do {
+            try await powerSync.saveRosterEntry(entry)
+        } catch {
+            print("SportsShootDetailView: Failed to save entry: \(error)")
         }
     }
 
@@ -1277,44 +1283,30 @@ struct SportsShootDetailView: View {
     // MARK: - Delete Functions
 
     private func deleteRosterEntry(_ entry: RosterEntry) async {
-        // Queue for sync
-        syncEngine.queueRosterEntryOperation(
-            operation: .delete,
-            entry: entry,
-            jobId: shootID
-        )
-
-        // Remove from local state
+        // Remove from local state immediately
         rosterEntries.removeAll { $0.id == entry.id }
 
-        // Try to sync immediately if online
-        if syncEngine.isOnline {
-            do {
-                try await RosterEntryService.shared.deleteEntry(id: entry.id)
-            } catch {
-                print("Failed to sync delete: \(error)")
-            }
+        // Delete from PowerSync (auto-syncs when online)
+        do {
+            try await powerSync.deleteRosterEntry(id: entry.id)
+        } catch {
+            print("SportsShootDetailView: Failed to delete entry: \(error)")
+            // Restore on failure
+            rosterEntries.append(entry)
         }
     }
 
     private func deleteGroupImage(_ group: GroupImage) async {
-        // Queue for sync
-        syncEngine.queueGroupImageOperation(
-            operation: .delete,
-            group: group,
-            jobId: shootID
-        )
-
-        // Remove from local state
+        // Remove from local state immediately
         groupImages.removeAll { $0.id == group.id }
 
-        // Try to sync immediately if online
-        if syncEngine.isOnline {
-            do {
-                try await GroupImageService.shared.deleteGroup(id: group.id)
-            } catch {
-                print("Failed to sync delete: \(error)")
-            }
+        // Delete from PowerSync (auto-syncs when online)
+        do {
+            try await powerSync.deleteGroupImage(id: group.id)
+        } catch {
+            print("SportsShootDetailView: Failed to delete group: \(error)")
+            // Restore on failure
+            groupImages.append(group)
         }
     }
 

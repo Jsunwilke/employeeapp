@@ -37,21 +37,18 @@ class SchoolService: ObservableObject {
     
     // MARK: - Get Schools for Organization
     func getSchools(organizationID: String) async throws -> [School] {
-        do {
-            // Query schools from Supabase (Codable handles snake_case automatically)
-            let schools: [School] = try await supabase
-                .from("schools")
-                .select()
-                .eq("organization_id", value: organizationID)
-                .execute()
-                .value
+        // Query schools from Supabase (Codable handles snake_case automatically)
+        let schools: [School] = try await supabase
+            .from("schools")
+            .select()
+            .eq("organization_id", value: organizationID)
+            .execute()
+            .value
 
-            // Sort alphabetically by name
-            return schools.sorted { $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending }
-        } catch {
-            print("❌ SchoolService decode error: \(describeDecodingError(error))")
-            throw error
-        }
+        // Sort alphabetically by name
+        let sorted = schools.sorted { $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending }
+
+        return sorted
     }
     
     // MARK: - Load Schools with Loading State

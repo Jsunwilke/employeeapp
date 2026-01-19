@@ -127,7 +127,10 @@ struct SportsShootListView: View {
     
     // Use the view model for state management
     @StateObject private var viewModel = SportsShootListViewModel()
-    
+
+    // PowerSync for offline-first operations
+    @StateObject private var powerSync = PowerSyncManager.shared
+
     // Focus state for keyboard navigation
     @FocusState private var focusedField: String?
     
@@ -359,10 +362,10 @@ struct SportsShootListView: View {
                                             isSelected: false,
                                             onSelect: { },
                                             onSyncNow: {
-                                                Task { await SyncEngine.shared.syncNow() }
+                                                Task { try? await powerSync.connect() }
                                             },
                                             onMakeAvailableOffline: {
-                                                Task { await SyncEngine.shared.syncNow() }
+                                                Task { try? await powerSync.connect() }
                                             },
                                             isInsideNavigationLink: true
                                         )
@@ -399,11 +402,11 @@ struct SportsShootListView: View {
                                     onSelect: { },
                                     onSyncNow: {
                                         Task {
-                                            await SyncEngine.shared.syncNow()
+                                            try? await powerSync.connect()
                                         }
                                     },
                                     onMakeAvailableOffline: {
-                                        Task { await SyncEngine.shared.syncNow() }
+                                        Task { try? await powerSync.connect() }
                                     },
                                     isInsideNavigationLink: true
                                 )
@@ -519,10 +522,10 @@ struct SportsShootListView: View {
                                             collapseSidebarAfterSelection()
                                         },
                                         onSyncNow: {
-                                            Task { await SyncEngine.shared.syncNow() }
+                                            Task { try? await powerSync.connect() }
                                         },
                                         onMakeAvailableOffline: {
-                                            Task { await SyncEngine.shared.syncNow() }
+                                            Task { try? await powerSync.connect() }
                                         }
                                     )
                                     .background(viewModel.selectedShoot?.id == sportsShoot.id ? Color.blue.opacity(0.1) : Color.clear)
@@ -568,11 +571,11 @@ struct SportsShootListView: View {
                                 },
                                 onSyncNow: {
                                     Task {
-                                        await SyncEngine.shared.syncNow()
+                                        try? await powerSync.connect()
                                     }
                                 },
                                 onMakeAvailableOffline: {
-                                    Task { await SyncEngine.shared.syncNow() }
+                                    Task { try? await powerSync.connect() }
                                 }
                             )
                             .background(viewModel.selectedShoot?.id == sportsShoot.id ? Color.blue.opacity(0.1) : Color.clear)
@@ -644,11 +647,11 @@ struct SportsShootListView: View {
                         .disabled(viewModel.selectedShoot == nil)
                         .opacity(viewModel.selectedShoot == nil ? 0.5 : 1.0)
                         
-                        // Sync button - syncs pending changes via SyncEngine
+                        // Sync button - triggers PowerSync reconnect
                         if viewModel.selectedShoot != nil {
                             Button(action: {
                                 Task {
-                                    await SyncEngine.shared.syncNow()
+                                    try? await powerSync.connect()
                                 }
                             }) {
                                 HStack {
@@ -978,13 +981,15 @@ struct SportsShootListView: View {
                 .navigationBarHidden(true)
                 .onAppear {
                     setupOrientationNotification()
-                    
+
                     // Set up a real-time listener for updates
                     setupRealtimeListeners()
-                    
-                    // Clean up stale locks immediately on view load
+
+                    // iPad: Load initial roster data and clean up stale locks
+                    // (iPhone does this in SportsShootDetailView)
                     if let shootID = viewModel.selectedShoot?.id {
                         Task {
+                            await loadRosterForSelectedShoot(shootID: shootID)
                             try? await RosterEntryService.shared.releaseExpiredLocks(forJob: shootID)
                             try? await GroupImageService.shared.releaseExpiredLocks(forJob: shootID)
                         }
@@ -1015,8 +1020,9 @@ struct SportsShootListView: View {
                     // When the selected shoot changes, set up listeners for the new shoot
                     setupRealtimeListeners()
 
-                    // Clean up stale locks for the new shoot
+                    // Load roster data and clean up stale locks for the new shoot
                     Task {
+                        await loadRosterForSelectedShoot(shootID: newShootID)
                         try? await RosterEntryService.shared.releaseExpiredLocks(forJob: newShootID)
                         try? await GroupImageService.shared.releaseExpiredLocks(forJob: newShootID)
                     }
@@ -1255,10 +1261,10 @@ struct SportsShootListView: View {
         }
         
         private func updateStatus() {
-            // Get status from SyncEngine
-            let newIsFullyCached = true // In new architecture, data is always available
-            let newPendingCount = SyncEngine.shared.pendingCount
-            let newOnline = SyncEngine.shared.isOnline
+            // Get status from PowerSync - data is always available locally
+            let newIsFullyCached = true // PowerSync keeps data locally in SQLite
+            let newPendingCount = 0
+            let newOnline = PowerSyncManager.shared.isConnected
 
             // Only update if status actually changed to avoid UI flashing
             if isFullyCached != newIsFullyCached || pendingChangeCount != newPendingCount || isOnline != newOnline {
@@ -1312,34 +1318,38 @@ struct SportsShootListView: View {
     // MARK: - Network Monitoring
     
     private func setupNetworkMonitoring() {
-        let networkMonitor = NetworkMonitor.shared
-        networkMonitor.startMonitoring { isConnected in
-            DispatchQueue.main.async {
-                self.viewModel.isOnline = isConnected
+        // Use PowerSync's connection status - it handles network monitoring internally
+        // Initial sync of status
+        viewModel.isOnline = PowerSyncManager.shared.isConnected
 
-                // If we just came back online, sync pending changes via SyncEngine
-                if isConnected {
-                    Task {
-                        await SyncEngine.shared.syncNow()
-                    }
-                }
+        // Listen for PowerSync connection changes
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("PowerSyncConnectionChanged"),
+            object: nil,
+            queue: .main
+        ) { notification in
+            if let isConnected = notification.userInfo?["isConnected"] as? Bool {
+                self.viewModel.isOnline = isConnected
             }
         }
     }
     
     // MARK: - Conflict Handling
+    // NOTE: PowerSync uses last-write-wins conflict resolution, so manual conflict handling is not needed.
+    // This method is kept for backwards compatibility but will never trigger the conflict view.
 
     private func setupConflictHandling() {
-        // Listen for sync conflict notifications from SyncEngine
+        // PowerSync handles conflicts automatically with last-write-wins strategy
+        // This notification handler is kept for backwards compatibility but won't be triggered
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("SyncConflictsDetected"),
             object: nil,
             queue: .main
         ) { _ in
-            // Check if there are active conflicts
-            guard !SyncEngine.shared.activeConflicts.isEmpty else { return }
+            // PowerSync handles conflicts automatically - this guard always returns
+            guard false else { return }
 
-            // Present conflict resolution view
+            // Legacy conflict resolution view (never reached with PowerSync)
             DispatchQueue.main.async {
                 let keyWindow = UIApplication.shared.connectedScenes
                     .filter { $0.activationState == .foregroundActive }
@@ -2235,16 +2245,8 @@ struct SportsShootListView: View {
                                     return
                                 }
 
-                                // First, try to load from cache for instant display (offline-first)
-                                if let cachedShoots = LocalSportsRepository.shared.loadSportsShoots(forOrg: storedUserOrganizationID) {
-                                    self.viewModel.sportsShoots = cachedShoots
-                                    self.viewModel.isLoading = false
-                                    print("[DEBUG] loadSportsShoots: Loaded \(cachedShoots.count) shoots from cache, refreshing from network...")
-                                    // Check for selected session with cached data
-                                    self.checkForSelectedSession()
-                                } else {
-                                    viewModel.isLoading = true
-                                }
+                                // PowerSync handles offline caching - start loading
+                                viewModel.isLoading = true
 
                                 // Then refresh from network (service handles caching)
                                 Task {
@@ -2345,62 +2347,68 @@ struct SportsShootListView: View {
                             private func refreshSelectedShoot() {
                                 guard let currentShoot = viewModel.selectedShoot else { return }
 
+                                // Load from PowerSync (offline-first - data is always available locally)
                                 Task {
                                     do {
-                                        let updatedShoot = try await SportsShootService.shared.fetchSportsShoot(id: currentShoot.id)
-                                        // Also fetch roster and groups
-                                        let entries = try await RosterEntryService.shared.fetchEntries(forJob: currentShoot.id)
-                                        let groups = try await GroupImageService.shared.fetchGroups(forJob: currentShoot.id)
+                                        // Load from PowerSync local database (instant, works offline)
+                                        let entries = try await powerSync.getRosterEntries(forJob: currentShoot.id)
+                                        let groups = try await powerSync.getGroupImages(forJob: currentShoot.id)
 
                                         await MainActor.run {
-                                            // Update the selected shoot
-                                            self.viewModel.selectedShoot = updatedShoot
                                             self.viewModel.rosterEntries = entries
                                             self.viewModel.groupImages = groups
+                                        }
 
-                                            // Also update this shoot in the list
+                                        // Also try to refresh shoot info from network
+                                        let updatedShoot = try await SportsShootService.shared.fetchSportsShoot(id: currentShoot.id)
+                                        await MainActor.run {
+                                            self.viewModel.selectedShoot = updatedShoot
                                             if let index = self.viewModel.sportsShoots.firstIndex(where: { $0.id == updatedShoot.id }) {
                                                 self.viewModel.sportsShoots[index] = updatedShoot
                                             }
                                         }
                                     } catch {
-                                        await MainActor.run {
-                                            self.viewModel.errorMessage = "Failed to refresh: \(error.localizedDescription)"
-                                            self.viewModel.showingErrorAlert = true
-                                        }
+                                        // PowerSync data is always available, network errors are expected offline
+                                        print("SportsShootListView: Refresh using PowerSync local data")
                                     }
                                 }
                             }
                             
                             private func deleteRosterEntry(entryID: UUID) {
+                                guard let entry = viewModel.rosterEntries.first(where: { $0.id == entryID }) else { return }
+
+                                // Remove from local state immediately
+                                viewModel.rosterEntries.removeAll { $0.id == entryID }
+
+                                // Delete from PowerSync (auto-syncs when online)
                                 Task {
                                     do {
-                                        try await RosterEntryService.shared.deleteEntry(id: entryID)
-                                        await MainActor.run {
-                                            // Remove from local state
-                                            viewModel.rosterEntries.removeAll { $0.id == entryID }
-                                        }
+                                        try await powerSync.deleteRosterEntry(id: entry.id)
                                     } catch {
+                                        print("SportsShootListView: Failed to delete entry: \(error)")
+                                        // Restore on failure
                                         await MainActor.run {
-                                            self.viewModel.errorMessage = "Failed to delete athlete: \(error.localizedDescription)"
-                                            self.viewModel.showingErrorAlert = true
+                                            viewModel.rosterEntries.append(entry)
                                         }
                                     }
                                 }
                             }
                             
                             private func deleteGroupImage(groupID: UUID) {
+                                guard let group = viewModel.groupImages.first(where: { $0.id == groupID }) else { return }
+
+                                // Remove from local state immediately
+                                viewModel.groupImages.removeAll { $0.id == groupID }
+
+                                // Delete from PowerSync (auto-syncs when online)
                                 Task {
                                     do {
-                                        try await GroupImageService.shared.deleteGroup(id: groupID)
-                                        await MainActor.run {
-                                            // Remove from local state
-                                            viewModel.groupImages.removeAll { $0.id == groupID }
-                                        }
+                                        try await powerSync.deleteGroupImage(id: group.id)
                                     } catch {
+                                        print("SportsShootListView: Failed to delete group: \(error)")
+                                        // Restore on failure
                                         await MainActor.run {
-                                            self.viewModel.errorMessage = "Failed to delete group: \(error.localizedDescription)"
-                                            self.viewModel.showingErrorAlert = true
+                                            viewModel.groupImages.append(group)
                                         }
                                     }
                                 }
@@ -2544,6 +2552,25 @@ struct SportsShootListView: View {
                                 }
                             }
                             
+                            // MARK: - iPad Roster Data Loading
+
+                            /// Loads roster data for the selected shoot on iPad (offline-first via PowerSync)
+                            /// iPhone uses SportsShootDetailView which handles this via loadSportsShoot()
+                            private func loadRosterForSelectedShoot(shootID: UUID) async {
+                                // Load from PowerSync local database (instant, works offline)
+                                do {
+                                    let entries = try await powerSync.getRosterEntries(forJob: shootID)
+                                    let groups = try await powerSync.getGroupImages(forJob: shootID)
+
+                                    await MainActor.run {
+                                        viewModel.rosterEntries = entries
+                                        viewModel.groupImages = groups
+                                    }
+                                } catch {
+                                    print("SportsShootListView: Failed to load from PowerSync: \(error)")
+                                }
+                            }
+
                             // MARK: - Realtime Listeners
 
                             // Set up Supabase realtime listeners for real-time updates
@@ -2667,7 +2694,7 @@ struct SportsShootListView: View {
 
                                 // Set up realtime subscription to track roster entry locks with unique subscription ID
                                 Task {
-                                    await RosterEntryService.shared.subscribeToChanges(subscriptionId: subscriptionId, jobId: shootID) { entries in
+                                    await RosterEntryService.shared.subscribeToChanges(subscriptionId: subscriptionId, jobId: shootID) { [self] entries in
                                         // Extract locked entries from the realtime update
                                         var locks: [UUID: String] = [:]
                                         for entry in entries {
@@ -2677,8 +2704,21 @@ struct SportsShootListView: View {
                                         }
                                         self.viewModel.lockedEntries = locks
 
-                                        // Also update roster entries
-                                        self.viewModel.rosterEntries = entries
+                                        // Protect currently editing entry from being overwritten
+                                        if let editingId = self.viewModel.currentlyEditingEntry,
+                                           let localEntry = self.viewModel.rosterEntries.first(where: { $0.id == editingId }) {
+                                            var merged = entries
+                                            if let index = merged.firstIndex(where: { $0.id == editingId }) {
+                                                // Keep local editing state
+                                                var preservedEntry = localEntry
+                                                preservedEntry.imageNumbers = self.viewModel.editingImageNumber
+                                                merged[index] = preservedEntry
+                                            }
+                                            self.viewModel.rosterEntries = merged
+                                        } else {
+                                            // Not editing - accept all server updates
+                                            self.viewModel.rosterEntries = entries
+                                        }
                                     }
                                 }
                             }
@@ -2729,27 +2769,21 @@ struct SportsShootListView: View {
 
                                 var updatedEntry = currentEntry
                                 updatedEntry.imageNumbers = viewModel.editingImageNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                                updatedEntry.version = currentEntry.version + 1
+                                updatedEntry.updatedAt = Date()
+                                updatedEntry.updatedBy = SupabaseManager.shared.client.auth.currentUser?.id
 
+                                // Update local state immediately
+                                if let index = viewModel.rosterEntries.firstIndex(where: { $0.id == entryID }) {
+                                    viewModel.rosterEntries[index] = updatedEntry
+                                }
+
+                                // Save to PowerSync (auto-syncs when online)
                                 Task {
                                     do {
-                                        let savedEntry = try await RosterEntryService.shared.updateEntry(updatedEntry)
-                                        await MainActor.run {
-                                            // Update the local roster to reflect the change
-                                            if let index = self.viewModel.rosterEntries.firstIndex(where: { $0.id == entryID }) {
-                                                self.viewModel.rosterEntries[index] = savedEntry
-                                            }
-                                        }
+                                        try await powerSync.saveRosterEntry(updatedEntry)
                                     } catch {
-                                        await MainActor.run {
-                                            // Check if it's a permission error
-                                            let errorMessage = error.localizedDescription.lowercased()
-                                            if errorMessage.contains("permission") || errorMessage.contains("insufficient") {
-                                                self.viewModel.errorMessage = "Permission denied. Please contact your administrator to ensure you have access to edit this sports shoot."
-                                            } else {
-                                                self.viewModel.errorMessage = "Failed to save: \(error.localizedDescription)"
-                                            }
-                                            self.viewModel.showingErrorAlert = true
-                                        }
+                                        print("SportsShootListView: Failed to save entry: \(error)")
                                     }
                                 }
                             }

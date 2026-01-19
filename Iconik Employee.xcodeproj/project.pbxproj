@@ -12,6 +12,7 @@
 		7A023CB42EFE51C70085EAD5 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CB32EFE51C70085EAD5 /* PostgREST */; };
 		7A023CB62EFE51C70085EAD5 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CB52EFE51C70085EAD5 /* Realtime */; };
 		7A023CB82EFE51C70085EAD5 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 7A023CB72EFE51C70085EAD5 /* Storage */; };
+		7A24838C2F19BEFB001B8CCC /* PowerSync in Frameworks */ = {isa = PBXBuildFile; productRef = 7A24838B2F19BEFB001B8CCC /* PowerSync */; };
 		7AD701182EFF4E4900094E9C /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 7AD701172EFF4E4900094E9C /* Supabase */; };
 		C3B8E9752DC7D5080014357D /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C3B8E9742DC7D5080014357D /* Metal.framework */; };
 /* End PBXBuildFile section */
@@ -67,6 +68,7 @@
 				C3B8E9752DC7D5080014357D /* Metal.framework in Frameworks */,
 				7A023CB82EFE51C70085EAD5 /* Storage in Frameworks */,
 				7A023CB22EFE51C70085EAD5 /* Functions in Frameworks */,
+				7A24838C2F19BEFB001B8CCC /* PowerSync in Frameworks */,
 				7AD701182EFF4E4900094E9C /* Supabase in Frameworks */,
 				7A023CB62EFE51C70085EAD5 /* Realtime in Frameworks */,
 				7A023CB02EFE51C70085EAD5 /* Auth in Frameworks */,
@@ -220,6 +222,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				7A24838A2F19BEFB001B8CCC /* XCRemoteSwiftPackageReference "powersync-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C389745B2D74DACE00F75F9F /* Products */;
@@ -428,7 +431,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 31;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -472,7 +475,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 31;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -626,6 +629,14 @@
 				minimumVersion = 2.5.1;
 			};
 		};
+		7A24838A2F19BEFB001B8CCC /* XCRemoteSwiftPackageReference "powersync-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/powersync-ja/powersync-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.9.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -653,6 +664,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7A023CAE2EFE51C70085EAD5 /* XCRemoteSwiftPackageReference "supabase-swift" */;
 			productName = Storage;
+		};
+		7A24838B2F19BEFB001B8CCC /* PowerSync */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7A24838A2F19BEFB001B8CCC /* XCRemoteSwiftPackageReference "powersync-swift" */;
+			productName = PowerSync;
 		};
 		7AD701172EFF4E4900094E9C /* Supabase */ = {
 			isa = XCSwiftPackageProductDependency;

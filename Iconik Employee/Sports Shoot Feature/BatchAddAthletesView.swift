@@ -4,6 +4,9 @@ struct BatchAddAthletesView: View {
     let shootID: UUID
     let onComplete: (Bool) -> Void
 
+    // PowerSync for offline-first operations
+    @StateObject private var powerSync = PowerSyncManager.shared
+
     @State private var sportName: String = ""
     @State private var numberOfAthletes: String = "10"
     @State private var startingSubjectID: Int = 101
@@ -196,7 +199,7 @@ struct BatchAddAthletesView: View {
 
         Task {
             do {
-                let entries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+                let entries = try await powerSync.getRosterEntries(forJob: shootID)
 
                 // Find the highest Subject ID value
                 let highestID = entries.compactMap { entry -> Int? in
@@ -230,31 +233,43 @@ struct BatchAddAthletesView: View {
         isLoading = true
 
         Task {
-            do {
-                // Create roster entries one by one
-                for index in 0..<count {
-                    let entry = RosterEntry(
-                        sportsJobId: shootID,
-                        lastName: "",
-                        firstName: "\(startingSubjectID + index)",
-                        teacher: specialField,
-                        groupName: sportName.uppercased(),
-                        sortOrder: index
-                    )
-                    _ = try await RosterEntryService.shared.createEntry(entry)
-                }
+            var allSuccess = true
 
-                await MainActor.run {
-                    isLoading = false
-                    onComplete(true)
-                    presentationMode.wrappedValue.dismiss()
+            // Save all entries to PowerSync (auto-syncs when online)
+            for index in 0..<count {
+                let entry = RosterEntry(
+                    id: UUID(),
+                    sportsJobId: shootID,
+                    lastName: "",
+                    firstName: "\(startingSubjectID + index)",
+                    teacher: specialField,
+                    groupName: sportName.uppercased(),
+                    email: "",
+                    phone: "",
+                    imageNumbers: "",
+                    notes: "",
+                    sortOrder: index,
+                    version: 1,
+                    updatedAt: Date(),
+                    updatedBy: nil,
+                    lockedBy: nil,
+                    lockedByName: nil,
+                    lockedAt: nil,
+                    createdAt: Date()
+                )
+
+                do {
+                    try await powerSync.saveRosterEntry(entry)
+                } catch {
+                    print("BatchAddAthletesView: Failed to save entry: \(error)")
+                    allSuccess = false
                 }
-            } catch {
-                await MainActor.run {
-                    isLoading = false
-                    errorMessage = "Failed to add athletes: \(error.localizedDescription)"
-                    showingErrorAlert = true
-                }
+            }
+
+            await MainActor.run {
+                isLoading = false
+                onComplete(allSuccess)
+                presentationMode.wrappedValue.dismiss()
             }
         }
     }

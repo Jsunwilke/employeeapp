@@ -23,33 +23,19 @@ class RosterEntryService {
     // MARK: - CRUD Operations (Cache-First Pattern)
 
     /// Fetch all roster entries for a sports job
+    /// NOTE: For offline-first access, use PowerSyncManager.getRosterEntries() instead
     func fetchEntries(forJob jobId: UUID) async throws -> [RosterEntry] {
-        // Try to get from cache first
-        let cached = LocalSportsRepository.shared.loadRosterEntries(forJob: jobId)
+        // Fetch from network (Supabase)
+        let entries: [RosterEntry] = try await supabase
+            .from(tableName)
+            .select()
+            .eq("sports_job_id", value: jobId)
+            .order("sort_order", ascending: true)
+            .order("last_name", ascending: true)
+            .execute()
+            .value
 
-        do {
-            // Fetch from network
-            let entries: [RosterEntry] = try await supabase
-                .from(tableName)
-                .select()
-                .eq("sports_job_id", value: jobId)
-                .order("sort_order", ascending: true)
-                .order("last_name", ascending: true)
-                .execute()
-                .value
-
-            // Save to cache for offline use
-            LocalSportsRepository.shared.saveRosterEntries(entries, forJob: jobId)
-            return entries
-        } catch {
-            // If network fails but we have cache, return cached data
-            if let cached = cached {
-                print("RosterEntryService: Network failed, returning \(cached.count) cached entries")
-                return cached
-            }
-            // No cache and network failed - rethrow error
-            throw error
-        }
+        return entries.sorted { ($0.sortOrder) < ($1.sortOrder) }
     }
 
     /// Fetch a single roster entry by ID
@@ -125,44 +111,42 @@ class RosterEntryService {
 
     // MARK: - Locking Operations
 
-    /// Attempt to acquire a lock on a roster entry using atomic UPDATE
+    /// Attempt to acquire a lock on a roster entry using atomic RPC function
     /// Returns true if lock was acquired, false if already locked by someone else
-    /// When offline, returns true to allow local editing (SyncEngine handles conflicts)
+    /// When offline, returns true to allow local editing (PowerSync handles sync)
     func acquireLock(entryId: UUID, userId: UUID, userName: String) async throws -> Bool {
-        // If offline, allow local editing - SyncEngine will handle conflicts when back online
-        let isOnline = await MainActor.run { SyncEngine.shared.isOnline }
+        // If offline, allow local editing - PowerSync will sync when back online
+        let isOnline = await MainActor.run { PowerSyncManager.shared.isConnected }
         guard isOnline else {
             print("RosterEntryService: Offline - allowing local edit without remote lock")
             return true
         }
 
-        // Use atomic UPDATE with conditions to prevent race conditions
-        // Lock can be acquired if:
-        // 1. Entry is not locked (locked_by_name is NULL), OR
-        // 2. Already locked by this device (locked_by_name matches - includes device session ID), OR
-        // 3. Lock has expired (locked_at is more than 2 minutes ago)
-        let twoMinutesAgo = Date().addingTimeInterval(-120)
-        let twoMinutesAgoISO = twoMinutesAgo.ISO8601Format()
-
         do {
-            // Atomic UPDATE: only succeeds if conditions are met
-            // Using OR filter with locked_by_name for per-device locking (same user on different devices = different locks)
-            try await supabase
-                .from(tableName)
-                .update([
-                    "locked_by": userId.uuidString,
-                    "locked_by_name": userName,
-                    "locked_at": Date().ISO8601Format()
+            // Use atomic RPC function with SELECT ... FOR UPDATE to prevent race conditions
+            let result: AnyJSON = try await supabase
+                .rpc("acquire_lock", params: [
+                    "p_table_name": AnyJSON.string("roster_entries"),
+                    "p_record_id": AnyJSON.string(entryId.uuidString.lowercased()),
+                    "p_user_id": AnyJSON.string(userId.uuidString.lowercased()),
+                    "p_user_name": AnyJSON.string(userName)
                 ])
-                .eq("id", value: entryId)
-                .or("locked_by_name.is.null,locked_by_name.eq.\(userName),locked_at.lt.\(twoMinutesAgoISO)")
                 .execute()
+                .value
 
-            // Verify we actually got the lock by fetching current state (check name for per-device locking)
-            let entry = try await fetchEntry(id: entryId)
-            return entry.lockedByName == userName
+            // Parse the JSONB response
+            if case .object(let dict) = result,
+               case .bool(let success) = dict["success"] {
+                if !success, case .string(let lockedBy) = dict["locked_by"] {
+                    print("RosterEntryService: Lock held by \(lockedBy)")
+                }
+                return success
+            }
+
+            print("RosterEntryService: Unexpected RPC response format")
+            return false
         } catch {
-            // Network error - allow local editing, SyncEngine handles conflicts
+            // Network error - allow local editing, PowerSync handles sync
             print("RosterEntryService: Network error acquiring lock - allowing local edit: \(error)")
             return true
         }
@@ -172,7 +156,7 @@ class RosterEntryService {
     /// When offline, skips gracefully - lock will expire naturally in ≤2 minutes
     func releaseLock(entryId: UUID, userName: String) async throws {
         // If offline, skip - lock will expire naturally
-        let isOnline = await MainActor.run { SyncEngine.shared.isOnline }
+        let isOnline = await MainActor.run { PowerSyncManager.shared.isConnected }
         guard isOnline else {
             print("RosterEntryService: Offline - skipping lock release, will expire in ≤2 min")
             return
@@ -196,7 +180,7 @@ class RosterEntryService {
     /// When offline, skips gracefully - lock will expire if we stay offline
     func refreshLock(entryId: UUID, userName: String) async throws {
         // If offline, skip - lock will expire if we stay offline too long
-        let isOnline = await MainActor.run { SyncEngine.shared.isOnline }
+        let isOnline = await MainActor.run { PowerSyncManager.shared.isConnected }
         guard isOnline else {
             print("RosterEntryService: Offline - skipping lock refresh")
             return

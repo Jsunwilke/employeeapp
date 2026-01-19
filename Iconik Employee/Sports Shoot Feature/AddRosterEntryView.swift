@@ -6,6 +6,10 @@ struct AddRosterEntryView: View {
     let existingEntry: RosterEntry?
     let onComplete: (Bool) -> Void
 
+    // PowerSync for offline-first operations
+    @StateObject private var powerSync = PowerSyncManager.shared
+    @StateObject private var lockManager = LockManager.shared
+
     @State private var lastName: String = ""
     @State private var firstName: String = ""
     @State private var teacher: String = ""
@@ -20,6 +24,11 @@ struct AddRosterEntryView: View {
     @State private var showingErrorAlert = false
     @State private var isLoadingSubjectID = false
 
+    // Lock state for editing existing entries
+    @State private var lockAcquired = false
+    @State private var lockError: String?
+    @State private var isAcquiringLock = false
+
     // Focus state for keyboard navigation
     @FocusState private var focusedField: String?
 
@@ -31,7 +40,83 @@ struct AddRosterEntryView: View {
 
     var body: some View {
         NavigationView {
-            Form {
+            // Show lock error if we couldn't get lock
+            if let error = lockError {
+                lockErrorView(error)
+            } else if isAcquiringLock {
+                acquiringLockView
+            } else {
+                formContent
+            }
+        }
+        .task {
+            await acquireLockIfNeeded()
+        }
+        .onDisappear {
+            releaseLockIfNeeded()
+        }
+    }
+
+    // MARK: - Lock Error View
+
+    private func lockErrorView(_ error: String) -> some View {
+        VStack(spacing: 20) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 60))
+                .foregroundColor(.red)
+
+            Text("Cannot Edit")
+                .font(.title2)
+                .fontWeight(.bold)
+
+            Text(error)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+
+            Button("Go Back") {
+                presentationMode.wrappedValue.dismiss()
+            }
+            .padding()
+            .background(Color.blue)
+            .foregroundColor(.white)
+            .cornerRadius(10)
+        }
+        .padding()
+        .navigationBarTitle("Locked", displayMode: .inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("Cancel") {
+                    presentationMode.wrappedValue.dismiss()
+                }
+            }
+        }
+    }
+
+    // MARK: - Acquiring Lock View
+
+    private var acquiringLockView: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .scaleEffect(1.5)
+            Text("Acquiring lock...")
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationBarTitle(isEditing ? "Edit Athlete" : "Add Athlete", displayMode: .inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("Cancel") {
+                    presentationMode.wrappedValue.dismiss()
+                }
+            }
+        }
+    }
+
+    // MARK: - Form Content
+
+    private var formContent: some View {
+        Form {
                 Section(header: Text("Athlete Information")) {
                     TextField("Name", text: $lastName)
                         .autocapitalization(.words)
@@ -187,6 +272,42 @@ struct AddRosterEntryView: View {
                     loadNextSubjectID()
                 }
             }
+    }
+
+    // MARK: - Lock Management
+
+    private func acquireLockIfNeeded() async {
+        guard let entry = existingEntry else {
+            // New entry - no lock needed
+            lockAcquired = true
+            return
+        }
+
+        isAcquiringLock = true
+
+        // Try to acquire lock
+        let acquired = await lockManager.acquireRosterEntryLock(entryId: entry.id)
+
+        await MainActor.run {
+            isAcquiringLock = false
+            if acquired {
+                lockAcquired = true
+            } else {
+                // Check who has the lock
+                if let lockedByName = entry.lockedByName {
+                    lockError = "This athlete is being edited by \(lockedByName). Please try again later."
+                } else {
+                    lockError = "This athlete is being edited by another photographer. Please try again later."
+                }
+            }
+        }
+    }
+
+    private func releaseLockIfNeeded() {
+        guard let entry = existingEntry, lockAcquired else { return }
+
+        Task {
+            await lockManager.releaseRosterEntryLock(entryId: entry.id)
         }
     }
 
@@ -195,8 +316,8 @@ struct AddRosterEntryView: View {
 
         Task {
             do {
-                // Fetch roster entries for this job to find the highest Subject ID
-                let entries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
+                // Fetch roster entries from PowerSync to find the highest Subject ID
+                let entries = try await powerSync.getRosterEntries(forJob: shootID)
 
                 // Find the highest Subject ID value
                 let highestID = entries.compactMap { entry -> Int? in
@@ -219,11 +340,9 @@ struct AddRosterEntryView: View {
     }
 
     private func saveRosterEntry() {
-        isLoading = true
-
         let trimmedLastName = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Create or update the roster entry
+        // Create or update the roster entry with incremented version
         let entry = RosterEntry(
             id: existingEntry?.id ?? UUID(),
             sportsJobId: shootID,
@@ -236,7 +355,7 @@ struct AddRosterEntryView: View {
             imageNumbers: imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines),
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
             sortOrder: existingEntry?.sortOrder ?? 0,
-            version: existingEntry?.version ?? 1,
+            version: (existingEntry?.version ?? 0) + 1,  // Increment version for conflict detection
             updatedAt: Date(),
             updatedBy: nil,
             lockedBy: nil,
@@ -245,24 +364,18 @@ struct AddRosterEntryView: View {
             createdAt: existingEntry?.createdAt ?? Date()
         )
 
+        // Save to PowerSync (auto-syncs when online)
         Task {
             do {
-                if isEditing {
-                    _ = try await RosterEntryService.shared.updateEntry(entry)
-                } else {
-                    _ = try await RosterEntryService.shared.createEntry(entry)
-                }
-
+                try await powerSync.saveRosterEntry(entry)
                 await MainActor.run {
-                    self.isLoading = false
-                    self.onComplete(true)
-                    self.presentationMode.wrappedValue.dismiss()
+                    onComplete(true)
+                    presentationMode.wrappedValue.dismiss()
                 }
             } catch {
                 await MainActor.run {
-                    self.isLoading = false
-                    self.errorMessage = "Failed to \(isEditing ? "update" : "add") athlete: \(error.localizedDescription)"
-                    self.showingErrorAlert = true
+                    errorMessage = "Failed to save: \(error.localizedDescription)"
+                    showingErrorAlert = true
                 }
             }
         }

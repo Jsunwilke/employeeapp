@@ -24,9 +24,15 @@ struct EmployeeAppApp: App {
         _ = SupabaseManager.shared
         print("✅ Supabase initialized and ready")
 
-        // Start SyncEngine for offline-first architecture
-        SyncEngine.shared.startSyncing()
-        print("🔄 SyncEngine started monitoring for pending changes")
+        // Initialize PowerSync for offline-first sync
+        Task {
+            do {
+                try await PowerSyncManager.shared.initialize()
+                print("⚡ PowerSync initialized and connected")
+            } catch {
+                print("⚠️ PowerSync initialization failed: \(error)")
+            }
+        }
 
         // Apply the saved theme immediately during app initialization
         applyAppTheme()
