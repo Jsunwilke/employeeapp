@@ -75,7 +75,8 @@ struct TabBarItem: Identifiable, Codable, Equatable {
             "schedule": "Schedule",
             "locationPhotos": "Photos",
             "sportsShoot": "Sports",
-            "timeOffRequests": "Time Off"
+            "timeOffRequests": "Time Off",
+            "equipment": "Equipment"
         ]
         return shortTitles[featureId]
     }

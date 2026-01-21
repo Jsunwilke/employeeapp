@@ -80,7 +80,8 @@ class MainEmployeeViewModel: ObservableObject {
         FeatureItem(id: "yearbookChecklists", title: "Yearbook Checklists", systemImage: "list.clipboard", description: "Track yearbook photo requirements"),
         FeatureItem(id: "classGroups", title: "Class Groups", systemImage: "person.3", description: "Track class photos by grade and teacher"),
         FeatureItem(id: "training", title: "Training", systemImage: "graduationcap.fill", description: "View your training photos and feedback"),
-        FeatureItem(id: "tasks", title: "Tasks", systemImage: "checklist", description: "Manage team tasks and to-dos")
+        FeatureItem(id: "tasks", title: "Tasks", systemImage: "checklist", description: "Manage team tasks and to-dos"),
+        FeatureItem(id: "equipment", title: "Equipment", systemImage: "camera.fill", description: "Manage photography equipment")
     ]
     
     private let employeeOrderKey = "employeeFeatureOrder"
@@ -822,6 +823,8 @@ struct MainEmployeeView: View {
             ManagerJobBoxTrackerView()
         case "tasks":
             TasksMainView()
+        case "equipment":
+            EquipmentTabView()
         default:
             homeView
         }
@@ -1099,10 +1102,12 @@ struct MainEmployeeView: View {
         case "stats": return .indigo
         case "galleryCreator": return .green
         case "jobBoxTracker": return .teal
+        case "equipment": return .cyan
+        case "tasks": return .blue
         default: return .gray
         }
     }
-    
+
     private func loadSchedule() {
         viewModel.fetchUpcomingEvents(employeeName: "")
     }

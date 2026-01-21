@@ -251,6 +251,7 @@ struct TabBarButton: View {
         case "photoshootNotes": return .purple
         case "dailyJobReport": return .green
         case "sportsShoot": return .indigo
+        case "equipment": return .cyan
         default: return .blue
         }
     }
@@ -502,6 +503,7 @@ struct TabBarConfigurationView: View {
         case "locationPhotos": return .pink
         case "sportsShoot": return .indigo
         case "timeOffRequests": return .teal
+        case "equipment": return .cyan
         default: return .gray
         }
     }

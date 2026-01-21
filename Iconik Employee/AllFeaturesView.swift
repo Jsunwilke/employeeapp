@@ -241,6 +241,8 @@ struct AllFeaturesView: View {
         case "stats": return .indigo
         case "galleryCreator": return .green
         case "jobBoxTracker": return .teal
+        case "equipment": return .cyan
+        case "tasks": return .blue
         default: return .gray
         }
     }

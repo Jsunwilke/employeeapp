@@ -64,6 +64,9 @@ struct SlingWeeklyView: View {
     // Cached event indicators for performance (pre-computed to avoid repeated filtering)
     @State private var daysWithEvents: Set<Date> = []
 
+    // Heat map popover state
+    @State private var showingStaffingPopover: Date? = nil
+
     // Environment for color scheme
     @Environment(\.colorScheme) var colorScheme
     
@@ -335,32 +338,59 @@ struct SlingWeeklyView: View {
                 }
             }
             
-            // Day cells
+            // Day cells with heat map indicators
             HStack(spacing: 0) {
                 ForEach(dates, id: \.self) { date in
+                    let staffing = getStaffingForDay(date)
+                    let heatMapColor = getHeatMapColor(total: staffing.total)
+                    let userHasShift = hasEvents(on: date)  // User's own shifts (from filteredSessions)
+
                     Button(action: {
                         selectedDay = date
                     }) {
-                        VStack(spacing: 4) {
-                            // Day number with circle background if selected
+                        VStack(spacing: 2) {
+                            // Badge with count (above the day number) - shows total org staffing needs
+                            if staffing.total > 0 {
+                                Text("\(staffing.total)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(heatMapColor)
+                                    .cornerRadius(6)
+                                    .onTapGesture {
+                                        showingStaffingPopover = date
+                                    }
+                            } else {
+                                // Placeholder to maintain consistent spacing
+                                Spacer()
+                                    .frame(height: 16)
+                            }
+
+                            // Day number with heat map color background
                             ZStack {
+                                // Heat map color background (or blue for selected/today)
                                 if isSelectedDay(date) {
                                     Circle()
                                         .fill(Color.blue)
+                                        .frame(width: 32, height: 32)
+                                } else if staffing.total > 0 {
+                                    Circle()
+                                        .fill(heatMapColor.opacity(0.25))
                                         .frame(width: 32, height: 32)
                                 } else if isToday(date) {
                                     Circle()
                                         .fill(Color.blue.opacity(0.15))
                                         .frame(width: 32, height: 32)
                                 }
-                                
+
                                 Text(formatDayNumber(date))
                                     .font(.system(size: 16, weight: isToday(date) ? .bold : .regular))
                                     .foregroundColor(isSelectedDay(date) ? .white : (isToday(date) ? .blue : .primary))
                             }
-                            
-                            // Green dot if there are events
-                            if hasEvents(on: date) {
+
+                            // Green dot when current user has a shift on this day
+                            if userHasShift {
                                 Circle()
                                     .fill(Color.green)
                                     .frame(width: 6, height: 6)
@@ -373,6 +403,12 @@ struct SlingWeeklyView: View {
                         .padding(.vertical, 4)
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .popover(isPresented: Binding(
+                        get: { showingStaffingPopover == date },
+                        set: { if !$0 { showingStaffingPopover = nil } }
+                    )) {
+                        StaffingPopoverView(staffing: staffing, date: date)
+                    }
                 }
             }
         }
@@ -1491,7 +1527,40 @@ struct SlingWeeklyView: View {
             return sessionDate >= startOfDay && sessionDate < endOfDay
         }.sorted(by: { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) })
     }
-    
+
+    // MARK: - Heat Map Calculations
+
+    /// Calculate staffing totals for a specific day (for heat map display)
+    /// Uses ALL sessions (not filtered) to show organization-wide staffing needs
+    private func getStaffingForDay(_ date: Date) -> DayStaffingTotals {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+
+        // Use ALL sessions (not filteredSessions) to show total staffing needs
+        // Exclude time-off entries from staffing calculation
+        let daySessions = sessions.filter { session in
+            guard let sessionDate = session.startDate else { return false }
+            return sessionDate >= startOfDay && sessionDate < endOfDay && !session.isTimeOff
+        }
+
+        var photographers = 0
+        var posers = 0
+        var helpers = 0
+
+        for session in daySessions {
+            photographers += session.photographersNeeded
+            posers += session.posersNeeded
+            helpers += session.helpersNeeded
+        }
+
+        return DayStaffingTotals(
+            photographers: photographers,
+            posers: posers,
+            helpers: helpers
+        )
+    }
+
     private func getTimeOffForDay(_ day: Date) -> [TimeOffCalendarEntry] {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: day)

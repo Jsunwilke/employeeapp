@@ -166,8 +166,8 @@ class ClaudeRosterService {
         }
     }
 
-    // Claude model to use
-    private let modelName = "claude-opus-4-5-20251101"  // Claude Opus 4.5 for best accuracy
+    // Claude model to use - Sonnet 4.5 with extended thinking for better token limits
+    private let modelName = "claude-sonnet-4-5-20250514"  // Claude Sonnet 4.5 with extended thinking
     
     // Get the next available Subject ID from existing roster
     func getNextAvailableSubjectID(existingRoster: [RosterEntry]) -> Int {
@@ -458,7 +458,7 @@ class ClaudeRosterService {
         Only respond with the JSON, nothing else.
         """
         
-        // Create the request body
+        // Create the request body with extended thinking enabled
         let requestBody: [String: Any] = [
             "model": modelName,
             "messages": [
@@ -480,7 +480,11 @@ class ClaudeRosterService {
                     ]
                 ]
             ],
-            "max_tokens": 4000
+            "max_tokens": 16000,  // Increased for extended thinking output
+            "thinking": [
+                "type": "enabled",
+                "budget_tokens": 10000  // Allow up to 10k tokens for thinking
+            ]
         ]
         
         do {
@@ -567,14 +571,30 @@ class ClaudeRosterService {
                 do {
                     // Parse the JSON response
                     let responseJSON = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                    
+
                     // Extract the content from the response
-                    if let content = responseJSON?["content"] as? [[String: Any]],
-                       let firstContent = content.first,
-                       let text = firstContent["text"] as? String {
-                        
-                        // Parse the JSON text to extract roster entries
-                        self.parseJsonToRosterEntries(jsonString: text, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, completion: completion)
+                    // With extended thinking, content array has both "thinking" and "text" blocks
+                    if let content = responseJSON?["content"] as? [[String: Any]] {
+                        // Find the text block (skip thinking blocks)
+                        var textContent: String? = nil
+                        for block in content {
+                            if let blockType = block["type"] as? String, blockType == "text",
+                               let text = block["text"] as? String {
+                                textContent = text
+                                break
+                            }
+                        }
+
+                        if let text = textContent {
+                            // Parse the JSON text to extract roster entries
+                            self.parseJsonToRosterEntries(jsonString: text, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, completion: completion)
+                        } else {
+                            let error = NSError(domain: "ClaudeRosterService", code: 106,
+                                                userInfo: [NSLocalizedDescriptionKey: "No text content in response"])
+                            DispatchQueue.main.async {
+                                completion(.failure(error))
+                            }
+                        }
                     } else {
                         let error = NSError(domain: "ClaudeRosterService", code: 106,
                                             userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])

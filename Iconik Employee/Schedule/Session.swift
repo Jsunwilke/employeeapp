@@ -36,6 +36,9 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
     let has_class_group_job: Bool?
     let has_class_candids: Bool?
     let has_sports_job: Bool?
+    let photographers_needed: Int
+    let posers_needed: Int
+    let helpers_needed: Int
     let created_at: Date
     let updated_at: Date?
     let created_by: SessionCreatedBy?
@@ -54,6 +57,9 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
     var hasClassGroupJob: Bool { has_class_group_job ?? false }
     var hasClassCandids: Bool { has_class_candids ?? false }
     var hasSportsJob: Bool { has_sports_job ?? false }
+    var photographersNeeded: Int { photographers_needed }
+    var posersNeeded: Int { posers_needed }
+    var helpersNeeded: Int { helpers_needed }
     var createdAt: Date { created_at }
     var updatedAt: Date? { updated_at }
     var createdBy: SessionCreatedBy? { created_by }
@@ -117,6 +123,9 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
         has_class_group_job: Bool? = nil,
         has_class_candids: Bool? = nil,
         has_sports_job: Bool? = nil,
+        photographers_needed: Int = 1,
+        posers_needed: Int = 0,
+        helpers_needed: Int = 0,
         created_at: Date = Date(),
         updated_at: Date? = nil,
         created_by: SessionCreatedBy? = nil
@@ -139,6 +148,9 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
         self.has_class_group_job = has_class_group_job
         self.has_class_candids = has_class_candids
         self.has_sports_job = has_sports_job
+        self.photographers_needed = photographers_needed
+        self.posers_needed = posers_needed
+        self.helpers_needed = helpers_needed
         self.created_at = created_at
         self.updated_at = updated_at
         self.created_by = created_by
@@ -234,6 +246,7 @@ extension Session {
         case session_types, custom_session_type, photographers, notes, status
         case session_color, is_published, is_time_off
         case has_class_group_job, has_class_candids, has_sports_job
+        case photographers_needed, posers_needed, helpers_needed
         case created_at, updated_at, created_by
     }
 
@@ -258,6 +271,11 @@ extension Session {
         has_class_group_job = try container.decodeIfPresent(Bool.self, forKey: .has_class_group_job)
         has_class_candids = try container.decodeIfPresent(Bool.self, forKey: .has_class_candids)
         has_sports_job = try container.decodeIfPresent(Bool.self, forKey: .has_sports_job)
+
+        // Staffing fields with defaults (photographers_needed defaults to 1, others to 0)
+        photographers_needed = try container.decodeIfPresent(Int.self, forKey: .photographers_needed) ?? 1
+        posers_needed = try container.decodeIfPresent(Int.self, forKey: .posers_needed) ?? 0
+        helpers_needed = try container.decodeIfPresent(Int.self, forKey: .helpers_needed) ?? 0
 
         // Handle created_at - try Date first, then ISO8601 string
         if let dateValue = try? container.decode(Date.self, forKey: .created_at) {
