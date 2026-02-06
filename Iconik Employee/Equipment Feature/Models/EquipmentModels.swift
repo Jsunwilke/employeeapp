@@ -786,9 +786,14 @@ struct KitTemplate: Decodable, Identifiable, Hashable {
         items?.count ?? 0
     }
 
-    /// Get color as SwiftUI Color
+    /// Check if the kit has a rainbow color
+    var isRainbow: Bool {
+        color?.lowercased() == "rainbow"
+    }
+
+    /// Get color as SwiftUI Color (returns nil for rainbow since it needs special handling)
     var kitColor: Color? {
-        guard let hex = color else { return nil }
+        guard let hex = color, !isRainbow else { return nil }
         return Color(hex: hex)
     }
 
@@ -878,7 +883,12 @@ struct UserKitAssignment: Identifiable {
         kitTemplate?.name ?? "Other Equipment"
     }
 
-    /// Get kit color or nil
+    /// Get kit color hex string (for rainbow support)
+    var kitColorHex: String? {
+        kitTemplate?.color
+    }
+
+    /// Get kit color or nil (returns nil for rainbow - use kitColorHex instead)
     var kitColor: Color? {
         kitTemplate?.kitColor
     }

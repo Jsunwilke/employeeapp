@@ -53,8 +53,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
 
             Task {
                 do {
-                    let authService = SupabaseAuthService()
-                    try await authService.handleOAuthCallback(url: url)
+                    try await SupabaseAuthService.shared.handleOAuthCallback(url: url)
                     print("✅ OAuth callback processed successfully")
 
                     // Post notification to update UI

@@ -347,8 +347,25 @@ struct HoursWidget: View {
                         .fill(Color.yellow.opacity(0.2))
                         .frame(width: 28, height: 28)
                 )
-            Text("Hours Tracking")
-                .font(.headline)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Hours Tracking")
+                    .font(.headline)
+
+                // Offline indicator
+                if timeTrackingService.isUsingOfflineData {
+                    HStack(spacing: 4) {
+                        Image(systemName: "icloud.slash")
+                            .font(.caption2)
+                        Text("Offline")
+                            .font(.caption2)
+                        if let lastSync = timeTrackingService.lastSyncTime {
+                            Text("• \(lastSync.timeAgoDisplay())")
+                                .font(.caption2)
+                        }
+                    }
+                    .foregroundColor(.orange)
+                }
+            }
             Spacer()
 
             // Clock In/Out Button

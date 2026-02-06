@@ -14,11 +14,9 @@ struct KitCard: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // Kit color indicator (left border)
-            if let kitColor = kitAssignment.kitColor {
-                Rectangle()
-                    .fill(kitColor)
-                    .frame(width: 4)
+            // Kit color indicator (left border) - supports rainbow
+            if let colorHex = kitAssignment.kitColorHex {
+                KitColorBorder(hexColor: colorHex, width: 4)
             }
 
             HStack(spacing: 12) {
@@ -31,9 +29,9 @@ struct KitCard: View {
                         .background(Color(.systemGray6))
                         .cornerRadius(8)
 
-                    // Color dot overlay (if kit has a color)
-                    if let kitColor = kitAssignment.kitColor {
-                        KitColorIndicator(color: kitColor, size: 14)
+                    // Color dot overlay (if kit has a color) - supports rainbow
+                    if let colorHex = kitAssignment.kitColorHex {
+                        KitColorIndicator(hexColor: colorHex, size: 14)
                             .offset(x: -4, y: -4)
                     }
                 }
@@ -99,9 +97,9 @@ struct KitTemplateCard: View {
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
 
-                // Color dot overlay (if kit has a color)
-                if let kitColor = kit.kitColor {
-                    KitColorIndicator(color: kitColor, size: 14)
+                // Color dot overlay (if kit has a color) - supports rainbow
+                if let colorHex = kit.color {
+                    KitColorIndicator(hexColor: colorHex, size: 14)
                         .offset(x: -4, y: -4)
                 }
             }
@@ -123,11 +121,9 @@ struct KitTemplateCard: View {
                 HStack(spacing: 8) {
                     ItemCountBadge(count: kit.itemCount)
 
-                    if let color = kit.color {
+                    if let colorHex = kit.color {
                         HStack(spacing: 4) {
-                            Circle()
-                                .fill(Color(hex: color))
-                                .frame(width: 10, height: 10)
+                            KitColorIndicator(hexColor: colorHex, size: 10)
                             Text("Tape color")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
@@ -166,7 +162,7 @@ struct KitTemplateCard: View {
 
 struct KitItemsList: View {
     let items: [EquipmentItem]
-    let kitColor: Color?
+    let kitColorHex: String?
     var onItemTap: ((EquipmentItem) -> Void)? = nil
     var onReportDamage: ((EquipmentItem) -> Void)? = nil
 
@@ -175,7 +171,7 @@ struct KitItemsList: View {
             ForEach(items) { item in
                 KitItemRow(
                     item: item,
-                    kitColor: kitColor,
+                    kitColorHex: kitColorHex,
                     onTap: { onItemTap?(item) },
                     onReportDamage: { onReportDamage?(item) }
                 )
@@ -188,17 +184,15 @@ struct KitItemsList: View {
 
 struct KitItemRow: View {
     let item: EquipmentItem
-    let kitColor: Color?
+    let kitColorHex: String?
     var onTap: (() -> Void)? = nil
     var onReportDamage: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 0) {
-            // Kit color indicator (left border)
-            if let color = kitColor {
-                Rectangle()
-                    .fill(color)
-                    .frame(width: 3)
+            // Kit color indicator (left border) - supports rainbow
+            if let hexColor = kitColorHex {
+                KitColorBorder(hexColor: hexColor, width: 3)
             }
 
             HStack(spacing: 12) {

@@ -19,7 +19,7 @@ struct SignInView: View {
   @AppStorage("userRole") var userRole: String = "employee"
 
   // Supabase services
-  @StateObject private var authService = SupabaseAuthService()
+  @ObservedObject private var authService = SupabaseAuthService.shared
   
   var body: some View {
     NavigationView {

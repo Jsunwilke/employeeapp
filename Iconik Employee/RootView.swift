@@ -6,7 +6,7 @@ struct RootView: View {
     @State private var isSignedIn = false
     @StateObject private var userManager = UserManager.shared
     @StateObject private var profileService = UserProfileService.shared
-    @StateObject private var authService = SupabaseAuthService()
+    @ObservedObject private var authService = SupabaseAuthService.shared
     @EnvironmentObject var passwordResetVM: PasswordResetViewModel
     
     var body: some View {
@@ -21,8 +21,10 @@ struct RootView: View {
         }
         .onAppear {
             // Check for existing Supabase session
+            // Note: SupabaseAuthService.shared already checks session in its init()
             Task {
-                await authService.checkSession()
+                // Wait briefly for SDK to restore session from keychain
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
 
                 let hasSupabaseSession = authService.isAuthenticated
 

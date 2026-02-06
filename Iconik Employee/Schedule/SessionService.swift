@@ -39,11 +39,16 @@ class SessionService: ObservableObject {
     @Published var isConnected: Bool = true
     @Published var lastError: String?
     @Published var isRetrying: Bool = false
+    @Published var isUsingOfflineData: Bool = false
+    @Published var lastSyncTime: Date?
 
-    // Cache for sessions
+    // In-memory cache for sessions
     private var sessionsCache: [Session] = []
     private var lastCacheUpdate: Date?
     private let cacheValidityDuration: TimeInterval = 300 // 5 minutes
+
+    // Persistent cache manager for offline support
+    private let persistentCache = ScheduleCacheManager.shared
 
     // Track active Supabase realtime channels - keyed by subscription ID for per-caller tracking
     private var activeChannels: [UUID: RealtimeChannelV2] = [:]
@@ -73,13 +78,18 @@ class SessionService: ObservableObject {
     /// Fetch sessions for a specific organization
     /// - Parameter forceRefresh: If true, bypasses cache and fetches fresh data (used by real-time handlers)
     func fetchSessions(organizationID: String, includeUnpublished: Bool = false, forceRefresh: Bool = false) async throws -> [Session] {
-        // Check cache first (skip if forceRefresh)
+        // Check in-memory cache first (skip if forceRefresh)
         if !forceRefresh,
            let lastUpdate = lastCacheUpdate,
            Date().timeIntervalSince(lastUpdate) < cacheValidityDuration,
            !sessionsCache.isEmpty {
-            print("📅 SessionService: Returning \(sessionsCache.count) cached sessions")
+            print("📅 SessionService: Returning \(sessionsCache.count) in-memory cached sessions")
             return sessionsCache
+        }
+
+        // If offline, try to load from persistent cache
+        if !isConnected {
+            return try await loadFromOfflineCache(organizationID: organizationID)
         }
 
         var query = supabase
@@ -96,15 +106,55 @@ class SessionService: ObservableObject {
             let sessions: [Session] = try await query.execute().value
             print("📅 SessionService: Fetched \(sessions.count) sessions for org \(organizationID)")
 
-            // Update cache
+            // Update in-memory cache
             sessionsCache = sessions
             lastCacheUpdate = Date()
 
+            // Save to persistent cache for offline use
+            await persistentCache.saveSessions(sessions, organizationId: organizationID)
+
+            // Update sync status
+            isUsingOfflineData = false
+            lastSyncTime = Date()
+
             return sessions
         } catch {
-            print("❌ SessionService decode error: \(describeDecodingError(error))")
+            print("❌ SessionService fetch error: \(describeDecodingError(error))")
+
+            // On network error, try to load from persistent cache
+            if let cached = await loadFromOfflineCacheIfAvailable(organizationID: organizationID) {
+                return cached
+            }
+
             throw error
         }
+    }
+
+    /// Load sessions from offline cache
+    private func loadFromOfflineCache(organizationID: String) async throws -> [Session] {
+        if let cached = await persistentCache.loadSessions(organizationId: organizationID) {
+            print("📱 SessionService: Using offline cache (\(cached.sessions.count) sessions)")
+            sessionsCache = cached.sessions
+            lastCacheUpdate = cached.lastSync
+            isUsingOfflineData = true
+            lastSyncTime = cached.lastSync
+            return cached.sessions
+        }
+
+        throw SessionError.networkError
+    }
+
+    /// Try to load from offline cache without throwing
+    private func loadFromOfflineCacheIfAvailable(organizationID: String) async -> [Session]? {
+        if let cached = await persistentCache.loadSessions(organizationId: organizationID) {
+            print("📱 SessionService: Falling back to offline cache after network error")
+            sessionsCache = cached.sessions
+            lastCacheUpdate = cached.lastSync
+            isUsingOfflineData = true
+            lastSyncTime = cached.lastSync
+            return cached.sessions
+        }
+        return nil
     }
 
     /// Start listening to sessions with Supabase Realtime
@@ -143,13 +193,33 @@ class SessionService: ObservableObject {
         print("📡 SessionService: Channel status after subscribe: \(channel.status)")
         print("📅 SessionService: Channel \(subscriptionId) subscribed, starting initial fetch...")
 
-        // Initial fetch - always force refresh to get latest data when starting a new subscription
-        do {
-            let sessions = try await fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished, forceRefresh: true)
-            print("📅 SessionService: Calling onChange callback with \(sessions.count) sessions")
-            onChange(sessions)
-        } catch {
-            print("❌ Error on initial sessions fetch: \(describeDecodingError(error))")
+        // OPTIMIZATION: Show cached data immediately, then sync fresh data in background
+        // This eliminates the loading spinner for users who have cached data
+        if let cached = await persistentCache.loadSessions(organizationId: organizationID) {
+            print("📅 SessionService: Showing \(cached.sessions.count) cached sessions immediately")
+            sessionsCache = cached.sessions
+            lastCacheUpdate = cached.lastSync
+            isUsingOfflineData = !isConnected  // Only mark as offline if actually offline
+            lastSyncTime = cached.lastSync
+            onChange(cached.sessions)
+        }
+
+        // Now fetch fresh data from network (if online)
+        if isConnected {
+            do {
+                let sessions = try await fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished, forceRefresh: true)
+                print("📅 SessionService: Updated with \(sessions.count) fresh sessions from network")
+                onChange(sessions)
+            } catch {
+                print("❌ Error on initial sessions fetch: \(describeDecodingError(error))")
+                // Already showed cached data, so don't call onChange([]) here
+                if sessionsCache.isEmpty {
+                    onChange([])
+                }
+            }
+        } else if sessionsCache.isEmpty {
+            // Offline with no cache - show empty state
+            print("📅 SessionService: Offline with no cached data")
             onChange([])
         }
 
@@ -160,7 +230,13 @@ class SessionService: ObservableObject {
                 do {
                     let sessions = try await self.fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished, forceRefresh: true)
                     print("📡 SessionService: Fetched \(sessions.count) sessions after realtime update")
+
+                    // Save to persistent cache on realtime updates
+                    await self.persistentCache.saveSessions(sessions, organizationId: organizationID)
+
                     await MainActor.run {
+                        self.isUsingOfflineData = false
+                        self.lastSyncTime = Date()
                         onChange(sessions)
                     }
                 } catch {
@@ -671,6 +747,29 @@ class SessionService: ObservableObject {
         lastCacheUpdate = nil
     }
 
+    /// Clear both in-memory and persistent cache
+    func clearAllCaches() async {
+        sessionsCache = []
+        lastCacheUpdate = nil
+        await persistentCache.clearCache()
+        isUsingOfflineData = false
+        lastSyncTime = nil
+    }
+
+    /// Get formatted last sync time for display
+    func getLastSyncDisplay() async -> String {
+        let organizationID = UserManager.shared.getCachedOrganizationID()
+        guard !organizationID.isEmpty else { return "Not synced" }
+        return await persistentCache.getLastSyncDisplay(organizationId: organizationID)
+    }
+
+    /// Check if we have offline data available
+    func hasOfflineData() async -> Bool {
+        let organizationID = UserManager.shared.getCachedOrganizationID()
+        guard !organizationID.isEmpty else { return false }
+        return await persistentCache.hasCachedData(organizationId: organizationID)
+    }
+
     func userCanManageSessions() -> Bool {
         let userRole = UserDefaults.standard.string(forKey: "userRole") ?? "employee"
         return userRole == "admin" || userRole == "manager"
@@ -742,7 +841,15 @@ class SessionService: ObservableObject {
     private func setupNetworkMonitoring() {
         monitor.pathUpdateHandler = { [weak self] path in
             DispatchQueue.main.async {
+                let wasOffline = self?.isConnected == false
                 self?.isConnected = path.status == .satisfied
+
+                // When coming back online, clear offline flag
+                // The realtime subscription will automatically sync fresh data
+                if wasOffline && path.status == .satisfied {
+                    self?.isUsingOfflineData = false
+                    print("📡 SessionService: Network restored - realtime will sync fresh data")
+                }
             }
         }
         monitor.start(queue: monitorQueue)

@@ -1,5 +1,6 @@
 import Foundation
 import Supabase
+import Network
 
 @MainActor
 class TimeTrackingService: ObservableObject {
@@ -8,14 +9,26 @@ class TimeTrackingService: ObservableObject {
     @Published var currentTimeEntry: TimeEntry?
     @Published var isClockIn = false
     @Published var elapsedTime: TimeInterval = 0
+    @Published var isUsingOfflineData = false
+    @Published var lastSyncTime: Date?
+    @Published var isConnected = true
 
     private var timer: Timer?
     private var currentUserId: String?
     private var currentOrgId: String?
 
+    // Persistent cache and network monitoring
+    private let persistentCache = TimeEntryCacheManager.shared
+    private let networkMonitor = NWPathMonitor()
+    private let monitorQueue = DispatchQueue(label: "TimeTrackingNetworkMonitor")
+
     init() {
         setupUser()
+        setupNetworkMonitoring()
         Task {
+            // Load cached current entry immediately for instant display
+            await loadCachedCurrentEntry()
+            // Then check actual status from network
             await checkCurrentStatus()
         }
     }
@@ -23,6 +36,47 @@ class TimeTrackingService: ObservableObject {
     deinit {
         timer?.invalidate()
         timer = nil
+        networkMonitor.cancel()
+    }
+
+    // MARK: - Network Monitoring
+
+    private func setupNetworkMonitoring() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                let wasOffline = self?.isConnected == false
+                self?.isConnected = path.status == .satisfied
+
+                // When coming back online, refresh status
+                if wasOffline && path.status == .satisfied {
+                    self?.isUsingOfflineData = false
+                    await self?.checkCurrentStatus()
+                    print("📡 TimeTrackingService: Network restored - refreshing status")
+                }
+            }
+        }
+        networkMonitor.start(queue: monitorQueue)
+    }
+
+    // MARK: - Cache Operations
+
+    /// Load cached current entry for instant display
+    private func loadCachedCurrentEntry() async {
+        if let cached = await persistentCache.loadCurrentEntry() {
+            // Only use if still clocked in
+            if cached.status == "clocked-in" {
+                self.currentTimeEntry = cached
+                self.isClockIn = true
+                self.isUsingOfflineData = true
+                startTimer()
+                print("📱 TimeTrackingService: Loaded cached active entry for instant display")
+            }
+        }
+    }
+
+    /// Save current entry to cache
+    private func cacheCurrentEntry() async {
+        await persistentCache.saveCurrentEntry(currentTimeEntry)
     }
 
     func setupUser() {
@@ -107,6 +161,7 @@ class TimeTrackingService: ObservableObject {
             .value
 
         await checkCurrentStatus()
+        await cacheCurrentEntry()
     }
 
     func clockOut(notes: String? = nil) async throws {
@@ -154,6 +209,7 @@ class TimeTrackingService: ObservableObject {
             .execute()
 
         await checkCurrentStatus()
+        await cacheCurrentEntry()
     }
 
     func clockOutManual(clockOutDateTime: Date, notes: String? = nil) async throws {
@@ -215,6 +271,7 @@ class TimeTrackingService: ObservableObject {
             .execute()
 
         await checkCurrentStatus()
+        await cacheCurrentEntry()
     }
 
     func updateActiveClockInTime(newClockInTime: Date) async throws {
@@ -262,10 +319,23 @@ class TimeTrackingService: ObservableObject {
         guard let userId = currentUserId,
               let orgId = currentOrgId else { return }
 
+        // If offline, use cached data
+        if !isConnected {
+            if currentTimeEntry == nil {
+                await loadCachedCurrentEntry()
+            }
+            return
+        }
+
         do {
             let activeEntry = try await getCurrentTimeEntry(userId: userId, organizationID: orgId)
             self.currentTimeEntry = activeEntry
             self.isClockIn = (activeEntry != nil)
+            self.isUsingOfflineData = false
+            self.lastSyncTime = Date()
+
+            // Cache the current entry for offline use
+            await cacheCurrentEntry()
 
             if activeEntry != nil {
                 startTimer()
@@ -273,7 +343,10 @@ class TimeTrackingService: ObservableObject {
                 stopTimer()
             }
         } catch {
-            // Silent failure
+            // On network error, fall back to cache
+            if currentTimeEntry == nil {
+                await loadCachedCurrentEntry()
+            }
         }
     }
 
@@ -331,6 +404,16 @@ class TimeTrackingService: ObservableObject {
             return []
         }
 
+        // If offline, try to load from cache
+        if !isConnected {
+            if let cached = await persistentCache.loadTimeEntries(userId: userId, organizationId: orgId) {
+                isUsingOfflineData = true
+                lastSyncTime = cached.lastSync
+                return cached.entries
+            }
+            return []
+        }
+
         // Get device's current timezone offset (e.g., "-06:00" for Central)
         let offsetSeconds = TimeZone.current.secondsFromGMT()
         let hours = abs(offsetSeconds) / 3600
@@ -338,20 +421,35 @@ class TimeTrackingService: ObservableObject {
         let sign = offsetSeconds >= 0 ? "+" : "-"
         let tzOffset = String(format: "%@%02d:%02d", sign, hours, minutes)
 
-        let entries: [TimeEntry] = try await supabase
-            .from("time_entries")
-            .select()
-            .eq("user_id", value: userId)
-            .eq("organization_id", value: orgId)
-            .gte("start_time", value: "\(startDate)T00:00:00\(tzOffset)")
-            .lte("start_time", value: "\(endDate)T23:59:59\(tzOffset)")
-            .order("start_time", ascending: false)
-            .order("created_at", ascending: false)
-            .limit(100)
-            .execute()
-            .value
+        do {
+            let entries: [TimeEntry] = try await supabase
+                .from("time_entries")
+                .select()
+                .eq("user_id", value: userId)
+                .eq("organization_id", value: orgId)
+                .gte("start_time", value: "\(startDate)T00:00:00\(tzOffset)")
+                .lte("start_time", value: "\(endDate)T23:59:59\(tzOffset)")
+                .order("start_time", ascending: false)
+                .order("created_at", ascending: false)
+                .limit(100)
+                .execute()
+                .value
 
-        return entries
+            // Cache the entries for offline use
+            await persistentCache.saveTimeEntries(entries, userId: userId, organizationId: orgId, periodStart: startDate, periodEnd: endDate)
+            isUsingOfflineData = false
+            lastSyncTime = Date()
+
+            return entries
+        } catch {
+            // On error, try to load from cache
+            if let cached = await persistentCache.loadTimeEntries(userId: userId, organizationId: orgId) {
+                isUsingOfflineData = true
+                lastSyncTime = cached.lastSync
+                return cached.entries
+            }
+            throw error
+        }
     }
 
     /// Debug function to diagnose time entry issues (prints removed for production)

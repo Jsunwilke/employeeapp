@@ -18,9 +18,7 @@ struct EquipmentCard: View {
         HStack(spacing: 0) {
             // Kit color indicator (left border)
             if let colorHex = kitColor {
-                Rectangle()
-                    .fill(Color(hex: colorHex))
-                    .frame(width: 4)
+                KitColorBorder(hexColor: colorHex, width: 4)
             }
 
             HStack(spacing: 12) {

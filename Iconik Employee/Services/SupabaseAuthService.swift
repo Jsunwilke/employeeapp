@@ -14,6 +14,10 @@ import Combine
 /// Handles sign in, sign up, sign out, and password reset
 @MainActor
 class SupabaseAuthService: ObservableObject {
+    // MARK: - Singleton
+
+    static let shared = SupabaseAuthService()
+
     // MARK: - Published Properties
 
     @Published var currentUser: User?
@@ -37,7 +41,7 @@ class SupabaseAuthService: ObservableObject {
 
     // MARK: - Initialization
 
-    init() {
+    private init() {
         // Get initial session
         Task {
             await checkSession()

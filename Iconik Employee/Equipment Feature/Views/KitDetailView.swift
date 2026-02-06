@@ -116,15 +116,9 @@ struct KitDetailView: View {
                     .font(.system(size: 36))
                     .foregroundColor(.secondary)
 
-                // Color indicator
-                if let kitColor = kitAssignment.kitColor {
-                    Circle()
-                        .fill(kitColor)
-                        .frame(width: 24, height: 24)
-                        .overlay(
-                            Circle()
-                                .stroke(Color.white, lineWidth: 3)
-                        )
+                // Color indicator - supports rainbow
+                if let colorHex = kitAssignment.kitColorHex {
+                    KitColorIndicator(hexColor: colorHex, size: 24)
                         .offset(x: 28, y: -28)
                 }
             }
@@ -159,12 +153,10 @@ struct KitDetailView: View {
                 }
             }
 
-            // Tape color reference
-            if let kit = kitAssignment.kitTemplate, let colorHex = kit.color {
+            // Tape color reference - supports rainbow
+            if let colorHex = kitAssignment.kitColorHex {
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color(hex: colorHex))
-                        .frame(width: 16, height: 16)
+                    KitColorIndicator(hexColor: colorHex, size: 16)
                     Text("Tape color for physical identification")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -191,7 +183,7 @@ struct KitDetailView: View {
                     CategorySection(
                         categoryName: group.categoryName,
                         items: group.items,
-                        kitColor: kitAssignment.kitColor,
+                        kitColorHex: kitAssignment.kitColorHex,
                         isExpanded: expandedCategories.contains(group.categoryName),
                         onToggle: {
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -253,7 +245,7 @@ struct KitDetailView: View {
 private struct CategorySection: View {
     let categoryName: String
     let items: [EquipmentItem]
-    let kitColor: Color?
+    let kitColorHex: String?
     let isExpanded: Bool
     let onToggle: () -> Void
     var onItemTap: ((EquipmentItem) -> Void)? = nil
@@ -300,7 +292,7 @@ private struct CategorySection: View {
                     ForEach(items) { item in
                         KitItemRow(
                             item: item,
-                            kitColor: kitColor,
+                            kitColorHex: kitColorHex,
                             onTap: { onItemTap?(item) },
                             onReportDamage: { onReportDamage?(item) }
                         )

@@ -146,33 +146,63 @@ struct ReturnDateBadge: View {
 // MARK: - Kit Color Indicator
 
 struct KitColorIndicator: View {
-    let color: Color?
+    let hexColor: String?
     let size: CGFloat
+    @State private var animationOffset: CGFloat = 0
 
     init(color: Color?, size: CGFloat = 12) {
-        self.color = color
+        // Convert Color to hex if possible, otherwise nil
+        self.hexColor = nil
         self.size = size
     }
 
     init(hexColor: String?, size: CGFloat = 12) {
-        if let hex = hexColor {
-            self.color = Color(hex: hex)
-        } else {
-            self.color = nil
-        }
+        self.hexColor = hexColor
         self.size = size
     }
 
+    private var isRainbow: Bool {
+        hexColor?.lowercased() == "rainbow"
+    }
+
+    private var rainbowGradient: AngularGradient {
+        AngularGradient(
+            gradient: Gradient(colors: [
+                .red, .orange, .yellow, .green, .blue, .purple, .red
+            ]),
+            center: .center,
+            startAngle: .degrees(animationOffset),
+            endAngle: .degrees(animationOffset + 360)
+        )
+    }
+
     var body: some View {
-        if let color = color {
-            Circle()
-                .fill(color)
-                .frame(width: size, height: size)
-                .overlay(
-                    Circle()
-                        .stroke(Color.white, lineWidth: 2)
-                )
-                .shadow(color: color.opacity(0.3), radius: 2, x: 0, y: 1)
+        if let hex = hexColor {
+            if isRainbow {
+                Circle()
+                    .fill(rainbowGradient)
+                    .frame(width: size, height: size)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white, lineWidth: 2)
+                    )
+                    .shadow(radius: 2, x: 0, y: 1)
+                    .onAppear {
+                        withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+                            animationOffset = 360
+                        }
+                    }
+            } else {
+                let color = Color(hex: hex)
+                Circle()
+                    .fill(color)
+                    .frame(width: size, height: size)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white, lineWidth: 2)
+                    )
+                    .shadow(color: color.opacity(0.3), radius: 2, x: 0, y: 1)
+            }
         }
     }
 }
@@ -180,28 +210,50 @@ struct KitColorIndicator: View {
 // MARK: - Kit Color Border (for equipment cards)
 
 struct KitColorBorder: View {
-    let color: Color?
+    let hexColor: String?
     let width: CGFloat
+    @State private var animationOffset: CGFloat = 0
 
     init(color: Color?, width: CGFloat = 4) {
-        self.color = color
+        self.hexColor = nil
         self.width = width
     }
 
     init(hexColor: String?, width: CGFloat = 4) {
-        if let hex = hexColor {
-            self.color = Color(hex: hex)
-        } else {
-            self.color = nil
-        }
+        self.hexColor = hexColor
         self.width = width
     }
 
+    private var isRainbow: Bool {
+        hexColor?.lowercased() == "rainbow"
+    }
+
+    private var rainbowGradient: LinearGradient {
+        LinearGradient(
+            gradient: Gradient(colors: [
+                .red, .orange, .yellow, .green, .blue, .purple, .red
+            ]),
+            startPoint: UnitPoint(x: 0.5, y: animationOffset),
+            endPoint: UnitPoint(x: 0.5, y: animationOffset + 1)
+        )
+    }
+
     var body: some View {
-        if let color = color {
-            Rectangle()
-                .fill(color)
-                .frame(width: width)
+        if let hex = hexColor {
+            if isRainbow {
+                Rectangle()
+                    .fill(rainbowGradient)
+                    .frame(width: width)
+                    .onAppear {
+                        withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+                            animationOffset = 1
+                        }
+                    }
+            } else {
+                Rectangle()
+                    .fill(Color(hex: hex))
+                    .frame(width: width)
+            }
         } else {
             EmptyView()
         }

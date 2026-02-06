@@ -19,12 +19,59 @@ extension Publishers {
     }
 }
 
+// MARK: - Auto-Dismiss Date Picker Sheet
+/// A date picker sheet that automatically dismisses after selection
+private struct AutoDismissDatePickerSheet: View {
+    @Binding var selectedDate: Date
+    @Binding var isPresented: Bool
+    var onDateSelected: (Date) -> Void
+
+    @State private var tempDate: Date = Date()
+    @State private var hasInitialized: Bool = false
+
+    var body: some View {
+        NavigationView {
+            DatePicker("Select Date", selection: $tempDate, displayedComponents: .date)
+                .datePickerStyle(.graphical)
+                .padding()
+                .navigationTitle("Report Date")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            isPresented = false
+                        }
+                    }
+                }
+                .onChange(of: tempDate) { newDate in
+                    // Only auto-dismiss if user actually changed the date (not initial setup)
+                    guard hasInitialized else { return }
+
+                    // Auto-dismiss after a brief delay when date changes
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        selectedDate = newDate
+                        isPresented = false
+                        onDateSelected(newDate)
+                    }
+                }
+        }
+        .presentationDetents([.medium])
+        .onAppear {
+            tempDate = selectedDate
+            // Mark as initialized after a brief delay to ignore the initial onChange
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                hasInitialized = true
+            }
+        }
+    }
+}
+
 // Photographer struct to handle duplicate names
 struct PhotographerOption: Identifiable {
     let id: String  // User document ID
     let firstName: String
     let lastName: String
-    
+
     var displayName: String {
         "\(firstName) \(lastName)"
     }
@@ -70,6 +117,7 @@ struct DailyJobReportView: View {
     // Other report fields
     // ------------------------------------------------------------------
     @State private var reportDate: Date = Date()
+    @State private var showDatePicker: Bool = false
     @State private var totalMileage: String = ""
     @State private var jobDescription: String = ""  // Optional free text
     
@@ -517,14 +565,27 @@ struct DailyJobReportView: View {
                 .font(.headline)
                 .foregroundColor(.secondary)
             
-            DatePicker("Report Date", selection: $reportDate, displayedComponents: .date)
-                .datePickerStyle(.compact)
-                .onChange(of: reportDate) { newDate in
-                    loadScheduleForDate(newDate)
+            Button {
+                showDatePicker = true
+            } label: {
+                HStack {
+                    Text("Report Date")
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Text(reportDate, style: .date)
+                        .foregroundColor(.secondary)
+                    Image(systemName: "calendar")
+                        .foregroundColor(.accentColor)
                 }
                 .padding()
                 .background(inputFieldBackground)
                 .cornerRadius(8)
+            }
+            .sheet(isPresented: $showDatePicker) {
+                AutoDismissDatePickerSheet(selectedDate: $reportDate, isPresented: $showDatePicker) { newDate in
+                    loadScheduleForDate(newDate)
+                }
+            }
             
             if photographers.isEmpty {
                 HStack {
@@ -1510,8 +1571,20 @@ struct DailyJobReportView: View {
         }
         
         var stops: [String] = [storedUserHomeAddress]
-        let selectedAddresses = selectedSchools.compactMap { $0?.address }
-        stops.append(contentsOf: selectedAddresses)
+
+        // Use coordinates when available for reliable distance calculation
+        // Fall back to address only if coordinates are missing
+        let selectedStops = selectedSchools.compactMap { school -> String? in
+            guard let school = school else { return nil }
+            // Prefer coordinates (format: "lat,lng") - can be parsed directly, no geocoding needed
+            if let coords = school.coordinates, !coords.isEmpty {
+                return coords
+            }
+            // Fall back to address (requires geocoding, may fail for bare school names)
+            return school.address.isEmpty ? nil : school.address
+        }
+
+        stops.append(contentsOf: selectedStops)
         stops.append(storedUserHomeAddress)
         
         print("Calculating mileage with stops: \(stops)")

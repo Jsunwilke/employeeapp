@@ -24,7 +24,7 @@ class PasswordResetViewModel: ObservableObject {
 
     // MARK: - Private Properties
 
-    private let authService = SupabaseAuthService()
+    private let authService = SupabaseAuthService.shared
     private let redirectURL = URL(string: "iconik://reset-password")!
 
     // MARK: - Validation

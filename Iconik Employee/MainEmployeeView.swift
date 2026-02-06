@@ -81,7 +81,8 @@ class MainEmployeeViewModel: ObservableObject {
         FeatureItem(id: "classGroups", title: "Class Groups", systemImage: "person.3", description: "Track class photos by grade and teacher"),
         FeatureItem(id: "training", title: "Training", systemImage: "graduationcap.fill", description: "View your training photos and feedback"),
         FeatureItem(id: "tasks", title: "Tasks", systemImage: "checklist", description: "Manage team tasks and to-dos"),
-        FeatureItem(id: "equipment", title: "Equipment", systemImage: "camera.fill", description: "Manage photography equipment")
+        FeatureItem(id: "equipment", title: "Equipment", systemImage: "camera.fill", description: "Manage photography equipment"),
+        FeatureItem(id: "routePlanner", title: "Route Planner", systemImage: "map.fill", description: "Plan optimized routes between schools")
     ]
     
     private let employeeOrderKey = "employeeFeatureOrder"
@@ -486,7 +487,7 @@ struct MainEmployeeView: View {
     // Tab bar management
     @StateObject private var tabBarManager = TabBarManager.shared
     @StateObject private var chatManager = ChatManager.shared
-    @StateObject private var authService = SupabaseAuthService()
+    @ObservedObject private var authService = SupabaseAuthService.shared
 
     // Fixed manager features
     let managerFeatures: [FeatureItem] = [
@@ -825,6 +826,8 @@ struct MainEmployeeView: View {
             TasksMainView()
         case "equipment":
             EquipmentTabView()
+        case "routePlanner":
+            RoutePlannerView()
         default:
             homeView
         }
@@ -1104,6 +1107,7 @@ struct MainEmployeeView: View {
         case "jobBoxTracker": return .teal
         case "equipment": return .cyan
         case "tasks": return .blue
+        case "routePlanner": return .green
         default: return .gray
         }
     }

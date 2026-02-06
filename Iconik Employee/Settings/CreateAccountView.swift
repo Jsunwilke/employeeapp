@@ -26,7 +26,7 @@ struct CreateAccountView: View {
     @StateObject private var placesService = GooglePlacesService.shared
 
     // Supabase auth service
-    @StateObject private var authService = SupabaseAuthService()
+    @ObservedObject private var authService = SupabaseAuthService.shared
     
     var body: some View {
         ScrollView {

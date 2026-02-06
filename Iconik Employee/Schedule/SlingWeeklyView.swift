@@ -235,15 +235,40 @@ struct SlingWeeklyView: View {
     }
     
     // MARK: - UI Components
-    
-    // Week range header with Today button
+
+    // Week range header with Today button and offline indicator
     private var weekRangeHeader: some View {
         HStack {
-            Text(weekRangeString())
-                .font(.headline)
-            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(weekRangeString())
+                    .font(.headline)
+
+                // Offline indicator
+                if sessionService.isUsingOfflineData {
+                    HStack(spacing: 4) {
+                        Image(systemName: "icloud.slash")
+                            .font(.caption2)
+                        Text("Offline")
+                            .font(.caption2)
+                        if let lastSync = sessionService.lastSyncTime {
+                            Text("• Last synced \(lastSync.timeAgoDisplay())")
+                                .font(.caption2)
+                        }
+                    }
+                    .foregroundColor(.orange)
+                } else if !sessionService.isConnected {
+                    HStack(spacing: 4) {
+                        Image(systemName: "wifi.slash")
+                            .font(.caption2)
+                        Text("No connection")
+                            .font(.caption2)
+                    }
+                    .foregroundColor(.orange)
+                }
+            }
+
             Spacer()
-            
+
             Button(action: {
                 withAnimation(.spring()) {
                     weekOffset = 0

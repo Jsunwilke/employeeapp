@@ -100,11 +100,9 @@ struct KitTemplateRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Color indicator
-            if let color = kit.kitColor {
-                Circle()
-                    .fill(color)
-                    .frame(width: 12, height: 12)
+            // Color indicator - supports rainbow
+            if let colorHex = kit.color {
+                KitColorIndicator(hexColor: colorHex, size: 12)
             }
 
             // Info

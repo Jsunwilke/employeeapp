@@ -24,18 +24,32 @@ class RosterEntryService {
 
     /// Fetch all roster entries for a sports job
     /// NOTE: For offline-first access, use PowerSyncManager.getRosterEntries() instead
+    /// Uses pagination to handle rosters with more than 1000 entries (Supabase default limit)
     func fetchEntries(forJob jobId: UUID) async throws -> [RosterEntry] {
-        // Fetch from network (Supabase)
-        let entries: [RosterEntry] = try await supabase
-            .from(tableName)
-            .select()
-            .eq("sports_job_id", value: jobId)
-            .order("sort_order", ascending: true)
-            .order("last_name", ascending: true)
-            .execute()
-            .value
+        var allEntries: [RosterEntry] = []
+        let batchSize = 1000
+        var offset = 0
 
-        return entries.sorted { ($0.sortOrder) < ($1.sortOrder) }
+        while true {
+            let entries: [RosterEntry] = try await supabase
+                .from(tableName)
+                .select()
+                .eq("sports_job_id", value: jobId)
+                .order("sort_order", ascending: true)
+                .order("last_name", ascending: true)
+                .range(from: offset, to: offset + batchSize - 1)
+                .execute()
+                .value
+
+            allEntries.append(contentsOf: entries)
+
+            if entries.count < batchSize {
+                break  // No more records
+            }
+            offset += batchSize
+        }
+
+        return allEntries
     }
 
     /// Fetch a single roster entry by ID

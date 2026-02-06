@@ -3,7 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @StateObject private var tabBarManager = TabBarManager.shared
     @StateObject private var mainViewModel = MainEmployeeViewModel()
-    @StateObject private var authService = SupabaseAuthService()
+    @ObservedObject private var authService = SupabaseAuthService.shared
 
     var body: some View {
         List {

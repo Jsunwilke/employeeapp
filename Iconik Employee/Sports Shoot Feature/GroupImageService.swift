@@ -24,18 +24,32 @@ class GroupImageService {
 
     /// Fetch all group images for a sports job
     /// NOTE: For offline-first access, use PowerSyncManager.getGroupImages() instead
+    /// Uses pagination to handle more than 1000 entries (Supabase default limit)
     func fetchGroups(forJob jobId: UUID) async throws -> [GroupImage] {
-        // Fetch from network (Supabase)
-        let groups: [GroupImage] = try await supabase
-            .from(tableName)
-            .select()
-            .eq("sports_job_id", value: jobId)
-            .order("sort_order", ascending: true)
-            .order("description", ascending: true)
-            .execute()
-            .value
+        var allGroups: [GroupImage] = []
+        let batchSize = 1000
+        var offset = 0
 
-        return groups.sorted { ($0.sortOrder) < ($1.sortOrder) }
+        while true {
+            let groups: [GroupImage] = try await supabase
+                .from(tableName)
+                .select()
+                .eq("sports_job_id", value: jobId)
+                .order("sort_order", ascending: true)
+                .order("description", ascending: true)
+                .range(from: offset, to: offset + batchSize - 1)
+                .execute()
+                .value
+
+            allGroups.append(contentsOf: groups)
+
+            if groups.count < batchSize {
+                break  // No more records
+            }
+            offset += batchSize
+        }
+
+        return allGroups
     }
 
     /// Fetch a single group image by ID
