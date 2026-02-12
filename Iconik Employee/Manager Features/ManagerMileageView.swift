@@ -48,28 +48,41 @@ class ManagerMileageViewModel: ObservableObject {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "M/d/yyyy"
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
-        
+
         guard let referenceDate = dateFormatter.date(from: "2/25/2024") else {
-            fatalError("Invalid reference date for pay periods.")
+            print("❌ Invalid reference date for pay periods - using fallback to 2 weeks ago")
+            let fallbackEnd = Date()
+            let fallbackStart = calendar.date(byAdding: .day, value: -14, to: fallbackEnd) ?? fallbackEnd
+            self.currentPeriodStart = fallbackStart
+            self.currentPeriodEnd = fallbackEnd
+            return
         }
-        
+
         // Make sure reference date is start of day
         let referenceStartOfDay = calendar.startOfDay(for: referenceDate)
-        
+
         let today = Date()
         let daysSinceRef = calendar.dateComponents([.day], from: referenceStartOfDay, to: today).day ?? 0
         let periodsElapsed = daysSinceRef / periodLength
-        
+
         guard let start = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay) else {
-            fatalError("Could not compute 14-day start boundary.")
+            print("❌ Could not compute 14-day start boundary - using fallback")
+            let fallbackEnd = Date()
+            let fallbackStart = calendar.date(byAdding: .day, value: -14, to: fallbackEnd) ?? fallbackEnd
+            self.currentPeriodStart = fallbackStart
+            self.currentPeriodEnd = fallbackEnd
+            return
         }
-        
+
         // Calculate end date and set it to end of day (23:59:59)
         guard let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: start),
               let end = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) else {
-            fatalError("Could not compute 14-day end boundary.")
+            print("❌ Could not compute 14-day end boundary - using fallback")
+            self.currentPeriodStart = start
+            self.currentPeriodEnd = calendar.date(byAdding: .day, value: 14, to: start) ?? Date()
+            return
         }
-        
+
         self.currentPeriodStart = start
         self.currentPeriodEnd = end
     }

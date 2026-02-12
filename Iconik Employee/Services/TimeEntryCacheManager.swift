@@ -21,8 +21,13 @@ actor TimeEntryCacheManager {
 
     // MARK: - File Paths
     private var cacheDirectory: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TimeEntryCache", isDirectory: true)
+        guard let baseURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            // Fallback to temporary directory if caches directory unavailable
+            print("⚠️ TimeEntryCache: Caches directory not available, using temp directory")
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("TimeEntryCache", isDirectory: true)
+        }
+        return baseURL.appendingPathComponent("TimeEntryCache", isDirectory: true)
     }
 
     private var entriesFileURL: URL {

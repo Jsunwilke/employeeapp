@@ -433,7 +433,10 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
                 return "Direct Chat"
             }
 
-            let otherUserId = participants.first(where: { $0 != currentUserId }) ?? participants[0]
+            guard let otherUserId = participants.first(where: { $0 != currentUserId }) ?? participants.first else {
+                print("❌ No valid participant found for conversation")
+                return "Direct Chat"
+            }
 
             do {
                 struct UserName: Decodable {

@@ -42,25 +42,33 @@ struct TimeEntryListView: View {
             payPeriodFormatter.dateFormat = "M/d/yyyy"
             payPeriodFormatter.locale = Locale(identifier: "en_US_POSIX")
             guard let referenceDate = payPeriodFormatter.date(from: "2/25/2024") else {
-                fatalError("Invalid reference date format.")
+                print("❌ Invalid reference date format - using fallback to 2 weeks ago")
+                let fallbackEnd = Date()
+                let fallbackStart = calendar.date(byAdding: .day, value: -14, to: fallbackEnd) ?? fallbackEnd
+                return (fallbackStart, fallbackEnd)
             }
-            
+
             // Make sure reference date is start of day
             let referenceStartOfDay = calendar.startOfDay(for: referenceDate)
-            
+
             let today = Date()
             let daysSinceReference = calendar.dateComponents([.day], from: referenceStartOfDay, to: today).day ?? 0
             let periodLength = 14
             let periodsElapsed = daysSinceReference / periodLength
-            
+
             guard let currentStart = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay) else {
-                fatalError("Error calculating current pay period start date.")
+                print("❌ Error calculating current pay period start date - using fallback")
+                let fallbackEnd = Date()
+                let fallbackStart = calendar.date(byAdding: .day, value: -14, to: fallbackEnd) ?? fallbackEnd
+                return (fallbackStart, fallbackEnd)
             }
-            
+
             // Calculate end date and set it to end of day (23:59:59)
             guard let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: currentStart),
                   let currentEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) else {
-                fatalError("Error calculating current pay period end date.")
+                print("❌ Error calculating current pay period end date - using fallback")
+                let fallbackEnd = Date()
+                return (currentStart, fallbackEnd)
             }
             
             // Log for debugging and verification with mileage system

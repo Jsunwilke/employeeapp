@@ -90,6 +90,25 @@ struct RoutePlannerView: View {
 
     private var schoolSelectionView: some View {
         VStack(spacing: 0) {
+            // Manual search bar above the list
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.gray)
+                TextField("Search schools...", text: $searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.isEmpty {
+                    Button(action: { searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.gray)
+                    }
+                }
+            }
+            .padding(8)
+            .background(Color(.systemGray6))
+            .cornerRadius(10)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
             List {
                 // Starting Point Section
                 Section {
@@ -192,7 +211,6 @@ struct RoutePlannerView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .searchable(text: $searchText, prompt: "Search schools...")
 
             // Bottom action bar
             if selectedSchools.count >= 2 {
@@ -529,7 +547,14 @@ struct RoutePlannerView: View {
 
             schools = try await SchoolService.shared.getSchools(organizationID: orgID)
         } catch {
-            errorMessage = "Failed to load schools: \(error.localizedDescription)"
+            // Check if error is cancellation-related
+            let errorDesc = error.localizedDescription.lowercased()
+            if errorDesc.contains("cancel") || (error as NSError).code == NSURLErrorCancelled {
+                // Task was cancelled - ignore this error
+                print("School loading was cancelled (view dismissed)")
+            } else {
+                errorMessage = "Failed to load schools: \(error.localizedDescription)"
+            }
         }
     }
 

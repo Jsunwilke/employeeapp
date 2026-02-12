@@ -22,16 +22,30 @@ struct PhotoshootNotesView: View {
     // User's stored information
     @AppStorage("userFirstName") var storedUserFirstName: String = ""
     @AppStorage("userLastName") var storedUserLastName: String = ""
+    @AppStorage("userOrganizationID") private var organizationID: String = ""
+    @AppStorage("userID") private var userID: String = ""
     
     // Photo management
     @State private var showingImagePicker = false
     @State private var showingCamera = false
     @State private var tempImage: UIImage? = nil
     @State private var isUploadingImage = false
-    
+
+    // Submit and sync management
+    @State private var isSubmitting = false
+    @State private var showSubmitSuccess = false
+
+    // Submitted notes from server
+    @State private var submittedNotes: [PhotoshootNote] = []
+    @State private var isLoadingSubmittedNotes = false
+    @State private var showSubmittedNotes = false
+
     // Session service for Supabase operations
     private let sessionService = SessionService.shared
     private let subscriptionId = UUID()
+
+    // Organization service to check feature flags
+    @ObservedObject private var organizationService = OrganizationService.shared
 
     // A simple date/time formatter for the list display.
     private var dateFormatter: DateFormatter {
@@ -40,7 +54,20 @@ struct PhotoshootNotesView: View {
         formatter.timeStyle = .short
         return formatter
     }
-    
+
+    // Helper to get selected school for a note
+    private func getSelectedSchool(for note: PhotoshootNote) -> SchoolItem {
+        if let match = schoolOptions.first(where: { $0.name == note.school }) {
+            return match
+        }
+        if let first = schoolOptions.first {
+            print("⚠️ School '\(note.school)' not found in options, using first available: '\(first.name)'")
+            return first
+        }
+        print("⚠️ No schools available for note, using fallback 'Unknown' school")
+        return SchoolItem(id: "unknown", name: "Unknown", address: "", coordinates: nil)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header with buttons - Keep at top, outside ScrollView
@@ -155,9 +182,7 @@ struct PhotoshootNotesView: View {
                             .padding(.horizontal)
                         } else {
                             Picker("", selection: Binding(
-                                get: {
-                                    schoolOptions.first(where: { $0.name == note.school }) ?? schoolOptions.first!
-                                },
+                                get: { getSelectedSchool(for: note) },
                                 set: { newSchool in
                                     if let index = notes.firstIndex(of: note) {
                                         notes[index].school = newSchool.name
@@ -330,6 +355,93 @@ struct PhotoshootNotesView: View {
                             .padding(.horizontal)
                         }
                     }
+
+                    // Sync Status and Submit Button
+                    VStack(spacing: 16) {
+                        // Sync status indicator
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(note.syncedToServer ? Color.green : Color.orange)
+                                .frame(width: 10, height: 10)
+
+                            if note.syncedToServer {
+                                if note.status == .submitted {
+                                    Text("Submitted")
+                                        .font(.caption)
+                                        .foregroundColor(.green)
+                                    if let submittedDate = note.submittedAt {
+                                        Text("• \(formatRelativeDate(submittedDate))")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                } else {
+                                    Text("Synced to server")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            } else {
+                                Text("Local only (not synced)")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+
+                            Spacer()
+                        }
+                        .padding(.horizontal)
+
+                        // Submit button - Only show if organization has photoshoot notes enabled
+                        if organizationService.usePhotoshootNotesOnly {
+                            if note.status == .draft {
+                                Button(action: {
+                                    submitNote(note)
+                                }) {
+                                    HStack {
+                                        if isSubmitting {
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            Text("Submitting...")
+                                        } else {
+                                            Image(systemName: "checkmark.circle.fill")
+                                            Text("Submit Note")
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .foregroundColor(.white)
+                                    .background(note.school.isEmpty || note.noteText.isEmpty ? Color.gray : Color.green)
+                                    .cornerRadius(10)
+                                }
+                                .disabled(note.school.isEmpty || note.noteText.isEmpty || isSubmitting)
+                                .padding(.horizontal)
+                            } else {
+                                HStack {
+                                    Image(systemName: "lock.fill")
+                                    Text("Note submitted (read-only)")
+                                        .font(.callout)
+                                }
+                                .foregroundColor(.secondary)
+                                .padding()
+                                .frame(maxWidth: .infinity)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(10)
+                                .padding(.horizontal)
+                            }
+                        }
+
+                        if showSubmitSuccess {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                Text("Note submitted successfully!")
+                            }
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.green)
+                            .cornerRadius(8)
+                            .padding(.horizontal)
+                            .transition(.scale.combined(with: .opacity))
+                        }
+                    }
+                    .padding(.top, 8)
                 } else {
                     Spacer()
                     Text("Select a note to edit or create a new one")
@@ -356,7 +468,143 @@ struct PhotoshootNotesView: View {
                         .cornerRadius(8)
                         .padding(.horizontal)
                 }
-                
+
+                // Submitted Notes Section
+                if organizationService.usePhotoshootNotesOnly {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // Section Header with Toggle
+                        Button(action: {
+                            if !showSubmittedNotes {
+                                loadSubmittedNotes()
+                            }
+                            withAnimation {
+                                showSubmittedNotes.toggle()
+                            }
+                        }) {
+                            HStack {
+                                Image(systemName: showSubmittedNotes ? "chevron.down" : "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                                Text("Submitted Notes")
+                                    .font(.headline)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                if isLoadingSubmittedNotes {
+                                    ProgressView()
+                                } else if !submittedNotes.isEmpty {
+                                    Text("\(submittedNotes.count)")
+                                        .font(.caption)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.blue)
+                                        .clipShape(Capsule())
+                                }
+                            }
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(10)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .padding(.horizontal)
+
+                        // Submitted Notes List
+                        if showSubmittedNotes {
+                            if isLoadingSubmittedNotes {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                    Text("Loading submitted notes...")
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                }
+                                .padding()
+                            } else if submittedNotes.isEmpty {
+                                Text("No submitted notes found")
+                                    .foregroundColor(.gray)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding()
+                            } else {
+                                VStack(spacing: 12) {
+                                    ForEach(submittedNotes) { submittedNote in
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            // Header
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: 4) {
+                                                    Text(submittedNote.school)
+                                                        .font(.headline)
+                                                    Text(dateFormatter.string(from: submittedNote.timestamp))
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                }
+
+                                                Spacer()
+
+                                                if let submittedAt = submittedNote.submittedAt {
+                                                    VStack(alignment: .trailing, spacing: 4) {
+                                                        Text("Submitted")
+                                                            .font(.caption)
+                                                            .foregroundColor(.green)
+                                                        Text(formatRelativeDate(submittedAt))
+                                                            .font(.caption2)
+                                                            .foregroundColor(.secondary)
+                                                    }
+                                                }
+                                            }
+
+                                            // Note content
+                                            Text(submittedNote.noteText)
+                                                .font(.body)
+                                                .foregroundColor(.primary)
+                                                .padding(.vertical, 4)
+
+                                            // Photos
+                                            if !submittedNote.photoURLs.isEmpty {
+                                                ScrollView(.horizontal, showsIndicators: false) {
+                                                    HStack(spacing: 8) {
+                                                        ForEach(submittedNote.photoURLs, id: \.self) { urlString in
+                                                            AsyncImage(url: URL(string: urlString)) { phase in
+                                                                switch phase {
+                                                                case .empty:
+                                                                    ProgressView()
+                                                                        .frame(width: 80, height: 80)
+                                                                case .success(let image):
+                                                                    image
+                                                                        .resizable()
+                                                                        .scaledToFill()
+                                                                        .frame(width: 80, height: 80)
+                                                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                                                case .failure:
+                                                                    Image(systemName: "photo")
+                                                                        .frame(width: 80, height: 80)
+                                                                        .background(Color.gray.opacity(0.2))
+                                                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                                                @unknown default:
+                                                                    EmptyView()
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                .frame(height: 90)
+                                            }
+                                        }
+                                        .padding()
+                                        .background(Color(.systemBackground))
+                                        .cornerRadius(10)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .stroke(Color.green.opacity(0.3), lineWidth: 2)
+                                        )
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
+                        }
+                    }
+                    .padding(.top, 20)
+                }
+
                     Spacer()
                 }
             }
@@ -368,6 +616,11 @@ struct PhotoshootNotesView: View {
             loadNotes()
             loadSchoolOptions()
             loadScheduleForToday()
+
+            // Start listening to organization settings
+            if !organizationID.isEmpty {
+                organizationService.startListeningToOrganization(organizationID: organizationID)
+            }
         }
         .onDisappear {
             sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
@@ -442,16 +695,30 @@ struct PhotoshootNotesView: View {
     // MARK: - Helper Methods
     
     private func createNewNote() {
-        let newNote = PhotoshootNote(id: UUID(), timestamp: Date(), school: "", noteText: "", photoURLs: [])
+        let newNote = PhotoshootNote(
+            id: UUID(),
+            timestamp: Date(),
+            school: "",
+            noteText: "",
+            photoURLs: [],
+            status: .draft,
+            submittedAt: nil,
+            dailyReportId: nil,
+            syncedToServer: false,
+            lastSyncedAt: nil,
+            photographerName: "\(storedUserFirstName) \(storedUserLastName)".trimmingCharacters(in: .whitespaces),
+            photographerID: userID,
+            shootType: "photoshoot"
+        )
         notes.append(newNote)
         selectedNote = newNote
-        
+
         // Try to set school from today's schedule
         setSchoolFromSchedule(for: newNote)
-        
+
         saveNotes()
         successMessage = "New note created"
-        
+
         // Clear success message after delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             successMessage = ""
@@ -770,11 +1037,154 @@ struct PhotoshootNotesView: View {
     private func formatSessionOption(_ session: Session) -> String {
         let timeFormatter = DateFormatter()
         timeFormatter.timeStyle = .short
-        
+
         if let startDate = session.startDate {
             return "\(session.schoolName) - \(timeFormatter.string(from: startDate))"
         } else {
             return session.schoolName
+        }
+    }
+
+    // MARK: - Submit Note
+
+    private func submitNote(_ note: PhotoshootNote) {
+        guard !isSubmitting else { return }
+
+        // Validate required fields
+        guard !note.school.isEmpty else {
+            errorMessage = "Please select a school before submitting"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                errorMessage = ""
+            }
+            return
+        }
+
+        guard !note.noteText.isEmpty else {
+            errorMessage = "Please add some notes before submitting"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                errorMessage = ""
+            }
+            return
+        }
+
+        isSubmitting = true
+        errorMessage = ""
+
+        Task {
+            do {
+                // Get user info
+                let photographerName = "\(storedUserFirstName) \(storedUserLastName)".trimmingCharacters(in: .whitespaces)
+
+                // Update note with user info before submitting
+                var noteToSubmit = note
+                noteToSubmit.photographerName = photographerName.isEmpty ? "Unknown" : photographerName
+                noteToSubmit.photographerID = userID
+                noteToSubmit.shootType = "photoshoot" // Default type
+
+                // Submit to Supabase
+                let submittedNote = try await PhotoshootNoteService.shared.submitNote(
+                    noteToSubmit,
+                    organizationID: organizationID
+                )
+
+                // Remove from local storage since it's now on the server
+                await MainActor.run {
+                    // Remove the note from local storage
+                    notes.removeAll { $0.id == note.id }
+                    saveNotes()
+
+                    // Clear selection to close detail view
+                    selectedNote = nil
+
+                    isSubmitting = false
+                    showSubmitSuccess = true
+
+                    // Hide success message after 3 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        showSubmitSuccess = false
+                    }
+
+                    print("✅ Note submitted successfully and removed from local storage: \(submittedNote.id)")
+                }
+            } catch {
+                await MainActor.run {
+                    isSubmitting = false
+                    errorMessage = "Failed to submit note: \(error.localizedDescription)"
+
+                    // Clear error after 5 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        errorMessage = ""
+                    }
+
+                    print("❌ Failed to submit note: \(error)")
+                }
+            }
+        }
+    }
+
+    // Format relative date for display
+    private func formatRelativeDate(_ date: Date) -> String {
+        let now = Date()
+        let interval = now.timeIntervalSince(date)
+
+        if interval < 60 {
+            return "just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
+        }
+    }
+
+    // MARK: - Load Submitted Notes from Server
+
+    private func loadSubmittedNotes() {
+        guard !isLoadingSubmittedNotes else { return }
+
+        isLoadingSubmittedNotes = true
+
+        Task {
+            do {
+                // Get date range for last 30 days
+                let calendar = Calendar.current
+                let endDate = Date()
+                guard let startDate = calendar.date(byAdding: .day, value: -30, to: endDate) else {
+                    throw PhotoshootNoteError.fetchFailed("Failed to calculate date range")
+                }
+
+                // Fetch notes from server
+                let fetchedNotes = try await PhotoshootNoteService.shared.fetchNotes(
+                    photographerID: userID,
+                    startDate: startDate,
+                    endDate: endDate
+                )
+
+                // Filter for submitted notes only
+                let submitted = fetchedNotes.filter { $0.status == .submitted }
+
+                await MainActor.run {
+                    submittedNotes = submitted
+                    isLoadingSubmittedNotes = false
+                    print("✅ Loaded \(submitted.count) submitted notes from server")
+                }
+            } catch {
+                await MainActor.run {
+                    isLoadingSubmittedNotes = false
+                    errorMessage = "Failed to load submitted notes: \(error.localizedDescription)"
+
+                    // Clear error after 5 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        errorMessage = ""
+                    }
+
+                    print("❌ Failed to load submitted notes: \(error)")
+                }
+            }
         }
     }
 }

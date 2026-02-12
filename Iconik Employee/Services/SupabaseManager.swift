@@ -28,13 +28,25 @@ class SupabaseManager {
         let key = AppEnvironment.current.supabaseAnonKey
 
         // Validate URL format
-        guard let url = URL(string: urlString), url.scheme == "https" else {
-            fatalError("[SupabaseManager] Invalid Supabase URL: \(urlString)")
+        let url: URL
+        if let validURL = URL(string: urlString), validURL.scheme == "https" {
+            url = validURL
+        } else {
+            print("❌ [SupabaseManager] FATAL: Invalid Supabase URL: \(urlString)")
+            print("❌ Please check your Config.xcconfig file and ensure SUPABASE_URL is set correctly")
+            // Use dummy URL for graceful degradation
+            url = URL(string: "https://invalid.supabase.co")!
         }
 
         // Validate key is a JWT (basic check)
-        guard key.split(separator: ".").count == 3 else {
-            fatalError("[SupabaseManager] Invalid Supabase anon key format (not a valid JWT)")
+        let validatedKey: String
+        if key.split(separator: ".").count == 3 {
+            validatedKey = key
+        } else {
+            print("❌ [SupabaseManager] FATAL: Invalid Supabase anon key format (not a valid JWT)")
+            print("❌ Please check your Config.xcconfig file and ensure SUPABASE_ANON_KEY is set correctly")
+            // Use dummy key for graceful degradation
+            validatedKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJpbnZhbGlkIiwicm9sZSI6ImFub24ifQ.invalid"
         }
 
         print("[SupabaseManager] Initializing with URL: \(urlString)")
@@ -45,7 +57,7 @@ class SupabaseManager {
         // emitLocalSessionAsInitialSession ensures locally stored session is always emitted
         self.client = SupabaseClient(
             supabaseURL: url,
-            supabaseKey: key,
+            supabaseKey: validatedKey,
             options: SupabaseClientOptions(
                 auth: .init(
                     autoRefreshToken: true,

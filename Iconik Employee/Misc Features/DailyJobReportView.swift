@@ -643,13 +643,13 @@ struct DailyJobReportView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .background(inputFieldBackground)
                     .cornerRadius(8)
-            } else if photoshootNotes.count == 1 {
+            } else if photoshootNotes.count == 1, let firstNote = photoshootNotes.first {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Using note from \(photoshootNotes.first!.timestamp, style: .time)")
+                    Text("Using note from \(firstNote.timestamp, style: .time)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    
-                    Text(photoshootNotes.first!.school)
+
+                    Text(firstNote.school)
                         .font(.headline)
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1065,8 +1065,8 @@ struct DailyJobReportView: View {
             
         case .schools:
             // Complete if at least one school is selected and mileage is entered
-            return selectedSchools.first != nil &&
-                   selectedSchools.first! != nil &&
+            return !selectedSchools.isEmpty &&
+                   selectedSchools.first != nil &&
                    !totalMileage.isEmpty &&
                    totalMileage != "Calculating..."
             
@@ -1694,15 +1694,33 @@ struct DailyJobReportView: View {
 
             Task {
                 do {
-                    _ = try await DailyJobReportService.shared.createReport(report)
+                    let createdReport = try await DailyJobReportService.shared.createReport(report)
+
+                    // If note is attached, link it to the report in the photoshoot_notes table
+                    if let selectedNote = self.selectedPhotoshootNote {
+                        do {
+                            try await PhotoshootNoteService.shared.attachToReport(
+                                noteId: selectedNote.id,
+                                reportId: createdReport.id
+                            )
+                            print("✅ Linked note \(selectedNote.id) to report \(createdReport.id)")
+                        } catch {
+                            print("⚠️ Failed to link note to report: \(error.localizedDescription)")
+                            // Don't fail the entire submission if this fails
+                        }
+                    }
 
                     await MainActor.run {
                         self.isSubmitting = false
 
+                        // Update note in local storage with dailyReportId instead of removing it
                         if let selectedNote = self.selectedPhotoshootNote,
                            let index = self.photoshootNotes.firstIndex(of: selectedNote) {
-                            self.photoshootNotes.remove(at: index)
+                            var updatedNote = self.photoshootNotes[index]
+                            updatedNote.dailyReportId = createdReport.id
+                            self.photoshootNotes[index] = updatedNote
                             self.savePhotoshootNotes()
+                            print("✅ Updated note with daily_report_id in local storage")
                         }
 
                         // Post notification to show toast on main view

@@ -37,9 +37,11 @@ struct Organization: Codable {
     let coordinates: String?  // Format: "lat,lng"
     let created_at: String?  // ISO8601 string
     let updated_at: String?  // ISO8601 string
+    let use_photoshoot_notes_only: Bool?  // NEW: Toggle for photoshoot notes vs daily reports
 
     // Backward compatibility computed properties
     var enableSessionPublishing: Bool? { enable_session_publishing }
+    var usePhotoshootNotesOnly: Bool { use_photoshoot_notes_only ?? false }
 
     // Extract address string from JSONB object
     var addressString: String? {
@@ -65,6 +67,7 @@ class OrganizationService: ObservableObject {
     @Published var organizationAddress: String = ""
     @Published var organizationCoordinates: String = ""  // Format: "lat,lng"
     @Published var organizationHasPublishing: Bool = false
+    @Published var usePhotoshootNotesOnly: Bool = false  // NEW: Toggle for photoshoot notes vs daily reports
     private var organizationChannel: RealtimeChannelV2?
 
     private init() {}
@@ -145,6 +148,10 @@ class OrganizationService: ObservableObject {
             // Update publishing setting
             self.organizationHasPublishing = org.enable_session_publishing ?? false
             print("📝 Organization has publishing: \(self.organizationHasPublishing)")
+
+            // Update photoshoot notes only setting
+            self.usePhotoshootNotesOnly = org.use_photoshoot_notes_only ?? false
+            print("📸 Organization uses photoshoot notes only: \(self.usePhotoshootNotesOnly)")
 
         } catch {
             print("Error fetching organization: \(error.localizedDescription)")

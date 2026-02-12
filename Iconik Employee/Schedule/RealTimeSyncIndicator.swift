@@ -90,13 +90,13 @@ struct RealTimeSyncIndicator: View {
                             .repeatForever(autoreverses: true),
                         value: isAnimating
                     )
-                
+
                 Text(statusText)
                     .font(.caption)
                     .fontWeight(.medium)
                     .foregroundColor(.primary)
             }
-            
+
             if isOnline {
                 Text("Last updated: \(timeAgoString)")
                     .font(.caption2)
@@ -113,10 +113,17 @@ struct RealTimeSyncIndicator: View {
             if isOnline {
                 isAnimating = true
             }
-            startUpdateTimer()
         }
         .onChange(of: isOnline) { newValue in
             isAnimating = newValue
+        }
+        .task {
+            // Update the time display every minute using async/await (auto-cancelled on view disappear)
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000) // 60 seconds
+                // Force a UI refresh by updating the state
+                lastUpdateTime = lastUpdateTime
+            }
         }
     }
     
@@ -162,14 +169,6 @@ struct RealTimeSyncIndicator: View {
     func connectionRestored() {
         isOnline = true
         lastUpdateTime = Date()
-    }
-    
-    private func startUpdateTimer() {
-        // Update the time display every minute for the detailed view
-        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
-            // This will trigger a UI update to refresh the "time ago" text
-            lastUpdateTime = lastUpdateTime
-        }
     }
 }
 

@@ -4,6 +4,7 @@ import MapKit
 import CoreLocation
 import UniformTypeIdentifiers
 import Supabase
+import Combine
 
 // Widget identifier for drag and drop
 enum DashboardWidget: String, CaseIterable, Identifiable, Transferable, Codable {
@@ -47,11 +48,11 @@ class MainEmployeeViewModel: ObservableObject {
     @Published var upcomingShifts: [Session] = []
     @Published var allSessions: [Session] = [] // Store all sessions for coworker data
     @Published var isLoadingSchedule: Bool = false
-    
+
     // Weather service and data
     private let weatherService = WeatherService()
     @Published var weatherDataBySession: [String: WeatherData] = [:] // Key is location-date
-    
+
     // Session service for Supabase operations
     private let sessionService = SessionService.shared
 
@@ -63,7 +64,11 @@ class MainEmployeeViewModel: ObservableObject {
 
     // Organization ID for session filtering
     private var organizationID: String = ""
-    
+
+    // Organization service to check feature flags
+    private let organizationService = OrganizationService.shared
+    private var organizationCancellable: AnyCancellable?
+
     // Default employee features – re-orderable by the user.
     let defaultEmployeeFeatures: [FeatureItem] = [
         FeatureItem(id: "timeTracking", title: "Time Tracking", systemImage: "clock.fill", description: "Clock in/out and track your hours"),
@@ -93,7 +98,9 @@ class MainEmployeeViewModel: ObservableObject {
     // Removed: ICS URL no longer needed - using Supabase sessions
 
     init() {
-        loadEmployeeFeatureOrder()
+        Task { @MainActor in
+            loadEmployeeFeatureOrder()
+        }
 
         // Listen for app returning to foreground to re-subscribe
         foregroundObserver = NotificationCenter.default.addObserver(
@@ -101,7 +108,22 @@ class MainEmployeeViewModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppBecameActive()
+            Task { @MainActor in
+                self?.handleAppBecameActive()
+            }
+        }
+
+        // Watch for changes to organization settings
+        Task { @MainActor in
+            organizationCancellable = organizationService.$usePhotoshootNotesOnly
+                .dropFirst() // Skip initial value to avoid race condition
+                .sink { [weak self] newValue in
+                    print("🔔 Organization setting changed: usePhotoshootNotesOnly = \(newValue)")
+                    // Reload features when the setting changes
+                    self?.loadEmployeeFeatureOrder()
+                    // Force view update
+                    self?.objectWillChange.send()
+                }
         }
     }
     
@@ -114,12 +136,11 @@ class MainEmployeeViewModel: ObservableObject {
         // Clean up the session listener
         // Capture values BEFORE the Task closure to avoid capturing self
         // This prevents recursive deallocation that was causing the crash
-        guard hasActiveListener else { return }
-
         let subId = subscriptionId
         let service = sessionService
 
         // Use Task with pre-captured values - service and subId don't reference self
+        // The stopListeningToSessions method will handle if there's no active listener
         Task { @MainActor in
             service.stopListeningToSessions(subscriptionId: subId)
         }
@@ -132,22 +153,76 @@ class MainEmployeeViewModel: ObservableObject {
         fetchUpcomingEvents(employeeName: "")
     }
     
+    @MainActor
     func loadEmployeeFeatureOrder() {
+        print("📋 loadEmployeeFeatureOrder called")
         let saved = UserDefaults.standard.string(forKey: employeeOrderKey) ?? ""
+
+        // Get filtered features based on organization settings
+        let availableFeatures = getAvailableFeatures()
+
+        var newFeatures: [FeatureItem] = []
+
         if saved.isEmpty {
-            employeeFeatures = defaultEmployeeFeatures
+            newFeatures = availableFeatures
         } else {
             let ids = saved.split(separator: ",").map { String($0) }
-            employeeFeatures = ids.compactMap { id in
-                defaultEmployeeFeatures.first(where: { $0.id == id })
+            newFeatures = ids.compactMap { id in
+                availableFeatures.first(where: { $0.id == id })
             }
             // Append any missing features.
-            for feature in defaultEmployeeFeatures {
-                if !employeeFeatures.contains(feature) {
-                    employeeFeatures.append(feature)
+            for feature in availableFeatures {
+                if !newFeatures.contains(feature) {
+                    newFeatures.append(feature)
                 }
             }
         }
+
+        // Force a new array assignment to trigger @Published update
+        employeeFeatures = newFeatures
+
+        print("📋 employeeFeatures now has \(employeeFeatures.count) items: \(employeeFeatures.map { $0.id })")
+    }
+
+    /// Get available features based on organization settings
+    @MainActor
+    private func getAvailableFeatures() -> [FeatureItem] {
+        let usePhotoshootNotesOnly = organizationService.usePhotoshootNotesOnly
+        print("🔍 getAvailableFeatures: usePhotoshootNotesOnly = \(usePhotoshootNotesOnly)")
+
+        let filtered = defaultEmployeeFeatures.filter { feature in
+            // If organization uses photoshoot notes only, hide daily report features
+            if usePhotoshootNotesOnly {
+                // Hide daily report, custom daily reports, and my daily job reports
+                let shouldShow = feature.id != "dailyJobReport" &&
+                       feature.id != "customDailyReports" &&
+                       feature.id != "myDailyJobReports"
+                if !shouldShow {
+                    print("🚫 Filtering out feature: \(feature.id)")
+                }
+                return shouldShow
+            }
+
+            // Show all features if not using photoshoot notes only
+            return true
+        }
+
+        print("✅ Returning \(filtered.count) features (filtered from \(defaultEmployeeFeatures.count))")
+        return filtered
+    }
+
+    /// Check if a specific feature is currently available based on organization settings
+    @MainActor
+    func isFeatureAvailable(_ featureId: String) -> Bool {
+        let usePhotoshootNotesOnly = organizationService.usePhotoshootNotesOnly
+
+        // If using photoshoot notes only, block daily report features
+        if usePhotoshootNotesOnly {
+            let disabledFeatures = ["dailyJobReport", "customDailyReports", "myDailyJobReports"]
+            return !disabledFeatures.contains(featureId)
+        }
+
+        return true
     }
     
     func saveEmployeeFeatureOrder() {
@@ -594,8 +669,16 @@ struct MainEmployeeView: View {
             if tabBarManager.selectedTab == "home" || tabBarManager.selectedTab == "" {
                 homeView
             } else {
-                // Show selected feature view
-                featureView(for: tabBarManager.selectedTab)
+                // Show selected feature view only if the feature is available
+                if viewModel.isFeatureAvailable(tabBarManager.selectedTab) {
+                    featureView(for: tabBarManager.selectedTab)
+                } else {
+                    // Feature is disabled, redirect to home
+                    Color.clear
+                        .onAppear {
+                            tabBarManager.selectedTab = "home"
+                        }
+                }
             }
         }
     }
@@ -916,16 +999,22 @@ struct MainEmployeeView: View {
         // Only initialize data once to prevent duplicate loads
         if !hasInitializedData {
             hasInitializedData = true
-            
+
             // Initialize user organization ID for session filtering
             UserManager.shared.initializeOrganizationID()
+
+            // Start listening to organization settings
+            let orgID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+            if !orgID.isEmpty {
+                OrganizationService.shared.startListeningToOrganization(organizationID: orgID)
+            }
 
             // Refresh time tracking service and initialize chat manager
             Task {
                 await timeTrackingService.refreshUserAndStatus()
                 await chatManager.initialize()
             }
-            
+
             // Delay data loading slightly to ensure organization ID is cached
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 loadSchedule()

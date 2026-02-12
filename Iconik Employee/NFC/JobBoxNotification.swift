@@ -19,25 +19,41 @@ struct JobBoxNotification: View {
             
             if jobBoxes.count == 1 {
                 let (record, timeDiff) = jobBoxes[0]
-                Text("Box #\(record.boxNumber) has been in 'Left Job' status for \(formatTime(timeDiff))")
-                    .font(.subheadline)
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Box #\(record.boxNumber) has been in 'Left Job' status for \(formatTime(timeDiff))")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let school = record.school, !school.isEmpty {
+                        Text("School: \(school)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                }
             } else {
                 Text("\(jobBoxes.count) job boxes have been in 'Left Job' status for over 12 hours")
                     .font(.subheadline)
                     .foregroundColor(.white)
                     .multilineTextAlignment(.leading)
-                
+
                 ForEach(jobBoxes.prefix(3), id: \.0.id) { record, timeDiff in
-                    HStack {
-                        Text("• Box #\(record.boxNumber)")
-                        Spacer()
-                        Text(formatTime(timeDiff))
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("• Box #\(record.boxNumber)")
+                            Spacer()
+                            Text(formatTime(timeDiff))
+                        }
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.9))
+
+                        if let school = record.school, !school.isEmpty {
+                            Text("  \(school)")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
                     }
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.9))
                 }
                 
                 if jobBoxes.count > 3 {

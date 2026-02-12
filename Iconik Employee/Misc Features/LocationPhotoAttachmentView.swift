@@ -551,12 +551,14 @@ struct LocationPhotoAttachmentView: View {
     private func parseCoordinates(from addressString: String) -> CLLocationCoordinate2D? {
         // Try to parse strings like "37.7749,-122.4194"
         let components = addressString.split(separator: ",").compactMap { Double(String($0).trimmingCharacters(in: .whitespaces)) }
-        
-        if components.count == 2 {
-            return CLLocationCoordinate2D(latitude: components[0], longitude: components[1])
+
+        guard components.count == 2,
+              let latitude = components.first,
+              let longitude = components.last else {
+            return nil
         }
-        
-        return nil
+
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
     
     private func geocodeAddress(_ address: String, completion: @escaping (CLLocationCoordinate2D?) -> Void) {

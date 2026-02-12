@@ -259,8 +259,12 @@ struct TaskDetailsTabView: View {
                             .stroke(Color(.systemGray4), lineWidth: 1)
                     )
                 } else {
-                    Text(task.description ?? "No description")
-                        .foregroundColor(task.description == nil ? .secondary : .primary)
+                    if let description = task.description {
+                        HTMLTextView(htmlString: description)
+                    } else {
+                        Text("No description")
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
@@ -535,5 +539,31 @@ struct ActivityTabView: View {
                 .foregroundColor(.secondary)
         }
         .padding()
+    }
+}
+
+// MARK: - HTML Text View
+
+struct HTMLTextView: View {
+    let htmlString: String
+
+    var body: some View {
+        Text(AttributedString(html: htmlString))
+    }
+}
+
+extension AttributedString {
+    init(html htmlString: String) {
+        // Strip HTML tags and decode entities for plain text display
+        let cleanedString = htmlString
+            .replacingOccurrences(of: "<p>", with: "")
+            .replacingOccurrences(of: "</p>", with: "\n\n")
+            .replacingOccurrences(of: "<br>", with: "\n")
+            .replacingOccurrences(of: "<br/>", with: "\n")
+            .replacingOccurrences(of: "<br />", with: "\n")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        self.init(cleanedString)
     }
 }

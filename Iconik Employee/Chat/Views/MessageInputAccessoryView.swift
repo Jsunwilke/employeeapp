@@ -169,7 +169,9 @@ struct GifPickerView: View {
         if let key = Bundle.main.infoDictionary?["GIPHY_API_KEY"] as? String, !key.isEmpty, !key.hasPrefix("$") {
             return key
         }
-        fatalError("GIPHY_API_KEY not configured in Info.plist")
+        print("❌ GIPHY_API_KEY not configured in Info.plist")
+        print("❌ GIF search will not work. Please configure GIPHY_API_KEY in Config.xcconfig")
+        return "INVALID_API_KEY"
     }
     private let giphyBaseURL = "https://api.giphy.com/v1/gifs"
     

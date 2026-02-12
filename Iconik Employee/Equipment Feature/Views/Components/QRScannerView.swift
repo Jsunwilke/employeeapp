@@ -225,6 +225,17 @@ struct QRScannerCameraView: UIViewRepresentable {
             device.torchMode = torchOn ? .on : .off
             device.unlockForConfiguration()
         }
+
+        // Stop scanning when isScanning is false
+        if !isScanning {
+            context.coordinator.stopSession()
+        }
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        // Critical: Stop and clean up the capture session when view is removed
+        coordinator.stopSession()
+        coordinator.cleanup()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -252,6 +263,35 @@ struct QRScannerCameraView: UIViewRepresentable {
             }
 
             onCodeScanned(stringValue)
+        }
+
+        // Stop the capture session
+        func stopSession() {
+            guard let session = captureSession, session.isRunning else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                session.stopRunning()
+            }
+        }
+
+        // Clean up resources to prevent memory leaks
+        func cleanup() {
+            stopSession()
+
+            // Remove preview layer
+            previewLayer?.removeFromSuperlayer()
+            previewLayer = nil
+
+            // Remove inputs and outputs
+            if let session = captureSession {
+                session.inputs.forEach { session.removeInput($0) }
+                session.outputs.forEach { session.removeOutput($0) }
+            }
+
+            captureSession = nil
+        }
+
+        deinit {
+            cleanup()
         }
     }
 }

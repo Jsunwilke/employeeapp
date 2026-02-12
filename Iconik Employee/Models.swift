@@ -484,28 +484,64 @@ struct PhotoshootNote: Identifiable, Codable, Equatable, Hashable {
     var school: String  // The school name selected via dropdown.
     var noteText: String
     var photoURLs: [String] // URLs of photos taken for this note
-    
+
+    // NEW: Server sync fields for standalone submission
+    var status: NoteStatus = .draft
+    var submittedAt: Date?
+    var dailyReportId: String? // TEXT to match daily_job_reports.id
+    var syncedToServer: Bool = false
+    var lastSyncedAt: Date?
+    var photographerName: String = ""
+    var photographerID: String = ""
+    var shootType: String = "" // "sports", "school", etc.
+
+    enum NoteStatus: String, Codable {
+        case draft
+        case submitted
+    }
+
     // For backward compatibility when decoding existing notes
     enum CodingKeys: String, CodingKey {
         case id, timestamp, school, noteText, photoURLs
+        case status, submittedAt, dailyReportId, syncedToServer, lastSyncedAt
+        case photographerName, photographerID, shootType
     }
-    
-    init(id: UUID, timestamp: Date, school: String, noteText: String, photoURLs: [String] = []) {
+
+    init(id: UUID, timestamp: Date, school: String, noteText: String, photoURLs: [String] = [],
+         status: NoteStatus = .draft, submittedAt: Date? = nil, dailyReportId: String? = nil,
+         syncedToServer: Bool = false, lastSyncedAt: Date? = nil,
+         photographerName: String = "", photographerID: String = "", shootType: String = "") {
         self.id = id
         self.timestamp = timestamp
         self.school = school
         self.noteText = noteText
         self.photoURLs = photoURLs
+        self.status = status
+        self.submittedAt = submittedAt
+        self.dailyReportId = dailyReportId
+        self.syncedToServer = syncedToServer
+        self.lastSyncedAt = lastSyncedAt
+        self.photographerName = photographerName
+        self.photographerID = photographerID
+        self.shootType = shootType
     }
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         school = try container.decode(String.self, forKey: .school)
         noteText = try container.decode(String.self, forKey: .noteText)
-        // Try to decode photoURLs, but use an empty array if the key doesn't exist
+        // Try to decode all fields with fallbacks for backward compatibility
         photoURLs = (try? container.decode([String].self, forKey: .photoURLs)) ?? []
+        status = (try? container.decode(NoteStatus.self, forKey: .status)) ?? .draft
+        submittedAt = try? container.decode(Date.self, forKey: .submittedAt)
+        dailyReportId = try? container.decode(String.self, forKey: .dailyReportId)
+        syncedToServer = (try? container.decode(Bool.self, forKey: .syncedToServer)) ?? false
+        lastSyncedAt = try? container.decode(Date.self, forKey: .lastSyncedAt)
+        photographerName = (try? container.decode(String.self, forKey: .photographerName)) ?? ""
+        photographerID = (try? container.decode(String.self, forKey: .photographerID)) ?? ""
+        shootType = (try? container.decode(String.self, forKey: .shootType)) ?? ""
     }
 }
 

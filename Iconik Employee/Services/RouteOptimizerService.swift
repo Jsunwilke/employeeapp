@@ -249,10 +249,26 @@ class RouteOptimizerService {
             options: .init(body: requestBody)
         )
 
+        // Debug: Log full response
+        print("📥 Edge Function Response:")
+        print("   Success: \(response.success)")
+        print("   Optimized order: \(response.optimizedOrder?.description ?? "nil")")
+        print("   Skipped shipments: \(response.skippedShipments?.description ?? "nil")")
+
         guard response.success else {
             let errorMessage = response.error ?? "Unknown error"
             print("RouteOptimizerService: Edge Function error: \(errorMessage)")
             throw RouteOptimizerError.apiError(statusCode: 500)
+        }
+
+        // Log any skipped shipments
+        if let skipped = response.skippedShipments, !skipped.isEmpty {
+            print("⚠️ Google API skipped \(skipped.count) shipment(s):")
+            for skip in skipped {
+                print("   - Index \(skip.index): \(skip.label ?? "Unknown")")
+            }
+        } else {
+            print("✅ No skipped shipments (or field is nil)")
         }
 
         guard let optimizedOrder = response.optimizedOrder, !optimizedOrder.isEmpty else {
@@ -267,18 +283,26 @@ class RouteOptimizerService {
             )
         }
 
-        // Reorder schools based on the optimized order
-        var reorderedSchools: [School] = []
-        for index in optimizedOrder {
-            if index >= 0 && index < validSchools.count {
-                reorderedSchools.append(validSchools[index])
-            }
+        // Debug: Log the schools sent and order received
+        print("🗺️ Route Optimization Debug:")
+        print("   Starting from: \(startingFrom.latitude), \(startingFrom.longitude)")
+        print("   Schools sent (in order):")
+        for (index, school) in validSchools.enumerated() {
+            let coords = school.parsedCoordinates!
+            print("     [\(index)] \(school.name) at \(coords.lat), \(coords.lng)")
         }
+        print("   Optimized order received from API: \(optimizedOrder)")
+        print("   Total distance: \(response.totalDistanceMeters ?? 0)m")
+        print("   Legs: \(response.legs?.count ?? 0)")
 
-        // If we didn't get all schools, fall back to original order
-        if reorderedSchools.count != validSchools.count {
-            print("RouteOptimizerService: Incomplete optimization, using original order")
-            reorderedSchools = validSchools
+        // Reorder schools based on the optimized order
+        let reorderedSchools: [School] = optimizedOrder.enumerated().compactMap { (position, index) -> School? in
+            guard index >= 0 && index < validSchools.count else {
+                print("⚠️ Invalid school index \(index) in optimized order")
+                return nil
+            }
+            print("     Reordered position \(position + 1): \(validSchools[index].name)")
+            return validSchools[index]
         }
 
         // Extract distance data
@@ -436,6 +460,11 @@ private struct OptimizeRouteRequest: Codable {
     let endLocation: OptimizeLocation?
 }
 
+private struct SkippedShipment: Codable {
+    let index: Int
+    let label: String?
+}
+
 private struct OptimizeRouteResponse: Codable {
     let success: Bool
     let optimizedOrder: [Int]?
@@ -443,6 +472,7 @@ private struct OptimizeRouteResponse: Codable {
     let totalDurationSeconds: Double?
     let legs: [RouteLeg]?
     let error: String?
+    let skippedShipments: [SkippedShipment]?
 }
 
 // MARK: - Errors

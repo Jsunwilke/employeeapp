@@ -1072,9 +1072,11 @@ struct CompactShiftRow: View {
 struct SportsRostersWidget: View {
     @State private var todaysSportsShoots: [SportsShoot] = []
     @State private var isLoading = true
+    @State private var loadTask: Task<Void, Never>?
     @ObservedObject var tabBarManager: TabBarManager
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
-    
+    @Environment(\.scenePhase) private var scenePhase
+
     private var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
@@ -1224,32 +1226,74 @@ struct SportsRostersWidget: View {
         .onAppear {
             loadSportsRosters()
         }
+        .onDisappear {
+            // Cancel any ongoing load task when view disappears
+            loadTask?.cancel()
+            loadTask = nil
+        }
+        .onChange(of: scenePhase) { newPhase in
+            if newPhase == .background || newPhase == .inactive {
+                // Cancel loading when going to background to prevent crashes
+                loadTask?.cancel()
+                loadTask = nil
+            } else if newPhase == .active {
+                // Reload data when returning to foreground
+                loadSportsRosters()
+            }
+        }
     }
-    
+
     private func loadSportsRosters() {
+        // Cancel any previous load task
+        loadTask?.cancel()
         guard !storedUserOrganizationID.isEmpty else {
             self.isLoading = false
             return
         }
-        
+
         isLoading = true
-        
+
         // Fetch all sports shoots for the organization
-        Task {
+        loadTask = Task {
+            // Check for cancellation before network call
+            guard !Task.isCancelled else {
+                await MainActor.run {
+                    self.isLoading = false
+                }
+                return
+            }
             do {
                 let shoots = try await SportsShootService.shared.fetchAllSportsShoots(forOrganization: storedUserOrganizationID)
 
-                // Filter for today's shoots
+                // Check for cancellation after network call
+                guard !Task.isCancelled else {
+                    await MainActor.run {
+                        self.isLoading = false
+                    }
+                    return
+                }
+
+                // Filter for today's shoots - use date components to ignore timezone
                 let calendar = Calendar.current
-                let today = calendar.startOfDay(for: Date())
-                let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+                let todayComponents = calendar.dateComponents([.year, .month, .day], from: Date())
+
+                print("📅 SportsRosterWidget: Today's components - Year: \(todayComponents.year ?? 0), Month: \(todayComponents.month ?? 0), Day: \(todayComponents.day ?? 0)")
+                print("📅 SportsRosterWidget: Fetched \(shoots.count) total shoots")
 
                 await MainActor.run {
                     self.todaysSportsShoots = shoots.filter { shoot in
-                        let shootDay = calendar.startOfDay(for: shoot.shootDate)
-                        // Filter out archived shoots and only show today's shoots
-                        return !shoot.isArchived && shootDay >= today && shootDay < tomorrow
+                        let shootComponents = calendar.dateComponents([.year, .month, .day], from: shoot.shootDate)
+                        let isToday = shootComponents.year == todayComponents.year &&
+                                     shootComponents.month == todayComponents.month &&
+                                     shootComponents.day == todayComponents.day
+                        let isNotArchived = !shoot.isArchived
+
+                        print("📅 Shoot: \(shoot.schoolName) - Year: \(shootComponents.year ?? 0), Month: \(shootComponents.month ?? 0), Day: \(shootComponents.day ?? 0) -> IsToday: \(isToday), IsNotArchived: \(isNotArchived)")
+
+                        return isNotArchived && isToday
                     }.sorted { $0.shootDate < $1.shootDate }
+
+                    print("✅ SportsRosterWidget: Showing \(self.todaysSportsShoots.count) rosters for today")
                     self.isLoading = false
                 }
             } catch {
@@ -1518,7 +1562,20 @@ struct PhotoshootNotesWidget: View {
         formatter.dateFormat = "MMM d"
         return formatter
     }
-    
+
+    // Helper to get selected school for a note
+    private func getSelectedSchool(for note: PhotoshootNote) -> SchoolItem {
+        if let match = schoolOptions.first(where: { $0.name == note.school }) {
+            return match
+        }
+        if let first = schoolOptions.first {
+            print("⚠️ School '\(note.school)' not found in options, using first available: '\(first.name)'")
+            return first
+        }
+        print("⚠️ No schools available for note, using fallback 'Unknown' school")
+        return SchoolItem(id: "unknown", name: "Unknown", address: "", coordinates: nil)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             // Header
@@ -1591,15 +1648,30 @@ struct PhotoshootNotesWidget: View {
                                             Text("\(note.photoURLs.count)")
                                                 .font(.caption2)
                                         }
+                                        Spacer()
+                                        // Sync status badge
+                                        if note.status == .submitted {
+                                            Circle()
+                                                .fill(Color.green)
+                                                .frame(width: 6, height: 6)
+                                        } else if note.syncedToServer {
+                                            Circle()
+                                                .fill(Color.blue)
+                                                .frame(width: 6, height: 6)
+                                        } else {
+                                            Circle()
+                                                .fill(Color.orange)
+                                                .frame(width: 6, height: 6)
+                                        }
                                     }
                                     .foregroundColor(.blue)
-                                    
+
                                     Text(note.school.isEmpty ? "No school" : note.school)
                                         .font(.caption)
                                         .fontWeight(.medium)
                                         .foregroundColor(.primary)
                                         .lineLimit(1)
-                                    
+
                                     Text(note.noteText.isEmpty ? "(No content)" : note.noteText)
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
@@ -1643,9 +1715,7 @@ struct PhotoshootNotesWidget: View {
                                 .foregroundColor(.secondary)
                             
                             Picker("", selection: Binding(
-                                get: {
-                                    schoolOptions.first(where: { $0.name == note.school }) ?? schoolOptions.first!
-                                },
+                                get: { getSelectedSchool(for: note) },
                                 set: { newSchool in
                                     if let index = notes.firstIndex(where: { $0.id == note.id }) {
                                         notes[index].school = newSchool.name
@@ -1753,13 +1823,33 @@ struct PhotoshootNotesWidget: View {
     // MARK: - Helper Methods
     
     private func createNewNote() {
-        let newNote = PhotoshootNote(id: UUID(), timestamp: Date(), school: "", noteText: "", photoURLs: [])
+        // Get user info from AppStorage
+        let firstName = UserDefaults.standard.string(forKey: "userFirstName") ?? ""
+        let lastName = UserDefaults.standard.string(forKey: "userLastName") ?? ""
+        let userID = UserDefaults.standard.string(forKey: "userID") ?? ""
+        let photographerName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+
+        let newNote = PhotoshootNote(
+            id: UUID(),
+            timestamp: Date(),
+            school: "",
+            noteText: "",
+            photoURLs: [],
+            status: .draft,
+            submittedAt: nil,
+            dailyReportId: nil,
+            syncedToServer: false,
+            lastSyncedAt: nil,
+            photographerName: photographerName.isEmpty ? "Unknown" : photographerName,
+            photographerID: userID,
+            shootType: "photoshoot"
+        )
         notes.append(newNote)
         selectedNote = newNote
-        
+
         // Try to set school from today's schedule
         setSchoolFromSchedule(for: newNote)
-        
+
         saveNotes()
     }
     

@@ -28,6 +28,11 @@ interface RouteLeg {
   durationSeconds: number;
 }
 
+interface SkippedShipment {
+  index: number;
+  label?: string;
+}
+
 interface OptimizeRouteResponse {
   success: boolean;
   optimizedOrder?: number[];
@@ -35,6 +40,7 @@ interface OptimizeRouteResponse {
   totalDurationSeconds?: number;
   legs?: RouteLeg[];
   error?: string;
+  skippedShipments?: SkippedShipment[];
 }
 
 interface RouteOptimizationResult {
@@ -42,6 +48,7 @@ interface RouteOptimizationResult {
   totalDistanceMeters: number;
   totalDurationSeconds: number;
   legs: RouteLeg[];
+  skippedShipments: SkippedShipment[];
 }
 
 // Generate a JWT for Google OAuth2 authentication
@@ -148,14 +155,18 @@ async function optimizeRoute(
 ): Promise<RouteOptimizationResult> {
   const url = `https://routeoptimization.googleapis.com/v1/projects/${projectId}:optimizeTours`;
 
-  // Build shipments - each destination is a "pickup" location
+  // Build shipments - use delivery-only approach (simpler for route optimization)
   const shipments = destinations.map((dest, index) => ({
     label: dest.label || `Stop ${index + 1}`,
-    pickups: [
+    deliveries: [
       {
-        arrivalLocation: {
-          latitude: dest.latitude,
-          longitude: dest.longitude,
+        arrivalWaypoint: {
+          location: {
+            latLng: {
+              latitude: dest.latitude,
+              longitude: dest.longitude,
+            },
+          },
         },
         duration: "300s",  // 5 min service time at each stop
       },
@@ -165,21 +176,29 @@ async function optimizeRoute(
   // Build vehicle starting from origin
   const vehicle: Record<string, unknown> = {
     label: "Route",
-    startLocation: {
-      latitude: origin.latitude,
-      longitude: origin.longitude,
+    startWaypoint: {
+      location: {
+        latLng: {
+          latitude: origin.latitude,
+          longitude: origin.longitude,
+        },
+      },
     },
     travelMode: "DRIVING",
-    // Cost model - tells optimizer to minimize distance and driving time
-    costPerKilometer: 1.0,
-    costPerTraveledHour: 10.0,
+    // Cost model - heavily prioritize minimizing distance
+    costPerKilometer: 1000.0,  // Very high cost per km to minimize distance
+    costPerHour: 0.1,  // Minimal cost per hour
   };
 
   // Add end location if specified
   if (endLocation) {
-    vehicle.endLocation = {
-      latitude: endLocation.latitude,
-      longitude: endLocation.longitude,
+    vehicle.endWaypoint = {
+      location: {
+        latLng: {
+          latitude: endLocation.latitude,
+          longitude: endLocation.longitude,
+        },
+      },
     };
   }
 
@@ -188,12 +207,24 @@ async function optimizeRoute(
       shipments,
       vehicles: [vehicle],
     },
-    timeout: "30s",  // More time for better optimization
+    // Ensure all shipments are included, even if it's not optimal
+    considerRoadTraffic: false,
+    // Use longer timeout for more thorough optimization
+    timeout: "30s",
     // Request populated transition polylines to get distance data
     populateTransitionPolylines: false,
   };
 
-  console.log("Calling Route Optimization API:", JSON.stringify(requestBody, null, 2));
+  console.log("🗺️ Route Optimization Request:");
+  console.log(`  Origin: ${origin.latitude}, ${origin.longitude}`);
+  console.log(`  Destinations (${destinations.length}):`);
+  destinations.forEach((dest, i) => {
+    console.log(`    [${i}] ${dest.label}: ${dest.latitude}, ${dest.longitude}`);
+  });
+  if (endLocation) {
+    console.log(`  End location: ${endLocation.latitude}, ${endLocation.longitude}`);
+  }
+  console.log("Full request body:", JSON.stringify(requestBody, null, 2));
 
   const response = await fetch(url, {
     method: "POST",
@@ -217,11 +248,43 @@ async function optimizeRoute(
   const route = data.routes?.[0];
   const visits = route?.visits || [];
   const transitions = route?.transitions || [];
+  const skippedShipments = route?.skippedShipments || [];
+
+
+  console.log(`\n📊 Route Analysis:`);
+  console.log(`  Total shipments sent: ${destinations.length}`);
+  console.log(`  Visits in route: ${visits.length}`);
+  console.log(`  Skipped shipments: ${skippedShipments.length}`);
+
+  if (skippedShipments.length > 0) {
+    console.log(`  ⚠️  Skipped shipments:`);
+    skippedShipments.forEach((skipped: any) => {
+      console.log(`    - Shipment ${skipped.index}: ${skipped.label || 'Unknown'}`);
+      console.log(`      Full skipped data: ${JSON.stringify(skipped, null, 2)}`);
+      if (skipped.reasons) {
+        skipped.reasons.forEach((reason: any) => {
+          console.log(`      Reason code: ${reason.code || 'UNKNOWN'}`);
+          console.log(`      Full reason: ${JSON.stringify(reason, null, 2)}`);
+        });
+      }
+    });
+  }
 
   // Get the optimized order of shipments (0-indexed)
-  const optimizedOrder = visits
-    .map((visit: { shipmentIndex?: number }) => visit.shipmentIndex)
-    .filter((index: number | undefined): index is number => index !== undefined);
+  // Some visits may not have shipmentIndex, so we need to match by label
+  const optimizedOrder: number[] = [];
+  for (const visit of visits) {
+    if (visit.shipmentIndex !== undefined) {
+      optimizedOrder.push(visit.shipmentIndex);
+    } else if (visit.shipmentLabel) {
+      // Find the shipment index by matching the label
+      const matchIndex = destinations.findIndex(dest => dest.label === visit.shipmentLabel);
+      if (matchIndex !== -1) {
+        optimizedOrder.push(matchIndex);
+        console.log(`  ⚠️  Visit without shipmentIndex matched by label: ${visit.shipmentLabel} → index ${matchIndex}`);
+      }
+    }
+  }
 
   // Extract distance and duration from transitions
   // transitions[0] = origin to first stop
@@ -244,14 +307,27 @@ async function optimizeRoute(
     });
   }
 
-  console.log(`Total distance: ${totalDistanceMeters}m, Total duration: ${totalDurationSeconds}s`);
-  console.log(`Legs: ${JSON.stringify(legs)}`);
+  console.log(`\n✅ Route Optimization Result:`);
+  console.log(`  Optimized order: [${optimizedOrder.join(', ')}]`);
+  console.log(`  Total distance: ${totalDistanceMeters}m (${(totalDistanceMeters * 0.000621371).toFixed(1)} mi)`);
+  console.log(`  Total duration: ${totalDurationSeconds}s (${Math.round(totalDurationSeconds / 60)} min)`);
+  console.log(`  Leg details:`);
+  legs.forEach((leg, i) => {
+    console.log(`    Leg ${i}: ${leg.distanceMeters}m (${(leg.distanceMeters * 0.000621371).toFixed(1)} mi), ${leg.durationSeconds}s (${Math.round(leg.durationSeconds / 60)} min)`);
+  });
+
+  // Map skipped shipments to simple format
+  const skippedShipmentsData: SkippedShipment[] = skippedShipments.map((skipped: any) => ({
+    index: skipped.index || 0,
+    label: skipped.label,
+  }));
 
   return {
     optimizedOrder,
     totalDistanceMeters,
     totalDurationSeconds,
     legs,
+    skippedShipments: skippedShipmentsData,
   };
 }
 
@@ -344,6 +420,7 @@ serve(async (req) => {
         totalDistanceMeters: result.totalDistanceMeters,
         totalDurationSeconds: result.totalDurationSeconds,
         legs: result.legs,
+        skippedShipments: result.skippedShipments,
       } as OptimizeRouteResponse),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

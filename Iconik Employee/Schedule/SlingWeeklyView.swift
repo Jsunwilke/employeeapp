@@ -79,6 +79,12 @@ struct SlingWeeklyView: View {
     @State private var dayOffset: CGFloat = 0
     @State private var isDraggingDay = false
     @State private var isAnimatingDay = false
+    @State private var dragDirection: DragDirection? = nil
+
+    enum DragDirection {
+        case horizontal
+        case vertical
+    }
     
     // Animation parameters
     private let transitionDuration: Double = 0.3
@@ -167,14 +173,21 @@ struct SlingWeeklyView: View {
                 loadSessions()
             }
             .onChange(of: weekOffset) { _ in
+                // Update immediately but defer heavy operations to next run loop
+                // This keeps animation smooth by not blocking the main thread
                 updateDisplayedSessions()
+
                 if let selectedDay = selectedDay, !isDateInVisibleWeek(selectedDay) {
                     // If selected day is no longer in visible week after a week change,
                     // select the closest date in the new week
                     self.selectedDay = getClosestVisibleDate(to: selectedDay)
                 }
-                loadWeatherForVisibleSessions()
-                loadTimeOffForVisibleWeek()
+
+                // Defer weather and time off loading to not block animation
+                DispatchQueue.main.async {
+                    loadWeatherForVisibleSessions()
+                    loadTimeOffForVisibleWeek()
+                }
             }
             .onChange(of: selectedDay) { _ in
                 loadWeatherForVisibleSessions()
@@ -377,19 +390,19 @@ struct SlingWeeklyView: View {
                             // Badge with count (above the day number) - shows total org staffing needs
                             if staffing.total > 0 {
                                 Text("\(staffing.total)")
-                                    .font(.system(size: 9, weight: .bold))
+                                    .font(.system(size: 8, weight: .semibold))
                                     .foregroundColor(.white)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 2)
-                                    .background(heatMapColor)
-                                    .cornerRadius(6)
-                                    .onTapGesture {
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(heatMapColor.opacity(0.85))
+                                    .cornerRadius(4)
+                                    .onLongPressGesture(minimumDuration: 0.3) {
                                         showingStaffingPopover = date
                                     }
                             } else {
                                 // Placeholder to maintain consistent spacing
                                 Spacer()
-                                    .frame(height: 16)
+                                    .frame(height: 14)
                             }
 
                             // Day number with heat map color background
@@ -401,7 +414,7 @@ struct SlingWeeklyView: View {
                                         .frame(width: 32, height: 32)
                                 } else if staffing.total > 0 {
                                     Circle()
-                                        .fill(heatMapColor.opacity(0.25))
+                                        .fill(heatMapColor.opacity(0.15))
                                         .frame(width: 32, height: 32)
                                 } else if isToday(date) {
                                     Circle()
@@ -616,40 +629,41 @@ struct SlingWeeklyView: View {
     // Main content view with calendar and events
     private var mainContentView: some View {
         Group {
-            // Improved carousel with rounded corners and interactive dragging
-            ZStack {
-                // Current week view
-                calendarWeekView(weekOffset: weekOffset)
-                    .offset(x: offset)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                if !isAnimating {
-                                    isDragging = true
-                                    offset = value.translation.width
-                                }
+            // Week calendar with instant response
+            calendarWeekView(weekOffset: weekOffset)
+                .offset(x: offset)
+                .animation(nil, value: offset) // Disable implicit animations for instant response
+                .frame(height: 120)
+                .padding(.horizontal)
+                .contentShape(Rectangle())
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 2)
+                        .onChanged { value in
+                            if !isAnimating {
+                                isDragging = true
+                                // Pure 1:1 tracking - no interpolation
+                                offset = value.translation.width
                             }
-                            .onEnded { value in
-                                isDragging = false
-                                let threshold = screenWidth * 0.3
+                        }
+                        .onEnded { value in
+                            isDragging = false
+                            let threshold = screenWidth * 0.15
+                            let velocity = value.predictedEndTranslation.width - value.translation.width
 
-                                if value.translation.width < -threshold {
-                                    // Next week
-                                    animateToNextWeek()
-                                } else if value.translation.width > threshold {
-                                    // Previous week
-                                    animateToPreviousWeek()
-                                } else {
-                                    // Return to current position
-                                    withAnimation(.spring()) {
-                                        offset = 0
-                                    }
+                            if value.translation.width < -threshold || velocity < -350 {
+                                // Next week (swipe left) - animate immediately
+                                animateToNextWeek()
+                            } else if value.translation.width > threshold || velocity > 350 {
+                                // Previous week (swipe right) - animate immediately
+                                animateToPreviousWeek()
+                            } else {
+                                // Snap back instantly with tight spring
+                                withAnimation(.interpolatingSpring(stiffness: 300, damping: 25)) {
+                                    offset = 0
                                 }
                             }
-                    )
-            }
-            .frame(height: 120)
-            .padding(.horizontal)
+                        }
+                )
 
             // Selected day header with shift count
             if let selectedDate = selectedDay {
@@ -664,30 +678,63 @@ struct SlingWeeklyView: View {
                 ZStack {
                     eventsListView(for: selectedDate)
                         .offset(x: dayOffset)
-                        .gesture(
-                            DragGesture()
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 5)
                                 .onChanged { value in
                                     if !isAnimatingDay {
-                                        isDraggingDay = true
-                                        dayOffset = value.translation.width
+                                        let horizontalAmount = abs(value.translation.width)
+                                        let verticalAmount = abs(value.translation.height)
+
+                                        // Determine drag direction on first significant movement
+                                        if dragDirection == nil {
+                                            if horizontalAmount > 8 || verticalAmount > 8 {
+                                                // Lock into direction based on initial movement
+                                                // Require stronger horizontal bias to activate (2x more horizontal than vertical)
+                                                if horizontalAmount > verticalAmount * 2 {
+                                                    dragDirection = .horizontal
+                                                } else if verticalAmount > horizontalAmount {
+                                                    dragDirection = .vertical
+                                                }
+                                            }
+                                        }
+
+                                        // Only handle horizontal drags
+                                        if dragDirection == .horizontal {
+                                            isDraggingDay = true
+                                            // Smooth tracking with slight damping
+                                            let translation = value.translation.width
+                                            let damping: CGFloat = 0.85
+                                            dayOffset = translation * damping
+                                        }
                                     }
                                 }
                                 .onEnded { value in
-                                    isDraggingDay = false
-                                    let threshold = screenWidth * 0.3
+                                    // Only process if this was a horizontal drag
+                                    if dragDirection == .horizontal {
+                                        isDraggingDay = false
+                                        let threshold = screenWidth * 0.18
+                                        let velocity = value.predictedEndTranslation.width - value.translation.width
+                                        let horizontalAmount = abs(value.translation.width)
 
-                                    if value.translation.width < -threshold {
-                                        // Swipe left - next day
-                                        animateToNextDay()
-                                    } else if value.translation.width > threshold {
-                                        // Swipe right - previous day
-                                        animateToPreviousDay()
-                                    } else {
-                                        // Snap back to center
-                                        withAnimation(.spring()) {
-                                            dayOffset = 0
+                                        if (value.translation.width < -threshold && horizontalAmount > 30) || velocity < -300 {
+                                            // Swipe left - next day
+                                            animateToNextDay()
+                                        } else if (value.translation.width > threshold && horizontalAmount > 30) || velocity > 300 {
+                                            // Swipe right - previous day
+                                            animateToPreviousDay()
+                                        } else {
+                                            // Snap back to center with spring animation
+                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                                dayOffset = 0
+                                            }
                                         }
+                                    } else {
+                                        // Vertical drag - just reset position
+                                        dayOffset = 0
                                     }
+
+                                    // Reset drag direction for next gesture
+                                    dragDirection = nil
                                 }
                         )
                 }
@@ -702,51 +749,39 @@ struct SlingWeeklyView: View {
     
     private func animateToNextWeek() {
         isAnimating = true
-        
-        // First animate off screen to the left
-        withAnimation(.easeInOut(duration: transitionDuration/2)) {
+
+        // Instant snap to complete the swipe - no animation delay
+        withAnimation(.interpolatingSpring(stiffness: 350, damping: 28)) {
             offset = -screenWidth
         }
-        
-        // Then reset position and increment week
-        DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
-            offset = screenWidth
+
+        // Update immediately after animation starts - no waiting
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            // Reset instantly without animation
+            offset = 0
             weekOffset += 1
-            
-            // Now animate back to center from right
-            withAnimation(.easeInOut(duration: transitionDuration/2)) {
-                offset = 0
-            }
-            
-            // Animation complete
-            DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
-                isAnimating = false
-            }
+
+            // Mark complete immediately
+            isAnimating = false
         }
     }
     
     private func animateToPreviousWeek() {
         isAnimating = true
-        
-        // First animate off screen to the right
-        withAnimation(.easeInOut(duration: transitionDuration/2)) {
+
+        // Instant snap to complete the swipe - no animation delay
+        withAnimation(.interpolatingSpring(stiffness: 350, damping: 28)) {
             offset = screenWidth
         }
-        
-        // Then reset position and decrement week
-        DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
-            offset = -screenWidth
+
+        // Update immediately after animation starts - no waiting
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            // Reset instantly without animation
+            offset = 0
             weekOffset -= 1
-            
-            // Now animate back to center from left
-            withAnimation(.easeInOut(duration: transitionDuration/2)) {
-                offset = 0
-            }
-            
-            // Animation complete
-            DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
-                isAnimating = false
-            }
+
+            // Mark complete immediately
+            isAnimating = false
         }
     }
     
@@ -754,77 +789,63 @@ struct SlingWeeklyView: View {
     
     private func animateToNextDay() {
         guard let currentSelected = selectedDay else { return }
-        
+
         isAnimatingDay = true
-        
+
         // Calculate next day
         let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: currentSelected) ?? currentSelected
-        
+
         // Check if we need to move to next week
         let currentWeekday = Calendar.current.component(.weekday, from: currentSelected)
         let isLastDayOfWeek = currentWeekday == 7 // Saturday
-        
-        // Animate the day view sliding out
-        withAnimation(.easeInOut(duration: transitionDuration/2)) {
+
+        // Smooth spring animation to slide out
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             dayOffset = -screenWidth
         }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
-            // Update selected day
+
+        // Update after animation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            dayOffset = 0
             selectedDay = nextDay
-            
+
             // If moving to next week, update week offset
             if isLastDayOfWeek {
                 weekOffset += 1
             }
-            
-            // Reset position and animate in from right
-            dayOffset = screenWidth
-            withAnimation(.easeInOut(duration: transitionDuration/2)) {
-                dayOffset = 0
-            }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
-                isAnimatingDay = false
-            }
+
+            isAnimatingDay = false
         }
     }
     
     private func animateToPreviousDay() {
         guard let currentSelected = selectedDay else { return }
-        
+
         isAnimatingDay = true
-        
+
         // Calculate previous day
         let previousDay = Calendar.current.date(byAdding: .day, value: -1, to: currentSelected) ?? currentSelected
-        
+
         // Check if we need to move to previous week
         let currentWeekday = Calendar.current.component(.weekday, from: currentSelected)
         let isFirstDayOfWeek = currentWeekday == 1 // Sunday
-        
-        // Animate the day view sliding out
-        withAnimation(.easeInOut(duration: transitionDuration/2)) {
+
+        // Smooth spring animation to slide out
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             dayOffset = screenWidth
         }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
-            // Update selected day
+
+        // Update after animation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            dayOffset = 0
             selectedDay = previousDay
-            
+
             // If moving to previous week, update week offset
             if isFirstDayOfWeek {
                 weekOffset -= 1
             }
-            
-            // Reset position and animate in from left
-            dayOffset = -screenWidth
-            withAnimation(.easeInOut(duration: transitionDuration/2)) {
-                dayOffset = 0
-            }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration/2) {
-                isAnimatingDay = false
-            }
+
+            isAnimatingDay = false
         }
     }
     

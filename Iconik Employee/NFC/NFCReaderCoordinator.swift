@@ -40,10 +40,17 @@ class NFCReaderCoordinator: NSObject, NFCNDEFReaderSessionDelegate, ObservableOb
             session.invalidate()
             return
         }
-        
-        let record = message.records.first!
+
+        guard let record = message.records.first else {
+            DispatchQueue.main.async {
+                self.errorMessage = "NFC tag has no records."
+            }
+            session.invalidate()
+            return
+        }
+
         let payloadData = record.payload
-        
+
         guard payloadData.count > 0 else {
             DispatchQueue.main.async {
                 self.errorMessage = "Tag payload is empty."

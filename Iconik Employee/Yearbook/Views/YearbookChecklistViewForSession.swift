@@ -162,11 +162,11 @@ struct YearbookChecklistViewForSession: View {
                     print("📋 Loading yearbook list for year: \(sessionYear)")
                     selectedYear = sessionYear
                     viewModel.loadShootList(schoolId: schoolId, schoolYear: sessionYear, organizationId: orgId)
-                } else if years.count == 1 {
+                } else if years.count == 1, let firstYear = years.first {
                     // Only one year available, load it
-                    print("📋 Loading only available year: \(years.first!)")
-                    selectedYear = years.first
-                    viewModel.loadShootList(schoolId: schoolId, schoolYear: years.first!, organizationId: orgId)
+                    print("📋 Loading only available year: \(firstYear)")
+                    selectedYear = firstYear
+                    viewModel.loadShootList(schoolId: schoolId, schoolYear: firstYear, organizationId: orgId)
                 } else {
                     // Multiple years available, let user choose
                     print("📋 Multiple years available, showing selection")

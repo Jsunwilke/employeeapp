@@ -8,6 +8,7 @@ struct NotesInputView: View {
     
     @State private var notes = ""
     @State private var characterCount = 0
+    @State private var isProcessing = false
     
     private let maxCharacters = 500
     
@@ -67,21 +68,29 @@ struct NotesInputView: View {
                 // Action buttons
                 VStack(spacing: 12) {
                     Button(action: {
+                        guard !isProcessing else { return }
+                        isProcessing = true
                         onComplete(notes.isEmpty ? nil : notes)
                     }) {
                         HStack {
-                            Image(systemName: isClockOut ? "stop.circle.fill" : "play.circle.fill")
-                                .font(.title2)
-                            Text(isClockOut ? "Clock Out" : "Clock In")
+                            if isProcessing {
+                                ProgressView()
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: isClockOut ? "stop.circle.fill" : "play.circle.fill")
+                                    .font(.title2)
+                            }
+                            Text(isClockOut ? (isProcessing ? "Processing..." : "Clock Out") : (isProcessing ? "Processing..." : "Clock In"))
                                 .font(.headline)
                                 .fontWeight(.semibold)
                         }
                         .foregroundColor(.white)
                         .padding()
                         .frame(maxWidth: .infinity)
-                        .background(isClockOut ? Color.red : Color.blue)
+                        .background(isProcessing ? Color.gray : (isClockOut ? Color.red : Color.blue))
                         .cornerRadius(12)
                     }
+                    .disabled(isProcessing)
                     
                     Button(action: {
                         presentationMode.wrappedValue.dismiss()

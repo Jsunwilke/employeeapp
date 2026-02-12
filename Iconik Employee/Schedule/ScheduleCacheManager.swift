@@ -26,8 +26,13 @@ actor ScheduleCacheManager {
 
     // MARK: - File Paths
     private var cacheDirectory: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ScheduleCache", isDirectory: true)
+        guard let baseURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            // Fallback to temporary directory if caches directory unavailable
+            print("⚠️ ScheduleCache: Caches directory not available, using temp directory")
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("ScheduleCache", isDirectory: true)
+        }
+        return baseURL.appendingPathComponent("ScheduleCache", isDirectory: true)
     }
 
     private var sessionsFileURL: URL {

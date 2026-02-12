@@ -79,20 +79,15 @@ struct ClassGroupSlateView: View {
             
             // Detect orientation
             orientation = UIDevice.current.orientation
-            
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             // Listen for orientation changes
-            NotificationCenter.default.addObserver(
-                forName: UIDevice.orientationDidChangeNotification,
-                object: nil,
-                queue: .main
-            ) { _ in
-                orientation = UIDevice.current.orientation
-            }
+            orientation = UIDevice.current.orientation
         }
         .onDisappear {
             // Restore idle timer
             UIApplication.shared.isIdleTimerDisabled = false
-            
+
             // Note: We don't restore brightness as the user may have set it manually
         }
     }

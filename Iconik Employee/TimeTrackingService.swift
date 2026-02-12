@@ -16,6 +16,7 @@ class TimeTrackingService: ObservableObject {
     private var timer: Timer?
     private var currentUserId: String?
     private var currentOrgId: String?
+    private var isClockingOut = false
 
     // Persistent cache and network monitoring
     private let persistentCache = TimeEntryCacheManager.shared
@@ -165,6 +166,10 @@ class TimeTrackingService: ObservableObject {
     }
 
     func clockOut(notes: String? = nil) async throws {
+        guard !isClockingOut else { return }
+        isClockingOut = true
+        defer { isClockingOut = false }
+
         guard let userId = currentUserId,
               let orgId = currentOrgId else {
             throw TimeTrackingError.userNotAuthenticated

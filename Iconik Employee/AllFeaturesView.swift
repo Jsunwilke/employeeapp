@@ -3,6 +3,7 @@ import SwiftUI
 struct AllFeaturesView: View {
     @ObservedObject var viewModel: MainEmployeeViewModel
     @ObservedObject var tabBarManager: TabBarManager
+    @ObservedObject private var organizationService = OrganizationService.shared
     @State private var localEditMode: EditMode = .inactive
     let userRole: String
     @StateObject private var timeTrackingService = TimeTrackingService()
@@ -26,7 +27,7 @@ struct AllFeaturesView: View {
         List {
             // Employee Features Section (re-orderable)
             Section(header: Text("Employee Features")) {
-                ForEach(viewModel.employeeFeatures) { feature in
+                ForEach(filteredEmployeeFeatures) { feature in
                     if localEditMode == .active {
                         // Simple row in edit mode
                         HStack {
@@ -129,64 +130,7 @@ struct AllFeaturesView: View {
         .navigationTitle("All Features")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                // Clock In/Out Button
-                Button(action: {
-                    Task {
-                        do {
-                            if timeTrackingService.isClockIn {
-                                try await timeTrackingService.clockOut()
-                            } else {
-                                try await timeTrackingService.clockIn()
-                                await MainActor.run {
-                                    startTimerIfNeeded()
-                                }
-                            }
-                        } catch {
-                            print("Clock in/out error: \(error.localizedDescription)")
-                        }
-                    }
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: timeTrackingService.isClockIn ? "stop.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 20))
-                        
-                        if timeTrackingService.isClockIn {
-                            Text(elapsedTime)
-                                .font(.system(.body, design: .monospaced))
-                                .fontWeight(.medium)
-                        } else {
-                            Text("Clock In")
-                                .font(.body)
-                                .fontWeight(.medium)
-                        }
-                    }
-                    .foregroundColor(timeTrackingService.isClockIn ? .red : .green)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(timeTrackingService.isClockIn ? Color.red.opacity(0.1) : Color.green.opacity(0.1))
-                    )
-                }
-            }
-            
-            ToolbarItem(placement: .navigationBarTrailing) {
-                if localEditMode == .active {
-                    Button("Done") {
-                        withAnimation { 
-                            localEditMode = .inactive 
-                        }
-                        viewModel.saveEmployeeFeatureOrder()
-                    }
-                } else {
-                    Button("Edit") {
-                        withAnimation { 
-                            localEditMode = .active 
-                        }
-                    }
-                }
-            }
+            toolbarContent
         }
         .environment(\.editMode, $localEditMode)
         .task {
@@ -198,7 +142,73 @@ struct AllFeaturesView: View {
             timer = nil
         }
     }
-    
+
+    // MARK: - Toolbar Content
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            // Clock In/Out Button
+            Button(action: {
+                Task {
+                    do {
+                        if timeTrackingService.isClockIn {
+                            try await timeTrackingService.clockOut()
+                        } else {
+                            try await timeTrackingService.clockIn()
+                            await MainActor.run {
+                                startTimerIfNeeded()
+                            }
+                        }
+                    } catch {
+                        print("Clock in/out error: \(error.localizedDescription)")
+                    }
+                }
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: timeTrackingService.isClockIn ? "stop.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 20))
+
+                    if timeTrackingService.isClockIn {
+                        Text(elapsedTime)
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.medium)
+                    } else {
+                        Text("Clock In")
+                            .font(.body)
+                            .fontWeight(.medium)
+                    }
+                }
+                .foregroundColor(timeTrackingService.isClockIn ? .red : .green)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(timeTrackingService.isClockIn ? Color.red.opacity(0.1) : Color.green.opacity(0.1))
+                )
+            }
+        }
+
+        ToolbarItem(placement: .navigationBarTrailing) {
+            if localEditMode == .active {
+                Button("Done") {
+                    withAnimation {
+                        localEditMode = .inactive
+                    }
+                    viewModel.saveEmployeeFeatureOrder()
+                }
+            } else {
+                Button("Edit") {
+                    withAnimation {
+                        localEditMode = .active
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Helper Methods
+
     private func startTimerIfNeeded() {
         timer?.invalidate()
         if timeTrackingService.isClockIn {
@@ -219,6 +229,23 @@ struct AllFeaturesView: View {
         }
     }
     
+    // MARK: - Filtered Features
+
+    /// Get employee features filtered by organization settings
+    private var filteredEmployeeFeatures: [FeatureItem] {
+        let usePhotoshootNotesOnly = organizationService.usePhotoshootNotesOnly
+
+        return viewModel.employeeFeatures.filter { feature in
+            // If using photoshoot notes only, hide daily report features
+            if usePhotoshootNotesOnly {
+                return feature.id != "dailyJobReport" &&
+                       feature.id != "customDailyReports" &&
+                       feature.id != "myDailyJobReports"
+            }
+            return true
+        }
+    }
+
     private func featureColorFor(_ id: String) -> Color {
         switch id {
         case "timeTracking": return .cyan

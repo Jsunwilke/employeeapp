@@ -11,8 +11,10 @@ class GooglePlacesService: ObservableObject {
         if let key = Bundle.main.infoDictionary?["GOOGLE_PLACES_API_KEY"] as? String, !key.isEmpty, !key.hasPrefix("$") {
             return key
         }
-        // Fallback - should not happen in production
-        fatalError("GOOGLE_PLACES_API_KEY not configured in Info.plist")
+        // Fallback - return invalid key and log error
+        print("❌ GOOGLE_PLACES_API_KEY not configured in Info.plist")
+        print("❌ Google Places API will not work. Please configure GOOGLE_PLACES_API_KEY in Config.xcconfig")
+        return "INVALID_API_KEY"
     }
     private let baseURL = "https://places.googleapis.com/v1/places"
     private let legacyBaseURL = "https://maps.googleapis.com/maps/api/place"

@@ -1187,20 +1187,18 @@ struct SportsShootDetailView: View {
     }
 
     private func stopEditing(entryId: UUID) async {
-        // Save any pending changes first
+        // Cancel debounce first
         debounceTask?.cancel()
 
-        if let newValue = editingValues[entryId],
-           let entry = rosterEntries.first(where: { $0.id == entryId }),
-           newValue != entry.imageNumbers {
+        // ALWAYS save if there's a value - prevents data loss when switching fields quickly
+        if let newValue = editingValues[entryId] {
             await saveEntry(entryId: entryId, imageNumbers: newValue)
         }
 
-        await lockManager.releaseRosterEntryLock(entryId: entryId)
-
-        currentlyEditingEntryId = nil
+        // Clean up state
         editingValues.removeValue(forKey: entryId)
         lastSavedValues.removeValue(forKey: entryId)
+        currentlyEditingEntryId = nil
     }
 
     private func handleEditingValueChange(_ newValues: [UUID: String]) {
