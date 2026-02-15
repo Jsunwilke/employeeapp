@@ -365,19 +365,30 @@ struct AddGroupImageView: View {
             createdAt: existingGroup?.createdAt ?? Date()
         )
 
-        // Save to PowerSync (auto-syncs when online)
+        // Save to PowerSync with retry (auto-syncs when online)
         Task {
-            do {
-                try await powerSync.saveGroupImage(group)
-                await MainActor.run {
-                    onComplete(true)
-                    presentationMode.wrappedValue.dismiss()
+            var retries = 0
+            var lastError: Error?
+            while retries < 3 {
+                do {
+                    try await powerSync.saveGroupImage(group)
+                    await MainActor.run {
+                        onComplete(true)
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                    return
+                } catch {
+                    lastError = error
+                    retries += 1
+                    print("AddGroupImageView: Save retry \(retries)/3: \(error)")
+                    if retries < 3 {
+                        try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries))
+                    }
                 }
-            } catch {
-                await MainActor.run {
-                    errorMessage = "Failed to save: \(error.localizedDescription)"
-                    showingErrorAlert = true
-                }
+            }
+            await MainActor.run {
+                errorMessage = "Failed to save after 3 attempts: \(lastError?.localizedDescription ?? "Unknown error")"
+                showingErrorAlert = true
             }
         }
     }

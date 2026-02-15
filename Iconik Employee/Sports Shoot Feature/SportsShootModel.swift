@@ -176,6 +176,18 @@ struct RosterEntry: Identifiable, Codable, Hashable {
     func isLockedBy(userId: UUID) -> Bool {
         return lockedBy == userId && isLocked
     }
+
+    /// Check if locked by a different device (uses lockedByName with device session ID)
+    /// Falls back to UUID comparison if lockedByName is nil (legacy data)
+    func isLockedByOtherDevice(editorIdentifier: String, userId: UUID?) -> Bool {
+        guard isLocked else { return false }
+        if let name = lockedByName {
+            return name != editorIdentifier
+        }
+        // Fallback for entries locked before lockedByName was populated
+        guard let lockedBy = lockedBy, let userId = userId else { return false }
+        return lockedBy != userId
+    }
 }
 
 // MARK: - Group Image Model (matches group_images table)
@@ -282,6 +294,18 @@ struct GroupImage: Identifiable, Codable, Hashable {
     // Check if locked by a specific user
     func isLockedBy(userId: UUID) -> Bool {
         return lockedBy == userId && isLocked
+    }
+
+    /// Check if locked by a different device (uses lockedByName with device session ID)
+    /// Falls back to UUID comparison if lockedByName is nil (legacy data)
+    func isLockedByOtherDevice(editorIdentifier: String, userId: UUID?) -> Bool {
+        guard isLocked else { return false }
+        if let name = lockedByName {
+            return name != editorIdentifier
+        }
+        // Fallback for entries locked before lockedByName was populated
+        guard let lockedBy = lockedBy, let userId = userId else { return false }
+        return lockedBy != userId
     }
 }
 

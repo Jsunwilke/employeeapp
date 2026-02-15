@@ -62,9 +62,21 @@ struct SportsShootDetailView: View {
     // Sync notification
     @State private var showSyncNotification = false
     @State private var syncNotificationMessage = ""
+    @State private var syncNotificationIsConflict = false
+
+    // Lock-lost warning
+    @State private var showLockLostWarning = false
+    @State private var lockLostMessage = ""
 
     // Currently editing entry for protecting from overwrites
     @State private var currentlyEditingImageNumbers: String = ""
+
+    // Track deleted IDs so watcher protection doesn't resurrect them
+    @State private var recentlyDeletedEntryIds: Set<UUID> = []
+    @State private var recentlyDeletedGroupIds: Set<UUID> = []
+
+    // Track previous connectivity for offline→online transition detection
+    @State private var wasConnected: Bool = true
 
     // Environment
     @Environment(\.scenePhase) var scenePhase
@@ -99,6 +111,14 @@ struct SportsShootDetailView: View {
             .onDisappear { handleDisappear() }
             .onChange(of: scenePhase) { handleScenePhaseChange($0) }
             .onChange(of: editingValues) { handleEditingValueChange($0) }
+            .onChange(of: lockManager.lockLostEvent?.id) { _ in handleLockLostEvent() }
+            .onChange(of: powerSync.isConnected) { isConnected in
+                // Detect offline → online transition
+                if !wasConnected && isConnected {
+                    Task { await lockManager.handleNetworkReconnection() }
+                }
+                wasConnected = isConnected
+            }
             .alert(isPresented: $showingErrorAlert) { errorAlert }
             .sheet(isPresented: $showingAddRosterEntry) { addRosterEntrySheet }
             .sheet(isPresented: $showingBatchAdd) { batchAddSheet }
@@ -202,25 +222,83 @@ struct SportsShootDetailView: View {
     }
 
     private func handleDisappear() {
+        // Cancel debounce first to prevent it from firing on destroyed state
+        debounceTask?.cancel()
+        debounceTask = nil
+
         // Cancel PowerSync watch tasks
         rosterWatchTask?.cancel()
         groupWatchTask?.cancel()
         rosterWatchTask = nil
         groupWatchTask = nil
 
-        // Release any locks
+        // Dismiss keyboard and save any pending edits
+        dismissKeyboard()
         Task {
             if let entryId = currentlyEditingEntryId {
+                await stopEditing(entryId: entryId)
                 await lockManager.releaseRosterEntryLock(entryId: entryId)
             }
         }
     }
 
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
-        if newPhase == .background || newPhase == .inactive {
+        if newPhase == .background {
+            // Only release on actual background, not .inactive (which fires for notifications, control center, etc.)
             lockManager.handleAppBackground()
         } else if newPhase == .active {
             lockManager.handleAppForeground()
+            // Re-acquire lock if we were editing when app went to background
+            if let editingId = currentlyEditingEntryId {
+                Task {
+                    let reacquired = await lockManager.reacquireLock(entryId: editingId, type: .rosterEntry)
+                    if !reacquired {
+                        // Lock taken by someone else while we were away
+                        lockLostMessage = "Lock lost while app was in background — your edits are still saved locally"
+                        withAnimation { showLockLostWarning = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                            withAnimation { showLockLostWarning = false }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func showConflictNotification(_ message: String) {
+        syncNotificationMessage = message
+        syncNotificationIsConflict = true
+        withAnimation { showSyncNotification = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            withAnimation {
+                showSyncNotification = false
+                syncNotificationIsConflict = false
+            }
+        }
+    }
+
+    private func handleLockLostEvent() {
+        guard let event = lockManager.lockLostEvent else { return }
+
+        // Only show warning if the lost lock matches what we're currently editing
+        guard event.entryId == currentlyEditingEntryId else { return }
+
+        let reasonText: String
+        switch event.reason {
+        case .heartbeatFailed:
+            reasonText = "Lock refresh failed — your edits are still saved locally"
+        case .expiredWhileOffline:
+            reasonText = "Lock expired while offline — another user may edit this entry"
+        case .takenByOtherUser:
+            reasonText = "Another user took this lock — your edits are still saved locally"
+        }
+
+        lockLostMessage = reasonText
+        withAnimation { showLockLostWarning = true }
+
+        // Auto-dismiss after 10 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            withAnimation { showLockLostWarning = false }
         }
     }
 
@@ -365,6 +443,10 @@ struct SportsShootDetailView: View {
             if showSyncNotification {
                 syncNotificationView
             }
+
+            if showLockLostWarning {
+                lockLostWarningView
+            }
         }
     }
 
@@ -372,8 +454,8 @@ struct SportsShootDetailView: View {
         VStack {
             Spacer()
             HStack {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
+                Image(systemName: syncNotificationIsConflict ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundColor(syncNotificationIsConflict ? .orange : .green)
                 Text(syncNotificationMessage)
                     .font(.subheadline)
                     .foregroundColor(.white)
@@ -385,6 +467,35 @@ struct SportsShootDetailView: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
         .animation(.spring(), value: showSyncNotification)
+    }
+
+    private var lockLostWarningView: some View {
+        VStack {
+            HStack {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+
+                Text(lockLostMessage)
+                    .font(.caption)
+                    .foregroundColor(.orange)
+
+                Spacer()
+
+                Button(action: {
+                    withAnimation { showLockLostWarning = false }
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+            .background(Color.orange.opacity(0.15))
+
+            Spacer()
+        }
     }
 
     // MARK: - Compact Header View
@@ -460,6 +571,14 @@ struct SportsShootDetailView: View {
             }
             .pickerStyle(SegmentedPickerStyle())
             .onChange(of: selectedTab) { newValue in
+                dismissKeyboard()
+                // Save and stop editing when switching tabs
+                if let editingId = currentlyEditingEntryId {
+                    Task {
+                        await stopEditing(entryId: editingId)
+                        await lockManager.releaseRosterEntryLock(entryId: editingId)
+                    }
+                }
                 if newValue == 1 {
                     withAnimation { showFilterPanel = false }
                 }
@@ -469,6 +588,7 @@ struct SportsShootDetailView: View {
 
             if selectedTab == 0 {
                 Button(action: {
+                    dismissKeyboard()
                     withAnimation { showFilterPanel.toggle() }
                 }) {
                     Image(systemName: "line.horizontal.3.decrease.circle")
@@ -629,7 +749,7 @@ struct SportsShootDetailView: View {
 
     private func rosterEntryRow(entry: RosterEntry, isEven: Bool) -> some View {
         let isCurrentlyEditing = currentlyEditingEntryId == entry.id
-        let isLockedByOther = entry.isLocked && entry.lockedBy != lockManager.currentUserId
+        let isLockedByOther = entry.isLockedByOtherDevice(editorIdentifier: lockManager.currentEditorIdentifier, userId: lockManager.currentUserId)
         let groupColor = colorForGroup(entry.groupName)
 
         return VStack(spacing: 0) {
@@ -672,8 +792,14 @@ struct SportsShootDetailView: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    selectedRosterEntry = entry
-                    showingAddRosterEntry = true
+                    dismissKeyboard()
+                    Task {
+                        if let editingId = currentlyEditingEntryId {
+                            await stopEditing(entryId: editingId)
+                        }
+                        selectedRosterEntry = entry
+                        showingAddRosterEntry = true
+                    }
                 }
 
                 // Image input row
@@ -696,6 +822,7 @@ struct SportsShootDetailView: View {
                         .cornerRadius(6)
 
                         Button(action: {
+                            dismissKeyboard()
                             Task {
                                 await stopEditing(entryId: entry.id)
                             }
@@ -751,8 +878,14 @@ struct SportsShootDetailView: View {
         .contextMenu {
             if !isLockedByOther {
                 Button(action: {
-                    selectedRosterEntry = entry
-                    showingAddRosterEntry = true
+                    dismissKeyboard()
+                    Task {
+                        if let editingId = currentlyEditingEntryId {
+                            await stopEditing(entryId: editingId)
+                        }
+                        selectedRosterEntry = entry
+                        showingAddRosterEntry = true
+                    }
                 }) {
                     Label("Edit", systemImage: "pencil")
                 }
@@ -818,7 +951,7 @@ struct SportsShootDetailView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                     .contextMenu {
-                        if !group.isLocked || group.lockedBy == lockManager.currentUserId {
+                        if !group.isLockedByOtherDevice(editorIdentifier: lockManager.currentEditorIdentifier, userId: lockManager.currentUserId) {
                             Button(action: {
                                 selectedGroupImage = group
                                 showingAddGroupImage = true
@@ -1100,17 +1233,49 @@ struct SportsShootDetailView: View {
     }
 
     private func refreshRosterEntries() async {
-        // PowerSync watchers auto-update, but we can also manually refresh
+        // Merge server data with local state — never blindly replace
         do {
-            rosterEntries = try await powerSync.getRosterEntries(forJob: shootID)
+            let serverEntries = try await powerSync.getRosterEntries(forJob: shootID)
+            var merged = serverEntries
+
+            // Keep local entries that are newer or not yet on server
+            for localEntry in rosterEntries {
+                guard !recentlyDeletedEntryIds.contains(localEntry.id) else { continue }
+
+                if let index = merged.firstIndex(where: { $0.id == localEntry.id }) {
+                    if localEntry.updatedAt > merged[index].updatedAt {
+                        merged[index] = localEntry
+                    }
+                } else {
+                    merged.append(localEntry)
+                }
+            }
+
+            rosterEntries = merged
         } catch {
             print("Failed to refresh roster: \(error)")
         }
     }
 
     private func refreshGroupImages() async {
+        // Merge server data with local state — never blindly replace
         do {
-            groupImages = try await powerSync.getGroupImages(forJob: shootID)
+            let serverGroups = try await powerSync.getGroupImages(forJob: shootID)
+            var merged = serverGroups
+
+            for localGroup in groupImages {
+                guard !recentlyDeletedGroupIds.contains(localGroup.id) else { continue }
+
+                if let index = merged.firstIndex(where: { $0.id == localGroup.id }) {
+                    if localGroup.updatedAt > merged[index].updatedAt {
+                        merged[index] = localGroup
+                    }
+                } else {
+                    merged.append(localGroup)
+                }
+            }
+
+            groupImages = merged
         } catch {
             print("Failed to refresh groups: \(error)")
         }
@@ -1126,19 +1291,52 @@ struct SportsShootDetailView: View {
         rosterWatchTask = Task {
             do {
                 for try await entries in powerSync.watchRosterEntries(forJob: shootID) {
+                    var merged = entries
+
                     // Protect currently editing entry from being overwritten
                     if let editingId = currentlyEditingEntryId,
                        let localEntry = rosterEntries.first(where: { $0.id == editingId }) {
-                        var merged = entries
                         if let index = merged.firstIndex(where: { $0.id == editingId }) {
-                            // Keep local editing state
                             var preservedEntry = localEntry
                             preservedEntry.imageNumbers = editingValues[editingId] ?? localEntry.imageNumbers
                             merged[index] = preservedEntry
                         }
-                        self.rosterEntries = merged
-                    } else {
-                        self.rosterEntries = entries
+                    }
+
+                    // For every local entry, protect it from stale server data:
+                    var conflictDetected = false
+                    for localEntry in rosterEntries {
+                        // Skip entries we intentionally deleted
+                        guard !recentlyDeletedEntryIds.contains(localEntry.id) else { continue }
+
+                        if let index = merged.firstIndex(where: { $0.id == localEntry.id }) {
+                            // Entry exists in both — keep whichever is newer
+                            if localEntry.updatedAt > merged[index].updatedAt {
+                                merged[index] = localEntry
+                            } else if merged[index].updatedAt > localEntry.updatedAt
+                                        && merged[index].imageNumbers != localEntry.imageNumbers {
+                                // Server data is newer AND content differs — notify user
+                                conflictDetected = true
+                            }
+                        } else {
+                            // Entry exists locally but NOT in watcher data —
+                            // server hasn't received it yet. Keep it.
+                            merged.append(localEntry)
+                        }
+                    }
+
+                    // Clean up deleted IDs once server confirms removal
+                    for deletedId in recentlyDeletedEntryIds {
+                        if !merged.contains(where: { $0.id == deletedId }) {
+                            recentlyDeletedEntryIds.remove(deletedId)
+                        }
+                    }
+
+                    self.rosterEntries = merged
+
+                    // Show conflict notification if server overwrote local changes
+                    if conflictDetected {
+                        showConflictNotification("Roster updated by another user")
                     }
                 }
             } catch {
@@ -1150,7 +1348,43 @@ struct SportsShootDetailView: View {
         groupWatchTask = Task {
             do {
                 for try await groups in powerSync.watchGroupImages(forJob: shootID) {
-                    self.groupImages = groups
+                    var merged = groups
+
+                    // For every local group, protect it from stale server data:
+                    var conflictDetected = false
+                    for localGroup in groupImages {
+                        // Skip groups we intentionally deleted
+                        guard !recentlyDeletedGroupIds.contains(localGroup.id) else { continue }
+
+                        if let index = merged.firstIndex(where: { $0.id == localGroup.id }) {
+                            // Group exists in both — keep whichever is newer
+                            if localGroup.updatedAt > merged[index].updatedAt {
+                                merged[index] = localGroup
+                            } else if merged[index].updatedAt > localGroup.updatedAt
+                                        && merged[index].imageNumbers != localGroup.imageNumbers {
+                                // Server data is newer AND content differs — notify user
+                                conflictDetected = true
+                            }
+                        } else {
+                            // Group exists locally but NOT in watcher data —
+                            // server hasn't received it yet. Keep it.
+                            merged.append(localGroup)
+                        }
+                    }
+
+                    // Clean up deleted IDs once server confirms removal
+                    for deletedId in recentlyDeletedGroupIds {
+                        if !merged.contains(where: { $0.id == deletedId }) {
+                            recentlyDeletedGroupIds.remove(deletedId)
+                        }
+                    }
+
+                    self.groupImages = merged
+
+                    // Show conflict notification if server overwrote local changes
+                    if conflictDetected {
+                        showConflictNotification("Group updated by another user")
+                    }
                 }
             } catch {
                 print("SportsShootDetailView: Groups watch error: \(error)")
@@ -1161,15 +1395,16 @@ struct SportsShootDetailView: View {
     // MARK: - Editing Functions
 
     private func startEditing(entry: RosterEntry) async {
-        // Check if locked by someone else
-        if entry.isLocked && entry.lockedBy != lockManager.currentUserId {
+        // Check if locked by someone else (uses device-session-aware comparison)
+        if entry.isLockedByOtherDevice(editorIdentifier: lockManager.currentEditorIdentifier, userId: lockManager.currentUserId) {
             errorMessage = "This entry is being edited by \(entry.lockedByName ?? "another user")"
             showingErrorAlert = true
             return
         }
 
-        // Release previous lock if any
+        // Save and release previous entry if switching
         if let previousId = currentlyEditingEntryId, previousId != entry.id {
+            await stopEditing(entryId: previousId)
             await lockManager.releaseRosterEntryLock(entryId: previousId)
         }
 
@@ -1201,6 +1436,12 @@ struct SportsShootDetailView: View {
         currentlyEditingEntryId = nil
     }
 
+    /// Dismiss both custom (iPad) and system (iPhone) keyboards
+    private func dismissKeyboard() {
+        KeyboardManager.shared.hideKeyboard()
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
     private func handleEditingValueChange(_ newValues: [UUID: String]) {
         guard let entryId = currentlyEditingEntryId,
               let newValue = newValues[entryId],
@@ -1209,13 +1450,16 @@ struct SportsShootDetailView: View {
         // Cancel any existing debounce task
         debounceTask?.cancel()
 
-        // Create a new debounce task
-        let task = DispatchWorkItem { [self] in
-            Task {
-                await saveEntry(entryId: entryId, imageNumbers: newValue)
-                await MainActor.run {
-                    lastSavedValues[entryId] = newValue
-                }
+        // Create a new debounce task using DispatchWorkItem
+        // Captures entryId and newValue by value so it's safe if view state changes
+        let capturedEntryId = entryId
+        let capturedValue = newValue
+        let task = DispatchWorkItem {
+            Task { @MainActor [self] in
+                // Verify we're still editing this entry before saving
+                guard self.currentlyEditingEntryId == capturedEntryId else { return }
+                await self.saveEntry(entryId: capturedEntryId, imageNumbers: capturedValue)
+                self.lastSavedValues[capturedEntryId] = capturedValue
             }
         }
 
@@ -1235,12 +1479,21 @@ struct SportsShootDetailView: View {
             rosterEntries[index] = entry
         }
 
-        // Save to PowerSync (auto-syncs when online)
-        do {
-            try await powerSync.saveRosterEntry(entry)
-        } catch {
-            print("SportsShootDetailView: Failed to save entry: \(error)")
+        // Save to PowerSync with retry
+        var retries = 0
+        while retries < 3 {
+            do {
+                try await powerSync.saveRosterEntry(entry)
+                return
+            } catch {
+                retries += 1
+                print("SportsShootDetailView: Save retry \(retries)/3: \(error)")
+                if retries < 3 {
+                    try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries))
+                }
+            }
         }
+        print("SportsShootDetailView: Failed to save entry after 3 retries")
     }
 
     private func moveToNextEditableEntry(currentID: UUID) {
@@ -1251,7 +1504,7 @@ struct SportsShootDetailView: View {
         // Find next unlocked entry
         for index in (currentIndex + 1)..<displayedRoster.count {
             let nextEntry = displayedRoster[index]
-            if !nextEntry.isLocked || nextEntry.lockedBy == lockManager.currentUserId {
+            if !nextEntry.isLockedByOtherDevice(editorIdentifier: lockManager.currentEditorIdentifier, userId: lockManager.currentUserId) {
                 Task {
                     await stopEditing(entryId: currentID)
                     await startEditing(entry: nextEntry)
@@ -1263,7 +1516,7 @@ struct SportsShootDetailView: View {
         // Wrap around to beginning
         for index in 0..<currentIndex {
             let nextEntry = displayedRoster[index]
-            if !nextEntry.isLocked || nextEntry.lockedBy == lockManager.currentUserId {
+            if !nextEntry.isLockedByOtherDevice(editorIdentifier: lockManager.currentEditorIdentifier, userId: lockManager.currentUserId) {
                 Task {
                     await stopEditing(entryId: currentID)
                     await startEditing(entry: nextEntry)
@@ -1281,6 +1534,9 @@ struct SportsShootDetailView: View {
     // MARK: - Delete Functions
 
     private func deleteRosterEntry(_ entry: RosterEntry) async {
+        // Track as deleted so watcher doesn't resurrect it
+        recentlyDeletedEntryIds.insert(entry.id)
+
         // Remove from local state immediately
         rosterEntries.removeAll { $0.id == entry.id }
 
@@ -1290,11 +1546,15 @@ struct SportsShootDetailView: View {
         } catch {
             print("SportsShootDetailView: Failed to delete entry: \(error)")
             // Restore on failure
+            recentlyDeletedEntryIds.remove(entry.id)
             rosterEntries.append(entry)
         }
     }
 
     private func deleteGroupImage(_ group: GroupImage) async {
+        // Track as deleted so watcher doesn't resurrect it
+        recentlyDeletedGroupIds.insert(group.id)
+
         // Remove from local state immediately
         groupImages.removeAll { $0.id == group.id }
 
@@ -1304,6 +1564,7 @@ struct SportsShootDetailView: View {
         } catch {
             print("SportsShootDetailView: Failed to delete group: \(error)")
             // Restore on failure
+            recentlyDeletedGroupIds.remove(group.id)
             groupImages.append(group)
         }
     }

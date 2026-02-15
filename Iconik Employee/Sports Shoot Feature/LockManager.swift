@@ -14,10 +14,24 @@ enum LockType {
     case groupImage
 }
 
+enum LockLostReason {
+    case heartbeatFailed
+    case expiredWhileOffline
+    case takenByOtherUser
+}
+
+struct LockLostEvent: Identifiable {
+    let id = UUID()
+    let entryId: UUID
+    let type: LockType
+    let reason: LockLostReason
+}
+
 struct ActiveLock {
     let id: UUID
     let type: LockType
     let acquiredAt: Date
+    var lastRefreshedAt: Date
 }
 
 @MainActor
@@ -40,6 +54,9 @@ class LockManager: ObservableObject {
     // Active locks held by this user
     @Published private(set) var activeLocks: [ActiveLock] = []
 
+    // Event published when a lock is lost (heartbeat fail, offline expiry, taken by other)
+    @Published var lockLostEvent: LockLostEvent?
+
     // Heartbeat timer
     private var heartbeatTimer: Timer?
     private let heartbeatInterval: TimeInterval = 30 // Refresh every 30 seconds
@@ -56,11 +73,31 @@ class LockManager: ObservableObject {
 
     /// Clear the current user info (call on logout)
     func clearCurrentUser() {
-        Task {
-            await releaseAllLocks()
-        }
+        // Capture credentials before clearing so releaseAllLocks can use them
+        let capturedIdentifier = currentEditorIdentifier
+        let locks = activeLocks
+
+        // Clear state immediately
         self.currentUserId = nil
         self.currentUserName = ""
+        self.activeLocks.removeAll()
+        stopHeartbeat()
+
+        // Release locks on server using captured credentials
+        Task {
+            for lock in locks {
+                do {
+                    switch lock.type {
+                    case .rosterEntry:
+                        try await RosterEntryService.shared.releaseLock(entryId: lock.id, userName: capturedIdentifier)
+                    case .groupImage:
+                        try await GroupImageService.shared.releaseLock(groupId: lock.id, userName: capturedIdentifier)
+                    }
+                } catch {
+                    print("LockManager: Failed to release lock \(lock.id) on logout: \(error)")
+                }
+            }
+        }
     }
 
     // MARK: - Lock Acquisition
@@ -81,7 +118,7 @@ class LockManager: ObservableObject {
             )
 
             if acquired {
-                let lock = ActiveLock(id: entryId, type: .rosterEntry, acquiredAt: Date())
+                let lock = ActiveLock(id: entryId, type: .rosterEntry, acquiredAt: Date(), lastRefreshedAt: Date())
                 activeLocks.append(lock)
                 startHeartbeatIfNeeded()
             }
@@ -109,7 +146,7 @@ class LockManager: ObservableObject {
             )
 
             if acquired {
-                let lock = ActiveLock(id: groupId, type: .groupImage, acquiredAt: Date())
+                let lock = ActiveLock(id: groupId, type: .groupImage, acquiredAt: Date(), lastRefreshedAt: Date())
                 activeLocks.append(lock)
                 startHeartbeatIfNeeded()
             }
@@ -214,7 +251,18 @@ class LockManager: ObservableObject {
     private func refreshAllLocks() async {
         guard currentUserId != nil else { return }
 
+        // Collect results first, then apply mutations (avoid mutating during iteration)
+        var locksToRemove: [(UUID, LockType, LockLostReason)] = []
+        var locksToUpdate: [UUID] = []
+
         for lock in activeLocks {
+            // Check if lock has been offline too long (>120s since last successful refresh)
+            if Date().timeIntervalSince(lock.lastRefreshedAt) > 120 {
+                print("LockManager: Lock \(lock.id) expired while offline (no refresh for >120s)")
+                locksToRemove.append((lock.id, lock.type, .expiredWhileOffline))
+                continue
+            }
+
             do {
                 switch lock.type {
                 case .rosterEntry:
@@ -222,11 +270,22 @@ class LockManager: ObservableObject {
                 case .groupImage:
                     try await GroupImageService.shared.refreshLock(groupId: lock.id, userName: currentEditorIdentifier)
                 }
+                locksToUpdate.append(lock.id)
             } catch {
                 print("LockManager: Failed to refresh lock \(lock.id): \(error)")
-                // Lock may have been taken by someone else, remove from active locks
-                activeLocks.removeAll { $0.id == lock.id }
+                locksToRemove.append((lock.id, lock.type, .heartbeatFailed))
             }
+        }
+
+        // Apply mutations after iteration
+        for id in locksToUpdate {
+            if let index = activeLocks.firstIndex(where: { $0.id == id }) {
+                activeLocks[index].lastRefreshedAt = Date()
+            }
+        }
+        for (id, type, reason) in locksToRemove {
+            activeLocks.removeAll { $0.id == id }
+            lockLostEvent = LockLostEvent(entryId: id, type: type, reason: reason)
         }
 
         stopHeartbeatIfNoLocks()
@@ -241,8 +300,102 @@ class LockManager: ObservableObject {
         }
     }
 
-    /// Call when app returns to foreground
+    /// Call when app returns to foreground - re-acquire locks for active editing
     func handleAppForeground() {
-        // Locks should be re-acquired when user starts editing again
+        // Locks are re-acquired by the view when it detects active editing
+    }
+
+    // MARK: - Network Reconnection
+
+    /// Validate/re-acquire all active locks after coming back online
+    /// Called when PowerSync transitions from disconnected to connected
+    func handleNetworkReconnection() async {
+        guard let userId = currentUserId else { return }
+
+        // Collect results first, then apply mutations
+        var locksToRemove: [(UUID, LockType)] = []
+        var locksToUpdate: [UUID] = []
+
+        for lock in activeLocks {
+            do {
+                var acquired = false
+                switch lock.type {
+                case .rosterEntry:
+                    acquired = try await RosterEntryService.shared.acquireLock(
+                        entryId: lock.id,
+                        userId: userId,
+                        userName: currentEditorIdentifier
+                    )
+                case .groupImage:
+                    acquired = try await GroupImageService.shared.acquireLock(
+                        groupId: lock.id,
+                        userId: userId,
+                        userName: currentEditorIdentifier
+                    )
+                }
+
+                if acquired {
+                    locksToUpdate.append(lock.id)
+                    print("LockManager: Lock \(lock.id) validated on reconnection")
+                } else {
+                    locksToRemove.append((lock.id, lock.type))
+                    print("LockManager: Lock \(lock.id) taken by another user during offline period")
+                }
+            } catch {
+                print("LockManager: Failed to validate lock \(lock.id) on reconnection: \(error)")
+                // Network still flaky, keep local lock state but don't emit event yet
+            }
+        }
+
+        // Apply mutations after iteration
+        for id in locksToUpdate {
+            if let index = activeLocks.firstIndex(where: { $0.id == id }) {
+                activeLocks[index].lastRefreshedAt = Date()
+            }
+        }
+        for (id, type) in locksToRemove {
+            activeLocks.removeAll { $0.id == id }
+            lockLostEvent = LockLostEvent(entryId: id, type: type, reason: .takenByOtherUser)
+        }
+
+        stopHeartbeatIfNoLocks()
+    }
+
+    /// Re-acquire a specific lock (used when returning from background)
+    func reacquireLock(entryId: UUID, type: LockType) async -> Bool {
+        guard let userId = currentUserId else { return false }
+
+        do {
+            var acquired = false
+            switch type {
+            case .rosterEntry:
+                acquired = try await RosterEntryService.shared.acquireLock(
+                    entryId: entryId,
+                    userId: userId,
+                    userName: currentEditorIdentifier
+                )
+            case .groupImage:
+                acquired = try await GroupImageService.shared.acquireLock(
+                    groupId: entryId,
+                    userId: userId,
+                    userName: currentEditorIdentifier
+                )
+            }
+
+            if acquired {
+                // Add back to active locks if not already there
+                if !activeLocks.contains(where: { $0.id == entryId }) {
+                    activeLocks.append(ActiveLock(id: entryId, type: type, acquiredAt: Date(), lastRefreshedAt: Date()))
+                } else if let index = activeLocks.firstIndex(where: { $0.id == entryId }) {
+                    activeLocks[index].lastRefreshedAt = Date()
+                }
+                startHeartbeatIfNeeded()
+            }
+
+            return acquired
+        } catch {
+            print("LockManager: Failed to re-acquire lock \(entryId): \(error)")
+            return false
+        }
     }
 }

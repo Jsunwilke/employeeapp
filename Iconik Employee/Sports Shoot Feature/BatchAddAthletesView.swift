@@ -258,10 +258,20 @@ struct BatchAddAthletesView: View {
                     createdAt: Date()
                 )
 
-                do {
-                    try await powerSync.saveRosterEntry(entry)
-                } catch {
-                    print("BatchAddAthletesView: Failed to save entry: \(error)")
+                var saved = false
+                for attempt in 1...3 {
+                    do {
+                        try await powerSync.saveRosterEntry(entry)
+                        saved = true
+                        break
+                    } catch {
+                        print("BatchAddAthletesView: Save attempt \(attempt)/3 for entry \(index + 1): \(error)")
+                        if attempt < 3 {
+                            try? await Task.sleep(nanoseconds: UInt64(500_000_000 * attempt))
+                        }
+                    }
+                }
+                if !saved {
                     allSuccess = false
                 }
             }
