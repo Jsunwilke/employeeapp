@@ -8,6 +8,7 @@
 
 import SwiftUI
 import Combine
+import UIKit
 
 struct SportsShootDetailView: View {
     let shootID: UUID
@@ -45,6 +46,16 @@ struct SportsShootDetailView: View {
     @State private var showingImportExport = false
     @State private var showingMultiPhotoImport = false
 
+    @State private var showingKiosk = false
+
+    // Multipeer connectivity for kiosk sync
+    @StateObject private var multipeerSync = MultipeerRosterSync()
+    @State private var showingConnectionDetails = false
+
+    // Focal Point Production sync (iPad ↔ Surface Pro)
+    @StateObject private var fpSync = FocalPointSyncClient.shared
+    @State private var showingFPSyncSheet = false
+
     // Field editing state
     @State private var currentlyEditingEntryId: UUID? = nil
     @State private var editingValues: [UUID: String] = [:]
@@ -78,6 +89,9 @@ struct SportsShootDetailView: View {
     // Track previous connectivity for offline→online transition detection
     @State private var wasConnected: Bool = true
 
+    // Search
+    @State private var searchText: String = ""
+
     // Environment
     @Environment(\.scenePhase) var scenePhase
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
@@ -108,6 +122,15 @@ struct SportsShootDetailView: View {
             .navigationBarBackButtonHidden(false)
             .toolbar { toolbarContent }
             .task { await performInitialLoad() }
+            .task {
+                // Start browsing for kiosk registration stations
+                multipeerSync.startBrowsing(jobId: shootID)
+                print("SportsShootDetailView: Started browsing for kiosks for shoot \(shootID)")
+            }
+            .task {
+                // Set up Focal Point Production sync callbacks
+                setupFPSyncCallbacks()
+            }
             .onDisappear { handleDisappear() }
             .onChange(of: scenePhase) { handleScenePhaseChange($0) }
             .onChange(of: editingValues) { handleEditingValueChange($0) }
@@ -116,6 +139,11 @@ struct SportsShootDetailView: View {
                 // Detect offline → online transition
                 if !wasConnected && isConnected {
                     Task { await lockManager.handleNetworkReconnection() }
+                    // If PowerSync connected after the view first appeared (slow first sync),
+                    // the initial load may have returned empty local SQLite — reload now
+                    if rosterEntries.isEmpty || groupImages.isEmpty {
+                        Task { await loadSportsShoot() }
+                    }
                 }
                 wasConnected = isConnected
             }
@@ -125,6 +153,27 @@ struct SportsShootDetailView: View {
             .sheet(isPresented: $showingAddGroupImage) { addGroupImageSheet }
             .sheet(isPresented: $showingImportExport) { importExportSheet }
             .sheet(isPresented: $showingMultiPhotoImport) { multiPhotoImportSheet }
+            .sheet(isPresented: $showingFPSyncSheet) { fpSyncSheet }
+            .sheet(isPresented: $showingKiosk) {
+                KioskLaunchView(
+                    sportsJobId: shootID,
+                    organizationId: sportsShoot?.organizationId ?? "",
+                    schoolName: sportsShoot?.schoolName ?? ""
+                )
+            }
+            .onChange(of: showingKiosk) { isShowingKiosk in
+                // Stop browsing when kiosk opens, resume when it closes
+                if isShowingKiosk {
+                    multipeerSync.stopBrowsing()
+                    print("SportsShootDetailView: Stopped browsing (kiosk opened)")
+                } else {
+                    multipeerSync.startBrowsing(jobId: shootID)
+                    print("SportsShootDetailView: Resumed browsing (kiosk closed)")
+                }
+            }
+            .sheet(isPresented: $showingConnectionDetails) {
+                connectionDetailsSheet
+            }
     }
 
     // MARK: - Toolbar Content
@@ -134,8 +183,22 @@ struct SportsShootDetailView: View {
         ToolbarItem(placement: .navigationBarLeading) {
             leadingToolbarButton
         }
-        ToolbarItem(placement: .navigationBarTrailing) {
-            trailingToolbarMenu
+
+        // iPad: Show buttons directly in toolbar
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: { showingKiosk = true }) {
+                    Label("Start Kiosk", systemImage: "person.2.fill")
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                fpSyncToolbarButton
+            }
+        } else {
+            // iPhone: Show menu button
+            ToolbarItem(placement: .navigationBarTrailing) {
+                trailingToolbarMenu
+            }
         }
     }
 
@@ -151,6 +214,30 @@ struct SportsShootDetailView: View {
 
     private var trailingToolbarMenu: some View {
         Menu {
+            Button(action: { showingKiosk = true }) {
+                Label("Start Kiosk", systemImage: "person.2.fill")
+            }
+
+            Divider()
+
+            Button(action: {
+                if fpSync.isConnected {
+                    showingFPSyncSheet = true
+                } else {
+                    guard let shoot = sportsShoot, shoot.galleryId != nil else {
+                        errorMessage = "This sports job isn't linked to a Production gallery yet. Sync it from Focal Point Production first."
+                        showingErrorAlert = true
+                        return
+                    }
+                    showingFPSyncSheet = true
+                }
+            }) {
+                Label(fpSync.isConnected ? "Production Sync (Connected)" : "Production Sync",
+                      systemImage: fpSync.isConnected ? "bolt.fill" : "bolt.slash")
+            }
+
+            Divider()
+
             Button(action: { showingMultiPhotoImport = true }) {
                 Label("Import Paper Rosters", systemImage: "doc.viewfinder")
             }
@@ -191,6 +278,134 @@ struct SportsShootDetailView: View {
         } else {
             Label("Offline", systemImage: "wifi.slash")
                 .foregroundColor(.orange)
+        }
+    }
+
+    // MARK: - Focal Point Production Sync UI
+
+    @ViewBuilder
+    private var fpSyncToolbarButton: some View {
+        Button(action: {
+            if fpSync.isConnected {
+                showingFPSyncSheet = true
+            } else {
+                // Can only connect if gallery is linked
+                guard let shoot = sportsShoot, shoot.galleryId != nil else {
+                    errorMessage = "This sports job isn't linked to a Production gallery yet. Link it in Focal Point Production first."
+                    showingErrorAlert = true
+                    return
+                }
+                showingFPSyncSheet = true
+            }
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: fpSync.isConnected ? "bolt.fill" : "bolt.slash")
+                    .foregroundColor(fpSync.isConnected ? .green : .secondary)
+                if fpSync.isConnected {
+                    Text("Synced")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var fpSyncSheet: some View {
+        NavigationView {
+            List {
+                // Connection section
+                Section("Production Sync") {
+                    if fpSync.isConnected {
+                        Label("Connected", systemImage: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+
+                        if let paired = fpSync.pairedCameraId,
+                           let camera = fpSync.devices.first(where: { $0.id == paired }) {
+                            Label("Paired: \(camera.name)", systemImage: "camera.fill")
+                        }
+
+                        Button(role: .destructive) {
+                            fpSync.disconnect()
+                            showingFPSyncSheet = false
+                        } label: {
+                            Label("Disconnect", systemImage: "wifi.slash")
+                        }
+                    } else {
+                        Button {
+                            guard let shoot = sportsShoot, let galleryId = shoot.galleryId else { return }
+                            fpSync.startDiscovery(galleryId: galleryId)
+                        } label: {
+                            Label("Connect to Production", systemImage: "wifi")
+                        }
+                        .disabled(sportsShoot?.galleryId == nil)
+
+                        if fpSync.connectionStatus == .discovering {
+                            HStack {
+                                ProgressView()
+                                Text("Scanning for server...")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        if fpSync.connectionStatus == .authFailed {
+                            Label("Authentication failed — check PIN", systemImage: "exclamationmark.triangle")
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
+
+                // Device pairing section (when connected)
+                if fpSync.isConnected && fpSync.cameraDevices.count > 1 {
+                    Section("Camera Pairing") {
+                        ForEach(fpSync.cameraDevices) { device in
+                            Button {
+                                fpSync.pairWithCamera(deviceId: device.id)
+                            } label: {
+                                HStack {
+                                    Label(device.name, systemImage: "camera")
+                                    Spacer()
+                                    if device.id == fpSync.pairedCameraId {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Connected devices
+                if fpSync.isConnected && !fpSync.devices.isEmpty {
+                    Section("Connected Devices") {
+                        ForEach(fpSync.devices) { device in
+                            HStack {
+                                Image(systemName: device.stationMode == "camera" ? "camera" : (device.stationMode == "ios_roster" ? "ipad" : "desktopcomputer"))
+                                VStack(alignment: .leading) {
+                                    Text(device.name)
+                                        .font(.body)
+                                    Text(Self.formatStationMode(device.stationMode))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if device.captureCount > 0 {
+                                    Text("\(device.captureCount) photos")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Production Sync")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showingFPSyncSheet = false }
+                }
+            }
         }
     }
 
@@ -240,6 +455,99 @@ struct SportsShootDetailView: View {
                 await lockManager.releaseRosterEntryLock(entryId: entryId)
             }
         }
+
+        // Stop browsing for kiosks
+        multipeerSync.disconnect()
+        print("SportsShootDetailView: Stopped browsing for kiosks")
+
+        // Clear callback to prevent stale state mutations after view disappears
+        fpSync.onCaptureCompleted = nil
+    }
+
+    // MARK: - Focal Point Production Sync
+
+    private func setupFPSyncCallbacks() {
+        // When camera station captures a photo, auto-fill image numbers on this roster entry
+        fpSync.onCaptureCompleted = { [self] event in
+            guard let rosterEntryId = event.rosterEntryId,
+                  let imageNumber = event.imageNumber else { return }
+
+            // Find the roster entry
+            if let idx = rosterEntries.firstIndex(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) {
+                let entryId = rosterEntries[idx].id
+                // Skip auto-fill if user is currently editing this entry's image numbers
+                if currentlyEditingEntryId == entryId { return }
+
+                var entry = rosterEntries[idx]
+                // Append image number to existing comma-separated list
+                let existing = entry.imageNumbers.trimmingCharacters(in: .whitespaces)
+                if existing.isEmpty {
+                    entry.imageNumbers = "\(imageNumber)"
+                } else {
+                    entry.imageNumbers = "\(existing), \(imageNumber)"
+                }
+                rosterEntries[idx] = entry
+
+                // Save to PowerSync with retry
+                saveEntryWithRetry(entry)
+
+                print("[FPSync] Auto-filled image #\(imageNumber) for \(entry.lastName), \(entry.firstName)")
+            }
+        }
+    }
+
+    /// Save a roster entry with retry logic. Shows error alert on final failure.
+    private func saveEntryWithRetry(_ entry: RosterEntry) {
+        Task {
+            // Wait for PowerSync to be ready if it hasn't initialized yet
+            if !PowerSyncManager.shared.isReady {
+                await PowerSyncManager.shared.waitForFirstSync()
+            }
+            var retries = 0
+            while retries < 3 {
+                do {
+                    try await PowerSyncManager.shared.saveRosterEntry(entry)
+                    return
+                } catch {
+                    retries += 1
+                    if retries < 3 {
+                        try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries))
+                    } else {
+                        print("saveEntryWithRetry: Failed after 3 attempts: \(error)")
+                        await MainActor.run {
+                            errorMessage = "Failed to save changes for \(entry.lastName). Please try again."
+                            showingErrorAlert = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Format station mode for display
+    private static func formatStationMode(_ mode: String) -> String {
+        switch mode {
+        case "camera": return "Camera Station"
+        case "ios_roster": return "iPad Roster"
+        case "poser": return "Poser Station"
+        case "kiosk": return "Kiosk"
+        case "staff_entry": return "Staff Entry"
+        default: return mode
+        }
+    }
+
+    /// Send subject selection to Production camera station
+    private func sendSubjectSelection(entry: RosterEntry) {
+        guard fpSync.isConnected else { return }
+        guard let subjectId = entry.subjectId else {
+            print("[FPSync] Entry \(entry.lastName), \(entry.firstName) has no subject_id — not linked")
+            return
+        }
+        fpSync.selectSubject(
+            subjectId: subjectId,
+            rosterEntryId: entry.id.uuidString.lowercased(),
+            subjectName: "\(entry.lastName), \(entry.firstName)"
+        )
     }
 
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
@@ -315,6 +623,7 @@ struct SportsShootDetailView: View {
     private var addRosterEntrySheet: some View {
         AddRosterEntryView(
             shootID: shootID,
+            organizationId: sportsShoot?.organizationId ?? "",
             existingEntry: selectedRosterEntry,
             onComplete: { success in
                 if success { Task { await refreshRosterEntries() } }
@@ -326,6 +635,7 @@ struct SportsShootDetailView: View {
     private var batchAddSheet: some View {
         BatchAddAthletesView(
             shootID: shootID,
+            organizationId: sportsShoot?.organizationId ?? "",
             onComplete: { success in
                 if success { Task { await refreshRosterEntries() } }
             }
@@ -346,6 +656,7 @@ struct SportsShootDetailView: View {
     private var importExportSheet: some View {
         CSVImportExportView(
             shootID: shootID,
+            organizationId: sportsShoot?.organizationId ?? "",
             onComplete: { success in
                 if success { Task { await refreshRosterEntries() } }
                 showingImportExport = false
@@ -356,11 +667,70 @@ struct SportsShootDetailView: View {
     private var multiPhotoImportSheet: some View {
         MultiPhotoRosterImporterView(
             shootID: shootID,
+            organizationId: sportsShoot?.organizationId ?? "",
             onComplete: { success in
                 if success { Task { await refreshRosterEntries() } }
                 showingMultiPhotoImport = false
             }
         )
+    }
+
+    private var connectionDetailsSheet: some View {
+        NavigationView {
+            List {
+                Section {
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text(multipeerSync.isConnected ? "Connected" : "Not Connected")
+                            .foregroundColor(multipeerSync.isConnected ? .green : .orange)
+                    }
+                }
+
+                if !multipeerSync.connectedPeers.isEmpty {
+                    Section("Connected Kiosks (\(multipeerSync.connectedPeers.count))") {
+                        ForEach(multipeerSync.connectedPeers, id: \.displayName) { peer in
+                            HStack {
+                                Image(systemName: "ipad")
+                                    .foregroundColor(.blue)
+                                Text(peer.displayName)
+                                    .font(.body)
+                                Spacer()
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 8, height: 8)
+                            }
+                        }
+                    }
+                } else {
+                    Section {
+                        VStack(alignment: .center, spacing: 8) {
+                            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                                .font(.system(size: 40))
+                                .foregroundColor(.orange)
+                            Text("No kiosks found")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Text("Make sure kiosk devices are running and have Bluetooth + WiFi enabled")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                    }
+                }
+            }
+            .navigationTitle("Photographer Connections")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        showingConnectionDetails = false
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Extracted Body Components
@@ -586,6 +956,20 @@ struct SportsShootDetailView: View {
 
             Spacer()
 
+            // Multipeer connection status
+            Button(action: { showingConnectionDetails = true }) {
+                HStack(spacing: 4) {
+                    Image(systemName: multipeerSync.isConnected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                        .font(.system(size: 12))
+                        .foregroundColor(multipeerSync.isConnected ? .green : .orange)
+                    Text(multipeerSync.isConnected ? "\(multipeerSync.connectedPeers.count) kiosk(s)" : "No kiosks")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+
             if selectedTab == 0 {
                 Button(action: {
                     dismissKeyboard()
@@ -685,17 +1069,52 @@ struct SportsShootDetailView: View {
             .padding(.vertical, 8)
             .background(Color(.secondarySystemGroupedBackground))
 
-            // Athlete count
-            HStack {
+            // Search bar
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 14))
+                    TextField("Search by name or ID...", text: $searchText)
+                        .font(.system(size: 15))
+                        .autocorrectionDisabled()
+                        .autocapitalization(.none)
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 14))
+                        }
+                        .frame(minWidth: 44, minHeight: 44)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(.systemGray5))
+                .cornerRadius(8)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 4)
+            .background(Color(.systemGroupedBackground))
+
+            // Progress bar + athlete count
+            HStack(spacing: 8) {
                 let filteredRoster = filterRoster(rosterEntries)
-                let athleteCount = filteredRoster.filter { !$0.lastName.isEmpty }.count
-                Text("Athletes: \(athleteCount)")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal)
-                    .padding(.vertical, 4)
+                let totalCount = filteredRoster.count
+                let photographedCount = filteredRoster.filter { !$0.imageNumbers.isEmpty }.count
+
+                Text("\(photographedCount)/\(totalCount) photographed")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(photographedCount == totalCount && totalCount > 0 ? .green : .secondary)
+
+                ProgressView(value: totalCount > 0 ? Double(photographedCount) / Double(totalCount) : 0)
+                    .tint(photographedCount == totalCount && totalCount > 0 ? .green : .blue)
+                    .frame(maxWidth: 100)
+
                 Spacer()
             }
+            .padding(.horizontal)
+            .padding(.vertical, 4)
             .background(Color(.systemGroupedBackground))
 
             // Roster list
@@ -707,10 +1126,13 @@ struct SportsShootDetailView: View {
                 }
             }
             .listStyle(PlainListStyle())
-
-            // Add athlete buttons
-            HStack(spacing: 10) {
-                Spacer()
+            .overlay(
+                // Add athlete buttons at bottom
+                VStack {
+                    Spacer()
+                    ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    Spacer()
 
                 Button(action: {
                     selectedRosterEntry = nil
@@ -741,9 +1163,49 @@ struct SportsShootDetailView: View {
                     .cornerRadius(8)
                 }
 
-                Spacer()
-            }
-            .padding(.vertical, 8)
+                Button(action: { showingKiosk = true }) {
+                    HStack {
+                        Image(systemName: "person.2.fill")
+                        Text("Kiosk")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.purple)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+
+                Button(action: {
+                    if fpSync.isConnected {
+                        showingFPSyncSheet = true
+                    } else {
+                        guard let shoot = sportsShoot, shoot.galleryId != nil else {
+                            errorMessage = "This sports job isn't linked to a Production gallery yet. Sync it from Focal Point Production first."
+                            showingErrorAlert = true
+                            return
+                        }
+                        showingFPSyncSheet = true
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: fpSync.isConnected ? "bolt.fill" : "bolt.slash")
+                        Text(fpSync.isConnected ? "Synced" : "Sync")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(fpSync.isConnected ? Color.green : Color.orange)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+
+                    Spacer()
+                    }
+                    .padding(.vertical, 8)
+                    .background(Color(.systemBackground).opacity(0.95))
+                }
+            }, alignment: .bottom)
         }
     }
 
@@ -752,10 +1214,24 @@ struct SportsShootDetailView: View {
         let isLockedByOther = entry.isLockedByOtherDevice(editorIdentifier: lockManager.currentEditorIdentifier, userId: lockManager.currentUserId)
         let groupColor = colorForGroup(entry.groupName)
 
-        return VStack(spacing: 0) {
+        return HStack(spacing: 0) {
+            // Status indicator color strip
+            Rectangle()
+                .fill(!entry.imageNumbers.isEmpty ? Color.green : Color(.systemGray4))
+                .frame(width: 4)
+
+            VStack(spacing: 0) {
             VStack(spacing: 8) {
                 // Player info row
                 HStack(alignment: .top) {
+                    // Sync status dot (only when connected to Production)
+                    if fpSync.isConnected {
+                        Circle()
+                            .fill(!entry.imageNumbers.isEmpty ? Color.green : (entry.subjectId != nil ? Color.gray : Color.orange))
+                            .frame(width: 8, height: 8)
+                            .padding(.top, 6)
+                    }
+
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
                             Text(entry.firstName)
@@ -764,8 +1240,12 @@ struct SportsShootDetailView: View {
 
                             if !entry.teacher.isEmpty {
                                 Text(specialTranslation(entry.teacher))
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.secondary)
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(specialBadgeColor(entry.teacher))
+                                    .clipShape(Capsule())
                             }
                         }
 
@@ -793,6 +1273,12 @@ struct SportsShootDetailView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     dismissKeyboard()
+
+                    // If connected to Production, send subject selection to camera station
+                    if fpSync.isConnected && entry.subjectId != nil {
+                        sendSubjectSelection(entry: entry)
+                    }
+
                     Task {
                         if let editingId = currentlyEditingEntryId {
                             await stopEditing(entryId: editingId)
@@ -873,8 +1359,35 @@ struct SportsShootDetailView: View {
 
             Divider()
         }
+        } // Close outer HStack (status strip + content)
         .background(isEven ? Color(.systemBackground) : Color(.systemGray6))
         .overlay(isLockedByOther ? Color.red.opacity(0.05) : Color.clear)
+        .swipeActions(edge: .trailing) {
+            if !isLockedByOther {
+                Button(role: .destructive) {
+                    Task { await deleteRosterEntry(entry) }
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
+        .swipeActions(edge: .leading) {
+            if !isLockedByOther {
+                Button {
+                    dismissKeyboard()
+                    Task {
+                        if let editingId = currentlyEditingEntryId {
+                            await stopEditing(entryId: editingId)
+                        }
+                        selectedRosterEntry = entry
+                        showingAddRosterEntry = true
+                    }
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .tint(.blue)
+            }
+        }
         .contextMenu {
             if !isLockedByOther {
                 Button(action: {
@@ -1215,16 +1728,22 @@ struct SportsShootDetailView: View {
 
     private func loadSportsShoot() async {
         do {
-            // Fetch shoot info from SportsShootService (still needed for initial load)
             let shoot = try await SportsShootService.shared.fetchSportsShoot(id: shootID)
             self.sportsShoot = shoot
 
-            // Load roster and groups from PowerSync local DB (instant, works offline)
-            self.rosterEntries = try await powerSync.getRosterEntries(forJob: shootID)
-            self.groupImages = try await powerSync.getGroupImages(forJob: shootID)
+            // If PowerSync hasn't completed its first sync yet, wait for it.
+            // This ensures local SQLite has data before we try to read it.
+            if !powerSync.hasSynced {
+                await powerSync.waitForFirstSync()
+            }
+
+            let entries = try await powerSync.getRosterEntries(forJob: shootID)
+            let groups = try await powerSync.getGroupImages(forJob: shootID)
+
+            self.rosterEntries = entries
+            self.groupImages = groups
 
             isLoading = false
-            print("SportsShootDetailView: Loaded from PowerSync")
         } catch {
             isLoading = false
             errorMessage = "Failed to load: \(error.localizedDescription)"
@@ -1287,107 +1806,121 @@ struct SportsShootDetailView: View {
         rosterWatchTask?.cancel()
         groupWatchTask?.cancel()
 
-        // Watch roster entries
+        // Watch roster entries with auto-reconnect
         rosterWatchTask = Task {
-            do {
-                for try await entries in powerSync.watchRosterEntries(forJob: shootID) {
-                    var merged = entries
+            var retryDelay: UInt64 = 1_000_000_000 // 1s
+            while !Task.isCancelled {
+                do {
+                    for try await entries in powerSync.watchRosterEntries(forJob: shootID) {
+                        var merged = entries
 
-                    // Protect currently editing entry from being overwritten
-                    if let editingId = currentlyEditingEntryId,
-                       let localEntry = rosterEntries.first(where: { $0.id == editingId }) {
-                        if let index = merged.firstIndex(where: { $0.id == editingId }) {
-                            var preservedEntry = localEntry
-                            preservedEntry.imageNumbers = editingValues[editingId] ?? localEntry.imageNumbers
-                            merged[index] = preservedEntry
-                        }
-                    }
-
-                    // For every local entry, protect it from stale server data:
-                    var conflictDetected = false
-                    for localEntry in rosterEntries {
-                        // Skip entries we intentionally deleted
-                        guard !recentlyDeletedEntryIds.contains(localEntry.id) else { continue }
-
-                        if let index = merged.firstIndex(where: { $0.id == localEntry.id }) {
-                            // Entry exists in both — keep whichever is newer
-                            if localEntry.updatedAt > merged[index].updatedAt {
-                                merged[index] = localEntry
-                            } else if merged[index].updatedAt > localEntry.updatedAt
-                                        && merged[index].imageNumbers != localEntry.imageNumbers {
-                                // Server data is newer AND content differs — notify user
-                                conflictDetected = true
+                        // Protect currently editing entry from being overwritten
+                        if let editingId = currentlyEditingEntryId,
+                           let localEntry = rosterEntries.first(where: { $0.id == editingId }) {
+                            if let index = merged.firstIndex(where: { $0.id == editingId }) {
+                                var preservedEntry = localEntry
+                                preservedEntry.imageNumbers = editingValues[editingId] ?? localEntry.imageNumbers
+                                merged[index] = preservedEntry
                             }
-                        } else {
-                            // Entry exists locally but NOT in watcher data —
-                            // server hasn't received it yet. Keep it.
-                            merged.append(localEntry)
+                        }
+
+                        // For every local entry, protect it from stale server data:
+                        var conflictDetected = false
+                        for localEntry in rosterEntries {
+                            // Skip entries we intentionally deleted
+                            guard !recentlyDeletedEntryIds.contains(localEntry.id) else { continue }
+
+                            if let index = merged.firstIndex(where: { $0.id == localEntry.id }) {
+                                // Entry exists in both — keep whichever is newer
+                                if localEntry.updatedAt > merged[index].updatedAt {
+                                    merged[index] = localEntry
+                                } else if merged[index].updatedAt > localEntry.updatedAt
+                                            && merged[index].imageNumbers != localEntry.imageNumbers {
+                                    // Server data is newer AND content differs — notify user
+                                    conflictDetected = true
+                                }
+                            } else {
+                                // Entry exists locally but NOT in watcher data —
+                                // server hasn't received it yet. Keep it.
+                                merged.append(localEntry)
+                            }
+                        }
+
+                        // Clean up deleted IDs once server confirms removal
+                        for deletedId in recentlyDeletedEntryIds {
+                            if !merged.contains(where: { $0.id == deletedId }) {
+                                recentlyDeletedEntryIds.remove(deletedId)
+                            }
+                        }
+
+                        self.rosterEntries = merged
+                        retryDelay = 1_000_000_000 // Reset on success
+
+                        // Show conflict notification if server overwrote local changes
+                        if conflictDetected {
+                            showConflictNotification("Roster updated by another user")
                         }
                     }
-
-                    // Clean up deleted IDs once server confirms removal
-                    for deletedId in recentlyDeletedEntryIds {
-                        if !merged.contains(where: { $0.id == deletedId }) {
-                            recentlyDeletedEntryIds.remove(deletedId)
-                        }
-                    }
-
-                    self.rosterEntries = merged
-
-                    // Show conflict notification if server overwrote local changes
-                    if conflictDetected {
-                        showConflictNotification("Roster updated by another user")
-                    }
+                } catch {
+                    if Task.isCancelled { return }
+                    print("SportsShootDetailView: Roster watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
                 }
-            } catch {
-                print("SportsShootDetailView: Roster watch error: \(error)")
+                try? await Task.sleep(nanoseconds: retryDelay)
+                retryDelay = min(retryDelay * 2, 30_000_000_000) // Cap at 30s
             }
         }
 
-        // Watch group images
+        // Watch group images with auto-reconnect
         groupWatchTask = Task {
-            do {
-                for try await groups in powerSync.watchGroupImages(forJob: shootID) {
-                    var merged = groups
+            var retryDelay: UInt64 = 1_000_000_000 // 1s
+            while !Task.isCancelled {
+                do {
+                    for try await groups in powerSync.watchGroupImages(forJob: shootID) {
+                        var merged = groups
 
-                    // For every local group, protect it from stale server data:
-                    var conflictDetected = false
-                    for localGroup in groupImages {
-                        // Skip groups we intentionally deleted
-                        guard !recentlyDeletedGroupIds.contains(localGroup.id) else { continue }
+                        // For every local group, protect it from stale server data:
+                        var conflictDetected = false
+                        for localGroup in groupImages {
+                            // Skip groups we intentionally deleted
+                            guard !recentlyDeletedGroupIds.contains(localGroup.id) else { continue }
 
-                        if let index = merged.firstIndex(where: { $0.id == localGroup.id }) {
-                            // Group exists in both — keep whichever is newer
-                            if localGroup.updatedAt > merged[index].updatedAt {
-                                merged[index] = localGroup
-                            } else if merged[index].updatedAt > localGroup.updatedAt
-                                        && merged[index].imageNumbers != localGroup.imageNumbers {
-                                // Server data is newer AND content differs — notify user
-                                conflictDetected = true
+                            if let index = merged.firstIndex(where: { $0.id == localGroup.id }) {
+                                // Group exists in both — keep whichever is newer
+                                if localGroup.updatedAt > merged[index].updatedAt {
+                                    merged[index] = localGroup
+                                } else if merged[index].updatedAt > localGroup.updatedAt
+                                            && merged[index].imageNumbers != localGroup.imageNumbers {
+                                    // Server data is newer AND content differs — notify user
+                                    conflictDetected = true
+                                }
+                            } else {
+                                // Group exists locally but NOT in watcher data —
+                                // server hasn't received it yet. Keep it.
+                                merged.append(localGroup)
                             }
-                        } else {
-                            // Group exists locally but NOT in watcher data —
-                            // server hasn't received it yet. Keep it.
-                            merged.append(localGroup)
+                        }
+
+                        // Clean up deleted IDs once server confirms removal
+                        for deletedId in recentlyDeletedGroupIds {
+                            if !merged.contains(where: { $0.id == deletedId }) {
+                                recentlyDeletedGroupIds.remove(deletedId)
+                            }
+                        }
+
+                        self.groupImages = merged
+                        retryDelay = 1_000_000_000 // Reset on success
+
+                        // Show conflict notification if server overwrote local changes
+                        if conflictDetected {
+                            showConflictNotification("Group updated by another user")
                         }
                     }
-
-                    // Clean up deleted IDs once server confirms removal
-                    for deletedId in recentlyDeletedGroupIds {
-                        if !merged.contains(where: { $0.id == deletedId }) {
-                            recentlyDeletedGroupIds.remove(deletedId)
-                        }
-                    }
-
-                    self.groupImages = merged
-
-                    // Show conflict notification if server overwrote local changes
-                    if conflictDetected {
-                        showConflictNotification("Group updated by another user")
-                    }
+                } catch {
+                    if Task.isCancelled { return }
+                    print("SportsShootDetailView: Groups watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
                 }
-            } catch {
-                print("SportsShootDetailView: Groups watch error: \(error)")
+                try? await Task.sleep(nanoseconds: retryDelay)
+                retryDelay = min(retryDelay * 2, 30_000_000_000) // Cap at 30s
             }
         }
     }
@@ -1479,6 +2012,9 @@ struct SportsShootDetailView: View {
             rosterEntries[index] = entry
         }
 
+        // Haptic feedback on save
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
         // Save to PowerSync with retry
         var retries = 0
         while retries < 3 {
@@ -1494,6 +2030,7 @@ struct SportsShootDetailView: View {
             }
         }
         print("SportsShootDetailView: Failed to save entry after 3 retries")
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
     }
 
     private func moveToNextEditableEntry(currentID: UUID) {
@@ -1603,8 +2140,17 @@ struct SportsShootDetailView: View {
         switch special.lowercased() {
         case "c": return "Coach"
         case "s": return "Senior"
-        case "8": return "8th Grader"
+        case "8": return "8th"
         default: return special
+        }
+    }
+
+    private func specialBadgeColor(_ code: String) -> Color {
+        switch code.uppercased() {
+        case "C": return .blue
+        case "S": return .orange
+        case "8": return .green
+        default: return .gray
         }
     }
 
@@ -1615,6 +2161,16 @@ struct SportsShootDetailView: View {
 
     private func filterRoster(_ roster: [RosterEntry]) -> [RosterEntry] {
         var filteredRoster = roster
+
+        // Apply search text filter
+        if !searchText.isEmpty {
+            let query = searchText.lowercased()
+            filteredRoster = filteredRoster.filter { entry in
+                entry.lastName.lowercased().contains(query) ||
+                entry.firstName.lowercased().contains(query) ||
+                entry.rosterId.lowercased().contains(query)
+            }
+        }
 
         if !selectedFilters.isEmpty || !selectedSpecialFilters.isEmpty {
             filteredRoster = roster.filter { entry in

@@ -431,7 +431,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 48;
+				CURRENT_PROJECT_VERSION = 52;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -441,7 +441,9 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NFCReaderUsageDescription = "This app uses NFC to scan SD cards and job boxes for tracking purposes.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Sync roster data between devices at photo shoots";
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access to take photos for chat messages and profile pictures.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Discover nearby devices for real-time roster sync";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "This app uses your location to provide navigation to session venues.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to record voice messages in chat.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "This app needs permission to save photos to your library.";
@@ -475,7 +477,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Iconik Employee/Iconik Employee.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 48;
+				CURRENT_PROJECT_VERSION = 52;
 				DEVELOPMENT_ASSET_PATHS = "\"Iconik Employee/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -485,7 +487,9 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NFCReaderUsageDescription = "This app uses NFC to scan SD cards and job boxes for tracking purposes.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Sync roster data between devices at photo shoots";
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access to take photos for chat messages and profile pictures.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Discover nearby devices for real-time roster sync";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "This app uses your location to provide navigation to session venues.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access to record voice messages in chat.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "This app needs permission to save photos to your library.";

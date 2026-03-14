@@ -10,6 +10,7 @@ import UIKit
 
 struct RosterPhotoImporterView: View {
     let shootID: UUID
+    let organizationId: String
     let onComplete: (Bool) -> Void
     
     @State private var showImagePicker = false
@@ -280,7 +281,7 @@ struct RosterPhotoImporterView: View {
         isProcessing = true
 
         // Use the actual API implementation with the next available Subject ID
-        ClaudeRosterService.shared.extractRosterFromImage(image, sportsJobId: shootID, startingSubjectID: nextSubjectID) { result in
+        ClaudeRosterService.shared.extractRosterFromImage(image, sportsJobId: shootID, organizationId: organizationId, startingSubjectID: nextSubjectID) { result in
             DispatchQueue.main.async {
                 isProcessing = false
                 
@@ -338,6 +339,7 @@ struct RosterPhotoImporterView_Previews: PreviewProvider {
     static var previews: some View {
         RosterPhotoImporterView(
             shootID: UUID(),
+            organizationId: "",
             onComplete: { _ in }
         )
     }

@@ -167,7 +167,7 @@ class ClaudeRosterService {
     }
 
     // Claude model to use
-    private let modelName = "claude-opus-4-5-20251101"  // Opus 4.5 - best for handwriting recognition
+    private let modelName = "claude-sonnet-4-6"  // Sonnet 4.6 - far less overloaded than Opus, fully capable for printed text
     
     // Get the next available Subject ID from existing roster
     func getNextAvailableSubjectID(existingRoster: [RosterEntry]) -> Int {
@@ -261,7 +261,7 @@ class ClaudeRosterService {
     }
     
     // Extract roster entries from an image - with a starting Subject ID and sportsJobId
-    func extractRosterFromImage(_ image: UIImage, sportsJobId: UUID = UUID(), startingSubjectID: Int = 101, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
+    func extractRosterFromImage(_ image: UIImage, sportsJobId: UUID = UUID(), organizationId: String = "", startingSubjectID: Int = 101, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Get and verify API key first
         if apiKey.isEmpty {
             // Try to fetch the API key from app_config table first (shared key)
@@ -272,7 +272,7 @@ class ClaudeRosterService {
                     // Verify the key before using it
                     self.verifyAPIKey(apiKey: key) { isValid, errorMessage in
                         if isValid {
-                            self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
+                            self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
                         } else {
                             let error = NSError(domain: "ClaudeRosterService", code: 101,
                                                 userInfo: [NSLocalizedDescriptionKey: "API key validation failed: \(errorMessage ?? "Unknown error")"])
@@ -285,7 +285,7 @@ class ClaudeRosterService {
                         if let key = fetchedOrgKey, !key.isEmpty {
                             self.verifyAPIKey(apiKey: key) { isValid, errorMessage in
                                 if isValid {
-                                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
+                                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
                                 } else {
                                     let error = NSError(domain: "ClaudeRosterService", code: 101,
                                                         userInfo: [NSLocalizedDescriptionKey: "API key validation failed: \(errorMessage ?? "Unknown error")"])
@@ -306,7 +306,7 @@ class ClaudeRosterService {
                 guard let self = self else { return }
                 
                 if isValid {
-                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, apiKey: self.apiKey, completion: completion)
+                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, apiKey: self.apiKey, completion: completion)
                 } else {
                     // The API key we had is invalid
                     // Don't clear from UserDefaults in case it's a temporary issue
@@ -340,7 +340,7 @@ class ClaudeRosterService {
         }
         
         // If still too large, resize the image
-        let maxDimension: CGFloat = 1920 // Reduced from 2048 for better compression
+        let maxDimension: CGFloat = 1600 // Reduced to minimize API payload size and avoid 529 overloaded errors
         let scale = min(maxDimension / image.size.width, maxDimension / image.size.height)
         
         if scale < 1.0 {
@@ -375,7 +375,7 @@ class ClaudeRosterService {
     }
     
     // This is the actual extraction logic, only called once we have a valid API key
-    private func proceedWithRosterExtraction(_ image: UIImage, sportsJobId: UUID, startingSubjectID: Int, apiKey: String, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
+    private func proceedWithRosterExtraction(_ image: UIImage, sportsJobId: UUID, organizationId: String = "", startingSubjectID: Int, apiKey: String, retryCount: Int = 0, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Convert and compress image to stay under 5MB
         guard let imageData = compressImageForAPI(image) else {
             let error = NSError(domain: "ClaudeRosterService", code: 100,
@@ -540,6 +540,14 @@ class ClaudeRosterService {
                         case 500:
                             errorMessage = "Claude API server error. Please try again later."
                         case 529:
+                            // Retry up to 3 times with escalating delay before surfacing the error
+                            if retryCount < 3 {
+                                let delay = Double(retryCount + 1) * 2.0  // 2s, 4s, 6s
+                                DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, apiKey: apiKey, retryCount: retryCount + 1, completion: completion)
+                                }
+                                return
+                            }
                             errorMessage = "Claude API is overloaded. Please try again in a few minutes."
                         default:
                             errorMessage = apiMessage ?? "HTTP Error \(httpResponse.statusCode)"
@@ -574,7 +582,7 @@ class ClaudeRosterService {
                        let text = firstContent["text"] as? String {
 
                         // Parse the JSON text to extract roster entries
-                        self.parseJsonToRosterEntries(jsonString: text, sportsJobId: sportsJobId, startingSubjectID: startingSubjectID, completion: completion)
+                        self.parseJsonToRosterEntries(jsonString: text, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, completion: completion)
                     } else {
                         let error = NSError(domain: "ClaudeRosterService", code: 106,
                                             userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
@@ -599,7 +607,7 @@ class ClaudeRosterService {
     }
     
     // Parse JSON string to roster entries
-    private func parseJsonToRosterEntries(jsonString: String, sportsJobId: UUID, startingSubjectID: Int, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
+    private func parseJsonToRosterEntries(jsonString: String, sportsJobId: UUID, organizationId: String = "", startingSubjectID: Int, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Extract JSON from the response if it's wrapped in code blocks
         var cleanedJsonString = jsonString
         if let jsonStartRange = jsonString.range(of: "```json"),
@@ -627,7 +635,7 @@ class ClaudeRosterService {
             // Try to decode as direct array first
             do {
                 let entries = try decoder.decode([ClaudeRosterEntry].self, from: jsonData)
-                var rosterEntries = entries.map { self.convertToRosterEntry($0, sportsJobId: sportsJobId) }
+                var rosterEntries = entries.map { self.convertToRosterEntry($0, sportsJobId: sportsJobId, organizationId: organizationId) }
                 // Sort alphabetically by lastName (which contains the full name)
                 // Since names are in format "FIRSTNAME LASTNAME", this will sort by first name
                 rosterEntries.sort { $0.lastName < $1.lastName }
@@ -638,7 +646,7 @@ class ClaudeRosterService {
                 // Append 10 blank rows after the scanned entries
                 let nextSubjectID = startingSubjectID + rosterEntries.count
                 let groupName = rosterEntries.first?.groupName ?? ""
-                self.appendBlankEntries(to: &rosterEntries, sportsJobId: sportsJobId, startingFromID: nextSubjectID, groupName: groupName)
+                self.appendBlankEntries(to: &rosterEntries, sportsJobId: sportsJobId, organizationId: organizationId, startingFromID: nextSubjectID, groupName: groupName)
                 DispatchQueue.main.async {
                     completion(.success(rosterEntries))
                 }
@@ -646,7 +654,7 @@ class ClaudeRosterService {
                 // If direct decoding fails, try to decode with a root container
                 do {
                     let container = try decoder.decode(ClaudeResponseContainer.self, from: jsonData)
-                    var rosterEntries = container.entries.map { self.convertToRosterEntry($0, sportsJobId: sportsJobId) }
+                    var rosterEntries = container.entries.map { self.convertToRosterEntry($0, sportsJobId: sportsJobId, organizationId: organizationId) }
                     // Sort alphabetically by lastName (which contains the full name)
                     // Since names are in format "FIRSTNAME LASTNAME", this will sort by first name
                     rosterEntries.sort { $0.lastName < $1.lastName }
@@ -657,7 +665,7 @@ class ClaudeRosterService {
                     // Append 10 blank rows after the scanned entries
                     let nextSubjectID = startingSubjectID + rosterEntries.count
                     let groupName = rosterEntries.first?.groupName ?? ""
-                    self.appendBlankEntries(to: &rosterEntries, sportsJobId: sportsJobId, startingFromID: nextSubjectID, groupName: groupName)
+                    self.appendBlankEntries(to: &rosterEntries, sportsJobId: sportsJobId, organizationId: organizationId, startingFromID: nextSubjectID, groupName: groupName)
                     DispatchQueue.main.async {
                         completion(.success(rosterEntries))
                     }
@@ -676,9 +684,10 @@ class ClaudeRosterService {
     
     // Convert Claude entry model to app's RosterEntry model
     // Note: sportsJobId will be set by the caller when saving to the database
-    private func convertToRosterEntry(_ claudeEntry: ClaudeRosterEntry, sportsJobId: UUID = UUID()) -> RosterEntry {
+    private func convertToRosterEntry(_ claudeEntry: ClaudeRosterEntry, sportsJobId: UUID = UUID(), organizationId: String = "") -> RosterEntry {
         return RosterEntry(
             sportsJobId: sportsJobId,
+            organizationId: organizationId,
             lastName: claudeEntry.lastName,
             firstName: claudeEntry.firstName,
             teacher: claudeEntry.teacher,
@@ -688,10 +697,11 @@ class ClaudeRosterService {
     }
 
     // Append blank entries after scanned roster entries
-    private func appendBlankEntries(to rosterEntries: inout [RosterEntry], sportsJobId: UUID, startingFromID: Int, groupName: String, count: Int = 10) {
+    private func appendBlankEntries(to rosterEntries: inout [RosterEntry], sportsJobId: UUID, organizationId: String = "", startingFromID: Int, groupName: String, count: Int = 10) {
         for i in 0..<count {
             let blankEntry = RosterEntry(
                 sportsJobId: sportsJobId,
+                organizationId: organizationId,
                 lastName: "",
                 firstName: String(startingFromID + i),
                 teacher: "",

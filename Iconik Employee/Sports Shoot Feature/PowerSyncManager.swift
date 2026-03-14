@@ -39,7 +39,11 @@ class PowerSyncManager: ObservableObject {
         }
     }
     @Published var isSyncing = false
+    @Published var hasSynced = false
     @Published var lastSyncTime: Date?
+
+    /// Whether the PowerSync database is initialized and ready for operations
+    var isReady: Bool { database != nil }
 
     // MARK: - Private Properties
 
@@ -49,6 +53,7 @@ class PowerSyncManager: ObservableObject {
     // Network monitoring for airplane mode detection
     private var networkMonitor: NWPathMonitor?
     private let monitorQueue = DispatchQueue(label: "PowerSyncNetworkMonitor")
+    private var isConnecting = false
 
     // MARK: - Initialization
 
@@ -118,17 +123,68 @@ class PowerSyncManager: ObservableObject {
             throw PowerSyncManagerError.notInitialized
         }
 
+        // Prevent concurrent connect() calls (network monitor + initialize() race)
+        guard !isConnecting else {
+            print("PowerSyncManager: Already connecting, skipping duplicate call")
+            return
+        }
+        isConnecting = true
+
         print("PowerSyncManager: Connecting...")
 
         do {
             try await db.connect(connector: connector)
             isConnected = true
-            lastSyncTime = Date()
+            isConnecting = false
             print("PowerSyncManager: Connected successfully")
+
+            // Check if we already have cached data from a previous sync
+            if let syncStatus = db.currentStatus.hasSynced, syncStatus {
+                hasSynced = true
+                lastSyncTime = Date()
+                print("PowerSyncManager: Has cached data from previous sync")
+            }
+
+            // Notify views that depend on PowerSync data
+            NotificationCenter.default.post(name: NSNotification.Name("PowerSyncDidConnect"), object: nil)
         } catch {
+            isConnecting = false
             print("PowerSyncManager: Connection failed: \(error)")
-            // Don't set isConnected = false here - network monitor handles that
             throw error
+        }
+    }
+
+    /// Wait for first sync to complete using the SDK's built-in method.
+    /// Local SQLite reads work immediately (cached data from previous sessions),
+    /// but on a fresh install this waits for the first full sync from the server.
+    func waitForFirstSync() async {
+        guard let db = database else { return }
+
+        // Already synced (cached data from previous app run) — return immediately
+        if let syncStatus = db.currentStatus.hasSynced, syncStatus {
+            hasSynced = true
+            return
+        }
+
+        // Use the SDK's own waitForFirstSync with a timeout
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await db.waitForFirstSync()
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 15_000_000_000) // 15s timeout
+                    throw CancellationError()
+                }
+                // Whichever finishes first wins
+                try await group.next()
+                group.cancelAll()
+            }
+            hasSynced = true
+            lastSyncTime = Date()
+            print("PowerSyncManager: First sync complete")
+        } catch {
+            print("PowerSyncManager: waitForFirstSync timed out or failed: \(error)")
         }
     }
 
@@ -181,14 +237,15 @@ class PowerSyncManager: ObservableObject {
         _ = try await db.execute(
             sql: """
                 INSERT OR REPLACE INTO roster_entries
-                (id, sports_job_id, last_name, first_name, teacher, group_name, email, phone,
+                (id, sports_job_id, organization_id, last_name, first_name, teacher, group_name, email, phone,
                  image_numbers, notes, sort_order, version, updated_at, updated_by,
-                 locked_by, locked_by_name, locked_at, created_at, is_filled_blank)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 locked_by, locked_by_name, locked_at, created_at, is_filled_blank, subject_id, roster_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             parameters: [
                 idString,
                 jobIdString,
+                entry.organizationId,
                 entry.lastName,
                 entry.firstName,
                 entry.teacher,
@@ -205,7 +262,9 @@ class PowerSyncManager: ObservableObject {
                 entry.lockedByName,
                 lockedAtISO,
                 createdAtISO,
-                isFilledBlankInt
+                isFilledBlankInt,
+                entry.subjectId,
+                entry.rosterId
             ]
         )
 
@@ -404,6 +463,7 @@ class PowerSyncManager: ObservableObject {
         return RosterEntry(
             id: id,
             sportsJobId: jobId,
+            organizationId: (try? cursor.getString(name: "organization_id")) ?? "",
             lastName: (try? cursor.getString(name: "last_name")) ?? "",
             firstName: (try? cursor.getString(name: "first_name")) ?? "",
             teacher: (try? cursor.getString(name: "teacher")) ?? "",
@@ -420,7 +480,9 @@ class PowerSyncManager: ObservableObject {
             lockedByName: try? cursor.getString(name: "locked_by_name"),
             lockedAt: parseDate((try? cursor.getString(name: "locked_at"))),
             createdAt: parseDate((try? cursor.getString(name: "created_at"))) ?? Date(),
-            isFilledBlank: (try? cursor.getIntOptional(name: "is_filled_blank")).flatMap { $0 }.map { $0 == 1 }
+            isFilledBlank: (try? cursor.getIntOptional(name: "is_filled_blank")).flatMap { $0 }.map { $0 == 1 },
+            subjectId: try? cursor.getString(name: "subject_id"),
+            rosterId: (try? cursor.getString(name: "roster_id")) ?? ""
         )
     }
 
@@ -474,7 +536,8 @@ class PowerSyncManager: ObservableObject {
             sessionId: try? cursor.getString(name: "session_id"),
             isArchived: (try? cursor.getIntOptional(name: "is_archived")).flatMap { $0 }.map { $0 == 1 } ?? false,
             createdAt: parseDate((try? cursor.getString(name: "created_at"))) ?? Date(),
-            updatedAt: parseDate((try? cursor.getString(name: "updated_at"))) ?? Date()
+            updatedAt: parseDate((try? cursor.getString(name: "updated_at"))) ?? Date(),
+            galleryId: try? cursor.getString(name: "gallery_id")
         )
     }
 

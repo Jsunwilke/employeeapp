@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BatchAddAthletesView: View {
     let shootID: UUID
+    let organizationId: String
     let onComplete: (Bool) -> Void
 
     // PowerSync for offline-first operations
@@ -240,6 +241,7 @@ struct BatchAddAthletesView: View {
                 let entry = RosterEntry(
                     id: UUID(),
                     sportsJobId: shootID,
+                    organizationId: organizationId,
                     lastName: "",
                     firstName: "\(startingSubjectID + index)",
                     teacher: specialField,
@@ -288,6 +290,6 @@ struct BatchAddAthletesView: View {
 // Preview
 struct BatchAddAthletesView_Previews: PreviewProvider {
     static var previews: some View {
-        BatchAddAthletesView(shootID: UUID()) { _ in }
+        BatchAddAthletesView(shootID: UUID(), organizationId: "") { _ in }
     }
 }

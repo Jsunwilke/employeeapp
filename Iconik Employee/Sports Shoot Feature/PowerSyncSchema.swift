@@ -25,13 +25,15 @@ let powerSyncSchema = Schema(
             .text("created_at"),
             .text("updated_at"),
             .text("captura_gallery_id"),
-            .text("captura_coach_gallery_id")
+            .text("captura_coach_gallery_id"),
+            .text("gallery_id")             // FK to Production galleries (iPad sync)
         ]
     ),
     Table(
         name: "roster_entries",
         columns: [
             .text("sports_job_id"),
+            .text("organization_id"),
             .text("last_name"),
             .text("first_name"),
             .text("teacher"),
@@ -48,13 +50,16 @@ let powerSyncSchema = Schema(
             .text("locked_by_name"),
             .text("locked_at"),
             .text("created_at"),
-            .integer("is_filled_blank")
+            .integer("is_filled_blank"),
+            .text("subject_id"),            // FK to Production subjects (iPad sync)
+            .text("roster_id")              // Dedicated roster/jersey ID (replaces firstName hack)
         ]
     ),
     Table(
         name: "group_images",
         columns: [
             .text("sports_job_id"),
+            .text("organization_id"),
             .text("description"),
             .text("image_numbers"),
             .text("notes"),

@@ -23,6 +23,9 @@ class SupabaseAuthService: ObservableObject {
     @Published var currentUser: User?
     @Published var isAuthenticated = false
     @Published var isLoading = false
+    /// Becomes true once checkSession() has completed (regardless of outcome).
+    /// RootView waits on this instead of a fixed 100ms sleep.
+    @Published var sessionCheckComplete = false
 
     // MARK: - Private Properties
 
@@ -67,6 +70,7 @@ class SupabaseAuthService: ObservableObject {
             self.isAuthenticated = false
             print("[SupabaseAuthService] No active session")
         }
+        self.sessionCheckComplete = true
     }
 
     /// Setup auth state change listener

@@ -10,6 +10,7 @@ import UIKit
 
 struct MultiPhotoRosterImporterView: View {
     let shootID: UUID
+    let organizationId: String
     let onComplete: (Bool) -> Void
 
     // State for managing photos and processing
@@ -500,7 +501,7 @@ struct MultiPhotoRosterImporterView: View {
             }
         } else {
             // Use Claude API with the next available Subject ID
-            ClaudeRosterService.shared.extractRosterFromImage(image, sportsJobId: shootID, startingSubjectID: nextSubjectID) { result in
+            ClaudeRosterService.shared.extractRosterFromImage(image, sportsJobId: shootID, organizationId: organizationId, startingSubjectID: nextSubjectID) { result in
                 DispatchQueue.main.async {
                     self.handleProcessingResult(result, for: index)
                     self.isProcessing = false
@@ -564,7 +565,7 @@ struct MultiPhotoRosterImporterView: View {
             }
         } else {
             // Use Claude API with the current subject ID
-            ClaudeRosterService.shared.extractRosterFromImage(image, sportsJobId: shootID, startingSubjectID: currentSubjectID) { result in
+            ClaudeRosterService.shared.extractRosterFromImage(image, sportsJobId: shootID, organizationId: organizationId, startingSubjectID: currentSubjectID) { result in
                 DispatchQueue.main.async {
                     self.handleProcessingResult(result, for: index)
 
@@ -645,6 +646,7 @@ struct MultiPhotoRosterImporterView_Previews: PreviewProvider {
     static var previews: some View {
         MultiPhotoRosterImporterView(
             shootID: UUID(),
+            organizationId: "",
             onComplete: { _ in }
         )
     }

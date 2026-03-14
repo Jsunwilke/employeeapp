@@ -22,6 +22,7 @@ class SportsShootListViewModel: ObservableObject {
     @Published var showingAddRosterEntry = false
     @Published var showingBatchAdd = false
     @Published var showingAddGroupImage = false
+    @Published var showingKiosk = false
     @Published var selectedRosterEntry: RosterEntry?
     @Published var selectedGroupImage: GroupImage?
     @Published var selectedTab = 0 // 0 = Athletes, 1 = Groups
@@ -44,7 +45,11 @@ class SportsShootListViewModel: ObservableObject {
     
     // UI state - header collapsed in landscape
     @Published var isHeaderCollapsed = true
-    
+
+    // Multipeer connectivity for kiosk sync
+    @Published var multipeerSync: MultipeerRosterSync?
+    @Published var showingConnectionDetails = false
+
     // Filter panel state
     @Published var showFilterPanel = false
     @Published var selectedFilters: Set<String> = []
@@ -140,16 +145,36 @@ struct SportsShootListView: View {
     // Track if view is visible to optimize timers
     @State private var isViewVisible = false
 
-    // Unique subscription ID for this view instance (prevents overwriting other subscribers)
-    private let subscriptionId = UUID()
-
     // Track expanded schools in archived view
     @State private var expandedSchools: Set<String> = []
 
     // Supabase realtime listener reference
     @State private var shootListener: ListenerRegistrationWrapper?
+
+    // PowerSync watch tasks (replaces Supabase realtime subscription for roster data)
+    @State private var rosterWatchTask: Task<Void, Never>?
+    @State private var groupWatchTask: Task<Void, Never>?
     private var supabase: SupabaseClient { SupabaseManager.shared.client }
-    
+
+    // Focal Point Production sync (iPad ↔ Surface Pro)
+    @StateObject private var fpSync = FocalPointSyncClient.shared
+    @State private var showingFPSyncSheet = false
+    @State private var manualSyncIP = ""
+    @State private var manualSyncPIN = ""
+
+    // Sync state: real-time indicators from Production
+    @State private var highlightedEntryId: UUID? = nil          // Flash highlight on reverse select
+    @State private var subjectCaptureCounts: [String: Int] = [:] // subject_id -> photo count
+    @State private var flaggedSubjects: Set<String> = []         // subject_ids with QC retake flag
+    @State private var photographedSubjects: Set<String> = []    // subject_ids that have been shot
+    @State private var subjectThumbnails: [String: UIImage] = [:] // subject_id -> last thumbnail
+    @State private var absentSubjects: Set<String> = []          // subject_ids marked absent
+    @State private var groupAttendance: [String: Set<String>] = [:] // group description -> set of present roster entry IDs
+    @State private var pendingCaptureSaves: [UUID: Task<Void, Never>] = [:] // debounced saves per roster entry
+
+    // Search
+    @State private var searchText: String = ""
+
     // Sync statuses refresh timer - using a longer interval to prevent flickering
     let syncStatusTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     
@@ -168,8 +193,523 @@ struct SportsShootListView: View {
             .sorted { $0.school < $1.school }
     }
 
+    // MARK: - Connection Details Sheet
+
+    @ViewBuilder
+    private func connectionDetailsSheet(multipeer: MultipeerRosterSync) -> some View {
+        NavigationView {
+            List {
+                Section {
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text(multipeer.isConnected ? "Connected" : "Not Connected")
+                            .foregroundColor(multipeer.isConnected ? .green : .orange)
+                    }
+                }
+
+                if !multipeer.connectedPeers.isEmpty {
+                    Section("Connected Kiosks (\(multipeer.connectedPeers.count))") {
+                        ForEach(multipeer.connectedPeers, id: \.displayName) { peer in
+                            HStack {
+                                Image(systemName: "ipad")
+                                    .foregroundColor(.blue)
+                                Text(peer.displayName)
+                                    .font(.body)
+                                Spacer()
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 8, height: 8)
+                            }
+                        }
+                    }
+                } else {
+                    Section {
+                        VStack(alignment: .center, spacing: 8) {
+                            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                                .font(.system(size: 40))
+                                .foregroundColor(.orange)
+                            Text("No kiosks found")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Text("Make sure kiosk devices are running and have Bluetooth + WiFi enabled")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                    }
+                }
+            }
+            .navigationTitle("Photographer Connections")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        viewModel.showingConnectionDetails = false
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Focal Point Production Sync UI
+
+    @ViewBuilder
+    private var fpSyncSheet: some View {
+        NavigationView {
+            List {
+                Section("Production Sync") {
+                    if fpSync.isConnected {
+                        Label("Connected", systemImage: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+
+                        if let paired = fpSync.pairedCameraId,
+                           let camera = fpSync.devices.first(where: { $0.id == paired }) {
+                            Label("Paired: \(camera.name)", systemImage: "camera.fill")
+                        }
+
+                        Button(role: .destructive) {
+                            fpSync.disconnect()
+                            showingFPSyncSheet = false
+                        } label: {
+                            Label("Disconnect", systemImage: "wifi.slash")
+                        }
+                    } else {
+                        // PIN entry — required for both auto and manual connect
+                        TextField("4-digit PIN", text: $manualSyncPIN)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.numberPad)
+
+                        // Auto-discover: finds server via mDNS, uses PIN above
+                        Button {
+                            let pin = manualSyncPIN.trimmingCharacters(in: .whitespaces)
+                            guard !pin.isEmpty else { return }
+                            fpSync.setAuthToken(pin)
+                            if let galleryId = viewModel.selectedShoot?.galleryId {
+                                fpSync.setGalleryId(galleryId)
+                            }
+                            guard let shoot = viewModel.selectedShoot, let galleryId = shoot.galleryId else { return }
+                            fpSync.startDiscovery(galleryId: galleryId)
+                        } label: {
+                            Label("Connect", systemImage: "wifi")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(manualSyncPIN.isEmpty || viewModel.selectedShoot?.galleryId == nil)
+
+                        if fpSync.connectionStatus == .discovering {
+                            HStack {
+                                ProgressView()
+                                Text("Scanning for server...")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        if fpSync.connectionStatus == .authFailed {
+                            Label("Authentication failed — check PIN", systemImage: "exclamationmark.triangle")
+                                .foregroundColor(.red)
+                        }
+
+                        Text("Enter the PIN shown on Production's network panel")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                // Manual IP override (if auto-discover doesn't find the server)
+                if !fpSync.isConnected {
+                    Section("Manual IP (optional)") {
+                        HStack {
+                            TextField("Server IP", text: $manualSyncIP)
+                                .keyboardType(.decimalPad)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Connect") {
+                                let ip = manualSyncIP.trimmingCharacters(in: .whitespaces)
+                                let pin = manualSyncPIN.trimmingCharacters(in: .whitespaces)
+                                guard !ip.isEmpty, !pin.isEmpty else { return }
+                                fpSync.setAuthToken(pin)
+                                if let galleryId = viewModel.selectedShoot?.galleryId {
+                                    fpSync.setGalleryId(galleryId)
+                                }
+                                fpSync.connect(host: ip, port: 8765)
+                            }
+                            .disabled(manualSyncIP.isEmpty || manualSyncPIN.isEmpty)
+                        }
+                        Text("Only needed if auto-connect doesn't find the server")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if fpSync.isConnected && fpSync.cameraDevices.count > 1 {
+                    Section("Camera Pairing") {
+                        ForEach(fpSync.cameraDevices) { device in
+                            Button {
+                                fpSync.pairWithCamera(deviceId: device.id)
+                            } label: {
+                                HStack {
+                                    Label(device.name, systemImage: "camera")
+                                    Spacer()
+                                    if device.id == fpSync.pairedCameraId {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if fpSync.isConnected && !fpSync.devices.isEmpty {
+                    Section("Connected Devices") {
+                        ForEach(fpSync.devices) { device in
+                            HStack {
+                                Image(systemName: device.stationMode == "camera" ? "camera" : (device.stationMode == "ios_roster" ? "ipad" : "desktopcomputer"))
+                                VStack(alignment: .leading) {
+                                    Text(device.name)
+                                        .font(.body)
+                                    Text(Self.formatStationMode(device.stationMode))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if device.captureCount > 0 {
+                                    Text("\(device.captureCount) photos")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Production Sync")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showingFPSyncSheet = false }
+                }
+            }
+        }
+    }
+
+    /// Format a sorted array of image numbers into range notation: [1456, 1457, 1458, 1462] → "1456-58, 1462"
+    private func formatImageNumberRanges(_ numbers: [Int]) -> String {
+        guard !numbers.isEmpty else { return "" }
+        let sorted = numbers.sorted()
+        var ranges: [(Int, Int)] = []
+        var start = sorted[0], end = sorted[0]
+
+        for i in 1..<sorted.count {
+            if sorted[i] == end + 1 {
+                end = sorted[i]
+            } else {
+                ranges.append((start, end))
+                start = sorted[i]
+                end = sorted[i]
+            }
+        }
+        ranges.append((start, end))
+
+        return ranges.map { (s, e) in
+            if s == e {
+                return "\(s)"
+            } else {
+                // Abbreviate end: 1456-58, 1456-1502
+                let startStr = "\(s)"
+                let endStr = "\(e)"
+                // Find how many leading digits are shared
+                let shared = zip(startStr, endStr).prefix(while: { $0 == $1 }).count
+                let suffix = String(endStr.dropFirst(shared))
+                // If suffix would be empty or confusing, use full number
+                if suffix.isEmpty || shared == 0 {
+                    return "\(s)-\(e)"
+                }
+                return "\(s)-\(suffix)"
+            }
+        }.joined(separator: ", ")
+    }
+
+    /// Parse image numbers field into array of ints (handles "1456-58, 1462" format)
+    private func parseImageNumbers(_ field: String) -> [Int] {
+        var numbers: [Int] = []
+        let parts = field.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        for part in parts {
+            if part.contains("-") {
+                let rangeParts = part.split(separator: "-").map { String($0).trimmingCharacters(in: .whitespaces) }
+                if rangeParts.count == 2, let start = Int(rangeParts[0]) {
+                    let endStr = rangeParts[1]
+                    if let end = Int(endStr) {
+                        if end > start {
+                            // Full range: 1456-1458
+                            for n in start...end { numbers.append(n) }
+                        } else {
+                            // Abbreviated: 1456-58 → 1456-1458
+                            let startStr = "\(start)"
+                            let prefix = String(startStr.prefix(startStr.count - endStr.count))
+                            if let fullEnd = Int(prefix + endStr), fullEnd > start {
+                                for n in start...fullEnd { numbers.append(n) }
+                            } else {
+                                numbers.append(start)
+                            }
+                        }
+                    }
+                }
+            } else if let n = Int(part) {
+                numbers.append(n)
+            }
+        }
+        return numbers
+    }
+
+    private func setupFPSyncCallbacks() {
+        // Capture completed — auto-fill image numbers
+        fpSync.onCaptureCompleted = { event in
+            guard let rosterEntryId = event.rosterEntryId,
+                  let imageNumber = event.imageNumber else { return }
+
+            // Track capture count
+            subjectCaptureCounts[event.subjectId, default: 0] += 1
+            // Mark as photographed
+            photographedSubjects.insert(event.subjectId)
+
+            if let idx = viewModel.rosterEntries.firstIndex(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) {
+                let entryId = viewModel.rosterEntries[idx].id
+                if viewModel.currentlyEditingEntry == entryId { return }
+
+                var entry = viewModel.rosterEntries[idx]
+                var numbers = parseImageNumbers(entry.imageNumbers)
+                if !numbers.contains(imageNumber) {
+                    numbers.append(imageNumber)
+                }
+                entry.imageNumbers = formatImageNumberRanges(numbers)
+                entry.version += 1
+                entry.updatedAt = Date()
+                viewModel.rosterEntries[idx] = entry
+
+                // Debounce save — cancel any pending save for this entry, wait 500ms for burst captures
+                pendingCaptureSaves[entryId]?.cancel()
+                pendingCaptureSaves[entryId] = Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+                    guard !Task.isCancelled else { return }
+                    // Re-read the latest entry state after debounce
+                    if let latestIdx = viewModel.rosterEntries.firstIndex(where: { $0.id == entryId }) {
+                        saveEntryWithRetry(viewModel.rosterEntries[latestIdx])
+                    }
+                }
+
+                print("[FPSync] Auto-filled image #\(imageNumber) for \(entry.lastName), \(entry.firstName)")
+            }
+        }
+
+        // Subject photographed — store thumbnail
+        fpSync.onSubjectPhotographed = { subjectId, thumbnail, poseNumber in
+            photographedSubjects.insert(subjectId)
+            if let thumbStr = thumbnail,
+               let data = Data(base64Encoded: thumbStr.replacingOccurrences(of: "data:image/jpeg;base64,", with: "")),
+               let image = UIImage(data: data) {
+                subjectThumbnails[subjectId] = image
+                // Cap at 100 thumbnails
+                if subjectThumbnails.count > 100 {
+                    let excess = subjectThumbnails.count - 100
+                    let keysToRemove = Array(subjectThumbnails.keys.prefix(excess))
+                    for key in keysToRemove { subjectThumbnails.removeValue(forKey: key) }
+                }
+            }
+        }
+
+        // Active subject changed — reverse selection (scroll to entry)
+        fpSync.onActiveSubjectChanged = { subjectId in
+            if let entry = viewModel.rosterEntries.first(where: { $0.subjectId == subjectId }) {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    highlightedEntryId = entry.id
+                }
+                // Clear highlight after 1.5s
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    withAnimation { highlightedEntryId = nil }
+                }
+            }
+        }
+
+        // QC flag changed — show/hide retake indicator
+        fpSync.onQCFlagChanged = { subjectId, flagged in
+            if flagged {
+                flaggedSubjects.insert(subjectId)
+            } else {
+                flaggedSubjects.remove(subjectId)
+            }
+        }
+
+        // Absent changed (from another iPad or Production)
+        fpSync.onSubjectAbsentChanged = { subjectId, isAbsent in
+            if isAbsent {
+                absentSubjects.insert(subjectId)
+            } else {
+                absentSubjects.remove(subjectId)
+            }
+        }
+
+        // Notes changed (from Production)
+        fpSync.onNotesChanged = { subjectId, rosterEntryId, notes in
+            if let rid = rosterEntryId,
+               let idx = viewModel.rosterEntries.firstIndex(where: { $0.id.uuidString.lowercased() == rid.lowercased() }) {
+                var entry = viewModel.rosterEntries[idx]
+                entry.notes = notes
+                entry.version += 1
+                entry.updatedAt = Date()
+                viewModel.rosterEntries[idx] = entry
+                saveEntryWithRetry(entry)
+            }
+        }
+
+        // Queue reorder (from Production or another iPad)
+        fpSync.onQueueReorder = { orderedSubjectIds in
+            // Reorder roster entries to match the new order
+            var reordered: [RosterEntry] = []
+            for sid in orderedSubjectIds {
+                if let entry = viewModel.rosterEntries.first(where: { $0.subjectId == sid }) {
+                    reordered.append(entry)
+                }
+            }
+            // Append any entries not in the reorder list (unlinked)
+            for entry in viewModel.rosterEntries where !reordered.contains(where: { $0.id == entry.id }) {
+                reordered.append(entry)
+            }
+            viewModel.rosterEntries = reordered
+        }
+
+        // Group photo ready (from Production)
+        fpSync.onGroupPhotoReady = { groupName, presentSubjectIds, totalInGroup in
+            // Update attendance from Production side
+            let presentIds = Set(presentSubjectIds)
+            let memberIds = viewModel.rosterEntries
+                .filter { presentIds.contains($0.subjectId ?? "") }
+                .map { $0.id.uuidString }
+            groupAttendance[groupName] = Set(memberIds)
+            print("[FPSync] Group '\(groupName)' ready: \(presentSubjectIds.count)/\(totalInGroup)")
+        }
+    }
+
+    private func sendSubjectSelection(entry: RosterEntry) {
+        guard fpSync.isConnected else { return }
+        guard let subjectId = entry.subjectId else {
+            print("[FPSync] Entry \(entry.lastName), \(entry.firstName) has no subject_id — not linked")
+            return
+        }
+        fpSync.selectSubject(
+            subjectId: subjectId,
+            rosterEntryId: entry.id.uuidString.lowercased(),
+            subjectName: "\(entry.lastName), \(entry.firstName)"
+        )
+    }
+
+    /// Inline Special dropdown — tap to select C/S/8/blank without opening detail sheet
+    @ViewBuilder
+    private func specialDropdown(entry: RosterEntry) -> some View {
+        Menu {
+            Button("— None") {
+                updateSpecial(entry: entry, value: "")
+            }
+            Button("C — Coach") {
+                updateSpecial(entry: entry, value: "C")
+            }
+            Button("S — Senior") {
+                updateSpecial(entry: entry, value: "S")
+            }
+            Button("8 — 8th Grader") {
+                updateSpecial(entry: entry, value: "8")
+            }
+        } label: {
+            if entry.teacher.isEmpty {
+                Image(systemName: "tag")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary.opacity(0.5))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color(.systemGray5))
+                    .clipShape(Capsule())
+            } else {
+                Text(specialLabel(entry.teacher))
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(specialColor(entry.teacher))
+                    .clipShape(Capsule())
+            }
+        }
+        .frame(minWidth: 44, minHeight: 44)
+    }
+
+    /// Save a roster entry with retry logic. Shows error alert on final failure.
+    private func saveEntryWithRetry(_ entry: RosterEntry) {
+        Task {
+            // Wait for PowerSync to be ready if it hasn't initialized yet
+            if !PowerSyncManager.shared.isReady {
+                await PowerSyncManager.shared.waitForFirstSync()
+            }
+            var retries = 0
+            while retries < 3 {
+                do {
+                    try await PowerSyncManager.shared.saveRosterEntry(entry)
+                    return
+                } catch {
+                    retries += 1
+                    if retries < 3 {
+                        try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries))
+                    } else {
+                        print("saveEntryWithRetry: Failed after 3 attempts: \(error)")
+                        await MainActor.run {
+                            viewModel.errorMessage = "Failed to save changes for \(entry.lastName). Please try again."
+                            viewModel.showingErrorAlert = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func updateSpecial(entry: RosterEntry, value: String) {
+        if let idx = viewModel.rosterEntries.firstIndex(where: { $0.id == entry.id }) {
+            var updated = viewModel.rosterEntries[idx]
+            updated.teacher = value
+            viewModel.rosterEntries[idx] = updated
+            saveEntryWithRetry(updated)
+        }
+    }
+
+    private func specialColor(_ code: String) -> Color {
+        switch code {
+        case "C": return .blue
+        case "S": return .orange
+        case "8": return .green
+        default: return .gray
+        }
+    }
+
+    private func specialLabel(_ code: String) -> String {
+        switch code.uppercased() {
+        case "C": return "Coach"
+        case "S": return "Senior"
+        case "8": return "8th"
+        default: return code
+        }
+    }
+
+    private static func formatStationMode(_ mode: String) -> String {
+        switch mode {
+        case "camera": return "Camera Station"
+        case "ios_roster": return "iPad Roster"
+        case "poser": return "Poser Station"
+        case "kiosk": return "Kiosk"
+        case "staff_entry": return "Staff Entry"
+        default: return mode
+        }
+    }
+
     // MARK: - Helper Functions
-    
+
     // Check if a lock is owned by this device
     private func isOwnLock(_ lockId: UUID) -> Bool {
         return viewModel.lockedEntries[lockId] == currentEditorIdentifier
@@ -193,12 +733,20 @@ struct SportsShootListView: View {
         return Array(allGroups).filter { !$0.isEmpty }.sorted()
     }
     
-    // Filter roster based on selected filters
+    // Filter roster based on selected filters and search text
     private func filterRoster(_ roster: [RosterEntry]) -> [RosterEntry] {
         // Apply filters in sequence
-        
-        // First, filter by group and special categories
+
+        // First, apply search text filter
         var filteredRoster = roster
+        if !searchText.isEmpty {
+            let query = searchText.lowercased()
+            filteredRoster = filteredRoster.filter { entry in
+                entry.lastName.lowercased().contains(query) ||
+                entry.firstName.lowercased().contains(query) ||
+                entry.rosterId.lowercased().contains(query)
+            }
+        }
         
         // If group or special filters are selected
         if !viewModel.selectedFilters.isEmpty || !viewModel.selectedSpecialFilters.isEmpty {
@@ -270,8 +818,19 @@ struct SportsShootListView: View {
             isViewVisible = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
-            // Re-load data when app returns to foreground
+            // Re-load shoots list and roster for currently-selected shoot when returning to foreground.
+            // Supabase realtime subscriptions are stopped on background, so data may be stale.
             loadSportsShoots()
+            if let shootID = viewModel.selectedShoot?.id {
+                Task { await loadRosterForSelectedShoot(shootID: shootID) }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PowerSyncDidConnect"))) { _ in
+            // PowerSync connected (possibly late, after view appeared with empty local SQLite).
+            // Re-fetch roster if it was empty due to sync not yet completing on first load.
+            if let shootID = viewModel.selectedShoot?.id, viewModel.rosterEntries.isEmpty {
+                Task { await loadRosterForSelectedShoot(shootID: shootID) }
+            }
         }
         .onReceive(syncStatusTimer) { _ in
             if isViewVisible {
@@ -857,7 +1416,23 @@ struct SportsShootListView: View {
                             }
                             
                             Spacer()
-                            
+
+                            // Multipeer connection status
+                            if let multipeer = viewModel.multipeerSync {
+                                Button(action: { viewModel.showingConnectionDetails = true }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: multipeer.isConnected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(multipeer.isConnected ? .green : .orange)
+                                        Text(multipeer.isConnected ? "\(multipeer.connectedPeers.count) kiosk(s)" : "No kiosks")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, 8)
+                            }
+
                             // Quick action buttons in header
                             HStack(spacing: 12) {
                                 Button(action: {
@@ -878,7 +1453,7 @@ struct SportsShootListView: View {
                             }
                             
                             // Show field mapping info
-                            Text("Field Map: Last→Name, First→SubjectID")
+                            Text("Roster ID + Name + Special + Team")
                                 .font(.system(size: 9))
                                 .foregroundColor(.secondary)
                                 .padding(.leading, 8)
@@ -982,17 +1557,29 @@ struct SportsShootListView: View {
                 .onAppear {
                     setupOrientationNotification()
 
-                    // Set up a real-time listener for updates
-                    setupRealtimeListeners()
-
-                    // iPad: Load initial roster data and clean up stale locks
-                    // (iPhone does this in SportsShootDetailView)
+                    // Set up shoot metadata listener + PowerSync watch streams
                     if let shootID = viewModel.selectedShoot?.id {
+                        setupShootListener(shootID: shootID)
+
+                        // Load data FIRST, then start watchers to avoid race condition
                         Task {
                             await loadRosterForSelectedShoot(shootID: shootID)
+                            setupPowerSyncWatchers()
                             try? await RosterEntryService.shared.releaseExpiredLocks(forJob: shootID)
                             try? await GroupImageService.shared.releaseExpiredLocks(forJob: shootID)
                         }
+
+                        // Start browsing for kiosk registration stations
+                        Task { @MainActor in
+                            if viewModel.multipeerSync == nil {
+                                viewModel.multipeerSync = MultipeerRosterSync()
+                            }
+                            viewModel.multipeerSync?.startBrowsing(jobId: shootID)
+                            print("SportsShootListView: Started browsing for kiosks for shoot \(shootID)")
+                        }
+
+                        // Set up Focal Point Production sync callbacks
+                        setupFPSyncCallbacks()
                     }
                 }
                 .onDisappear {
@@ -1003,10 +1590,9 @@ struct SportsShootListView: View {
                     shootListener?.remove()
                     shootListener = nil
 
-                    // Unsubscribe from roster entry realtime changes
-                    Task {
-                        await RosterEntryService.shared.unsubscribe(subscriptionId: subscriptionId)
-                    }
+                    // Cancel PowerSync watch tasks
+                    rosterWatchTask?.cancel()
+                    groupWatchTask?.cancel()
 
                     // Release any locks when leaving the view
                     if let entryID = viewModel.currentlyEditingEntry {
@@ -1015,14 +1601,46 @@ struct SportsShootListView: View {
                             await LockManager.shared.releaseRosterEntryLock(entryId: entryID)
                         }
                     }
+
+                    // Stop browsing for kiosks
+                    Task { @MainActor in
+                        viewModel.multipeerSync?.disconnect()
+                        print("SportsShootListView: Stopped browsing for kiosks")
+                    }
+
+                    // Clear FP sync callbacks
+                    fpSync.onCaptureCompleted = nil
+                    fpSync.onSubjectPhotographed = nil
+                    fpSync.onActiveSubjectChanged = nil
+                    fpSync.onQCFlagChanged = nil
+                    fpSync.onSubjectAbsentChanged = nil
+                    fpSync.onNotesChanged = nil
+                    fpSync.onQueueReorder = nil
+                    fpSync.onGroupPhotoReady = nil
+                    // Reset sync state
+                    subjectCaptureCounts = [:]
+                    flaggedSubjects = []
+                    photographedSubjects = []
+                    subjectThumbnails = [:]
+                    absentSubjects = []
+                    highlightedEntryId = nil
+                    groupAttendance = [:]
+                    pendingCaptureSaves.values.forEach { $0.cancel() }
+                    pendingCaptureSaves = [:]
                 }
                 .onChange(of: shoot.id) { newShootID in
-                    // When the selected shoot changes, set up listeners for the new shoot
-                    setupRealtimeListeners()
+                    // Cancel old watchers and set up new ones for the new shoot
+                    rosterWatchTask?.cancel()
+                    groupWatchTask?.cancel()
+                    shootListener?.remove()
+                    shootListener = nil
 
-                    // Load roster data and clean up stale locks for the new shoot
+                    setupShootListener(shootID: newShootID)
+
+                    // Load data FIRST, then start watchers to avoid race condition
                     Task {
                         await loadRosterForSelectedShoot(shootID: newShootID)
+                        setupPowerSyncWatchers()
                         try? await RosterEntryService.shared.releaseExpiredLocks(forJob: newShootID)
                         try? await GroupImageService.shared.releaseExpiredLocks(forJob: newShootID)
                     }
@@ -1073,6 +1691,7 @@ struct SportsShootListView: View {
             if let shoot = viewModel.selectedShoot {
                 AddRosterEntryView(
                     shootID: shoot.id,
+                    organizationId: shoot.organizationId,
                     existingEntry: viewModel.selectedRosterEntry,
                     onComplete: { success in
                         if success {
@@ -1087,6 +1706,7 @@ struct SportsShootListView: View {
             if let shoot = viewModel.selectedShoot {
                 BatchAddAthletesView(
                     shootID: shoot.id,
+                    organizationId: shoot.organizationId,
                     onComplete: { success in
                         if success {
                             refreshSelectedShoot()
@@ -1109,10 +1729,38 @@ struct SportsShootListView: View {
                 )
             }
         }
+        .sheet(isPresented: $viewModel.showingKiosk) {
+            if let shoot = viewModel.selectedShoot {
+                KioskLaunchView(
+                    sportsJobId: shoot.id,
+                    organizationId: shoot.organizationId,
+                    schoolName: shoot.schoolName
+                )
+            }
+        }
+        .onChange(of: viewModel.showingKiosk) { isShowingKiosk in
+            // Stop browsing when kiosk opens, resume when it closes
+            if isShowingKiosk {
+                viewModel.multipeerSync?.stopBrowsing()
+                print("SportsShootListView: Stopped browsing (kiosk opened)")
+            } else if let shootID = viewModel.selectedShoot?.id {
+                viewModel.multipeerSync?.startBrowsing(jobId: shootID)
+                print("SportsShootListView: Resumed browsing (kiosk closed)")
+            }
+        }
+        .sheet(isPresented: $viewModel.showingConnectionDetails) {
+            if let multipeer = viewModel.multipeerSync {
+                connectionDetailsSheet(multipeer: multipeer)
+            }
+        }
+        .sheet(isPresented: $showingFPSyncSheet) {
+            fpSyncSheet
+        }
         .sheet(isPresented: $viewModel.showingImportExport) {
             if let shoot = viewModel.selectedShoot {
                 CSVImportExportView(
                     shootID: shoot.id,
+                    organizationId: shoot.organizationId,
                     onComplete: { success in
                         if success {
                             refreshSelectedShoot()
@@ -1126,6 +1774,7 @@ struct SportsShootListView: View {
             if let shoot = viewModel.selectedShoot {
                 MultiPhotoRosterImporterView(
                     shootID: shoot.id,
+                    organizationId: shoot.organizationId,
                     onComplete: { success in
                         if success {
                             refreshSelectedShoot()
@@ -1673,7 +2322,7 @@ struct SportsShootListView: View {
             // Column headers with sorting functionality and filter button
             HStack {
                 sortableHeader("Name", field: "lastName")
-                sortableHeader("Subject ID", field: "firstName")
+                sortableHeader("Roster ID", field: "firstName")
                 sortableHeader("Special", field: "teacher")
                 sortableHeader("Sport/Team", field: "group")
                 
@@ -1695,34 +2344,102 @@ struct SportsShootListView: View {
             .padding(.vertical, 4)
             .background(Color(.secondarySystemGroupedBackground))
             
-            // Athlete count display
-            HStack {
+            // Search bar
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 14))
+                    TextField("Search by name or ID...", text: $searchText)
+                        .font(.system(size: 15))
+                        .autocorrectionDisabled()
+                        .autocapitalization(.none)
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 14))
+                        }
+                        .frame(minWidth: 44, minHeight: 44)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(.systemGray5))
+                .cornerRadius(8)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 4)
+            .background(Color(.systemGroupedBackground))
+
+            // Progress bar + athlete count
+            HStack(spacing: 8) {
                 let filteredRoster = filterRoster(viewModel.rosterEntries)
-                let athleteCount = filteredRoster.filter { !$0.lastName.isEmpty }.count
-                Text("Athletes: \(athleteCount)")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal)
-                    .padding(.vertical, 4)
+                let totalCount = filteredRoster.count
+                let photographedCount = filteredRoster.filter { !$0.imageNumbers.isEmpty }.count
+                let absentCount = filteredRoster.filter { entry in
+                    guard let sid = entry.subjectId else { return false }
+                    return absentSubjects.contains(sid)
+                }.count
+
+                Text("\(photographedCount)/\(totalCount) photographed")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(photographedCount == totalCount && totalCount > 0 ? .green : .secondary)
+
+                ProgressView(value: totalCount > 0 ? Double(photographedCount) / Double(totalCount) : 0)
+                    .tint(photographedCount == totalCount && totalCount > 0 ? .green : .blue)
+                    .frame(maxWidth: 120)
+
+                if absentCount > 0 {
+                    Text("· \(absentCount) absent")
+                        .font(.system(size: 12))
+                        .foregroundColor(.orange)
+                }
+
                 Spacer()
             }
+            .padding(.horizontal)
+            .padding(.vertical, 4)
             .background(Color(.systemGroupedBackground))
             
-            // List of roster entries
-            List {
-                // Sort roster based on current sort field and direction
-                ForEach(Array(sortedRoster(filterRoster(viewModel.rosterEntries)).enumerated()), id: \.element.id) { index, entry in
-                    rosterEntryRow(shoot: shoot, entry: entry, isEven: index % 2 == 0)
-                        .listRowInsets(EdgeInsets(
-                            top: 4,
-                            leading: 10,
-                            bottom: 4,
-                            trailing: 10
-                        ))
-                        .listRowBackground(Color.clear) // Clear default background
+            // List of roster entries with ScrollViewReader for reverse selection
+            ScrollViewReader { scrollProxy in
+                List {
+                    ForEach(Array(sortedRoster(filterRoster(viewModel.rosterEntries)).enumerated()), id: \.element.id) { index, entry in
+                        rosterEntryRow(shoot: shoot, entry: entry, isEven: index % 2 == 0)
+                            .listRowInsets(EdgeInsets(
+                                top: 4,
+                                leading: 10,
+                                bottom: 4,
+                                trailing: 10
+                            ))
+                            .listRowBackground(Color.clear)
+                    }
+                    .onMove { source, destination in
+                        var reordered = sortedRoster(filterRoster(viewModel.rosterEntries))
+                        reordered.move(fromOffsets: source, toOffset: destination)
+                        let orderedIds = reordered.compactMap { $0.subjectId }.filter { !$0.isEmpty }
+                        if !orderedIds.isEmpty {
+                            fpSync.sendQueueReorder(orderedSubjectIds: orderedIds)
+                        }
+                    }
+                }
+                .listStyle(PlainListStyle())
+                .onChange(of: highlightedEntryId) { entryId in
+                    if let entryId = entryId {
+                        withAnimation {
+                            scrollProxy.scrollTo(entryId, anchor: .center)
+                        }
+                    }
+                }
+                .onChange(of: viewModel.currentlyEditingEntry) { entryId in
+                    if let entryId = entryId {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            scrollProxy.scrollTo(entryId, anchor: .center)
+                        }
+                    }
                 }
             }
-            .listStyle(PlainListStyle()) // More compact style
             
             // Add athlete buttons
             HStack(spacing: 10) {
@@ -1758,167 +2475,261 @@ struct SportsShootListView: View {
                     .foregroundColor(.white)
                     .cornerRadius(8)
                 }
-                
+
+                Button(action: { viewModel.showingKiosk = true }) {
+                    HStack {
+                        Image(systemName: "person.2.fill")
+                        Text("Kiosk")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.purple)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+
+                Button(action: {
+                    if fpSync.isConnected {
+                        showingFPSyncSheet = true
+                    } else {
+                        guard let shoot = viewModel.selectedShoot, shoot.galleryId != nil else {
+                            viewModel.errorMessage = "This sports job isn't linked to a Production gallery yet. Sync it from Focal Point Production first."
+                            viewModel.showingErrorAlert = true
+                            return
+                        }
+                        showingFPSyncSheet = true
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: fpSync.isConnected ? "bolt.fill" : "bolt.slash")
+                        Text(fpSync.isConnected ? "Synced" : "Sync")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(fpSync.isConnected ? Color.green : Color.orange)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+
                 Spacer()
             }
             .padding(.vertical, 8)
         }
     }
-    
+
     private func rosterEntryRow(shoot: SportsShoot, entry: RosterEntry, isEven: Bool) -> some View {
         // Check if current user on this device is editing this entry
         let isOwnLock = isOwnLock(entry.id)
-        
+
         // Entry is locked by someone else (not us)
         let isLockedByOthers = viewModel.lockedEntries[entry.id] != nil && !isOwnLock
-        
+
         // We are currently editing this entry
         let isCurrentlyEditing = viewModel.currentlyEditingEntry == entry.id
-        
+
         // Generate a consistent color for each group
         let groupColor = colorForGroup(entry.groupName)
-        
+
         // Determine font size based on group name length
         let fontSize: CGFloat
         if entry.groupName.count < 15 {
-            fontSize = 20 // Larger font for short names
+            fontSize = 20
         } else if entry.groupName.count < 30 {
-            fontSize = 12 // Medium font for medium names
+            fontSize = 12
         } else {
-            fontSize = 10 // Smaller font for very long names
+            fontSize = 10
         }
-        
-        return VStack(spacing: 0) {
+
+        // Sync state for this entry
+        let subjectId = entry.subjectId ?? ""
+        let isAbsent = absentSubjects.contains(subjectId)
+        let isFlagged = flaggedSubjects.contains(subjectId)
+        let isPhotographed = photographedSubjects.contains(subjectId)
+        let captureCount = subjectCaptureCounts[subjectId] ?? 0
+        let thumbnail = subjectThumbnails[subjectId]
+        let isHighlighted = highlightedEntryId == entry.id
+
+        return HStack(spacing: 0) {
+            // Status indicator color strip (leading edge)
+            Rectangle()
+                .fill(
+                    isAbsent ? Color.gray :
+                    !entry.imageNumbers.isEmpty ? Color.green :
+                    Color(.systemGray4)
+                )
+                .frame(width: 4)
+
+            VStack(spacing: 0) {
             HStack(spacing: 0) {
-                // Left side - Name and SubjectId (fixed width)
-                VStack(alignment: .leading, spacing: 2) {
-                    // Subject ID (firstName) with special info
-                    HStack(spacing: 4) {
-                        Text(entry.firstName)
-                            .font(.system(size: 20))
-                            .foregroundColor(.primary)
-                        
-                        if !entry.teacher.isEmpty {
-                            Text(specialTranslation(entry.teacher))
-                                .font(.system(size: 16))
-                                .foregroundColor(.secondary)
+                // Sync status indicators (only when connected to Production)
+                if fpSync.isConnected {
+                    VStack(spacing: 3) {
+                        // Photographed checkmark OR sync dot
+                        if isPhotographed {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 12))
+                                .foregroundColor(.green)
+                        } else {
+                            Circle()
+                                .fill(!entry.imageNumbers.isEmpty ? Color.green : (entry.subjectId != nil ? Color.gray : Color.orange))
+                                .frame(width: 8, height: 8)
+                        }
+                        // QC retake flag
+                        if isFlagged {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.red)
                         }
                     }
-                    
-                    // Name (lastName)
-                    Text(entry.lastName)
-                        .font(.system(size: 20, weight: .bold))
-                        .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 20)
+                    .padding(.trailing, 4)
+                }
+
+                // Thumbnail (if available from Production)
+                if let thumb = thumbnail {
+                    Image(uiImage: thumb)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 36, height: 36)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .padding(.trailing, 8)
+                }
+
+                // Left side - Roster ID + Name (fixed width)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        // Roster ID (new field) or firstName as fallback
+                        Text(entry.rosterId.isEmpty ? entry.firstName : entry.rosterId)
+                            .font(.system(size: 20))
+                            .foregroundColor(.primary)
+
+                        // Special dropdown (inline, replaces text display)
+                        specialDropdown(entry: entry)
+                    }
+
+                    // Full name
+                    if entry.rosterId.isEmpty {
+                        // Legacy mode: lastName only (firstName is used as roster ID)
+                        Text(entry.lastName)
+                            .font(.system(size: 20, weight: .bold))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        // New mode: full name
+                        Text("\(entry.firstName) \(entry.lastName)")
+                            .font(.system(size: 20, weight: .bold))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .frame(width: 200, alignment: .leading)
-                .contentShape(Rectangle())  // Make entire area tappable
+                .contentShape(Rectangle())
                 .onTapGesture {
-                    // Open edit view when tapping on name area
                     if !isLockedByOthers {
                         viewModel.selectedRosterEntry = entry
                         viewModel.showingAddRosterEntry = true
                     }
                 }
-                
-                // This keeps the image centered by distributing space evenly
+
                 Spacer(minLength: 20)
-                    .contentShape(Rectangle())  // Make spacer area tappable
+                    .contentShape(Rectangle())
                     .onTapGesture {
-                        // Open edit view when tapping in empty space
                         if !isLockedByOthers {
                             viewModel.selectedRosterEntry = entry
                             viewModel.showingAddRosterEntry = true
                         }
                     }
-                
-                // Center - Image input box
-                if isCurrentlyEditing {
-                    AutosaveTextField(
-                        text: $viewModel.editingImageNumber,
-                        placeholder: "Enter image numbers",
-                        context: "\(entry.firstName) - \(entry.lastName)",
-                        onTapOutside: {
-                            // Just call the centralized save function
-                            saveCurrentEditingEntry()
-                        },
-                        onEnterOrDown: {
-                            // Save current entry before moving to next
-                            saveCurrentEditingEntry()
-                            // Find the next editable entry and start editing it
-                            moveToNextEditableEntry(currentID: entry.id)
-                        },
-                        onEnterOrUp: {
-                            // Save current entry before moving to previous
-                            saveCurrentEditingEntry()
-                            // Find the previous editable entry and start editing it
-                            moveToPreviousEditableEntry(currentID: entry.id)
+
+                // Center - Image input box + capture count badge
+                HStack(spacing: 4) {
+                    if isCurrentlyEditing {
+                        AutosaveTextField(
+                            text: $viewModel.editingImageNumber,
+                            placeholder: "Enter image numbers",
+                            context: "\(entry.firstName) - \(entry.lastName)",
+                            onTapOutside: {
+                                saveCurrentEditingEntry()
+                            },
+                            onEnterOrDown: {
+                                saveCurrentEditingEntry()
+                                moveToNextEditableEntry(currentID: entry.id)
+                            },
+                            onEnterOrUp: {
+                                saveCurrentEditingEntry()
+                                moveToPreviousEditableEntry(currentID: entry.id)
+                            }
+                        )
+                        .font(.system(size: 20))
+                        .frame(width: 150, height: 50)
+                        .multilineTextAlignment(.center)
+                        .background(Color.blue.opacity(0.3))
+                        .cornerRadius(6)
+                    } else if isLockedByOthers {
+                        VStack(spacing: 2) {
+                            Text(entry.imageNumbers.isEmpty ? "No images recorded" : entry.imageNumbers)
+                                .font(.system(size: 16))
+                                .foregroundColor(entry.imageNumbers.isEmpty ? .orange : .secondary)
+                                .lineLimit(1)
+
+                            if let editor = viewModel.lockedEntries[entry.id] {
+                                Text("Editing: \(editor)")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
                         }
-                    )
-                    .font(.system(size: 20))
-                    .frame(width: 150, height: 50)
-                    .multilineTextAlignment(.center)
-                    .background(Color.blue.opacity(0.3))
-                    .cornerRadius(6)
-                } else if isLockedByOthers {
-                    // Show who is editing if locked by others
-                    VStack(spacing: 2) {
-                        Text(entry.imageNumbers.isEmpty ? "No images recorded" : entry.imageNumbers)
-                            .font(.system(size: 16))
-                            .foregroundColor(entry.imageNumbers.isEmpty ? .orange : .secondary)
-                            .lineLimit(1)
-                        
-                        if let editor = viewModel.lockedEntries[entry.id] {
-                            Text("Editing: \(editor)")
-                                .font(.caption)
-                                .foregroundColor(.red)
+                        .frame(width: 150, height: 50)
+                        .padding(.horizontal, 4)
+                        .background(Color.gray.opacity(0.2))
+                        .cornerRadius(6)
+                    } else {
+                        Button(action: {
+                            startEditing(shootID: shoot.id, entry: entry)
+                        }) {
+                            Text(entry.imageNumbers.isEmpty ? "Image #" : entry.imageNumbers)
+                                .font(.system(size: 20))
+                                .fontWeight(.medium)
+                                .frame(width: 150, height: 50)
+                                .multilineTextAlignment(.center)
+                                .background(isEven ? Color.blue.opacity(0.3) : Color.blue.opacity(0.4))
+                                .foregroundColor(.white)
+                                .cornerRadius(6)
                         }
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .frame(width: 150, height: 50)
-                    .padding(.horizontal, 4)
-                    .background(Color.gray.opacity(0.2))
-                    .cornerRadius(6)
-                } else {
-                    Button(action: {
-                        startEditing(shootID: shoot.id, entry: entry)
-                    }) {
-                        // Use standard colors that work in both light and dark mode
-                        Text(entry.imageNumbers.isEmpty ? "Image #" : entry.imageNumbers)
-                            .font(.system(size: 20))
-                            .fontWeight(.medium) // Make text slightly bolder
-                            .frame(width: 150, height: 50)
-                            .multilineTextAlignment(.center)
-                            .background(isEven ? Color.blue.opacity(0.3) : Color.blue.opacity(0.4))
-                            .foregroundColor(.white) // White text for better contrast in both modes
-                            .cornerRadius(6)
+
+                    // Capture count badge
+                    if fpSync.isConnected && captureCount > 0 {
+                        Text("\(captureCount)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 22, height: 22)
+                            .background(Color.gray)
+                            .clipShape(Circle())
                     }
-                    .buttonStyle(PlainButtonStyle())  // Prevents button from taking over entire tap area
                 }
-                
-                // This keeps the image centered by distributing space evenly
+
                 Spacer(minLength: 20)
-                    .contentShape(Rectangle())  // Make spacer area tappable
+                    .contentShape(Rectangle())
                     .onTapGesture {
-                        // Open edit view when tapping in empty space
                         if !isLockedByOthers {
                             viewModel.selectedRosterEntry = entry
                             viewModel.showingAddRosterEntry = true
                         }
                     }
-                
+
                 // Right side - Group/Team tag
                 if !entry.groupName.isEmpty {
                     Text(entry.groupName)
-                        .font(.system(size: fontSize)) // Dynamic font size
+                        .font(.system(size: fontSize))
                         .foregroundColor(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(groupColor)
                         .cornerRadius(5)
-                        .lineLimit(2) // 2 lines max
-                        .fixedSize(horizontal: true, vertical: true) // Never truncate
-                        .contentShape(Rectangle())  // Make entire area tappable
+                        .lineLimit(2)
+                        .fixedSize(horizontal: true, vertical: true)
+                        .contentShape(Rectangle())
                         .onTapGesture {
-                            // Open edit view when tapping on group tag
                             if !isLockedByOthers {
                                 viewModel.selectedRosterEntry = entry
                                 viewModel.showingAddRosterEntry = true
@@ -1929,20 +2740,54 @@ struct SportsShootListView: View {
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
             .contentShape(Rectangle())
-            
+
             Divider()
         }
+        } // Close outer HStack (status strip + content)
         .background(
-            // Apply alternating background colors with different colors for light/dark mode
-            isEven ?
-                Color(.systemBackground) :
-                Color(.systemGray4) // Using systemGray4 as requested
+            isHighlighted ? Color.blue.opacity(0.2) :
+            (isEven ? Color(.systemBackground) : Color(.systemGray4))
         )
+        .clipShape(RoundedRectangle(cornerRadius: 0))
+        .opacity(isAbsent ? 0.4 : 1.0)
         .overlay(
             isLockedByOthers ?
                 Color.red.opacity(0.05) :
                 Color.clear
         )
+        .swipeActions(edge: .trailing) {
+            if let sid = entry.subjectId {
+                Button(isAbsent ? "Present" : "Absent") {
+                    if isAbsent {
+                        absentSubjects.remove(sid)
+                    } else {
+                        absentSubjects.insert(sid)
+                    }
+                    fpSync.markSubjectAbsent(subjectId: sid, rosterEntryId: entry.id.uuidString.lowercased(), isAbsent: !isAbsent)
+                }
+                .tint(isAbsent ? .green : .orange)
+            }
+
+            if !isLockedByOthers {
+                Button(role: .destructive) {
+                    deleteRosterEntry(entryID: entry.id)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
+        .swipeActions(edge: .leading) {
+            if !isLockedByOthers {
+                Button {
+                    viewModel.selectedRosterEntry = entry
+                    viewModel.showingAddRosterEntry = true
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .tint(.blue)
+            }
+        }
+        .id(entry.id)
         .contextMenu {
             if !isLockedByOthers {
                 Button(action: {
@@ -1951,13 +2796,13 @@ struct SportsShootListView: View {
                 }) {
                     Label("Edit", systemImage: "pencil")
                 }
-                
+
                 Button(action: {
                     startEditing(shootID: shoot.id, entry: entry)
                 }) {
                     Label("Edit Image Numbers", systemImage: "camera")
                 }
-                
+
                 Button(role: .destructive, action: {
                     deleteRosterEntry(entryID: entry.id)
                 }) {
@@ -1973,72 +2818,137 @@ struct SportsShootListView: View {
         VStack {
             List {
                 ForEach(viewModel.groupImages) { group in
-                    Button(action: {
-                        viewModel.selectedGroupImage = group
-                        viewModel.showingAddGroupImage = true
-                    }) {
-                        VStack(alignment: .leading, spacing: 4) {
-                                                    Text(group.description)
-                                                        .font(.headline)
-                                                    
-                                                    if !group.imageNumbers.isEmpty {
-                                                        HStack {
-                                                            Label("Images: \(group.imageNumbers)", systemImage: "camera")
-                                                                .font(.caption)
-                                                                .foregroundColor(.secondary)
-                                                        }
-                                                        .padding(.top, 2)
-                                                    } else {
-                                                        Text("No images recorded")
-                                                            .font(.caption)
-                                                            .foregroundColor(.orange)
-                                                            .padding(.top, 2)
-                                                    }
-                                                    
-                                                    if !group.notes.isEmpty {
-                                                        Text("Notes: \(group.notes)")
-                                                            .font(.caption)
-                                                            .foregroundColor(.secondary)
-                                                            .padding(.top, 2)
-                                                    }
-                                                }
-                                                .padding(.vertical, 4)
-                                            }
-                                            .buttonStyle(PlainButtonStyle())
-                                            .contextMenu {
-                                                Button(action: {
-                                                    viewModel.selectedGroupImage = group
-                                                    viewModel.showingAddGroupImage = true
-                                                }) {
-                                                    Label("Edit", systemImage: "pencil")
-                                                }
-                                                
-                                                Button(role: .destructive, action: {
-                                                    deleteGroupImage(groupID: group.id)
-                                                }) {
-                                                    Label("Delete", systemImage: "trash")
-                                                }
-                                            }
-                                        }
+                    Section {
+                        // Group header row (tappable to edit)
+                        Button(action: {
+                            viewModel.selectedGroupImage = group
+                            viewModel.showingAddGroupImage = true
+                        }) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(group.description)
+                                    .font(.headline)
+
+                                if !group.imageNumbers.isEmpty {
+                                    HStack {
+                                        Label("Images: \(group.imageNumbers)", systemImage: "camera")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
                                     }
-                                    .listStyle(InsetGroupedListStyle())
-                                    
-                                    Button(action: {
-                                        viewModel.selectedGroupImage = nil
-                                        viewModel.showingAddGroupImage = true
-                                    }) {
-                                        Label("Add Group", systemImage: "person.3.sequence.fill")
-                                            .font(.headline)
-                                            .padding()
-                                            .frame(maxWidth: .infinity)
-                                            .background(Color.blue)
-                                            .foregroundColor(.white)
-                                            .cornerRadius(10)
-                                            .padding(.horizontal)
-                                            .padding(.bottom)
-                                    }
+                                    .padding(.top, 2)
+                                } else {
+                                    Text("No images recorded")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                        .padding(.top, 2)
+                                }
+
+                                if !group.notes.isEmpty {
+                                    Text("Notes: \(group.notes)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .padding(.top, 2)
                                 }
                             }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .contextMenu {
+                            Button(action: {
+                                viewModel.selectedGroupImage = group
+                                viewModel.showingAddGroupImage = true
+                            }) {
+                                Label("Edit", systemImage: "pencil")
+                            }
+
+                            Button(role: .destructive, action: {
+                                deleteGroupImage(groupID: group.id)
+                            }) {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+
+                        // Attendance toggles — athletes in this group
+                        let groupMembers = viewModel.rosterEntries.filter { $0.groupName == group.description }
+                        if !groupMembers.isEmpty {
+                            let presentIds = groupAttendance[group.description] ?? []
+
+                            ForEach(groupMembers) { member in
+                                HStack {
+                                    Image(systemName: presentIds.contains(member.id.uuidString) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(presentIds.contains(member.id.uuidString) ? .green : .gray)
+                                        .font(.system(size: 20))
+
+                                    Text(!member.rosterId.isEmpty ? member.rosterId : member.firstName)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 44, alignment: .leading)
+
+                                    Text("\(member.firstName) \(member.lastName)".trimmingCharacters(in: .whitespaces))
+                                        .font(.subheadline)
+
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                                .frame(minHeight: 44)
+                                .onTapGesture {
+                                    var current = groupAttendance[group.description] ?? []
+                                    if current.contains(member.id.uuidString) {
+                                        current.remove(member.id.uuidString)
+                                    } else {
+                                        current.insert(member.id.uuidString)
+                                    }
+                                    groupAttendance[group.description] = current
+                                }
+                            }
+
+                            // "Ready" button — sends group_photo_ready to Production
+                            Button(action: {
+                                let presentIds = Array(groupAttendance[group.description] ?? [])
+                                // Map roster entry IDs to subject IDs for Production
+                                let presentSubjectIds = groupMembers
+                                    .filter { presentIds.contains($0.id.uuidString) }
+                                    .compactMap { $0.subjectId }
+                                    .filter { !$0.isEmpty }
+                                fpSync.sendGroupPhotoReady(
+                                    groupName: group.description,
+                                    presentSubjectIds: presentSubjectIds,
+                                    totalInGroup: groupMembers.count
+                                )
+                            }) {
+                                HStack {
+                                    Image(systemName: "checkmark.seal.fill")
+                                    Text("Ready (\(presentIds.count)/\(groupMembers.count))")
+                                }
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .frame(minHeight: 44)
+                                .background(presentIds.count > 0 ? Color.green : Color.gray)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                            }
+                            .disabled(presentIds.isEmpty)
+                        }
+                    }
+                }
+            }
+            .listStyle(InsetGroupedListStyle())
+
+            Button(action: {
+                viewModel.selectedGroupImage = nil
+                viewModel.showingAddGroupImage = true
+            }) {
+                Label("Add Group", systemImage: "person.3.sequence.fill")
+                    .font(.headline)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                    .padding(.horizontal)
+                    .padding(.bottom)
+            }
+        }
+    }
                             
                             // Function to move to the next editable entry when pressing Enter or Down arrow
                             private func moveToNextEditableEntry(currentID: UUID) {
@@ -2347,10 +3257,8 @@ struct SportsShootListView: View {
                             private func refreshSelectedShoot() {
                                 guard let currentShoot = viewModel.selectedShoot else { return }
 
-                                // Load from PowerSync (offline-first - data is always available locally)
                                 Task {
                                     do {
-                                        // Load from PowerSync local database (instant, works offline)
                                         let entries = try await powerSync.getRosterEntries(forJob: currentShoot.id)
                                         let groups = try await powerSync.getGroupImages(forJob: currentShoot.id)
 
@@ -2359,7 +3267,6 @@ struct SportsShootListView: View {
                                             self.viewModel.groupImages = groups
                                         }
 
-                                        // Also try to refresh shoot info from network
                                         let updatedShoot = try await SportsShootService.shared.fetchSportsShoot(id: currentShoot.id)
                                         await MainActor.run {
                                             self.viewModel.selectedShoot = updatedShoot
@@ -2368,7 +3275,6 @@ struct SportsShootListView: View {
                                             }
                                         }
                                     } catch {
-                                        // PowerSync data is always available, network errors are expected offline
                                         print("SportsShootListView: Refresh using PowerSync local data")
                                     }
                                 }
@@ -2557,7 +3463,12 @@ struct SportsShootListView: View {
                             /// Loads roster data for the selected shoot on iPad (offline-first via PowerSync)
                             /// iPhone uses SportsShootDetailView which handles this via loadSportsShoot()
                             private func loadRosterForSelectedShoot(shootID: UUID) async {
-                                // Load from PowerSync local database (instant, works offline)
+                                // If PowerSync hasn't completed its first sync yet, wait for it.
+                                // This ensures local SQLite has data before we try to read it.
+                                if !powerSync.hasSynced {
+                                    await powerSync.waitForFirstSync()
+                                }
+
                                 do {
                                     let entries = try await powerSync.getRosterEntries(forJob: shootID)
                                     let groups = try await powerSync.getGroupImages(forJob: shootID)
@@ -2567,23 +3478,89 @@ struct SportsShootListView: View {
                                         viewModel.groupImages = groups
                                     }
                                 } catch {
-                                    print("SportsShootListView: Failed to load from PowerSync: \(error)")
+                                    print("SportsShootListView: Failed to load roster: \(error)")
                                 }
                             }
 
                             // MARK: - Realtime Listeners
 
-                            // Set up Supabase realtime listeners for real-time updates
-                            private func setupRealtimeListeners() {
-                                // Set up lock listener
-                                setupLockListener()
-                                
-                                // Set up shoot data listener if we have a selected shoot
-                                if let shootID = viewModel.selectedShoot?.id {
-                                    setupShootListener(shootID: shootID)
+                            // Set up PowerSync watch streams for real-time roster/group updates
+                            // This replaces the old Supabase realtime subscription that conflicted with PowerSync
+                            private func setupPowerSyncWatchers() {
+                                guard let shootID = viewModel.selectedShoot?.id else { return }
+
+                                rosterWatchTask?.cancel()
+                                groupWatchTask?.cancel()
+
+                                rosterWatchTask = Task {
+                                    var retryDelay: UInt64 = 1_000_000_000 // 1s
+                                    while !Task.isCancelled {
+                                        do {
+                                            for try await entries in powerSync.watchRosterEntries(forJob: shootID) {
+                                                var merged = entries
+
+                                                // Extract lock info from the entries
+                                                var locks: [UUID: String] = [:]
+                                                for entry in entries {
+                                                    if let lockedByName = entry.lockedByName, !lockedByName.isEmpty {
+                                                        locks[entry.id] = lockedByName
+                                                    }
+                                                }
+                                                viewModel.lockedEntries = locks
+
+                                                // Protect currently-editing entry with live typed value
+                                                if let editingId = viewModel.currentlyEditingEntry,
+                                                   let index = merged.firstIndex(where: { $0.id == editingId }) {
+                                                    merged[index].imageNumbers = viewModel.editingImageNumber
+                                                }
+
+                                                // Protect recently-saved entries from being overwritten
+                                                // by stale SQLite data (async save may not have completed yet)
+                                                for localEntry in viewModel.rosterEntries {
+                                                    if let index = merged.firstIndex(where: { $0.id == localEntry.id }),
+                                                       localEntry.updatedAt > merged[index].updatedAt {
+                                                        merged[index] = localEntry
+                                                    }
+                                                }
+
+                                                // Don't overwrite populated data with empty
+                                                if merged.isEmpty && !viewModel.rosterEntries.isEmpty {
+                                                    continue
+                                                }
+
+                                                viewModel.rosterEntries = merged
+                                                retryDelay = 1_000_000_000 // Reset on success
+                                            }
+                                        } catch {
+                                            if Task.isCancelled { return }
+                                            print("SportsShootListView: Roster watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
+                                        }
+                                        try? await Task.sleep(nanoseconds: retryDelay)
+                                        retryDelay = min(retryDelay * 2, 30_000_000_000) // Cap at 30s
+                                    }
+                                }
+
+                                groupWatchTask = Task {
+                                    var retryDelay: UInt64 = 1_000_000_000 // 1s
+                                    while !Task.isCancelled {
+                                        do {
+                                            for try await groups in powerSync.watchGroupImages(forJob: shootID) {
+                                                if groups.isEmpty && !viewModel.groupImages.isEmpty {
+                                                    continue
+                                                }
+                                                viewModel.groupImages = groups
+                                                retryDelay = 1_000_000_000 // Reset on success
+                                            }
+                                        } catch {
+                                            if Task.isCancelled { return }
+                                            print("SportsShootListView: Group watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
+                                        }
+                                        try? await Task.sleep(nanoseconds: retryDelay)
+                                        retryDelay = min(retryDelay * 2, 30_000_000_000) // Cap at 30s
+                                    }
                                 }
                             }
-                            
+
                             // Set up a real-time listener for shoot data changes
                             private func setupShootListener(shootID: UUID) {
                                 // Remove any existing listener first
@@ -2625,56 +3602,16 @@ struct SportsShootListView: View {
                                 }
                             }
 
-                            // Helper to fetch and update shoot data
+                            // Helper to fetch and update shoot metadata only
+                            // Roster entries and group images are handled by PowerSync watch streams
                             private func fetchAndUpdateShoot(shootID: UUID) async {
                                 do {
-                                    // Fetch the updated shoot and its data from Supabase
                                     let updatedShoot = try await SportsShootService.shared.fetchSportsShoot(id: shootID)
-                                    let updatedEntries = try await RosterEntryService.shared.fetchEntries(forJob: shootID)
-                                    let updatedGroups = try await GroupImageService.shared.fetchGroups(forJob: shootID)
 
-                                    // Update individual roster entries without disrupting active editing
                                     await MainActor.run {
-                                        var needsUpdate = false
-
-                                        // Update roster entries that aren't currently being edited
-                                        for updatedEntry in updatedEntries {
-                                            // Skip if we're currently editing this entry
-                                            if self.viewModel.currentlyEditingEntry == updatedEntry.id {
-                                                continue
-                                            }
-
-                                            // Find and update the entry in our local roster
-                                            if let index = self.viewModel.rosterEntries.firstIndex(where: { $0.id == updatedEntry.id }) {
-                                                let currentImageNumbers = self.viewModel.rosterEntries[index].imageNumbers
-                                                let updatedImageNumbers = updatedEntry.imageNumbers
-
-                                                if currentImageNumbers != updatedImageNumbers {
-                                                    self.viewModel.rosterEntries[index] = updatedEntry
-                                                    needsUpdate = true
-                                                }
-                                            } else {
-                                                // New entry, add it
-                                                self.viewModel.rosterEntries.append(updatedEntry)
-                                                needsUpdate = true
-                                            }
-                                        }
-
-                                        // Also update group images
-                                        if self.viewModel.groupImages != updatedGroups {
-                                            self.viewModel.groupImages = updatedGroups
-                                            needsUpdate = true
-                                        }
-
-                                        // Update shoot metadata
                                         self.viewModel.selectedShoot = updatedShoot
                                         if let listIndex = self.viewModel.sportsShoots.firstIndex(where: { $0.id == shootID }) {
                                             self.viewModel.sportsShoots[listIndex] = updatedShoot
-                                        }
-
-                                        // Force UI update if needed
-                                        if needsUpdate {
-                                            self.viewModel.objectWillChange.send()
                                         }
                                     }
                                 } catch {
@@ -2688,41 +3625,7 @@ struct SportsShootListView: View {
                             }
                             
                             // MARK: - Lock Management
-                            
-                            private func setupLockListener() {
-                                guard let shootID = viewModel.selectedShoot?.id else { return }
 
-                                // Set up realtime subscription to track roster entry locks with unique subscription ID
-                                Task {
-                                    await RosterEntryService.shared.subscribeToChanges(subscriptionId: subscriptionId, jobId: shootID) { [self] entries in
-                                        // Extract locked entries from the realtime update
-                                        var locks: [UUID: String] = [:]
-                                        for entry in entries {
-                                            if let lockedByName = entry.lockedByName, !lockedByName.isEmpty {
-                                                locks[entry.id] = lockedByName
-                                            }
-                                        }
-                                        self.viewModel.lockedEntries = locks
-
-                                        // Protect currently editing entry from being overwritten
-                                        if let editingId = self.viewModel.currentlyEditingEntry,
-                                           let localEntry = self.viewModel.rosterEntries.first(where: { $0.id == editingId }) {
-                                            var merged = entries
-                                            if let index = merged.firstIndex(where: { $0.id == editingId }) {
-                                                // Keep local editing state
-                                                var preservedEntry = localEntry
-                                                preservedEntry.imageNumbers = self.viewModel.editingImageNumber
-                                                merged[index] = preservedEntry
-                                            }
-                                            self.viewModel.rosterEntries = merged
-                                        } else {
-                                            // Not editing - accept all server updates
-                                            self.viewModel.rosterEntries = entries
-                                        }
-                                    }
-                                }
-                            }
-                            
                             private func acquireLock(shootID: UUID, entryID: UUID) {
                                 Task {
                                     let success = await LockManager.shared.acquireRosterEntryLock(entryId: entryID)
@@ -2778,12 +3681,27 @@ struct SportsShootListView: View {
                                     viewModel.rosterEntries[index] = updatedEntry
                                 }
 
-                                // Save to PowerSync (auto-syncs when online)
+                                // Haptic feedback on save
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
+                                // Save to PowerSync (writes to local SQLite, auto-syncs to Supabase)
                                 Task {
-                                    do {
-                                        try await powerSync.saveRosterEntry(updatedEntry)
-                                    } catch {
-                                        print("SportsShootListView: Failed to save entry: \(error)")
+                                    var retries = 0
+                                    while retries < 3 {
+                                        do {
+                                            try await powerSync.saveRosterEntry(updatedEntry)
+                                            return
+                                        } catch {
+                                            retries += 1
+                                            print("SportsShootListView: Save retry \(retries)/3: \(error)")
+                                            if retries < 3 {
+                                                try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries))
+                                            }
+                                        }
+                                    }
+                                    print("SportsShootListView: Failed to save entry after 3 retries")
+                                    await MainActor.run {
+                                        UINotificationFeedbackGenerator().notificationOccurred(.error)
                                     }
                                 }
                             }
@@ -2817,6 +3735,9 @@ struct SportsShootListView: View {
 
                                 // Acquire lock for this entry
                                 acquireLock(shootID: shootID, entryID: entry.id)
+
+                                // Send subject selection to Production camera station
+                                sendSubjectSelection(entry: entry)
                             }
                         }
 

@@ -149,19 +149,29 @@ struct CustomNumberKeyboard: View {
             .padding(.horizontal)
             
             // Navigation buttons
-            HStack(spacing: compactMode ? 12 : 20) {
-                // Up arrow
+            HStack(spacing: compactMode ? 8 : 12) {
+                // Prev button
                 NavigationButton(systemName: "arrow.up", compactMode: compactMode) {
                     onUp?()
                 }
-                
-                // Down arrow
-                NavigationButton(systemName: "arrow.down", compactMode: compactMode) {
-                    onDown?()
+
+                // Next button (prominent — primary workflow action)
+                Button(action: { onDown?() }) {
+                    HStack(spacing: 4) {
+                        Text("Next")
+                            .font(.system(size: compactMode ? 14 : 16, weight: .semibold))
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: compactMode ? 12 : 14))
+                    }
+                    .foregroundColor(.white)
+                    .frame(height: compactMode ? 36 : 44)
+                    .padding(.horizontal, compactMode ? 12 : 16)
+                    .background(Color.green)
+                    .cornerRadius(compactMode ? 6 : 8)
                 }
-                
+
                 Spacer()
-                
+
                 // Done button
                 Button(action: onDismiss) {
                     Text("Done")

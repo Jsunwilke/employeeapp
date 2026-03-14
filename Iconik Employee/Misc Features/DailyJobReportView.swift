@@ -1713,14 +1713,16 @@ struct DailyJobReportView: View {
                     await MainActor.run {
                         self.isSubmitting = false
 
-                        // Update note in local storage with dailyReportId instead of removing it
+                        // Remove the used note now that its content is saved in the report.
+                        // Do NOT delete its photos — those URLs were copied into the report above.
                         if let selectedNote = self.selectedPhotoshootNote,
                            let index = self.photoshootNotes.firstIndex(of: selectedNote) {
-                            var updatedNote = self.photoshootNotes[index]
-                            updatedNote.dailyReportId = createdReport.id
-                            self.photoshootNotes[index] = updatedNote
+                            self.photoshootNotes.remove(at: index)
                             self.savePhotoshootNotes()
-                            print("✅ Updated note with daily_report_id in local storage")
+                            print("✅ Removed used photoshoot note from local storage")
+                            Task {
+                                try? await PhotoshootNoteService.shared.deleteNote(id: selectedNote.id)
+                            }
                         }
 
                         // Post notification to show toast on main view

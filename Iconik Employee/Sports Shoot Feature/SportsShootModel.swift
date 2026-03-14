@@ -47,9 +47,13 @@ private func parseISO8601Date(_ dateString: String?) -> Date? {
         return date
     }
 
-    // Plain date only (2025-12-29)
-    timestampFormatter.dateFormat = "yyyy-MM-dd"
-    if let date = timestampFormatter.date(from: dateString) {
+    // Plain date only (2025-12-29) — shoot_date is a calendar date, not a UTC moment.
+    // Use local timezone so "2026-02-25" doesn't roll back to the 24th for western timezones.
+    let dateOnlyFormatter = DateFormatter()
+    dateOnlyFormatter.locale = Locale(identifier: "en_US_POSIX")
+    dateOnlyFormatter.timeZone = TimeZone.current
+    dateOnlyFormatter.dateFormat = "yyyy-MM-dd"
+    if let date = dateOnlyFormatter.date(from: dateString) {
         return date
     }
 
@@ -60,6 +64,7 @@ private func parseISO8601Date(_ dateString: String?) -> Date? {
 struct RosterEntry: Identifiable, Codable, Hashable {
     var id: UUID
     var sportsJobId: UUID
+    var organizationId: String    // Required for PowerSync sync rules
     var lastName: String          // Maps to "Name" in Captura
     var firstName: String         // Maps to "Subject ID" in Captura
     var teacher: String           // Maps to "Special" in Captura
@@ -82,11 +87,14 @@ struct RosterEntry: Identifiable, Codable, Hashable {
 
     var createdAt: Date
     var isFilledBlank: Bool?  // Indicates if this is a filled blank entry
+    var subjectId: String?   // FK to Production subjects (iPad sync)
+    var rosterId: String     // Dedicated roster/jersey ID (replaces firstName hack)
 
     // CodingKeys to map snake_case database fields to camelCase Swift properties
     enum CodingKeys: String, CodingKey {
         case id, email, phone, notes, teacher, version
         case sportsJobId = "sports_job_id"
+        case organizationId = "organization_id"
         case lastName = "last_name"
         case firstName = "first_name"
         case groupName = "group_name"
@@ -99,6 +107,8 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         case lockedAt = "locked_at"
         case createdAt = "created_at"
         case isFilledBlank = "is_filled_blank"
+        case subjectId = "subject_id"
+        case rosterId = "roster_id"
     }
 
     // Custom decoder to handle missing fields with defaults
@@ -106,6 +116,7 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         sportsJobId = try container.decode(UUID.self, forKey: .sportsJobId)
+        organizationId = try container.decodeIfPresent(String.self, forKey: .organizationId) ?? ""
         lastName = try container.decodeIfPresent(String.self, forKey: .lastName) ?? ""
         firstName = try container.decodeIfPresent(String.self, forKey: .firstName) ?? ""
         teacher = try container.decodeIfPresent(String.self, forKey: .teacher) ?? ""
@@ -123,10 +134,13 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         lockedAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .lockedAt))
         createdAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .createdAt)) ?? Date()
         isFilledBlank = try container.decodeIfPresent(Bool.self, forKey: .isFilledBlank)
+        subjectId = try container.decodeIfPresent(String.self, forKey: .subjectId)
+        rosterId = try container.decodeIfPresent(String.self, forKey: .rosterId) ?? ""
     }
 
     init(id: UUID = UUID(),
          sportsJobId: UUID,
+         organizationId: String = "",
          lastName: String = "",
          firstName: String = "",
          teacher: String = "",
@@ -143,9 +157,12 @@ struct RosterEntry: Identifiable, Codable, Hashable {
          lockedByName: String? = nil,
          lockedAt: Date? = nil,
          createdAt: Date = Date(),
-         isFilledBlank: Bool? = nil) {
+         isFilledBlank: Bool? = nil,
+         subjectId: String? = nil,
+         rosterId: String = "") {
         self.id = id
         self.sportsJobId = sportsJobId
+        self.organizationId = organizationId
         self.lastName = lastName
         self.firstName = firstName
         self.teacher = teacher
@@ -163,6 +180,8 @@ struct RosterEntry: Identifiable, Codable, Hashable {
         self.lockedAt = lockedAt
         self.createdAt = createdAt
         self.isFilledBlank = isFilledBlank
+        self.subjectId = subjectId
+        self.rosterId = rosterId
     }
 
     // Check if entry is currently locked by someone else
@@ -326,6 +345,7 @@ struct SportsShoot: Identifiable, Codable {
     var isArchived: Bool
     var createdAt: Date
     var updatedAt: Date
+    var galleryId: String?       // FK to Production galleries (iPad sync)
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -341,6 +361,7 @@ struct SportsShoot: Identifiable, Codable {
         case isArchived = "is_archived"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case galleryId = "gallery_id"
     }
 
     init(from decoder: Decoder) throws {
@@ -359,6 +380,7 @@ struct SportsShoot: Identifiable, Codable {
         isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
         createdAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .createdAt)) ?? Date()
         updatedAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .updatedAt)) ?? Date()
+        galleryId = try container.decodeIfPresent(String.self, forKey: .galleryId)
     }
 
     init(id: UUID = UUID(),
@@ -374,7 +396,8 @@ struct SportsShoot: Identifiable, Codable {
          sessionId: String? = nil,
          isArchived: Bool = false,
          createdAt: Date = Date(),
-         updatedAt: Date = Date()) {
+         updatedAt: Date = Date(),
+         galleryId: String? = nil) {
         self.id = id
         self.organizationId = organizationId
         self.schoolName = schoolName
@@ -389,6 +412,7 @@ struct SportsShoot: Identifiable, Codable {
         self.isArchived = isArchived
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.galleryId = galleryId
     }
 }
 

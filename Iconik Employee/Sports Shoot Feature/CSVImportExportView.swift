@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct CSVImportExportView: View {
     let shootID: UUID
+    let organizationId: String
     let onComplete: (Bool) -> Void
 
     @State private var isImporting = false
@@ -130,6 +131,7 @@ struct CSVImportExportView: View {
             .sheet(isPresented: $showPhotoImport) {
                 RosterPhotoImporterView(
                     shootID: shootID,
+                    organizationId: organizationId,
                     onComplete: { success in
                         if success {
                             // If successfully imported via photo, reload roster data
@@ -143,6 +145,7 @@ struct CSVImportExportView: View {
             .sheet(isPresented: $showMultiPhotoImport) {
                 MultiPhotoRosterImporterView(
                     shootID: shootID,
+                    organizationId: organizationId,
                     onComplete: { success in
                         if success {
                             // If successfully imported via multi-photo, reload roster data
@@ -237,6 +240,7 @@ struct CSVImportExportView: View {
 
             let entry = RosterEntry(
                 sportsJobId: shootID,
+                organizationId: organizationId,
                 lastName: nameIndex != nil && fields.count > nameIndex! ? fields[nameIndex!] : "",
                 firstName: subjectIdIndex != nil && fields.count > subjectIdIndex! ? fields[subjectIdIndex!] : "",
                 teacher: specialIndex != nil && fields.count > specialIndex! ? fields[specialIndex!] : "",

@@ -44,18 +44,32 @@ struct DocumentScannerView: UIViewControllerRepresentable {
         }
         
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
-            // Convert scanned pages to UIImages
+            // Convert scanned pages to UIImages, downsizing to avoid overloading the Claude API
             var images: [UIImage] = []
             for i in 0..<scan.pageCount {
                 let image = scan.imageOfPage(at: i)
-                images.append(image)
+                let downsized = downsizeImage(image, maxDimension: 1600)
+                images.append(downsized)
             }
-            
+
             // Pass the scanned images back
             parent.onScan(images)
-            
+
             // Dismiss the scanner
             parent.presentationMode.wrappedValue.dismiss()
+        }
+
+        // Downsize image to a max dimension — camera scans are very high res (3000-4000px)
+        // and cause 529 "overloaded" errors when sent to Claude API at full size
+        private func downsizeImage(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+            let maxSide = max(image.size.width, image.size.height)
+            guard maxSide > maxDimension else { return image }
+            let scale = maxDimension / maxSide
+            let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            let renderer = UIGraphicsImageRenderer(size: newSize)
+            return renderer.image { _ in
+                image.draw(in: CGRect(origin: .zero, size: newSize))
+            }
         }
         
         func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {

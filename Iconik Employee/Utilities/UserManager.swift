@@ -107,31 +107,40 @@ class UserManager: ObservableObject {
             return
         }
 
-        do {
-            // Query users table for organization_id
-            let response = try await supabase
-                .from("users")
-                .select("organization_id")
-                .eq("id", value: userId)
-                .limit(1)
-                .single()
-                .execute()
-
-            // Decode the response
-            struct UserOrgResponse: Codable {
-                let organization_id: String
-            }
-
-            let decoder = JSONDecoder()
-            let userOrg = try decoder.decode(UserOrgResponse.self, from: response.data)
-
-            await MainActor.run {
-                self.currentUserOrganizationID = userOrg.organization_id
-                UserDefaults.standard.set(userOrg.organization_id, forKey: "userOrganizationID")
-            }
-        } catch {
-            // Silent failure - org ID will remain empty
+        // Retry up to 3 times — the auth token may still be refreshing when this first runs,
+        // and a silent failure here leaves org ID empty which makes every view appear blank.
+        struct UserOrgResponse: Codable {
+            let organization_id: String
         }
+
+        var retries = 0
+        while retries < 3 {
+            do {
+                let response = try await supabase
+                    .from("users")
+                    .select("organization_id")
+                    .eq("id", value: userId)
+                    .limit(1)
+                    .single()
+                    .execute()
+
+                let decoder = JSONDecoder()
+                let userOrg = try decoder.decode(UserOrgResponse.self, from: response.data)
+
+                await MainActor.run {
+                    self.currentUserOrganizationID = userOrg.organization_id
+                    UserDefaults.standard.set(userOrg.organization_id, forKey: "userOrganizationID")
+                }
+                return  // success — done
+            } catch {
+                retries += 1
+                print("⚠️ UserManager: Org ID fetch attempt \(retries)/3 failed: \(error)")
+                if retries < 3 {
+                    try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries)) // 0.5s, 1.0s
+                }
+            }
+        }
+        print("❌ UserManager: Failed to fetch org ID after 3 retries")
     }
 
     /// Force refresh the organization ID from the database

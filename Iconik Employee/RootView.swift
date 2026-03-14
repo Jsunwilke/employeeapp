@@ -23,8 +23,15 @@ struct RootView: View {
             // Check for existing Supabase session
             // Note: SupabaseAuthService.shared already checks session in its init()
             Task {
-                // Wait briefly for SDK to restore session from keychain
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+                // Wait for SupabaseAuthService to finish checkSession().
+                // Token refresh is a network call that can take 200-600ms — a fixed 100ms
+                // sleep was not reliably long enough, causing isAuthenticated to still be
+                // false when read, leading to empty data screens on first open.
+                // Safety cap: give up after 10 seconds so the app never appears completely frozen.
+                let sessionCheckDeadline = Date().addingTimeInterval(10)
+                while !authService.sessionCheckComplete && Date() < sessionCheckDeadline {
+                    try? await Task.sleep(nanoseconds: 50_000_000) // poll every 50ms
+                }
 
                 let hasSupabaseSession = authService.isAuthenticated
 

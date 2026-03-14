@@ -3,6 +3,7 @@ import Combine
 
 struct AddRosterEntryView: View {
     let shootID: UUID
+    let organizationId: String
     let existingEntry: RosterEntry?
     let onComplete: (Bool) -> Void
 
@@ -346,6 +347,7 @@ struct AddRosterEntryView: View {
         let entry = RosterEntry(
             id: existingEntry?.id ?? UUID(),
             sportsJobId: shootID,
+            organizationId: organizationId,
             lastName: trimmedLastName,
             firstName: firstName.trimmingCharacters(in: .whitespacesAndNewlines),
             teacher: teacher.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -508,6 +510,7 @@ struct AddRosterEntryView_Previews: PreviewProvider {
     static var previews: some View {
         AddRosterEntryView(
             shootID: UUID(),
+            organizationId: "",
             existingEntry: nil,
             onComplete: { _ in }
         )
