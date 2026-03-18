@@ -44,6 +44,44 @@ struct FPCaptureEvent {
     let fromDeviceId: String
 }
 
+// MARK: - Capture Info (for subject captures list)
+
+struct FPCaptureInfo: Identifiable {
+    let id = UUID()
+    let filename: String
+    let poseNumber: Int?
+    let size: Int
+    let timestamp: String
+}
+
+// MARK: - Full Image Result
+
+struct FPFullImage {
+    let image: UIImage
+    let filename: String
+    let size: Int
+}
+
+// MARK: - Sync Errors
+
+enum FPSyncError: LocalizedError {
+    case notConnected
+    case timeout
+    case invalidId
+    case invalidImageData
+    case serverError(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected: return "Not connected to Production"
+        case .timeout: return "Request timed out"
+        case .invalidId: return "Invalid ID format"
+        case .invalidImageData: return "Could not decode image data"
+        case .serverError(let msg): return msg
+        }
+    }
+}
+
 // MARK: - FocalPointSyncClient
 
 @MainActor
@@ -62,18 +100,32 @@ class FocalPointSyncClient: ObservableObject {
     var onQCFlagChanged: ((String, Bool) -> Void)?                 // subjectId, flagged
     var onSubjectAbsentChanged: ((String, Bool) -> Void)?          // subjectId, isAbsent
     var onNotesChanged: ((String, String?, String) -> Void)?       // subjectId, rosterEntryId, notes
+    var onSubjectUpdated: ((String, String?, String, String, String) -> Void)?  // rosterEntryId, subjectId?, firstName, lastName, rosterId
     var onQueueReorder: (([String]) -> Void)?                      // ordered subject_ids
     var onGroupPhotoReady: ((String, [String], Int) -> Void)?      // groupName, presentSubjectIds, total
+    var onSubjectLinked: ((String, String) -> Void)?               // rosterEntryId, subjectId — Production created a subject for this roster entry
+    var onSubjectsDeleted: (([String]) -> Void)?                   // subject_ids deleted on Production
+    var onCaptureReassigned: ((Int, String, String) -> Void)?      // imageNumber, oldRosterEntryId, newRosterEntryId
 
     // Internal state
     private var webSocket: URLSessionWebSocketTask?
     private var urlSession: URLSession?
     private var heartbeatTimer: Timer?
+    private var pingTimer: Timer?
+    private var missedPongs: Int = 0
+    private let maxMissedPongs: Int = 2  // 2 missed pongs (20s) = dead
     private var reconnectTimer: Timer?
     private var reconnectDelay: TimeInterval = 2.0
     private var intentionalClose = false
     private var galleryId: String?
     private var authToken: String = ""
+
+    // Image request state
+    private var requestIdCounter = 0
+    private var pendingImageRequests: [String: CheckedContinuation<FPFullImage, Error>] = [:]
+    private var pendingCaptureListRequests: [String: CheckedContinuation<[FPCaptureInfo], Error>] = [:]
+    private var pendingImageHeader: [String: Any]? = nil
+    private let imageRequestTimeout: TimeInterval = 30.0
 
     /// Set the auth token (PIN) for manual connection
     func setAuthToken(_ token: String) {
@@ -108,6 +160,8 @@ class FocalPointSyncClient: ObservableObject {
     private var lastPort: Int?
 
     private let maxReconnectDelay: TimeInterval = 15.0
+    private var reconnectAttempts: Int = 0
+    private let maxReconnectAttempts: Int = 10
 
     var isConnected: Bool {
         connectionStatus == .connected
@@ -251,16 +305,26 @@ class FocalPointSyncClient: ObservableObject {
         webSocket?.resume()
 
         startReceiving()
-        startHeartbeat()
 
-        // Wait for WebSocket to open before sending hello
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            guard let self = self else { return }
-            if self.webSocket?.state == .running {
+        // Verify connection with a real ping before marking connected
+        webSocket?.sendPing { [weak self] error in
+            Task { @MainActor in
+                guard let self = self else { return }
+                if let error = error {
+                    print("[FPSync] Connection verification failed: \(error)")
+                    self.handleDisconnect()
+                    return
+                }
+                guard self.webSocket?.state == .running else {
+                    self.handleDisconnect()
+                    return
+                }
                 self.sendHello()
                 self.connectionStatus = .connected
                 self.reconnectDelay = 2.0
+                self.reconnectAttempts = 0
                 self.stopDiscovery()
+                self.startHeartbeat()
 
                 // Remember server for fast reconnect
                 UserDefaults.standard.set(["ip": host, "port": port], forKey: "fp_last_server")
@@ -365,6 +429,79 @@ class FocalPointSyncClient: ObservableObject {
         send(msg)
     }
 
+    /// Send name/field update for a subject (when blank placeholder gets a name on iPad)
+    func sendSubjectUpdated(subjectId: String?, rosterEntryId: String, firstName: String, lastName: String, rosterId: String) {
+        guard isConnected, let galleryId = galleryId else { return }
+        let msg: [String: Any] = [
+            "type": "subject_updated",
+            "device_id": deviceId,
+            "gallery_id": galleryId,
+            "subject_id": subjectId ?? NSNull(),
+            "roster_entry_id": rosterEntryId,
+            "first_name": String(firstName.prefix(200)),
+            "last_name": String(lastName.prefix(200)),
+            "roster_id": String(rosterId.prefix(50)),
+            "station_name": "iPad - \(deviceName)",
+        ]
+        send(msg)
+    }
+
+    /// Broadcast that a new subject/athlete was created on iPad
+    func broadcastSubjectCreated(
+        rosterEntryId: String,
+        firstName: String,
+        lastName: String,
+        rosterId: String,
+        grade: String,
+        groupName: String
+    ) {
+        guard isConnected, let galleryId = galleryId else { return }
+        let msg: [String: Any] = [
+            "type": "subject_created",
+            "device_id": deviceId,
+            "gallery_id": galleryId,
+            "roster_entry_id": rosterEntryId,
+            "first_name": String(firstName.prefix(200)),
+            "last_name": String(lastName.prefix(200)),
+            "roster_id": String(rosterId.prefix(50)),
+            "grade": String(grade.prefix(50)),
+            "group_name": String(groupName.prefix(200)),
+            "station_name": "iPad - \(deviceName)",
+        ]
+        send(msg)
+    }
+
+    /// Broadcast that roster entries were batch-deleted on iPad
+    func broadcastEntriesDeleted(rosterEntryIds: [String]) {
+        guard isConnected, let galleryId = galleryId else { return }
+        let capped = Array(rosterEntryIds.prefix(500))
+        let msg: [String: Any] = [
+            "type": "roster_entries_deleted",
+            "device_id": deviceId,
+            "gallery_id": galleryId,
+            "roster_entry_ids": capped,
+            "station_name": "iPad - \(deviceName)",
+        ]
+        send(msg)
+    }
+
+    /// Request Production to move a capture from one subject to another
+    func sendMoveCapture(imageNumber: Int, fromSubjectId: String, toSubjectId: String, fromRosterEntryId: String, toRosterEntryId: String) {
+        guard isConnected, let galleryId = galleryId else { return }
+        let msg: [String: Any] = [
+            "type": "move_capture",
+            "device_id": deviceId,
+            "gallery_id": galleryId,
+            "subject_id": fromSubjectId,
+            "target_subject_id": toSubjectId,
+            "image_number": imageNumber,
+            "roster_entry_id": fromRosterEntryId,
+            "target_roster_entry_id": toRosterEntryId,
+            "station_name": "iPad - \(deviceName)",
+        ]
+        send(msg)
+    }
+
     /// Send queue reorder to Production
     func sendQueueReorder(orderedSubjectIds: [String]) {
         guard isConnected, let galleryId = galleryId else { return }
@@ -395,14 +532,94 @@ class FocalPointSyncClient: ObservableObject {
         send(msg)
     }
 
+    // MARK: - Image Requests
+
+    /// Request a full-resolution image from Production via WebSocket binary frame.
+    func requestImage(filename: String) async throws -> FPFullImage {
+        guard isConnected else { throw FPSyncError.notConnected }
+
+        requestIdCounter += 1
+        let requestId = "r\(requestIdCounter)"
+
+        let msg: [String: Any] = [
+            "type": "request_image",
+            "filename": filename,
+            "request_id": requestId,
+            "device_id": deviceId,
+            "gallery_id": galleryId ?? "",
+        ]
+        send(msg)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingImageRequests[requestId] = continuation
+
+            // Timeout
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(self?.imageRequestTimeout ?? 30) * 1_000_000_000)
+                guard let self = self else { return }
+                if let cont = self.pendingImageRequests.removeValue(forKey: requestId) {
+                    cont.resume(throwing: FPSyncError.timeout)
+                }
+            }
+        }
+    }
+
+    /// Request the list of captures for a subject from Production.
+    func requestSubjectCaptures(subjectId: String) async throws -> [FPCaptureInfo] {
+        guard isConnected else {
+            print("[FPSync] requestSubjectCaptures — not connected")
+            throw FPSyncError.notConnected
+        }
+        // Allow empty subjectId — server returns all hot folder files anyway
+        if !subjectId.isEmpty, UUID(uuidString: subjectId) == nil {
+            print("[FPSync] requestSubjectCaptures — invalid UUID: \(subjectId)")
+            throw FPSyncError.invalidId
+        }
+
+        requestIdCounter += 1
+        let requestId = "r\(requestIdCounter)"
+
+        let msg: [String: Any] = [
+            "type": "request_subject_captures",
+            "subject_id": subjectId,
+            "request_id": requestId,
+            "device_id": deviceId,
+            "gallery_id": galleryId ?? "",
+        ]
+        print("[FPSync] Sending request_subject_captures requestId=\(requestId) subjectId=\(subjectId)")
+        send(msg)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingCaptureListRequests[requestId] = continuation
+
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(self?.imageRequestTimeout ?? 30) * 1_000_000_000)
+                guard let self = self else { return }
+                if let cont = self.pendingCaptureListRequests.removeValue(forKey: requestId) {
+                    cont.resume(throwing: FPSyncError.timeout)
+                }
+            }
+        }
+    }
+
     // MARK: - Sending
 
     private func send(_ dict: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
-              let str = String(data: data, encoding: .utf8) else { return }
-        webSocket?.send(.string(str)) { error in
+              let str = String(data: data, encoding: .utf8) else {
+            print("[FPSync] Send failed: could not serialize message")
+            return
+        }
+        guard let ws = webSocket else {
+            print("[FPSync] Send failed: webSocket is nil (type=\(dict["type"] ?? "?"))")
+            return
+        }
+        let msgType = dict["type"] as? String ?? "?"
+        ws.send(.string(str)) { error in
             if let error = error {
-                print("[FPSync] Send error: \(error)")
+                print("[FPSync] Send error (\(msgType)): \(error)")
+            } else {
+                print("[FPSync] Sent \(msgType) (\(str.count) bytes)")
             }
         }
     }
@@ -438,11 +655,49 @@ class FocalPointSyncClient: ObservableObject {
                 self.send(msg)
             }
         }
+        // Ping/pong every 10s to detect dead connections fast
+        startPingPong()
     }
 
     private func stopHeartbeat() {
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
+        stopPingPong()
+    }
+
+    private func startPingPong() {
+        stopPingPong()
+        missedPongs = 0
+        pingTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            Task { @MainActor in
+                self.missedPongs += 1
+                if self.missedPongs > self.maxMissedPongs {
+                    print("[FPSync] Server unresponsive (\(self.missedPongs) missed pongs), disconnecting")
+                    self.webSocket?.cancel(with: .abnormalClosure, reason: nil)
+                    self.webSocket = nil
+                    self.handleDisconnect()
+                    return
+                }
+                self.webSocket?.sendPing { [weak self] error in
+                    Task { @MainActor in
+                        guard let self = self else { return }
+                        if let error = error {
+                            print("[FPSync] Ping failed: \(error)")
+                            // Don't disconnect here — missedPongs will catch it
+                        } else {
+                            self.missedPongs = 0
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func stopPingPong() {
+        pingTimer?.invalidate()
+        pingTimer = nil
+        missedPongs = 0
     }
 
     // MARK: - Receiving
@@ -459,7 +714,9 @@ class FocalPointSyncClient: ObservableObject {
                            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                             self.handleMessage(json)
                         }
-                    default:
+                    case .data(let binaryData):
+                        self.handleBinaryFrame(binaryData)
+                    @unknown default:
                         break
                     }
                     // Continue receiving
@@ -474,7 +731,11 @@ class FocalPointSyncClient: ObservableObject {
     }
 
     private func handleMessage(_ msg: [String: Any]) {
-        guard let type = msg["type"] as? String else { return }
+        guard let type = msg["type"] as? String else {
+            print("[FPSync] Received message with no type field")
+            return
+        }
+        print("[FPSync] Received: \(type)")
 
         // Skip messages from ourselves
         if let senderId = msg["device_id"] as? String, senderId == deviceId { return }
@@ -530,8 +791,8 @@ class FocalPointSyncClient: ObservableObject {
             guard let subjectId = msg["subject_id"] as? String, !subjectId.isEmpty,
                   UUID(uuidString: subjectId) != nil else { break }
             var thumbnail = msg["thumbnail"] as? String
-            // Cap thumbnail size at 500KB to prevent memory abuse
-            if let thumb = thumbnail, thumb.count > 500_000 {
+            // Cap thumbnail size at 1MB to allow 1200px preview images
+            if let thumb = thumbnail, thumb.count > 1_000_000 {
                 thumbnail = nil
             }
             let poseNumber = msg["pose_number"] as? Int
@@ -574,6 +835,15 @@ class FocalPointSyncClient: ObservableObject {
             let rosterEntryId = msg["roster_entry_id"] as? String
             onNotesChanged?(subjectId, rosterEntryId, notes)
 
+        case "subject_updated":
+            guard let rosterEntryId = msg["roster_entry_id"] as? String,
+                  UUID(uuidString: rosterEntryId) != nil else { break }
+            let subjectId = msg["subject_id"] as? String
+            let firstName = String((msg["first_name"] as? String ?? "").prefix(200))
+            let lastName = String((msg["last_name"] as? String ?? "").prefix(200))
+            let rosterId = String((msg["roster_id"] as? String ?? "").prefix(50))
+            onSubjectUpdated?(rosterEntryId, subjectId, firstName, lastName, rosterId)
+
         case "queue_reorder":
             if let orderedIds = msg["ordered_subject_ids"] as? [String],
                orderedIds.count <= 2000 {
@@ -597,8 +867,86 @@ class FocalPointSyncClient: ObservableObject {
                 }
             }
 
+        case "image_header":
+            // Store header — next binary frame will be the image data
+            pendingImageHeader = msg
+
+        case "image_error":
+            if let requestId = msg["request_id"] as? String {
+                let errorMsg = msg["error"] as? String ?? "Unknown error"
+                if let cont = pendingImageRequests.removeValue(forKey: requestId) {
+                    cont.resume(throwing: FPSyncError.serverError(errorMsg))
+                }
+            }
+
+        case "subject_captures":
+            print("[FPSync] Received subject_captures response: request_id=\(msg["request_id"] ?? "nil") captures_count=\((msg["captures"] as? [Any])?.count ?? -1)")
+            if let requestId = msg["request_id"] as? String,
+               let captures = msg["captures"] as? [[String: Any]] {
+                let infos = captures.map { c in
+                    FPCaptureInfo(
+                        filename: c["filename"] as? String ?? "",
+                        poseNumber: c["pose_number"] as? Int,
+                        size: c["size"] as? Int ?? 0,
+                        timestamp: c["timestamp"] as? String ?? ""
+                    )
+                }
+                if let cont = pendingCaptureListRequests.removeValue(forKey: requestId) {
+                    cont.resume(returning: infos)
+                }
+            }
+
+        case "subject_linked":
+            guard let rosterEntryId = msg["roster_entry_id"] as? String, !rosterEntryId.isEmpty,
+                  UUID(uuidString: rosterEntryId) != nil,
+                  let subjectId = msg["subject_id"] as? String, !subjectId.isEmpty,
+                  UUID(uuidString: subjectId) != nil else { break }
+            print("[FPSync] Subject linked: roster_entry=\(rosterEntryId) -> subject=\(subjectId), callback=\(onSubjectLinked != nil ? "SET" : "NIL")")
+            onSubjectLinked?(rosterEntryId, subjectId)
+
+        case "subjects_deleted":
+            guard let subjectIds = msg["subject_ids"] as? [String], !subjectIds.isEmpty else { break }
+            // Validate all are UUIDs
+            let validIds = subjectIds.filter { UUID(uuidString: $0) != nil }
+            guard !validIds.isEmpty else { break }
+            print("[FPSync] Subjects deleted from Production: \(validIds.count) subjects")
+            onSubjectsDeleted?(validIds)
+
+        case "capture_reassigned":
+            guard let imageNumber = msg["image_number"] as? Int,
+                  let oldRosterEntryId = msg["old_roster_entry_id"] as? String, !oldRosterEntryId.isEmpty,
+                  let newRosterEntryId = msg["new_roster_entry_id"] as? String, !newRosterEntryId.isEmpty else { break }
+            print("[FPSync] Capture reassigned: image #\(imageNumber) from \(oldRosterEntryId) to \(newRosterEntryId)")
+            onCaptureReassigned?(imageNumber, oldRosterEntryId, newRosterEntryId)
+
         default:
             break
+        }
+    }
+
+    // MARK: - Binary Frame Handling
+
+    private func handleBinaryFrame(_ data: Data) {
+        guard let header = pendingImageHeader else {
+            print("[FPSync] Received binary frame with no pending header — ignoring")
+            return
+        }
+        pendingImageHeader = nil
+
+        guard let requestId = header["request_id"] as? String else { return }
+
+        guard let image = UIImage(data: data) else {
+            if let cont = pendingImageRequests.removeValue(forKey: requestId) {
+                cont.resume(throwing: FPSyncError.invalidImageData)
+            }
+            return
+        }
+
+        let filename = header["filename"] as? String ?? ""
+        let size = header["size"] as? Int ?? data.count
+
+        if let cont = pendingImageRequests.removeValue(forKey: requestId) {
+            cont.resume(returning: FPFullImage(image: image, filename: filename, size: size))
         }
     }
 
@@ -608,13 +956,30 @@ class FocalPointSyncClient: ObservableObject {
         connectionStatus = .disconnected
         stopHeartbeat()
 
+        // Cancel all pending image/capture requests
+        for (_, cont) in pendingImageRequests {
+            cont.resume(throwing: FPSyncError.notConnected)
+        }
+        pendingImageRequests.removeAll()
+        for (_, cont) in pendingCaptureListRequests {
+            cont.resume(throwing: FPSyncError.notConnected)
+        }
+        pendingCaptureListRequests.removeAll()
+        pendingImageHeader = nil
+
         guard !intentionalClose, let host = lastHost, let port = lastPort else { return }
         scheduleReconnect(host: host, port: port)
     }
 
     private func scheduleReconnect(host: String, port: Int) {
         stopReconnect()
-        print("[FPSync] Reconnecting in \(reconnectDelay)s")
+        reconnectAttempts += 1
+        if reconnectAttempts > maxReconnectAttempts {
+            print("[FPSync] Max reconnect attempts (\(maxReconnectAttempts)) reached, giving up")
+            connectionStatus = .disconnected
+            return
+        }
+        print("[FPSync] Reconnecting in \(reconnectDelay)s (attempt \(reconnectAttempts)/\(maxReconnectAttempts))")
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: reconnectDelay, repeats: false) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in

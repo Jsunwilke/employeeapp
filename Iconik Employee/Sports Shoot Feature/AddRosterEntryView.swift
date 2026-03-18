@@ -13,6 +13,7 @@ struct AddRosterEntryView: View {
 
     @State private var lastName: String = ""
     @State private var firstName: String = ""
+    @State private var rosterId: String = ""
     @State private var teacher: String = ""
     @State private var groupName: String = ""
     @State private var email: String = ""
@@ -130,7 +131,7 @@ struct AddRosterEntryView: View {
                             .autocapitalization(.words)
                             .focused($focusedField, equals: "firstName")
                             .submitLabel(.next)
-                            .onSubmit { focusedField = "teacher" }
+                            .onSubmit { focusedField = "rosterId" }
                             .disabled(isLoadingSubjectID)
 
                         if isLoadingSubjectID {
@@ -138,6 +139,11 @@ struct AddRosterEntryView: View {
                                 .scaleEffect(0.8)
                         }
                     }
+
+                    TextField("Roster ID", text: $rosterId)
+                        .focused($focusedField, equals: "rosterId")
+                        .submitLabel(.next)
+                        .onSubmit { focusedField = "teacher" }
 
                     TextField("Special", text: $teacher)
                         .autocapitalization(.words)
@@ -262,6 +268,7 @@ struct AddRosterEntryView: View {
                     // Editing existing entry - load its values
                     lastName = entry.lastName
                     firstName = entry.firstName
+                    rosterId = entry.rosterId
                     teacher = entry.teacher
                     groupName = entry.groupName
                     email = entry.email
@@ -322,18 +329,20 @@ struct AddRosterEntryView: View {
 
                 // Find the highest Subject ID value
                 let highestID = entries.compactMap { entry -> Int? in
-                    return Int(entry.firstName)
+                    return Int(entry.rosterId) ?? Int(entry.firstName)
                 }.max() ?? 100  // Default to 100 if no entries
 
                 await MainActor.run {
-                    // Set the next available ID
+                    // Set the next available ID in both fields for Captura compatibility
                     self.firstName = "\(highestID + 1)"
+                    self.rosterId = "\(highestID + 1)"
                     self.isLoadingSubjectID = false
                 }
             } catch {
                 await MainActor.run {
                     // Use default starting ID on error
                     self.firstName = "101"
+                    self.rosterId = "101"
                     self.isLoadingSubjectID = false
                 }
             }
@@ -363,7 +372,8 @@ struct AddRosterEntryView: View {
             lockedBy: nil,
             lockedByName: nil,
             lockedAt: nil,
-            createdAt: existingEntry?.createdAt ?? Date()
+            createdAt: existingEntry?.createdAt ?? Date(),
+            rosterId: rosterId.trimmingCharacters(in: .whitespacesAndNewlines)
         )
 
         // Save to PowerSync with retry (auto-syncs when online)
@@ -373,6 +383,24 @@ struct AddRosterEntryView: View {
             while retries < 3 {
                 do {
                     try await powerSync.saveRosterEntry(entry)
+                    if !isEditing {
+                        FocalPointSyncClient.shared.broadcastSubjectCreated(
+                            rosterEntryId: entry.id.uuidString.lowercased(),
+                            firstName: entry.firstName,
+                            lastName: entry.lastName,
+                            rosterId: entry.rosterId,
+                            grade: "",
+                            groupName: entry.groupName
+                        )
+                    } else {
+                        FocalPointSyncClient.shared.sendSubjectUpdated(
+                            subjectId: entry.subjectId,
+                            rosterEntryId: entry.id.uuidString.lowercased(),
+                            firstName: entry.firstName,
+                            lastName: entry.lastName,
+                            rosterId: entry.rosterId
+                        )
+                    }
                     await MainActor.run {
                         onComplete(true)
                         presentationMode.wrappedValue.dismiss()
