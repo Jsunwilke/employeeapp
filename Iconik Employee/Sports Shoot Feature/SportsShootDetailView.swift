@@ -24,8 +24,14 @@ struct SportsShootDetailView: View {
     @State private var selectedTab = 0 // 0 = Athletes, 1 = Groups
 
     // PowerSync for offline-first operations
-    @StateObject private var powerSync = PowerSyncManager.shared
-    @StateObject private var lockManager = LockManager.shared
+    // NOTE: Using plain references (not @StateObject) to prevent @Published changes
+    // from triggering full view rebuilds that collapse the NavigationView stack
+    // when the phone wakes from sleep. Specific properties observed via .onReceive below.
+    private let powerSync = PowerSyncManager.shared
+    private let lockManager = LockManager.shared
+    @State private var psIsConnected = PowerSyncManager.shared.isConnected
+    @State private var psIsSyncing = PowerSyncManager.shared.isSyncing
+    @State private var psHasSynced = PowerSyncManager.shared.hasSynced
 
     // Watch task handles for PowerSync streams
     @State private var rosterWatchTask: Task<Void, Never>?
@@ -39,8 +45,9 @@ struct SportsShootDetailView: View {
     @State private var selectedGroupImage: GroupImage?
 
     // Sort states
-    @State private var sortField: String = "firstName" // Default to sort by Subject ID
+    @State private var sortField: String = "lastName" // Updated after load if roster IDs present
     @State private var sortAscending: Bool = true
+    @State private var hasSetDefaultSort: Bool = false
 
     // Import/Export state
     @State private var showingImportExport = false
@@ -85,6 +92,11 @@ struct SportsShootDetailView: View {
     // Track deleted IDs so watcher protection doesn't resurrect them
     @State private var recentlyDeletedEntryIds: Set<UUID> = []
     @State private var recentlyDeletedGroupIds: Set<UUID> = []
+
+    // Batch delete / multi-select
+    @State private var isEditMode = false
+    @State private var selectedEntryIds: Set<UUID> = []
+    @State private var showingBatchDeleteConfirm = false
 
     // Track previous connectivity for offline→online transition detection
     @State private var wasConnected: Bool = true
@@ -134,8 +146,11 @@ struct SportsShootDetailView: View {
             .onDisappear { handleDisappear() }
             .onChange(of: scenePhase) { handleScenePhaseChange($0) }
             .onChange(of: editingValues) { handleEditingValueChange($0) }
-            .onChange(of: lockManager.lockLostEvent?.id) { _ in handleLockLostEvent() }
-            .onChange(of: powerSync.isConnected) { isConnected in
+            .onReceive(lockManager.$lockLostEvent) { _ in handleLockLostEvent() }
+            .onReceive(PowerSyncManager.shared.$isConnected) { psIsConnected = $0 }
+            .onReceive(PowerSyncManager.shared.$isSyncing) { psIsSyncing = $0 }
+            .onReceive(PowerSyncManager.shared.$hasSynced) { psHasSynced = $0 }
+            .onChange(of: psIsConnected) { isConnected in
                 // Detect offline → online transition
                 if !wasConnected && isConnected {
                     Task { await lockManager.handleNetworkReconnection() }
@@ -186,6 +201,17 @@ struct SportsShootDetailView: View {
 
         // iPad: Show buttons directly in toolbar
         if UIDevice.current.userInterfaceIdiom == .pad {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    withAnimation {
+                        isEditMode.toggle()
+                        if !isEditMode { selectedEntryIds.removeAll() }
+                    }
+                }) {
+                    Text(isEditMode ? "Done" : "Edit")
+                        .fontWeight(isEditMode ? .bold : .regular)
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: { showingKiosk = true }) {
                     Label("Start Kiosk", systemImage: "person.2.fill")
@@ -253,7 +279,7 @@ struct SportsShootDetailView: View {
 
     @ViewBuilder
     private var syncStatusButton: some View {
-        if powerSync.isSyncing {
+        if psIsSyncing {
             Button(action: { }) {
                 Label("Syncing...", systemImage: "arrow.triangle.2.circlepath.circle.fill")
             }
@@ -263,7 +289,7 @@ struct SportsShootDetailView: View {
 
     @ViewBuilder
     private var syncButtonLabel: some View {
-        if powerSync.isSyncing {
+        if psIsSyncing {
             Label("Syncing...", systemImage: "arrow.triangle.2.circlepath.circle.fill")
         } else {
             Label("Synced", systemImage: "checkmark.circle")
@@ -272,7 +298,7 @@ struct SportsShootDetailView: View {
 
     @ViewBuilder
     private var connectionStatusLabel: some View {
-        if powerSync.isConnected {
+        if psIsConnected {
             Label("Online", systemImage: "wifi")
                 .foregroundColor(.green)
         } else {
@@ -412,7 +438,7 @@ struct SportsShootDetailView: View {
     private var menuLabel: some View {
         ZStack(alignment: .topTrailing) {
             Image(systemName: "ellipsis.circle")
-            if powerSync.isSyncing {
+            if psIsSyncing {
                 Circle()
                     .fill(Color.blue)
                     .frame(width: 8, height: 8)
@@ -460,8 +486,11 @@ struct SportsShootDetailView: View {
         multipeerSync.disconnect()
         print("SportsShootDetailView: Stopped browsing for kiosks")
 
-        // Clear callback to prevent stale state mutations after view disappears
+        // Clear callbacks to prevent stale state mutations after view disappears
         fpSync.onCaptureCompleted = nil
+        fpSync.onSubjectLinked = nil
+        fpSync.onSubjectsDeleted = nil
+        fpSync.onCaptureReassigned = nil
     }
 
     // MARK: - Focal Point Production Sync
@@ -492,6 +521,82 @@ struct SportsShootDetailView: View {
                 saveEntryWithRetry(entry)
 
                 print("[FPSync] Auto-filled image #\(imageNumber) for \(entry.lastName), \(entry.firstName)")
+            }
+        }
+
+        fpSync.onSubjectLinked = { rosterEntryId, subjectId in
+            // Update DB directly — the PowerSync watcher will auto-refresh the @State array
+            Task {
+                do {
+                    try await PowerSyncManager.shared.linkRosterEntryToSubject(
+                        rosterEntryId: rosterEntryId, subjectId: subjectId
+                    )
+                    print("[FPSync] Linked roster entry \(rosterEntryId) -> subject \(subjectId)")
+                } catch {
+                    print("[FPSync] Failed to save subject link: \(error)")
+                }
+            }
+        }
+
+        fpSync.onSubjectsDeleted = { subjectIds in
+            // Remove roster entries whose subjectId matches a deleted Production subject
+            Task {
+                let deletedSet = Set(subjectIds.map { $0.lowercased() })
+                // Delete from DB — watcher will auto-refresh @State
+                for entry in rosterEntries {
+                    if let sid = entry.subjectId, deletedSet.contains(sid.lowercased()) {
+                        do {
+                            try await PowerSyncManager.shared.deleteBatchRosterEntries(ids: [entry.id])
+                            print("[FPSync] Removed roster entry \(entry.lastName) — subject deleted on Production")
+                        } catch {
+                            print("[FPSync] Failed to delete roster entry \(entry.id): \(error)")
+                        }
+                    }
+                }
+            }
+        }
+
+        fpSync.onCaptureReassigned = { imageNumber, oldRosterEntryId, newRosterEntryId in
+            let oldId = oldRosterEntryId.lowercased()
+            let newId = newRosterEntryId.lowercased()
+
+            // Remove image number from old entry
+            if let oldIdx = rosterEntries.firstIndex(where: { $0.id.uuidString.lowercased() == oldId }) {
+                var entry = rosterEntries[oldIdx]
+                var numbers = entry.imageNumbers
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { $0 != String(imageNumber) }
+                entry.imageNumbers = numbers.joined(separator: ",")
+                rosterEntries[oldIdx] = entry
+                Task {
+                    do {
+                        try await PowerSyncManager.shared.saveRosterEntry(entry)
+                        print("[FPSync] Removed image #\(imageNumber) from roster entry \(oldId)")
+                    } catch {
+                        print("[FPSync] Failed to update old roster entry: \(error)")
+                    }
+                }
+            }
+
+            // Add image number to new entry
+            if let newIdx = rosterEntries.firstIndex(where: { $0.id.uuidString.lowercased() == newId }) {
+                var entry = rosterEntries[newIdx]
+                var numbers = entry.imageNumbers
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                numbers.append(String(imageNumber))
+                entry.imageNumbers = numbers.joined(separator: ",")
+                rosterEntries[newIdx] = entry
+                Task {
+                    do {
+                        try await PowerSyncManager.shared.saveRosterEntry(entry)
+                        print("[FPSync] Added image #\(imageNumber) to roster entry \(newId)")
+                    } catch {
+                        print("[FPSync] Failed to update new roster entry: \(error)")
+                    }
+                }
             }
         }
     }
@@ -896,22 +1001,22 @@ struct SportsShootDetailView: View {
                 // Status indicators
                 HStack(spacing: 8) {
                     // Sync status indicator
-                    if powerSync.isSyncing {
+                    if psIsSyncing {
                         ProgressView()
                             .scaleEffect(0.7)
                     }
 
                     // Connection indicator
-                    Image(systemName: powerSync.isConnected ? "wifi" : "wifi.slash")
+                    Image(systemName: psIsConnected ? "wifi" : "wifi.slash")
                         .font(.system(size: 14))
-                        .foregroundColor(powerSync.isConnected ? .green : .orange)
+                        .foregroundColor(psIsConnected ? .green : .orange)
                 }
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
 
             // Offline notification banner
-            if !powerSync.isConnected {
+            if !psIsConnected {
                 HStack {
                     Image(systemName: "wifi.slash")
                         .font(.caption)
@@ -936,7 +1041,7 @@ struct SportsShootDetailView: View {
     private var tabSelectorView: some View {
         HStack {
             Picker("", selection: $selectedTab) {
-                Text("Athletes (\(rosterEntries.count))").tag(0)
+                Text("Athletes (\(rosterEntries.filter { !$0.lastName.trimmingCharacters(in: .whitespaces).isEmpty }.count))").tag(0)
                 Text("Groups (\(groupImages.count))").tag(1)
             }
             .pickerStyle(SegmentedPickerStyle())
@@ -1061,7 +1166,7 @@ struct SportsShootDetailView: View {
             // Column headers with sorting
             HStack {
                 sortableHeader("Name", field: "lastName")
-                sortableHeader("ID", field: "firstName")
+                sortableHeader("Roster ID", field: "rosterId")
                 sortableHeader("Special", field: "teacher")
                 sortableHeader("Team", field: "groupName")
             }
@@ -1100,8 +1205,9 @@ struct SportsShootDetailView: View {
             // Progress bar + athlete count
             HStack(spacing: 8) {
                 let filteredRoster = filterRoster(rosterEntries)
-                let totalCount = filteredRoster.count
-                let photographedCount = filteredRoster.filter { !$0.imageNumbers.isEmpty }.count
+                let namedRoster = filteredRoster.filter { !$0.lastName.trimmingCharacters(in: .whitespaces).isEmpty }
+                let totalCount = namedRoster.count
+                let photographedCount = namedRoster.filter { !$0.imageNumbers.isEmpty }.count
 
                 Text("\(photographedCount)/\(totalCount) photographed")
                     .font(.system(size: 13, weight: .semibold))
@@ -1116,6 +1222,58 @@ struct SportsShootDetailView: View {
             .padding(.horizontal)
             .padding(.vertical, 4)
             .background(Color(.systemGroupedBackground))
+
+            // Batch action bar (edit mode)
+            if isEditMode {
+                HStack {
+                    Button(action: {
+                        let selectable = rosterEntries.filter {
+                            !$0.isLockedByOtherDevice(editorIdentifier: lockManager.currentEditorIdentifier, userId: lockManager.currentUserId)
+                        }
+                        if selectedEntryIds.count == selectable.count {
+                            selectedEntryIds.removeAll()
+                        } else {
+                            selectedEntryIds = Set(selectable.map(\.id))
+                        }
+                    }) {
+                        Text(selectedEntryIds.count == rosterEntries.filter({ !$0.isLockedByOtherDevice(editorIdentifier: lockManager.currentEditorIdentifier, userId: lockManager.currentUserId) }).count ? "Deselect All" : "Select All")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+
+                    Spacer()
+
+                    Text("\(selectedEntryIds.count) selected")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+
+                    Spacer()
+
+                    Button(action: { showingBatchDeleteConfirm = true }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "trash")
+                            Text("Delete")
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(selectedEntryIds.isEmpty ? Color.gray : Color.red)
+                        .cornerRadius(8)
+                    }
+                    .disabled(selectedEntryIds.isEmpty)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+                .background(Color(.systemGroupedBackground))
+                .alert("Delete \(selectedEntryIds.count) athletes?", isPresented: $showingBatchDeleteConfirm) {
+                    Button("Cancel", role: .cancel) { }
+                    Button("Delete", role: .destructive) {
+                        Task { await batchDeleteRosterEntries() }
+                    }
+                } message: {
+                    Text("This cannot be undone. Locked entries will be skipped.")
+                }
+            }
 
             // Roster list
             List {
@@ -1215,6 +1373,25 @@ struct SportsShootDetailView: View {
         let groupColor = colorForGroup(entry.groupName)
 
         return HStack(spacing: 0) {
+            // Multi-select checkbox (edit mode)
+            if isEditMode {
+                Button(action: {
+                    if !isLockedByOther {
+                        if selectedEntryIds.contains(entry.id) {
+                            selectedEntryIds.remove(entry.id)
+                        } else {
+                            selectedEntryIds.insert(entry.id)
+                        }
+                    }
+                }) {
+                    Image(systemName: isLockedByOther ? "lock.fill" : (selectedEntryIds.contains(entry.id) ? "checkmark.circle.fill" : "circle"))
+                        .font(.system(size: 22))
+                        .foregroundColor(isLockedByOther ? .gray : (selectedEntryIds.contains(entry.id) ? .blue : .gray))
+                }
+                .frame(width: 44, height: 44)
+                .disabled(isLockedByOther)
+            }
+
             // Status indicator color strip
             Rectangle()
                 .fill(!entry.imageNumbers.isEmpty ? Color.green : Color(.systemGray4))
@@ -1225,34 +1402,34 @@ struct SportsShootDetailView: View {
                 // Player info row
                 HStack(alignment: .top) {
                     // Sync status dot (only when connected to Production)
-                    if fpSync.isConnected {
+                    if fpSync.isConnected && !isEditMode {
                         Circle()
                             .fill(!entry.imageNumbers.isEmpty ? Color.green : (entry.subjectId != nil ? Color.gray : Color.orange))
                             .frame(width: 8, height: 8)
                             .padding(.top, 6)
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Text(entry.firstName)
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundColor(.blue)
-
-                            if !entry.teacher.isEmpty {
-                                Text(specialTranslation(entry.teacher))
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(specialBadgeColor(entry.teacher))
-                                    .clipShape(Capsule())
-                            }
+                    HStack(spacing: 4) {
+                        if !entry.rosterId.isEmpty {
+                            Text(entry.rosterId)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.secondary)
                         }
 
-                        Text(entry.lastName)
-                            .font(.system(size: 16))
+                        Text("\(entry.firstName) \(entry.lastName)".trimmingCharacters(in: .whitespaces))
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundColor(.primary)
-                            .lineLimit(2)
+
+                        if !entry.teacher.isEmpty {
+                            Text(specialTranslation(entry.teacher))
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(specialBadgeColor(entry.teacher))
+                                .clipShape(Capsule())
+                                .fixedSize()
+                        }
                     }
                     .layoutPriority(1)
 
@@ -1267,12 +1444,24 @@ struct SportsShootDetailView: View {
                             .padding(.vertical, 4)
                             .background(groupColor)
                             .cornerRadius(4)
-                            .lineLimit(2)
+                            .lineLimit(1)
                     }
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
                     dismissKeyboard()
+
+                    // In edit mode, toggle selection instead of opening editor
+                    if isEditMode {
+                        if !isLockedByOther {
+                            if selectedEntryIds.contains(entry.id) {
+                                selectedEntryIds.remove(entry.id)
+                            } else {
+                                selectedEntryIds.insert(entry.id)
+                            }
+                        }
+                        return
+                    }
 
                     // If connected to Production, send subject selection to camera station
                     if fpSync.isConnected && entry.subjectId != nil {
@@ -1287,6 +1476,14 @@ struct SportsShootDetailView: View {
                         showingAddRosterEntry = true
                     }
                 }
+                .onLongPressGesture {
+                    if !isEditMode && !isLockedByOther {
+                        withAnimation {
+                            isEditMode = true
+                            selectedEntryIds = [entry.id]
+                        }
+                    }
+                }
 
                 // Image input row
                 if isCurrentlyEditing {
@@ -1297,7 +1494,15 @@ struct SportsShootDetailView: View {
                                 set: { editingValues[entry.id] = $0 }
                             ),
                             placeholder: "",
-                            onTapOutside: { },
+                            onTapOutside: {
+                                // Save immediately when focus leaves this field
+                                if let value = editingValues[entry.id] {
+                                    Task {
+                                        await saveEntry(entryId: entry.id, imageNumbers: value)
+                                        lastSavedValues[entry.id] = value
+                                    }
+                                }
+                            },
                             onEnterOrDown: {
                                 moveToNextEditableEntry(currentID: entry.id)
                             }
@@ -1733,7 +1938,7 @@ struct SportsShootDetailView: View {
 
             // If PowerSync hasn't completed its first sync yet, wait for it.
             // This ensures local SQLite has data before we try to read it.
-            if !powerSync.hasSynced {
+            if !psHasSynced {
                 await powerSync.waitForFirstSync()
             }
 
@@ -1742,6 +1947,12 @@ struct SportsShootDetailView: View {
 
             self.rosterEntries = entries
             self.groupImages = groups
+
+            // Auto-set sort to rosterId if any entries have one
+            if !hasSetDefaultSort && entries.contains(where: { !$0.rosterId.isEmpty }) {
+                sortField = "rosterId"
+                hasSetDefaultSort = true
+            }
 
             isLoading = false
         } catch {
@@ -1997,7 +2208,7 @@ struct SportsShootDetailView: View {
         }
 
         debounceTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: task)
     }
 
     private func saveEntry(entryId: UUID, imageNumbers: String) async {
@@ -2085,6 +2296,34 @@ struct SportsShootDetailView: View {
             // Restore on failure
             recentlyDeletedEntryIds.remove(entry.id)
             rosterEntries.append(entry)
+        }
+    }
+
+    private func batchDeleteRosterEntries() async {
+        let idsToDelete = selectedEntryIds
+        let entriesToDelete = rosterEntries.filter { idsToDelete.contains($0.id) }
+
+        // Track all as deleted so watcher doesn't resurrect
+        for id in idsToDelete { recentlyDeletedEntryIds.insert(id) }
+
+        // Remove from local state immediately
+        rosterEntries.removeAll { idsToDelete.contains($0.id) }
+        selectedEntryIds.removeAll()
+        withAnimation { isEditMode = false }
+
+        // Delete from PowerSync in batch
+        do {
+            try await powerSync.deleteBatchRosterEntries(ids: Array(idsToDelete))
+            // Broadcast to Production
+            let idStrings = idsToDelete.map { $0.uuidString.lowercased() }
+            fpSync.broadcastEntriesDeleted(rosterEntryIds: idStrings)
+        } catch {
+            print("SportsShootDetailView: Batch delete failed: \(error)")
+            // Restore on failure
+            for id in idsToDelete { recentlyDeletedEntryIds.remove(id) }
+            rosterEntries.append(contentsOf: entriesToDelete)
+            errorMessage = "Failed to delete entries: \(error.localizedDescription)"
+            showingErrorAlert = true
         }
     }
 
@@ -2208,6 +2447,21 @@ struct SportsShootDetailView: View {
                 result = a.lastName.lowercased() < b.lastName.lowercased()
             case "firstName":
                 result = a.firstName.lowercased() < b.firstName.lowercased()
+            case "rosterId":
+                // Numeric-aware sort: entries with roster IDs sort numerically, empty ones go last
+                let aId = a.rosterId.isEmpty ? nil : a.rosterId
+                let bId = b.rosterId.isEmpty ? nil : b.rosterId
+                if let aId = aId, let bId = bId {
+                    let aNum = Int(aId)
+                    let bNum = Int(bId)
+                    if let aNum = aNum, let bNum = bNum {
+                        result = aNum < bNum
+                    } else {
+                        result = aId.lowercased() < bId.lowercased()
+                    }
+                } else {
+                    result = aId != nil // entries with IDs come first
+                }
             case "teacher":
                 result = a.teacher.lowercased() < b.teacher.lowercased()
             case "groupName":

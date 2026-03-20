@@ -791,8 +791,8 @@ class FocalPointSyncClient: ObservableObject {
             guard let subjectId = msg["subject_id"] as? String, !subjectId.isEmpty,
                   UUID(uuidString: subjectId) != nil else { break }
             var thumbnail = msg["thumbnail"] as? String
-            // Cap thumbnail size at 1MB to allow 1200px preview images
-            if let thumb = thumbnail, thumb.count > 1_000_000 {
+            // Cap thumbnail size at 2MB to allow 1200px preview images
+            if let thumb = thumbnail, thumb.count > 2_000_000 {
                 thumbnail = nil
             }
             let poseNumber = msg["pose_number"] as? Int
