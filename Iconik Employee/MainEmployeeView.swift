@@ -620,13 +620,15 @@ struct MainEmployeeView: View {
                     // Main content area
                     mainContent
                     
-                    // Bottom tab bar
-                    BottomTabBar(
-                        selectedTab: $tabBarManager.selectedTab,
-                        tabBarManager: tabBarManager,
-                        chatManager: chatManager,
-                        timeTrackingService: timeTrackingService
-                    )
+                    // Bottom tab bar (hidden during full-screen overlay like photo viewer)
+                    if !tabBarManager.isFullScreenOverlayActive {
+                        BottomTabBar(
+                            selectedTab: $tabBarManager.selectedTab,
+                            tabBarManager: tabBarManager,
+                            chatManager: chatManager,
+                            timeTrackingService: timeTrackingService
+                        )
+                    }
                 }
                 .ignoresSafeArea(edges: .bottom) // Keep tab bar positioned correctly
                 
@@ -638,7 +640,9 @@ struct MainEmployeeView: View {
             .navigationBarTitle("", displayMode: .inline)
             .navigationBarBackButtonHidden(true)
             .toolbar {
-                toolbarContent
+                if !tabBarManager.isFullScreenOverlayActive {
+                    toolbarContent
+                }
             }
             .onChange(of: tabBarManager.selectedTab) { newTab in
                 // Clean up chat if we're leaving it

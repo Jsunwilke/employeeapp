@@ -1,22 +1,19 @@
 import SwiftUI
+import UIKit
 
 class KeyboardManager: ObservableObject {
     static let shared = KeyboardManager()
-    
+
     @Published var isShowingCustomKeyboard = false
     @Published var activeFieldText: Binding<String>?
     @Published var onUp: (() -> Void)?
     @Published var onDown: (() -> Void)?
     @Published var onDismiss: (() -> Void)?
-    @Published var editingContext: String = "" // Add context about what's being edited
-    @Published var useMiniMode: Bool = false // Use mini mode for iPad
-    @Published var keyboardOffset: CGSize = .zero // Track keyboard position when dragged
-    
-    // Persistent storage for keyboard position
-    private static var savedKeyboardPosition: CGPoint? = nil
-    
+    @Published var editingContext: String = ""
+    @Published var useMiniMode: Bool = false
+
     private init() {}
-    
+
     func showKeyboard(for text: Binding<String>, context: String = "", miniMode: Bool = false, onUp: (() -> Void)? = nil, onDown: (() -> Void)? = nil, onDismiss: (() -> Void)? = nil) {
         self.activeFieldText = text
         self.editingContext = context
@@ -26,129 +23,165 @@ class KeyboardManager: ObservableObject {
         self.onDismiss = onDismiss
         self.isShowingCustomKeyboard = true
     }
-    
+
     func hideKeyboard() {
-        // Call onDismiss before clearing
         self.onDismiss?()
-        
         self.isShowingCustomKeyboard = false
         self.activeFieldText = nil
         self.editingContext = ""
         self.useMiniMode = false
-        // Don't reset keyboardOffset here - we want to remember it
         self.onUp = nil
         self.onDown = nil
         self.onDismiss = nil
     }
-    
-    func saveKeyboardPosition(_ position: CGPoint) {
-        Self.savedKeyboardPosition = position
+}
+
+// MARK: - iPad Vertical Strip Keyboard
+// Fixed to the right edge of the screen. Single column of buttons.
+// Dynamically resizes so all buttons fit regardless of orientation.
+// Keys: 1-9, 0, -, +, ⌫, ▲, ▼, Done
+
+struct iPadVerticalStripKeyboard: View {
+    @Binding var text: String
+    var onDismiss: (() -> Void)?
+
+    private enum KeyAction {
+        case append(String)
+        case backspace
+        case done
     }
-    
-    func getSavedKeyboardPosition() -> CGPoint? {
-        return Self.savedKeyboardPosition
+
+    private struct KeyDef: Identifiable {
+        let id: String
+        let label: String
+        let icon: String?
+        let action: KeyAction
+        let isAccent: Bool
+
+        init(_ label: String, icon: String? = nil, action: KeyAction, isAccent: Bool = false) {
+            self.id = label
+            self.label = label
+            self.icon = icon
+            self.action = action
+            self.isAccent = isAccent
+        }
+    }
+
+    private let keys: [KeyDef] = [
+        KeyDef("1", action: .append("1")),
+        KeyDef("2", action: .append("2")),
+        KeyDef("3", action: .append("3")),
+        KeyDef("4", action: .append("4")),
+        KeyDef("5", action: .append("5")),
+        KeyDef("6", action: .append("6")),
+        KeyDef("7", action: .append("7")),
+        KeyDef("8", action: .append("8")),
+        KeyDef("9", action: .append("9")),
+        KeyDef("0", action: .append("0")),
+        KeyDef("-", action: .append("-")),
+        KeyDef("+", action: .append("+")),
+        KeyDef("⌫", icon: "delete.left.fill", action: .backspace),
+        KeyDef("Done", action: .done, isAccent: true),
+    ]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let spacing: CGFloat = 2
+            let totalSpacing = spacing * CGFloat(keys.count - 1)
+            let buttonHeight = (geometry.size.height - totalSpacing) / CGFloat(keys.count)
+            let fontSize = min(buttonHeight * 0.38, 20)
+
+            VStack(spacing: spacing) {
+                ForEach(keys) { key in
+                    Button(action: { handleTap(key) }) {
+                        Group {
+                            if let icon = key.icon {
+                                Image(systemName: icon)
+                                    .font(.system(size: fontSize))
+                            } else {
+                                Text(key.label)
+                                    .font(.system(size: key.isAccent ? fontSize * 0.7 : fontSize, weight: .medium))
+                            }
+                        }
+                        .foregroundColor(key.isAccent ? .white : Color(UIColor.label))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(key.isAccent ? Color.blue : Color(UIColor.systemBackground))
+                                .shadow(color: .black.opacity(0.1), radius: 1, y: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .frame(height: buttonHeight)
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
+        }
+        .frame(width: 56)
+        .background(Color.clear)
+    }
+
+    private func handleTap(_ key: KeyDef) {
+        switch key.action {
+        case .append(let c):
+            text.append(c)
+        case .backspace:
+            if !text.isEmpty { text.removeLast() }
+        case .done:
+            onDismiss?()
+        }
     }
 }
 
-// View modifier to add the keyboard overlay at the root level
+// MARK: - View Modifier
+
 struct CustomKeyboardModifier: ViewModifier {
     @StateObject private var keyboardManager = KeyboardManager.shared
-    @State private var keyboardPosition: CGPoint = .zero
-    @State private var isDragging = false
-    
+
+    private var isIPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+
     func body(content: Content) -> some View {
-        ZStack {
-            content
-            
-            if keyboardManager.isShowingCustomKeyboard,
-               let textBinding = keyboardManager.activeFieldText {
-                
-                // Position keyboard based on mode
-                if keyboardManager.useMiniMode {
-                    // Mini mode: Position on right side with drag capability
-                    GeometryReader { geometry in
-                        CustomNumberKeyboard(
-                            text: textBinding,
-                            compactMode: true,
-                            showDragHandle: true,
-                            onDismiss: {
-                                keyboardManager.hideKeyboard()
-                            },
-                            onUp: {
-                                keyboardManager.onUp?()
-                                keyboardManager.hideKeyboard()
-                            },
-                            onDown: {
-                                keyboardManager.onDown?()
-                                keyboardManager.hideKeyboard()
-                            }
-                        )
-                        .frame(width: 380)
-                        .background(Color(UIColor.systemBackground))
-                        .cornerRadius(12)
-                        .shadow(radius: 10)
-                        .position(keyboardPosition)
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    isDragging = true
-                                    keyboardPosition = value.location
-                                }
-                                .onEnded { value in
-                                    isDragging = false
-                                    // Apply bounds checking
-                                    let minX: CGFloat = 190
-                                    let maxX = geometry.size.width - 190
-                                    let minY: CGFloat = 160
-                                    let maxY = geometry.size.height - 160
-                                    
-                                    keyboardPosition.x = min(max(minX, keyboardPosition.x), maxX)
-                                    keyboardPosition.y = min(max(minY, keyboardPosition.y), maxY)
-                                    
-                                    // Save position
-                                    keyboardManager.saveKeyboardPosition(keyboardPosition)
-                                }
-                        )
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                        .onAppear {
-                            // Set initial position: use saved position or default to lower-right
-                            if let savedPosition = keyboardManager.getSavedKeyboardPosition() {
-                                keyboardPosition = savedPosition
-                            } else {
-                                // Default to lower-right corner
-                                keyboardPosition = CGPoint(
-                                    x: geometry.size.width - 200,
-                                    y: geometry.size.height - 200
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    // Standard mode: Position at bottom
-                    VStack {
-                        Spacer()
-                        
-                        CustomNumberKeyboard(
-                            text: textBinding,
-                            compactMode: false,
-                            onDismiss: {
-                                keyboardManager.hideKeyboard()
-                            },
-                            onUp: {
-                                keyboardManager.onUp?()
-                                keyboardManager.hideKeyboard()
-                            },
-                            onDown: {
-                                keyboardManager.onDown?()
-                                keyboardManager.hideKeyboard()
-                            }
-                        )
-                        .transition(.move(edge: .bottom))
-                    }
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                content
+                    .frame(width: isIPad && keyboardManager.useMiniMode && keyboardManager.isShowingCustomKeyboard ? geo.size.width - 56 : geo.size.width)
+
+                if isIPad && keyboardManager.useMiniMode && keyboardManager.isShowingCustomKeyboard,
+                   let textBinding = keyboardManager.activeFieldText {
+                    iPadVerticalStripKeyboard(
+                        text: textBinding,
+                        onDismiss: { keyboardManager.hideKeyboard() }
+                    )
+                    .frame(width: 56, height: geo.size.height)
+                    .transition(.move(edge: .trailing))
                 }
             }
+            .animation(.easeInOut(duration: 0.2), value: keyboardManager.isShowingCustomKeyboard)
         }
-        .animation(.easeInOut(duration: 0.25), value: keyboardManager.isShowingCustomKeyboard)
+            .overlay(alignment: .bottom) {
+                if (!isIPad || !keyboardManager.useMiniMode) && keyboardManager.isShowingCustomKeyboard,
+                   let textBinding = keyboardManager.activeFieldText {
+                    CustomNumberKeyboard(
+                        text: textBinding,
+                        compactMode: false,
+                        onDismiss: { keyboardManager.hideKeyboard() },
+                        onUp: {
+                            keyboardManager.onUp?()
+                            keyboardManager.hideKeyboard()
+                        },
+                        onDown: {
+                            keyboardManager.onDown?()
+                            keyboardManager.hideKeyboard()
+                        }
+                    )
+                    .transition(.move(edge: .bottom))
+                    .animation(.easeInOut(duration: 0.25), value: true)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: keyboardManager.isShowingCustomKeyboard)
     }
 }
 

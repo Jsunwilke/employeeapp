@@ -1874,6 +1874,7 @@ struct SportsShootListView: View {
                         colorForGroup: colorForGroup
                     )
                 }
+                .customKeyboardOverlay()
                 // Hide original navigation toolbar
                 .navigationBarHidden(true)
                 .onAppear {
@@ -2910,7 +2911,6 @@ struct SportsShootListView: View {
                 }
             .padding(.vertical, 8)
         }
-        .customKeyboardOverlay()
     }
 
     private func rosterEntryRow(shoot: SportsShoot, entry: RosterEntry, isEven: Bool) -> some View {
