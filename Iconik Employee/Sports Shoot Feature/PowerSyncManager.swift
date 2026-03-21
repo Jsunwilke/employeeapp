@@ -287,6 +287,29 @@ class PowerSyncManager: ObservableObject {
         print("PowerSyncManager: Deleted roster entry \(idString)")
     }
 
+    /// Link a roster entry to a Production subject (update subject_id only)
+    func linkRosterEntryToSubject(rosterEntryId: String, subjectId: String) async throws {
+        guard let db = database else { throw PowerSyncManagerError.notInitialized }
+        let updatedAt = ISO8601DateFormatter().string(from: Date())
+        _ = try await db.execute(
+            sql: "UPDATE roster_entries SET subject_id = ?, updated_at = ? WHERE id = ?",
+            parameters: [subjectId, updatedAt, rosterEntryId]
+        )
+        print("PowerSyncManager: Linked roster entry \(rosterEntryId) -> subject \(subjectId)")
+    }
+
+    /// Batch delete multiple roster entries
+    func deleteBatchRosterEntries(ids: [UUID]) async throws {
+        guard let db = database else { throw PowerSyncManagerError.notInitialized }
+        for id in ids {
+            _ = try await db.execute(
+                sql: "DELETE FROM roster_entries WHERE id = ?",
+                parameters: [id.uuidString.lowercased()]
+            )
+        }
+        print("PowerSyncManager: Batch deleted \(ids.count) roster entries")
+    }
+
     /// Watch roster entries for real-time updates
     func watchRosterEntries(forJob jobId: UUID) -> AsyncThrowingStream<[RosterEntry], Error> {
         guard let db = database else {

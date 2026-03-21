@@ -118,6 +118,9 @@ class TabBarManager: ObservableObject {
     @Published var configuration: TabBarConfiguration
     @Published var selectedTab: String = ""
     
+    // Full-screen overlay state (hides tab bar when photo viewer etc. is active)
+    @Published var isFullScreenOverlayActive: Bool = false
+
     // Navigation data for passing between features
     @Published var selectedSportsSession: Session? = nil
     @Published var selectedSportsShoot: SportsShoot? = nil
