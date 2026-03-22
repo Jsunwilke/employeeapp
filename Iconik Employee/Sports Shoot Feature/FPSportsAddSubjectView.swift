@@ -93,7 +93,13 @@ struct FPSportsAddSubjectView: View {
     private var formContent: some View {
         Form {
             Section(header: Text("Athlete Information")) {
-                TextField("Name", text: $lastName)
+                TextField("First Name", text: $firstName)
+                    .autocapitalization(.words)
+                    .focused($focusedField, equals: "firstName")
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = "lastName" }
+
+                TextField("Last Name", text: $lastName)
                     .autocapitalization(.words)
                     .focused($focusedField, equals: "lastName")
                     .submitLabel(.next)
@@ -239,22 +245,24 @@ struct FPSportsAddSubjectView: View {
 
     // MARK: - Save
 
+    private func cap(_ s: String, _ max: Int) -> String { String(s.prefix(max)) }
+
     private func saveSubject() {
         let subject = FPSubject(
             id: existingSubject?.id ?? UUID(),
             galleryId: galleryId,
             organizationId: organizationId,
-            firstName: firstName.trimmingCharacters(in: .whitespacesAndNewlines),
-            lastName: lastName.trimmingCharacters(in: .whitespacesAndNewlines),
-            grade: grade.trimmingCharacters(in: .whitespacesAndNewlines),
-            teacher: teacher.trimmingCharacters(in: .whitespacesAndNewlines),
+            firstName: cap(firstName.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            lastName: cap(lastName.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            grade: cap(grade.trimmingCharacters(in: .whitespacesAndNewlines), 50),
+            teacher: cap(teacher.trimmingCharacters(in: .whitespacesAndNewlines), 50),
             homeroom: "",
             studentId: "",
-            rosterId: rosterId.trimmingCharacters(in: .whitespacesAndNewlines),
-            jerseyNumber: jerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines),
-            sport: sport.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
-            position: position.trimmingCharacters(in: .whitespacesAndNewlines),
-            email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+            rosterId: cap(rosterId.trimmingCharacters(in: .whitespacesAndNewlines), 50),
+            jerseyNumber: cap(jerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines), 50),
+            sport: cap(sport.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), 100),
+            position: cap(position.trimmingCharacters(in: .whitespacesAndNewlines), 100),
+            email: cap(email.trimmingCharacters(in: .whitespacesAndNewlines), 254),
             phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
             imageNumbers: imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines),
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),

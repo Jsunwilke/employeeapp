@@ -154,6 +154,21 @@ class PowerSyncManager: ObservableObject {
         }
     }
 
+    /// Clear local database and re-sync from server.
+    /// Use when the CRUD queue is stuck and preventing downloads.
+    func clearAndReSync() async {
+        guard let db = database else { return }
+        do {
+            try await db.disconnectAndClear()
+            hasSynced = false
+            isConnected = false
+            try await connect()
+            print("PowerSyncManager: Cleared local data and reconnected")
+        } catch {
+            print("PowerSyncManager: clearAndReSync failed: \(error)")
+        }
+    }
+
     /// Wait for first sync to complete using the SDK's built-in method.
     /// Local SQLite reads work immediately (cached data from previous sessions),
     /// but on a fresh install this waits for the first full sync from the server.
@@ -732,7 +747,18 @@ class PowerSyncManager: ObservableObject {
     func pinGallery(userId: String, galleryId: String, organizationId: String) async throws {
         guard let db = database else { throw PowerSyncManagerError.notInitialized }
 
-        let id = "\(userId)_\(galleryId)" // deterministic ID
+        // Check if already pinned
+        let existing: [String] = try await db.getAll(
+            sql: "SELECT id FROM synced_galleries WHERE user_id = ? AND gallery_id = ?",
+            parameters: [userId, galleryId],
+            mapper: { cursor in try cursor.getString(name: "id") }
+        )
+        if !existing.isEmpty {
+            print("PowerSyncManager: Gallery \(galleryId) already pinned")
+            return
+        }
+
+        let id = UUID().uuidString.lowercased() // Must be valid UUID — Supabase column is uuid type
         let now = ISO8601DateFormatter().string(from: Date())
 
         _ = try await db.execute(

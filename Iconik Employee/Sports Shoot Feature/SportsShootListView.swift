@@ -3646,7 +3646,8 @@ struct SportsShootListView: View {
                                         await MainActor.run {
                                             self.viewModel.isLoading = false
                                             print("[DEBUG] loadSportsShoots SUCCESS: received \(shoots.count) shoots from network")
-                                            self.viewModel.sportsShoots = shoots
+                                            // Only show jobs NOT linked to a Production gallery (those belong in FP Sports)
+                                            self.viewModel.sportsShoots = shoots.filter { $0.galleryId == nil }
                                             print("[DEBUG] viewModel.sportsShoots count = \(self.viewModel.sportsShoots.count)")
                                             print("[DEBUG] viewModel.showArchived = \(self.viewModel.showArchived)")
                                             print("[DEBUG] viewModel.filteredSportsShoots count = \(self.viewModel.filteredSportsShoots.count)")

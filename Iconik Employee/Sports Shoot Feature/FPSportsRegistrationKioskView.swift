@@ -29,6 +29,8 @@ struct FPSportsRegistrationKioskView: View {
     @State private var showSuccessScreen = false
     @State private var lastAssignedNumber: String = ""
     @State private var isSubmitting = false
+    @State private var isCooldown = false
+    @State private var registrationCount = 0
     @State private var errorMessage = ""
     @State private var showError = false
 
@@ -47,6 +49,7 @@ struct FPSportsRegistrationKioskView: View {
                 registrationForm
             }
         }
+        .background(passcodeAlert)
         .onAppear {
             gradeTeam = defaultGrade
             loadNextId()
@@ -195,7 +198,13 @@ struct FPSportsRegistrationKioskView: View {
     }
 
     private func submitRegistration() {
-        guard canSubmit else { return }
+        guard canSubmit, !isCooldown else { return }
+        // Rate limit: max 500 registrations per kiosk session
+        guard registrationCount < 500 else {
+            errorMessage = "Registration limit reached. Please see a staff member."
+            showError = true
+            return
+        }
         isSubmitting = true
 
         let fullName = "\(firstNameInput.trimmingCharacters(in: .whitespaces).uppercased()) \(lastNameInput.trimmingCharacters(in: .whitespaces).uppercased())"
@@ -225,7 +234,9 @@ struct FPSportsRegistrationKioskView: View {
                     lastAssignedNumber = String(nextRosterId)
                     nextRosterId += 1
                     totalRegistered += 1
+                    registrationCount += 1
                     isSubmitting = false
+                    isCooldown = true
                     showSuccessScreen = true
 
                     // Haptic feedback
@@ -235,7 +246,7 @@ struct FPSportsRegistrationKioskView: View {
             } catch {
                 await MainActor.run {
                     isSubmitting = false
-                    errorMessage = "Failed to register: \(error.localizedDescription)"
+                    errorMessage = "Failed to register. Please try again."
                     showError = true
                 }
             }
@@ -249,13 +260,38 @@ struct FPSportsRegistrationKioskView: View {
         phoneInput = ""
         gradeTeam = defaultGrade
         showSuccessScreen = false
+        isCooldown = false
     }
 
     private func exitKiosk() {
         if !kioskPasscode.isEmpty {
+            passcodeInput = ""
             showPasscodeEntry = true
         } else {
             presentationMode.wrappedValue.dismiss()
         }
+    }
+}
+
+// MARK: - Passcode Alert Extension
+extension FPSportsRegistrationKioskView {
+    @ViewBuilder
+    var passcodeAlert: some View {
+        EmptyView()
+            .alert("Enter Passcode", isPresented: $showPasscodeEntry) {
+                TextField("Passcode", text: $passcodeInput)
+                Button("Cancel", role: .cancel) { passcodeInput = "" }
+                Button("Exit Kiosk") {
+                    if passcodeInput == kioskPasscode {
+                        presentationMode.wrappedValue.dismiss()
+                    } else {
+                        passcodeInput = ""
+                        errorMessage = "Incorrect passcode"
+                        showError = true
+                    }
+                }
+            } message: {
+                Text("Enter the passcode to exit kiosk mode")
+            }
     }
 }

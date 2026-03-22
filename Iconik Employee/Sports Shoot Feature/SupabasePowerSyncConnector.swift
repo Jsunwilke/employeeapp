@@ -58,16 +58,27 @@ final class SupabasePowerSyncConnector: PowerSyncBackendConnectorProtocol {
         do {
             // Process each pending operation in the transaction
             for op in transaction.crud {
-                switch op.op {
-                case .put:
-                    // Insert or update (upsert)
-                    try await upsertRecord(table: op.table, id: op.id, data: op.opData)
-                case .patch:
-                    // Partial update
-                    try await updateRecord(table: op.table, id: op.id, data: op.opData)
-                case .delete:
-                    // Delete
-                    try await deleteRecord(table: op.table, id: op.id)
+                do {
+                    switch op.op {
+                    case .put:
+                        try await upsertRecord(table: op.table, id: op.id, data: op.opData)
+                    case .patch:
+                        try await updateRecord(table: op.table, id: op.id, data: op.opData)
+                    case .delete:
+                        try await deleteRecord(table: op.table, id: op.id)
+                    }
+                } catch {
+                    let errorStr = String(describing: error)
+                    // Skip unrecoverable errors (constraint violations, RLS, not found)
+                    // These will never succeed on retry — don't block the queue
+                    if errorStr.contains("23") || errorStr.contains("violates") ||
+                       errorStr.contains("403") || errorStr.contains("404") ||
+                       errorStr.contains("PGRST") || errorStr.contains("not_found") {
+                        print("SupabasePowerSyncConnector: Skipping unrecoverable error for \(op.op) \(op.table)/\(op.id): \(error)")
+                        continue
+                    }
+                    // Rethrow transient errors (network, timeout) for retry
+                    throw error
                 }
             }
 

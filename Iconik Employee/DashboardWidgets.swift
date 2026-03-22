@@ -1149,9 +1149,13 @@ struct SportsRostersWidget: View {
     
     private func shootRowView(for shoot: SportsShoot) -> some View {
         Button(action: {
-            // Set selected shoot and navigate to sports shoots feature
+            // Route to correct view based on whether it's linked to Production
             TabBarManager.shared.selectedSportsShoot = shoot
-            tabBarManager.selectedTab = "sportsShoot"
+            if shoot.galleryId != nil {
+                tabBarManager.selectedTab = "focalPointSports"
+            } else {
+                tabBarManager.selectedTab = "sportsShoot"
+            }
         }) {
             HStack {
                 // Sports icon
@@ -1182,14 +1186,14 @@ struct SportsRostersWidget: View {
                 
                 Spacer()
                 
-                // Sports shoot indicator
+                // Route indicator
                 HStack(spacing: 4) {
-                    Image(systemName: "sportscourt.fill")
+                    Image(systemName: shoot.galleryId != nil ? "bolt.fill" : "sportscourt.fill")
                         .font(.caption2)
-                    Text("View")
+                    Text(shoot.galleryId != nil ? "FP Sports" : "View")
                         .font(.caption)
                 }
-                .foregroundColor(.blue)
+                .foregroundColor(shoot.galleryId != nil ? .green : .blue)
                 
                 Image(systemName: "chevron.right")
                     .font(.caption)

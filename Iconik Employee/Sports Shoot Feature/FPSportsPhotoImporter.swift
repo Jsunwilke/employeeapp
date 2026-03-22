@@ -17,6 +17,7 @@ struct FPSportsPhotoImporter: View {
     private let powerSync = PowerSyncManager.shared
 
     @State private var showImagePicker = false
+    @State private var showCameraPicker = false
     @State private var image: UIImage? = nil
     @State private var isProcessing = false
     @State private var extractedSubjects: [FPSubject] = []
@@ -72,6 +73,9 @@ struct FPSportsPhotoImporter: View {
             .sheet(isPresented: $showImagePicker) {
                 ImagePicker(selectedImage: $image)
             }
+            .sheet(isPresented: $showCameraPicker) {
+                CameraImagePicker(selectedImage: $image)
+            }
             .alert(isPresented: $showingErrorAlert) {
                 Alert(title: Text("Error"), message: Text(errorMessage), dismissButton: .default(Text("OK")))
             }
@@ -103,7 +107,7 @@ struct FPSportsPhotoImporter: View {
                     }.frame(maxWidth: .infinity).padding()
                     .background(Color.blue).foregroundColor(.white).cornerRadius(10)
                 }
-                Button(action: { showImagePicker = true }) {
+                Button(action: { showCameraPicker = true }) {
                     HStack {
                         Image(systemName: "camera").font(.title3)
                         Text("Take Photo").fontWeight(.semibold)
@@ -209,6 +213,39 @@ struct FPSportsPhotoImporter: View {
                 onComplete(saved > 0)
                 presentationMode.wrappedValue.dismiss()
             }
+        }
+    }
+}
+
+// MARK: - Camera Picker (sourceType = .camera)
+private struct CameraImagePicker: UIViewControllerRepresentable {
+    @Environment(\.presentationMode) private var presentationMode
+    @Binding var selectedImage: UIImage?
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: CameraImagePicker
+        init(_ parent: CameraImagePicker) { self.parent = parent }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.selectedImage = image
+            }
+            parent.presentationMode.wrappedValue.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.presentationMode.wrappedValue.dismiss()
         }
     }
 }

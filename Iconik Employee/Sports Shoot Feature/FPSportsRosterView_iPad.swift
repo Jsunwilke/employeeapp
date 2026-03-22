@@ -30,7 +30,7 @@ class FPSportsRosterViewModel: ObservableObject {
     @Published var selectedTab = 0 // 0 = Athletes, 1 = Groups
     
     // Sort states
-    @Published var sortField: String = "firstName" // Default to sort by Subject ID
+    @Published var sortField: String = "rosterId" // Default to sort by Roster ID
     @Published var sortAscending: Bool = true
     
     // Import/Export state
@@ -597,7 +597,7 @@ struct FPSportsRosterView_iPad: View {
                 }
             }
 
-            print("[FPSync] Auto-filled image #\(imageNumber) for \(entry.lastName), \(entry.firstName)")
+            print("[FPSync] Auto-filled image #\(imageNumber) for subject \(entry.id)")
         }
 
         // Subject photographed — store thumbnail paired with image number
@@ -862,7 +862,7 @@ struct FPSportsRosterView_iPad: View {
                     } else {
                         print("saveEntryWithRetry: Failed after 3 attempts: \(error)")
                         await MainActor.run {
-                            viewModel.errorMessage = "Failed to save changes for \(entry.lastName). Please try again."
+                            viewModel.errorMessage = "Failed to save changes. Please try again."
                             viewModel.showingErrorAlert = true
                         }
                     }
@@ -949,9 +949,9 @@ struct FPSportsRosterView_iPad: View {
             }
         }
         
-        // If group or special filters are selected
+        // If group or special filters are selected (stack on top of search results)
         if !viewModel.selectedFilters.isEmpty || !viewModel.selectedSpecialFilters.isEmpty {
-            filteredRoster = roster.filter { entry in
+            filteredRoster = filteredRoster.filter { entry in
                 // Check if entry matches any selected group filter
                 let matchesGroup = viewModel.selectedFilters.contains(entry.sport)
                 
@@ -2730,6 +2730,11 @@ struct FPSportsRosterView_iPad: View {
                     }
                 }
                 .listStyle(PlainListStyle())
+                .refreshable {
+                    if let shootID = viewModel.selectedShoot?.id {
+                        await loadRosterForSelectedShoot(shootID: shootID, galleryId: viewModel.selectedShoot?.galleryId)
+                    }
+                }
                 .onChange(of: highlightedEntryId) { entryId in
                     if let entryId = entryId {
                         withAnimation {
@@ -2961,7 +2966,15 @@ struct FPSportsRosterView_iPad: View {
             VStack(alignment: .leading, spacing: 3) {
                 // Line 1: Name + sport badge + lock + flag
                 HStack(spacing: 6) {
-                    Text(entry.lastName.isEmpty ? (entry.rosterId.isEmpty ? "Blank" : "ID \(entry.rosterId)") : entry.lastName)
+                    Text({
+                        let first = entry.firstName.trimmingCharacters(in: .whitespaces)
+                        let last = entry.lastName.trimmingCharacters(in: .whitespaces)
+                        if !first.isEmpty && !last.isEmpty { return "\(first) \(last)" }
+                        if !last.isEmpty { return last }
+                        if !first.isEmpty { return first }
+                        if !entry.rosterId.isEmpty { return "ID \(entry.rosterId)" }
+                        return "Blank"
+                    }())
                         .font(.system(size: 17, weight: .semibold))
                         .lineLimit(1)
 
@@ -3547,7 +3560,8 @@ struct FPSportsRosterView_iPad: View {
                                         await MainActor.run {
                                             self.viewModel.isLoading = false
                                             print("[DEBUG] loadSportsShoots SUCCESS: received \(shoots.count) shoots from network")
-                                            self.viewModel.sportsShoots = shoots
+                                            // Only show jobs linked to a Production gallery
+                                            self.viewModel.sportsShoots = shoots.filter { $0.galleryId != nil }
                                             print("[DEBUG] viewModel.sportsShoots count = \(self.viewModel.sportsShoots.count)")
                                             print("[DEBUG] viewModel.showArchived = \(self.viewModel.showArchived)")
                                             print("[DEBUG] viewModel.filteredSportsShoots count = \(self.viewModel.filteredSportsShoots.count)")
@@ -3880,11 +3894,22 @@ struct FPSportsRosterView_iPad: View {
                                 }
 
                                 do {
+                                    // Pin the gallery so PowerSync syncs its subjects to this device
+                                    let gid = galleryId ?? viewModel.selectedShoot?.galleryId ?? ""
+                                    if !gid.isEmpty, let userId = UserManager.shared.getCurrentUserIDUnified() {
+                                        try? await powerSync.pinGallery(userId: userId, galleryId: gid, organizationId: storedUserOrganizationID)
+
+                                        // Only wait for sync if no subjects are locally cached yet
+                                        let existing = try? await powerSync.getSubjects(forGalleryId: gid)
+                                        if existing?.isEmpty ?? true {
+                                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                                        }
+                                    }
+
                                     // Clear expired locks (same as old roster's releaseExpiredLocks)
-                                    try? await powerSync.releaseExpiredSubjectLocks(forGalleryId: viewModel.selectedShoot?.galleryId ?? "")
+                                    try? await powerSync.releaseExpiredSubjectLocks(forGalleryId: gid)
                                     try? await GroupImageService.shared.releaseExpiredLocks(forJob: shootID)
 
-                                    let gid = galleryId ?? viewModel.selectedShoot?.galleryId ?? ""
                                     let entries = try await powerSync.getSubjects(forGalleryId: gid)
                                     let groups = try await powerSync.getGroupImages(forJob: shootID)
 

@@ -132,6 +132,8 @@ struct FPSportsCSVView: View {
     }
 
     private func importCSV(from url: URL) {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         do {
             let csvData = try String(contentsOf: url)
             importedSubjects = parseCSV(csvString: csvData)
@@ -165,6 +167,8 @@ struct FPSportsCSVView: View {
         let emailIdx = h.firstIndex(of: "email")
         let phoneIdx = h.firstIndex(of: "phone")
         let imagesIdx = h.firstIndex(of: "images") ?? h.firstIndex(of: "image_numbers")
+        let gradeIdx = h.firstIndex(of: "grade")
+        let jerseyIdx = h.firstIndex(of: "jersey") ?? h.firstIndex(of: "jersey_number") ?? h.firstIndex(of: "jersey number")
 
         for i in 1..<lines.count {
             let f = parseCSVLine(lines[i])
@@ -174,12 +178,12 @@ struct FPSportsCSVView: View {
                 organizationId: organizationId,
                 firstName: "",
                 lastName: nameIdx != nil && f.count > nameIdx! ? f[nameIdx!] : "",
-                grade: "",
+                grade: gradeIdx != nil && f.count > gradeIdx! ? f[gradeIdx!] : "",
                 teacher: specialIdx != nil && f.count > specialIdx! ? f[specialIdx!] : "",
                 homeroom: "",
                 studentId: "",
                 rosterId: rosterIdIdx != nil && f.count > rosterIdIdx! ? f[rosterIdIdx!] : "",
-                jerseyNumber: "",
+                jerseyNumber: jerseyIdx != nil && f.count > jerseyIdx! ? f[jerseyIdx!] : "",
                 sport: (sportIdx != nil && f.count > sportIdx! ? f[sportIdx!] : "").uppercased(),
                 position: "",
                 email: emailIdx != nil && f.count > emailIdx! ? f[emailIdx!] : "",
@@ -233,9 +237,9 @@ struct FPSportsCSVView: View {
         guard !currentSubjects.isEmpty else {
             alertTitle = "Export Error"; alertMessage = "No subjects to export."; showAlert = true; return
         }
-        var csv = "Name,Roster ID,Special,Sport/Team,Email,Phone,Images\n"
+        var csv = "Name,Roster ID,Special,Sport/Team,Grade,Jersey,Email,Phone,Images\n"
         for s in currentSubjects {
-            csv += "\(esc(s.lastName)),\(esc(s.rosterId)),\(esc(s.teacher)),\(esc(s.sport)),\(esc(s.email)),\(esc(s.phone)),\(esc(s.imageNumbers))\n"
+            csv += "\(esc(s.lastName)),\(esc(s.rosterId)),\(esc(s.teacher)),\(esc(s.sport)),\(esc(s.grade)),\(esc(s.jerseyNumber)),\(esc(s.email)),\(esc(s.phone)),\(esc(s.imageNumbers))\n"
         }
         let tempDir = FileManager.default.temporaryDirectory
         let fileURL = tempDir.appendingPathComponent("Roster_\(Date().timeIntervalSince1970).csv")
