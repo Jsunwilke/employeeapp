@@ -8,10 +8,13 @@
 
 import Foundation
 import Combine
+import Supabase
+import Realtime
 
 enum LockType {
     case rosterEntry
     case groupImage
+    case subject      // FP Sports — locks on Production subjects table
 }
 
 enum LockLostReason {
@@ -92,6 +95,19 @@ class LockManager: ObservableObject {
                         try await RosterEntryService.shared.releaseLock(entryId: lock.id, userName: capturedIdentifier)
                     case .groupImage:
                         try await GroupImageService.shared.releaseLock(groupId: lock.id, userName: capturedIdentifier)
+                    case .subject:
+                        let supabase = SupabaseManager.shared.client
+                        let updateData: [String: AnyJSON] = [
+                            "locked_by": AnyJSON.null,
+                            "locked_by_name": AnyJSON.null,
+                            "locked_at": AnyJSON.null
+                        ]
+                        try await supabase
+                            .from("subjects")
+                            .update(updateData)
+                            .eq("id", value: lock.id)
+                            .eq("locked_by_name", value: capturedIdentifier)
+                            .execute()
                     }
                 } catch {
                     print("LockManager: Failed to release lock \(lock.id) on logout: \(error)")
@@ -173,6 +189,89 @@ class LockManager: ObservableObject {
         }
     }
 
+    // MARK: - FP Sports Subject Locks
+
+    /// Acquire a lock on a Production subject (FP Sports)
+    /// Same pattern as RosterEntryService.acquireLock — Supabase RPC, offline fallback
+    func acquireSubjectLock(subjectId: UUID) async -> Bool {
+        guard let userId = currentUserId else {
+            print("LockManager: No current user set — allowing local subject edit")
+            return true
+        }
+
+        let isOnline = PowerSyncManager.shared.isConnected
+        guard isOnline else {
+            print("LockManager: Offline — allowing local subject edit without remote lock")
+            return true
+        }
+
+        do {
+            let supabase = SupabaseManager.shared.client
+            let result: AnyJSON = try await supabase
+                .rpc("acquire_lock", params: [
+                    "p_table_name": AnyJSON.string("subjects"),
+                    "p_record_id": AnyJSON.string(subjectId.uuidString.lowercased()),
+                    "p_user_id": AnyJSON.string(userId.uuidString.lowercased()),
+                    "p_user_name": AnyJSON.string(currentEditorIdentifier)
+                ])
+                .execute()
+                .value
+
+            if case .object(let dict) = result,
+               case .bool(let success) = dict["success"] {
+                if success {
+                    let lock = ActiveLock(id: subjectId, type: .subject, acquiredAt: Date(), lastRefreshedAt: Date())
+                    activeLocks.append(lock)
+                    startHeartbeatIfNeeded()
+                } else if case .string(let lockedBy) = dict["locked_by"] {
+                    print("LockManager: Subject lock held by \(lockedBy)")
+                }
+                return success
+            }
+
+            print("LockManager: Unexpected RPC response format — allowing local edit")
+            return true
+        } catch {
+            print("LockManager: Network error acquiring subject lock — allowing local edit: \(error)")
+            return true
+        }
+    }
+
+    /// Release a lock on a Production subject
+    /// Same pattern as RosterEntryService.releaseLock
+    func releaseSubjectLock(subjectId: UUID) async {
+        let isOnline = PowerSyncManager.shared.isConnected
+        guard isOnline else {
+            print("LockManager: Offline — skipping subject lock release, will expire in ≤2 min")
+            return
+        }
+
+        do {
+            let supabase = SupabaseManager.shared.client
+            let updateData: [String: AnyJSON] = [
+                "locked_by": AnyJSON.null,
+                "locked_by_name": AnyJSON.null,
+                "locked_at": AnyJSON.null
+            ]
+            try await supabase
+                .from("subjects")
+                .update(updateData)
+                .eq("id", value: subjectId)
+                .eq("locked_by_name", value: currentEditorIdentifier)
+                .execute()
+
+            activeLocks.removeAll { $0.id == subjectId && $0.type == .subject }
+            stopHeartbeatIfNoLocks()
+        } catch {
+            print("LockManager: Failed to release subject lock: \(error)")
+        }
+    }
+
+    /// Check if a subject is locked by this user
+    func hasSubjectLock(subjectId: UUID) -> Bool {
+        return activeLocks.contains { $0.id == subjectId && $0.type == .subject }
+    }
+
     /// Release a lock on a group image
     func releaseGroupImageLock(groupId: UUID) async {
         guard currentUserId != nil else { return }
@@ -197,6 +296,8 @@ class LockManager: ObservableObject {
                     try await RosterEntryService.shared.releaseLock(entryId: lock.id, userName: currentEditorIdentifier)
                 case .groupImage:
                     try await GroupImageService.shared.releaseLock(groupId: lock.id, userName: currentEditorIdentifier)
+                case .subject:
+                    await releaseSubjectLock(subjectId: lock.id)
                 }
             } catch {
                 print("LockManager: Failed to release lock \(lock.id): \(error)")
@@ -269,6 +370,15 @@ class LockManager: ObservableObject {
                     try await RosterEntryService.shared.refreshLock(entryId: lock.id, userName: currentEditorIdentifier)
                 case .groupImage:
                     try await GroupImageService.shared.refreshLock(groupId: lock.id, userName: currentEditorIdentifier)
+                case .subject:
+                    // Refresh subject lock by updating locked_at timestamp
+                    let supabase = SupabaseManager.shared.client
+                    try await supabase
+                        .from("subjects")
+                        .update(["locked_at": ISO8601DateFormatter().string(from: Date())])
+                        .eq("id", value: lock.id)
+                        .eq("locked_by_name", value: currentEditorIdentifier)
+                        .execute()
                 }
                 locksToUpdate.append(lock.id)
             } catch {
@@ -332,6 +442,8 @@ class LockManager: ObservableObject {
                         userId: userId,
                         userName: currentEditorIdentifier
                     )
+                case .subject:
+                    acquired = await acquireSubjectLock(subjectId: lock.id)
                 }
 
                 if acquired {
@@ -380,6 +492,8 @@ class LockManager: ObservableObject {
                     userId: userId,
                     userName: currentEditorIdentifier
                 )
+            case .subject:
+                acquired = await acquireSubjectLock(subjectId: entryId)
             }
 
             if acquired {

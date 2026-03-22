@@ -757,6 +757,103 @@ class ClaudeRosterService {
     }
 }
 
+// MARK: - FP Sports Subject Output Methods (parallel to RosterEntry methods)
+
+extension ClaudeRosterService {
+
+    /// Convert Claude entry to FPSubject (for FP Sports — writes to Production subjects table)
+    func convertToFPSubject(_ claudeEntry: ClaudeRosterEntry, galleryId: String, organizationId: String = "") -> FPSubject {
+        return FPSubject(
+            galleryId: galleryId,
+            organizationId: organizationId,
+            firstName: "",
+            lastName: claudeEntry.lastName,
+            grade: "",
+            teacher: claudeEntry.teacher,
+            homeroom: "",
+            studentId: "",
+            rosterId: "",
+            jerseyNumber: "",
+            sport: claudeEntry.group.uppercased(),
+            position: "",
+            email: claudeEntry.email
+        )
+    }
+
+    /// Append blank FPSubject entries after scanned ones
+    func appendBlankFPSubjects(to subjects: inout [FPSubject], galleryId: String, organizationId: String = "", startingFromID: Int, sport: String, count: Int = 10) {
+        for i in 0..<count {
+            let blank = FPSubject(
+                galleryId: galleryId,
+                organizationId: organizationId,
+                firstName: "",
+                lastName: "",
+                grade: "",
+                teacher: "",
+                homeroom: "",
+                studentId: "",
+                rosterId: String(startingFromID + i),
+                jerseyNumber: "",
+                sport: sport
+            )
+            subjects.append(blank)
+        }
+    }
+
+    /// Extract roster from image and return as FPSubjects
+    func extractSubjectsFromImage(
+        _ image: UIImage,
+        galleryId: String,
+        organizationId: String,
+        startingSubjectID: Int,
+        completion: @escaping (Result<[FPSubject], Error>) -> Void
+    ) {
+        // Use existing extraction then convert
+        extractRosterFromImage(image, sportsJobId: UUID(), organizationId: organizationId, startingSubjectID: startingSubjectID) { result in
+            switch result {
+            case .success(let rosterEntries):
+                var subjects: [FPSubject] = rosterEntries.map { entry in
+                    FPSubject(
+                        galleryId: galleryId,
+                        organizationId: organizationId,
+                        firstName: "",
+                        lastName: entry.lastName,
+                        grade: "",
+                        teacher: entry.teacher,
+                        homeroom: "",
+                        studentId: "",
+                        rosterId: entry.firstName,  // firstName holds the sequential ID in Captura convention
+                        jerseyNumber: "",
+                        sport: entry.groupName,
+                        position: "",
+                        email: entry.email
+                    )
+                }
+                // Append blank entries (same pattern as RosterEntry version)
+                let lastID = startingSubjectID + subjects.count
+                let sport = subjects.first?.sport ?? ""
+                self.appendBlankFPSubjects(to: &subjects, galleryId: galleryId, organizationId: organizationId, startingFromID: lastID, sport: sport)
+                completion(.success(subjects))
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// Mock extraction returning FPSubjects
+    func mockExtractFPSubjects(galleryId: String, organizationId: String = "", completion: @escaping (Result<[FPSubject], Error>) -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            let subjects = [
+                FPSubject(galleryId: galleryId, organizationId: organizationId, firstName: "", lastName: "SMITH JOHN", grade: "", teacher: "s", homeroom: "", studentId: "", rosterId: "101", jerseyNumber: "", sport: "BASKETBALL", position: "", email: "jsmith@school.edu"),
+                FPSubject(galleryId: galleryId, organizationId: organizationId, firstName: "", lastName: "JOHNSON EMILY", grade: "", teacher: "", homeroom: "", studentId: "", rosterId: "102", jerseyNumber: "", sport: "BASKETBALL"),
+                FPSubject(galleryId: galleryId, organizationId: organizationId, firstName: "", lastName: "WILLIAMS MICHAEL", grade: "", teacher: "8", homeroom: "", studentId: "", rosterId: "103", jerseyNumber: "", sport: "FOOTBALL", position: "", email: "mwilliams@school.edu"),
+                FPSubject(galleryId: galleryId, organizationId: organizationId, firstName: "", lastName: "DAVIS ROBERT", grade: "", teacher: "c", homeroom: "", studentId: "", rosterId: "104", jerseyNumber: "", sport: "BASKETBALL", position: "", email: "coach@school.edu"),
+            ]
+            completion(.success(subjects))
+        }
+    }
+}
+
 // Claude response models
 struct ClaudeRosterEntry: Codable {
     let lastName: String

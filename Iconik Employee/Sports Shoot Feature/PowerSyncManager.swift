@@ -577,4 +577,226 @@ class PowerSyncManager: ObservableObject {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: string)
     }
+
+    // MARK: - FP Sports Subjects (Production subjects table via PowerSync)
+
+    /// Fetch all subjects for a gallery
+    func getSubjects(forGalleryId galleryId: String) async throws -> [FPSubject] {
+        guard let db = database else {
+            throw PowerSyncManagerError.notInitialized
+        }
+
+        let results: [FPSubject] = try await db.getAll(
+            sql: "SELECT * FROM subjects WHERE gallery_id = ? AND (is_deleted IS NULL OR is_deleted != 'true') ORDER BY last_name ASC, first_name ASC",
+            parameters: [galleryId],
+            mapper: { cursor in
+                try Self.parseSubject(from: cursor)
+            }
+        )
+
+        return results
+    }
+
+    /// Save a subject — UPDATE for existing, INSERT only for new.
+    /// This prevents NULLing out Production-managed fields (school_id, qr_code, custom1-20, etc.)
+    func saveSubject(_ subject: FPSubject) async throws {
+        guard let db = database else {
+            throw PowerSyncManagerError.notInitialized
+        }
+
+        let idString = subject.id.uuidString.lowercased()
+        let updatedAtISO = ISO8601DateFormatter().string(from: subject.updatedAt)
+        let createdAtISO = ISO8601DateFormatter().string(from: subject.createdAt)
+        let lockedByString: String? = subject.lockedBy?.uuidString.lowercased()
+        let lockedAtISO: String? = subject.lockedAt.map { ISO8601DateFormatter().string(from: $0) }
+
+        // Check if subject already exists
+        let existing: [String] = try await db.getAll(
+            sql: "SELECT id FROM subjects WHERE id = ?",
+            parameters: [idString],
+            mapper: { cursor in try cursor.getString(name: "id") }
+        )
+
+        if !existing.isEmpty {
+            // UPDATE — only iPad-managed fields (never overwrite Production-managed fields)
+            _ = try await db.execute(
+                sql: """
+                    UPDATE subjects SET
+                        first_name = ?, last_name = ?, grade = ?, teacher = ?, homeroom = ?,
+                        student_id = ?, roster_id = ?, jersey_number = ?, sport = ?, position = ?,
+                        email = ?, phone = ?, image_numbers = ?, notes = ?,
+                        image_count = ?, is_absent = ?, is_photographed = ?, needs_retake = ?,
+                        checked_in_at = ?, locked_by = ?, locked_by_name = ?, locked_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                parameters: [
+                    subject.firstName, subject.lastName, subject.grade, subject.teacher, subject.homeroom,
+                    subject.studentId, subject.rosterId, subject.jerseyNumber, subject.sport, subject.position,
+                    subject.email, subject.phone, subject.imageNumbers, subject.notes,
+                    subject.imageCount, subject.isAbsent ? 1 : 0, subject.isPhotographed ? 1 : 0, subject.needsRetake ? 1 : 0,
+                    subject.checkedInAt, lockedByString, subject.lockedByName, lockedAtISO,
+                    updatedAtISO,
+                    idString
+                ]
+            )
+        } else {
+            // INSERT — new subject, set all fields
+            _ = try await db.execute(
+                sql: """
+                    INSERT INTO subjects
+                    (id, gallery_id, organization_id, first_name, last_name, grade, teacher, homeroom,
+                     student_id, roster_id, jersey_number, sport, position, email, phone,
+                     image_numbers, notes, image_count, is_absent, is_photographed, needs_retake,
+                     checked_in_at, locked_by, locked_by_name, locked_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                parameters: [
+                    idString, subject.galleryId, subject.organizationId,
+                    subject.firstName, subject.lastName, subject.grade, subject.teacher, subject.homeroom,
+                    subject.studentId, subject.rosterId, subject.jerseyNumber, subject.sport, subject.position,
+                    subject.email, subject.phone,
+                    subject.imageNumbers, subject.notes,
+                    subject.imageCount, subject.isAbsent ? 1 : 0, subject.isPhotographed ? 1 : 0, subject.needsRetake ? 1 : 0,
+                    subject.checkedInAt, lockedByString, subject.lockedByName, lockedAtISO,
+                    createdAtISO, updatedAtISO
+                ]
+            )
+        }
+
+        print("PowerSyncManager: Saved subject \(idString)")
+    }
+
+    /// Soft-delete a subject (matches Production's soft-delete pattern)
+    func deleteSubject(id: UUID) async throws {
+        guard let db = database else {
+            throw PowerSyncManagerError.notInitialized
+        }
+
+        let idString = id.uuidString.lowercased()
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        _ = try await db.execute(
+            sql: "UPDATE subjects SET is_deleted = 'true', deleted_at = ?, updated_at = ? WHERE id = ?",
+            parameters: [now, now, idString]
+        )
+
+        print("PowerSyncManager: Soft-deleted subject \(idString)")
+    }
+
+    /// Batch soft-delete multiple subjects
+    func deleteBatchSubjects(ids: [UUID]) async throws {
+        guard let db = database else { throw PowerSyncManagerError.notInitialized }
+        let now = ISO8601DateFormatter().string(from: Date())
+        for id in ids {
+            _ = try await db.execute(
+                sql: "UPDATE subjects SET is_deleted = 'true', deleted_at = ?, updated_at = ? WHERE id = ?",
+                parameters: [now, now, id.uuidString.lowercased()]
+            )
+        }
+        print("PowerSyncManager: Batch soft-deleted \(ids.count) subjects")
+    }
+
+    /// Clear expired subject locks (>2 minutes old) — same pattern as RosterEntryService.releaseExpiredLocks
+    func releaseExpiredSubjectLocks(forGalleryId galleryId: String) async throws {
+        guard let db = database else { return }
+        let twoMinutesAgo = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-120))
+        _ = try await db.execute(
+            sql: "UPDATE subjects SET locked_by = NULL, locked_by_name = NULL, locked_at = NULL WHERE gallery_id = ? AND locked_at IS NOT NULL AND locked_at < ?",
+            parameters: [galleryId, twoMinutesAgo]
+        )
+    }
+
+    /// Watch subjects for real-time updates (PowerSync reactive query)
+    func watchSubjects(forGalleryId galleryId: String) -> AsyncThrowingStream<[FPSubject], Error> {
+        guard let db = database else {
+            return AsyncThrowingStream { $0.finish() }
+        }
+
+        do {
+            return try db.watch(
+                sql: "SELECT * FROM subjects WHERE gallery_id = ? AND (is_deleted IS NULL OR is_deleted != 'true') ORDER BY last_name ASC, first_name ASC",
+                parameters: [galleryId],
+                mapper: { cursor in
+                    try Self.parseSubject(from: cursor)
+                }
+            )
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
+    }
+
+    // MARK: - Gallery Pinning (selective sync)
+
+    /// Pin a gallery for selective sync — tells PowerSync to sync this gallery's subjects
+    func pinGallery(userId: String, galleryId: String, organizationId: String) async throws {
+        guard let db = database else { throw PowerSyncManagerError.notInitialized }
+
+        let id = "\(userId)_\(galleryId)" // deterministic ID
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        _ = try await db.execute(
+            sql: """
+                INSERT OR REPLACE INTO synced_galleries (id, gallery_id, user_id, organization_id, synced_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+            parameters: [id, galleryId, userId, organizationId, now]
+        )
+
+        print("PowerSyncManager: Pinned gallery \(galleryId)")
+    }
+
+    /// Unpin a gallery — stop syncing its subjects
+    func unpinGallery(userId: String, galleryId: String) async throws {
+        guard let db = database else { throw PowerSyncManagerError.notInitialized }
+
+        let id = "\(userId)_\(galleryId)"
+
+        _ = try await db.execute(
+            sql: "DELETE FROM synced_galleries WHERE id = ?",
+            parameters: [id]
+        )
+
+        print("PowerSyncManager: Unpinned gallery \(galleryId)")
+    }
+
+    // MARK: - FP Subject Parsing
+
+    private nonisolated static func parseSubject(from cursor: SqlCursor) throws -> FPSubject {
+        let idString = try cursor.getString(name: "id")
+
+        guard let id = UUID(uuidString: idString) else {
+            throw PowerSyncManagerError.invalidData
+        }
+
+        return FPSubject(
+            id: id,
+            galleryId: (try? cursor.getString(name: "gallery_id")) ?? "",
+            organizationId: (try? cursor.getString(name: "organization_id")) ?? "",
+            firstName: (try? cursor.getString(name: "first_name")) ?? "",
+            lastName: (try? cursor.getString(name: "last_name")) ?? "",
+            grade: (try? cursor.getString(name: "grade")) ?? "",
+            teacher: (try? cursor.getString(name: "teacher")) ?? "",
+            homeroom: (try? cursor.getString(name: "homeroom")) ?? "",
+            studentId: (try? cursor.getString(name: "student_id")) ?? "",
+            rosterId: (try? cursor.getString(name: "roster_id")) ?? "",
+            jerseyNumber: (try? cursor.getString(name: "jersey_number")) ?? "",
+            sport: (try? cursor.getString(name: "sport")) ?? "",
+            position: (try? cursor.getString(name: "position")) ?? "",
+            email: (try? cursor.getString(name: "email")) ?? "",
+            phone: (try? cursor.getString(name: "phone")) ?? "",
+            imageCount: (try? cursor.getIntOptional(name: "image_count")) ?? 0,
+            isAbsent: (try? cursor.getIntOptional(name: "is_absent")).flatMap { $0 }.map { $0 == 1 } ?? false,
+            isPhotographed: (try? cursor.getIntOptional(name: "is_photographed")).flatMap { $0 }.map { $0 == 1 } ?? false,
+            needsRetake: (try? cursor.getIntOptional(name: "needs_retake")).flatMap { $0 }.map { $0 == 1 } ?? false,
+            checkedInAt: try? cursor.getString(name: "checked_in_at"),
+            imageNumbers: (try? cursor.getString(name: "image_numbers")) ?? "",
+            notes: (try? cursor.getString(name: "notes")) ?? "",
+            createdAt: parseDate((try? cursor.getString(name: "created_at"))) ?? Date(),
+            updatedAt: parseDate((try? cursor.getString(name: "updated_at"))) ?? Date(),
+            lockedBy: (try? cursor.getString(name: "locked_by")).flatMap { UUID(uuidString: $0) },
+            lockedByName: try? cursor.getString(name: "locked_by_name"),
+            lockedAt: parseDate((try? cursor.getString(name: "locked_at")))
+        )
+    }
 }
