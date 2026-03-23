@@ -789,6 +789,13 @@ struct FPSportsRosterView_iPad: View {
                 }
             }
         }
+
+        // Verification warning — show alert on iPad when Production detects QR/face mismatch
+        fpSync.onVerificationWarning = { subjectId, subjectName, status, message, qrData in
+            let title = status == "mismatch" ? "Assignment Mismatch" : "Verification Warning"
+            viewModel.errorMessage = "\(title): \(subjectName) — \(message)"
+            viewModel.showingErrorAlert = true
+        }
     }
 
     private func sendSubjectSelection(entry: FPSubject) {
@@ -1932,6 +1939,7 @@ struct FPSportsRosterView_iPad: View {
                     fpSync.onSubjectLinked = nil
                     fpSync.onSubjectsDeleted = nil
                     fpSync.onCaptureReassigned = nil
+                    fpSync.onVerificationWarning = nil
                     // Reset sync state
                     subjectCaptureCounts = [:]
                     flaggedSubjects = []

@@ -814,6 +814,13 @@ struct SportsShootListView: View {
                 }
             }
         }
+
+        // Verification warning — show alert when Production detects QR/face mismatch
+        fpSync.onVerificationWarning = { subjectId, subjectName, status, message, qrData in
+            let title = status == "mismatch" ? "Assignment Mismatch" : "Verification Warning"
+            viewModel.errorMessage = "\(title): \(subjectName) — \(message)"
+            viewModel.showingErrorAlert = true
+        }
     }
 
     private func sendSubjectSelection(entry: RosterEntry) {
@@ -1943,6 +1950,7 @@ struct SportsShootListView: View {
                     fpSync.onSubjectLinked = nil
                     fpSync.onSubjectsDeleted = nil
                     fpSync.onCaptureReassigned = nil
+                    fpSync.onVerificationWarning = nil
                     // Reset sync state
                     subjectCaptureCounts = [:]
                     flaggedSubjects = []

@@ -106,6 +106,7 @@ class FocalPointSyncClient: ObservableObject {
     var onSubjectLinked: ((String, String) -> Void)?               // rosterEntryId, subjectId — Production created a subject for this roster entry
     var onSubjectsDeleted: (([String]) -> Void)?                   // subject_ids deleted on Production
     var onCaptureReassigned: ((Int, String, String) -> Void)?      // imageNumber, oldRosterEntryId, newRosterEntryId
+    var onVerificationWarning: ((String, String, String, String, String?) -> Void)?  // subjectId, subjectName, status, message, qrData
 
     // Internal state
     private var webSocket: URLSessionWebSocketTask?
@@ -918,6 +919,16 @@ class FocalPointSyncClient: ObservableObject {
                   let newRosterEntryId = msg["new_roster_entry_id"] as? String, !newRosterEntryId.isEmpty else { break }
             print("[FPSync] Capture reassigned: image #\(imageNumber) from \(oldRosterEntryId) to \(newRosterEntryId)")
             onCaptureReassigned?(imageNumber, oldRosterEntryId, newRosterEntryId)
+
+        case "verification_warning":
+            if let subjectId = msg["subject_id"] as? String,
+               let subjectName = msg["subject_name"] as? String,
+               let status = msg["status"] as? String,
+               let message = msg["message"] as? String {
+                let qrData = msg["qr_data"] as? String
+                print("[FPSync] Verification warning: \(status) for \(subjectName) — \(message)")
+                onVerificationWarning?(subjectId, subjectName, status, message, qrData)
+            }
 
         default:
             break
