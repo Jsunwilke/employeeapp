@@ -281,6 +281,15 @@ struct FPSportsMultiPhotoImporter: View {
                 do {
                     try await powerSync.saveSubject(subject)
                     saved += 1
+                    // Broadcast to Surface Pro via WebSocket
+                    FocalPointSyncClient.shared.broadcastSubjectCreated(
+                        rosterEntryId: subject.id.uuidString.lowercased(),
+                        firstName: subject.firstName,
+                        lastName: subject.lastName,
+                        rosterId: subject.rosterId,
+                        grade: subject.grade,
+                        groupName: subject.sport
+                    )
                 } catch {
                     print("FPSportsMultiPhotoImporter: Save failed: \(error)")
                 }

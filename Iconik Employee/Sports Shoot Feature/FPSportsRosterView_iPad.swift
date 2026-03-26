@@ -75,32 +75,29 @@ class FPSportsRosterViewModel: ObservableObject {
         }
     }
     
-    // Method to archive/unarchive a shoot
+    // Method to archive/unarchive a gallery (FP Sports uses galleries, not sports_jobs)
     func toggleArchiveStatus(for shoot: SportsShoot) {
         Task { @MainActor in
             do {
-                if shoot.isArchived {
-                    try await SportsShootService.shared.unarchiveSportsShoot(id: shoot.id)
-                    // Update local copy
-                    if let index = sportsShoots.firstIndex(where: { $0.id == shoot.id }) {
-                        sportsShoots[index].isArchived = false
-                    }
-                    // If we're viewing archived and unarchived the selected shoot, clear selection
-                    if showArchived == true && selectedShoot?.id == shoot.id {
-                        selectedShoot = nil
-                    }
-                } else {
-                    try await SportsShootService.shared.archiveSportsShoot(id: shoot.id)
-                    // Update local copy
-                    if let index = sportsShoots.firstIndex(where: { $0.id == shoot.id }) {
-                        sportsShoots[index].isArchived = true
-                    }
-                    // Clean up cached thumbnails for this shoot
+                let newStatus = shoot.isArchived ? "active" : "archived"
+                // Update the gallery's status directly
+                try await SupabaseManager.shared.client
+                    .from("galleries")
+                    .update(["status": newStatus])
+                    .eq("id", value: shoot.id)
+                    .execute()
+
+                // Update local copy
+                if let index = sportsShoots.firstIndex(where: { $0.id == shoot.id }) {
+                    sportsShoots[index].isArchived = !shoot.isArchived
+                }
+                // Clean up cached thumbnails when archiving
+                if !shoot.isArchived {
                     ThumbnailCache.shared.deleteShoot(shootId: shoot.id.uuidString)
-                    // If we're viewing active and archived the selected shoot, clear selection
-                    if showArchived == false && selectedShoot?.id == shoot.id {
-                        selectedShoot = nil
-                    }
+                }
+                // Clear selection if the current shoot was toggled out of view
+                if selectedShoot?.id == shoot.id {
+                    selectedShoot = nil
                 }
             } catch {
                 errorMessage = "Failed to \(shoot.isArchived ? "unarchive" : "archive"): \(error.localizedDescription)"
@@ -3550,42 +3547,80 @@ struct FPSportsRosterView_iPad: View {
                             // MARK: - Data Loading and Actions (Offline-First)
 
                             private func loadSportsShoots() {
-                                print("[DEBUG] loadSportsShoots called, storedUserOrganizationID: '\(storedUserOrganizationID)'")
+                                print("[DEBUG] FP Sports loadSportsShoots called, org: '\(storedUserOrganizationID)'")
                                 guard !storedUserOrganizationID.isEmpty else {
-                                    print("[DEBUG] ERROR: storedUserOrganizationID is empty")
                                     viewModel.errorMessage = "No organization ID found. Please sign in again."
                                     viewModel.showingErrorAlert = true
                                     return
                                 }
 
-                                // PowerSync handles offline caching - start loading
                                 viewModel.isLoading = true
 
-                                // Then refresh from network (service handles caching)
                                 Task {
                                     do {
-                                        let shoots = try await SportsShootService.shared.fetchAllSportsShoots(forOrganization: storedUserOrganizationID)
+                                        // FP Sports: query galleries with shoot_type='sports' directly
+                                        // These are Production galleries — no sports_job link needed
+                                        struct GalleryRow: Decodable {
+                                            let id: String
+                                            let name: String
+                                            let school_year: String
+                                            let status: String
+                                            let notes: String?
+                                            let organization_id: String
+                                            let school_id: String?
+                                            let photo_day: String?    // date type comes as ISO string
+                                            let is_deleted: Bool?     // boolean in Supabase
+                                        }
+
+                                        let galleries: [GalleryRow] = try await SupabaseManager.shared.client
+                                            .from("galleries")
+                                            .select("id, name, school_year, status, notes, organization_id, school_id, photo_day, is_deleted")
+                                            .eq("organization_id", value: storedUserOrganizationID)
+                                            .eq("shoot_type", value: "sports")
+                                            .order("created_at", ascending: false)
+                                            .execute()
+                                            .value
+
+                                        // Filter out soft-deleted, map to SportsShoot so the rest of the view works unchanged
+                                        let shoots = galleries.filter { $0.is_deleted != true }.compactMap { g -> SportsShoot? in
+                                            guard let id = UUID(uuidString: g.id) else { return nil }
+                                            // Parse photo_day date if available
+                                            var shootDate = Date()
+                                            if let pd = g.photo_day {
+                                                let fmt = DateFormatter()
+                                                fmt.dateFormat = "yyyy-MM-dd"
+                                                shootDate = fmt.date(from: pd) ?? Date()
+                                            }
+                                            return SportsShoot(
+                                                id: id,
+                                                organizationId: g.organization_id,
+                                                schoolName: g.name,
+                                                schoolId: g.school_id,
+                                                sportName: "",
+                                                seasonType: g.school_year,
+                                                shootDate: shootDate,
+                                                location: "",
+                                                photographer: "",
+                                                additionalNotes: g.notes ?? "",
+                                                sessionId: nil,
+                                                isArchived: g.status == "archived",
+                                                galleryId: g.id
+                                            )
+                                        }
+
                                         await MainActor.run {
                                             self.viewModel.isLoading = false
-                                            print("[DEBUG] loadSportsShoots SUCCESS: received \(shoots.count) shoots from network")
-                                            // Only show jobs linked to a Production gallery
-                                            self.viewModel.sportsShoots = shoots.filter { $0.galleryId != nil }
-                                            print("[DEBUG] viewModel.sportsShoots count = \(self.viewModel.sportsShoots.count)")
-                                            print("[DEBUG] viewModel.showArchived = \(self.viewModel.showArchived)")
-                                            print("[DEBUG] viewModel.filteredSportsShoots count = \(self.viewModel.filteredSportsShoots.count)")
-
-                                            // Check if we have a selected session from the widget
+                                            print("[DEBUG] FP Sports: loaded \(shoots.count) sports galleries")
+                                            self.viewModel.sportsShoots = shoots
                                             self.checkForSelectedSession()
                                         }
                                     } catch {
                                         await MainActor.run {
-                                            // If we already have cached data displayed, don't show error alert
                                             if !self.viewModel.sportsShoots.isEmpty {
-                                                print("[DEBUG] loadSportsShoots: Network refresh failed, continuing with cached data")
+                                                print("[DEBUG] FP Sports: refresh failed, keeping cached data")
                                             } else {
                                                 self.viewModel.isLoading = false
-                                                print("[DEBUG] loadSportsShoots FAILURE: \(error)")
-                                                self.viewModel.errorMessage = "Failed to load sports shoots: \(error.localizedDescription)"
+                                                self.viewModel.errorMessage = "Failed to load sports galleries: \(error.localizedDescription)"
                                                 self.viewModel.showingErrorAlert = true
                                             }
                                         }

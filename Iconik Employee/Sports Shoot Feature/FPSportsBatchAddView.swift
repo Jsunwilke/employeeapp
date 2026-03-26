@@ -194,6 +194,15 @@ struct FPSportsBatchAddView: View {
                     do {
                         try await powerSync.saveSubject(subject)
                         saved = true
+                        // Broadcast to Surface Pro via WebSocket
+                        FocalPointSyncClient.shared.broadcastSubjectCreated(
+                            rosterEntryId: subject.id.uuidString.lowercased(),
+                            firstName: subject.firstName,
+                            lastName: subject.lastName,
+                            rosterId: subject.rosterId,
+                            grade: subject.grade,
+                            groupName: subject.sport
+                        )
                         break
                     } catch {
                         if attempt < 3 {
