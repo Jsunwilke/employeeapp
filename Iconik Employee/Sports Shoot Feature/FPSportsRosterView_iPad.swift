@@ -157,6 +157,7 @@ struct FPSportsRosterView_iPad: View {
     // PowerSync watch tasks (replaces Supabase realtime subscription for roster data)
     @State private var rosterWatchTask: Task<Void, Never>?
     @State private var groupWatchTask: Task<Void, Never>?
+    @State private var recentlyDeletedGroupIds: Set<UUID> = []
     private var supabase: SupabaseClient { SupabaseManager.shared.client }
 
     // Focal Point Production sync (iPad ↔ Surface Pro)
@@ -3785,6 +3786,9 @@ struct FPSportsRosterView_iPad: View {
                             private func deleteGroupImage(groupID: UUID) {
                                 guard let group = viewModel.groupImages.first(where: { $0.id == groupID }) else { return }
 
+                                // Track deletion so the group watcher doesn't re-append it
+                                recentlyDeletedGroupIds.insert(groupID)
+
                                 // Remove from local state immediately
                                 viewModel.groupImages.removeAll { $0.id == groupID }
 
@@ -4089,11 +4093,40 @@ struct FPSportsRosterView_iPad: View {
                                     while !Task.isCancelled {
                                         do {
                                             for try await groups in powerSync.watchGroupImages(forJob: shootID) {
-                                                if groups.isEmpty && !viewModel.groupImages.isEmpty {
-                                                    continue
+                                                var merged = groups
+
+                                                // Protect local group data from being overwritten by stale server data.
+                                                // A local group is authoritative if it has a higher version or newer timestamp.
+                                                for localGroup in viewModel.groupImages {
+                                                    // Skip groups we intentionally deleted — don't re-append them
+                                                    guard !recentlyDeletedGroupIds.contains(localGroup.id) else { continue }
+
+                                                    if let index = merged.firstIndex(where: { $0.id == localGroup.id }) {
+                                                        // Group exists in both local and server — keep whichever is authoritative.
+                                                        // Version is the primary signal (incremented on every save).
+                                                        // Timestamp is the fallback for entries saved before versioning.
+                                                        let localIsNewer = localGroup.version > merged[index].version
+                                                            || (localGroup.version == merged[index].version
+                                                                && localGroup.updatedAt > merged[index].updatedAt)
+                                                        if localIsNewer {
+                                                            merged[index] = localGroup
+                                                        }
+                                                    } else {
+                                                        // Group exists locally but NOT in server data yet —
+                                                        // PowerSync hasn't uploaded it yet. Keep it visible.
+                                                        merged.append(localGroup)
+                                                    }
                                                 }
-                                                viewModel.groupImages = groups
-                                                retryDelay = 1_000_000_000 // Reset on success
+
+                                                // Once server confirms a deleted group is gone, clean up the tracking set
+                                                for deletedId in recentlyDeletedGroupIds {
+                                                    if !merged.contains(where: { $0.id == deletedId }) {
+                                                        recentlyDeletedGroupIds.remove(deletedId)
+                                                    }
+                                                }
+
+                                                viewModel.groupImages = merged
+                                                retryDelay = 1_000_000_000 // Reset backoff on success
                                             }
                                         } catch {
                                             if Task.isCancelled { return }
