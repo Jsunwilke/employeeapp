@@ -170,5 +170,24 @@ let powerSyncSchema = Schema(
             .text("organization_id"),
             .text("synced_at")
         ]
+    ),
+
+    // MARK: - Gallery metadata (synced org-wide via by_org bucket — offline-first for FP Sports)
+
+    Table(
+        name: "galleries",
+        columns: [
+            .text("organization_id"),
+            .text("name"),
+            .text("school_year"),
+            .text("status"),
+            .text("notes"),
+            .text("school_id"),
+            .text("shoot_type"),
+            .text("photo_day"),
+            .text("is_deleted"),
+            .text("created_at"),
+            .text("updated_at")
+        ]
     )
 )

@@ -468,6 +468,44 @@ class PowerSyncManager: ObservableObject {
         return results
     }
 
+    // MARK: - Galleries (offline-first for FP Sports)
+
+    /// Fetch sports galleries from local SQLite — galleries are synced org-wide via by_org bucket
+    func getSportGalleries(forOrg orgId: String) async throws -> [SportsShoot] {
+        guard let db = database else {
+            throw PowerSyncManagerError.notInitialized
+        }
+
+        let results: [SportsShoot] = try await db.getAll(
+            sql: "SELECT * FROM galleries WHERE organization_id = ? AND shoot_type = 'sports' AND (is_deleted IS NULL OR is_deleted != 'true') ORDER BY created_at DESC",
+            parameters: [orgId],
+            mapper: { cursor in
+                try Self.parseGalleryAsSportsShoot(from: cursor)
+            }
+        )
+
+        return results
+    }
+
+    /// Watch sports galleries for real-time updates
+    func watchSportGalleries(forOrg orgId: String) -> AsyncThrowingStream<[SportsShoot], Error> {
+        guard let db = database else {
+            return AsyncThrowingStream { $0.finish() }
+        }
+
+        do {
+            return try db.watch(
+                sql: "SELECT * FROM galleries WHERE organization_id = ? AND shoot_type = 'sports' AND (is_deleted IS NULL OR is_deleted != 'true') ORDER BY created_at DESC",
+                parameters: [orgId],
+                mapper: { cursor in
+                    try Self.parseGalleryAsSportsShoot(from: cursor)
+                }
+            )
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
+    }
+
     /// Fetch a single sports job by ID from local SQLite — used as offline fallback
     func getSportsJob(id: UUID) async throws -> SportsShoot? {
         guard let db = database else {
@@ -569,6 +607,41 @@ class PowerSyncManager: ObservableObject {
             lockedByName: try? cursor.getString(name: "locked_by_name"),
             lockedAt: parseDate((try? cursor.getString(name: "locked_at"))),
             createdAt: parseDate((try? cursor.getString(name: "created_at"))) ?? Date()
+        )
+    }
+
+    /// Maps a galleries row to SportsShoot — mirrors the inline mapping in FPSportsRosterView_iPad.loadSportsShoots()
+    private nonisolated static func parseGalleryAsSportsShoot(from cursor: SqlCursor) throws -> SportsShoot {
+        let idString = try cursor.getString(name: "id")
+
+        guard let id = UUID(uuidString: idString) else {
+            throw PowerSyncManagerError.invalidData
+        }
+
+        // Parse photo_day date (stored as "yyyy-MM-dd" text in SQLite)
+        var shootDate = Date()
+        if let pd = try? cursor.getString(name: "photo_day"), !pd.isEmpty {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd"
+            shootDate = fmt.date(from: pd) ?? Date()
+        }
+
+        return SportsShoot(
+            id: id,
+            organizationId: (try? cursor.getString(name: "organization_id")) ?? "",
+            schoolName: (try? cursor.getString(name: "name")) ?? "",
+            schoolId: try? cursor.getString(name: "school_id"),
+            sportName: "",
+            seasonType: (try? cursor.getString(name: "school_year")) ?? "",
+            shootDate: shootDate,
+            location: "",
+            photographer: "",
+            additionalNotes: (try? cursor.getString(name: "notes")) ?? "",
+            sessionId: nil,
+            isArchived: (try? cursor.getString(name: "status")) == "archived",
+            createdAt: parseDate((try? cursor.getString(name: "created_at"))) ?? Date(),
+            updatedAt: parseDate((try? cursor.getString(name: "updated_at"))) ?? Date(),
+            galleryId: idString   // The gallery IS the shoot — its own id is the galleryId
         )
     }
 

@@ -3557,9 +3557,25 @@ struct FPSportsRosterView_iPad: View {
                                 viewModel.isLoading = true
 
                                 Task {
+                                    // Step 1: Load from local PowerSync SQLite first — instant, works offline.
+                                    // galleries are in the by_org bucket so they sync to every device in the org.
                                     do {
-                                        // FP Sports: query galleries with shoot_type='sports' directly
-                                        // These are Production galleries — no sports_job link needed
+                                        let localShoots = try await powerSync.getSportGalleries(forOrg: storedUserOrganizationID)
+                                        await MainActor.run {
+                                            if !localShoots.isEmpty {
+                                                self.viewModel.isLoading = false
+                                                self.viewModel.sportsShoots = localShoots
+                                                self.checkForSelectedSession()
+                                                print("[DEBUG] FP Sports: loaded \(localShoots.count) galleries from local SQLite")
+                                            }
+                                        }
+                                    } catch {
+                                        print("[DEBUG] FP Sports: local SQLite read failed: \(error)")
+                                    }
+
+                                    // Step 2: Refresh from Supabase in background — keeps data fresh when online.
+                                    // If offline this silently fails; local data stays displayed.
+                                    do {
                                         struct GalleryRow: Decodable {
                                             let id: String
                                             let name: String
@@ -3568,8 +3584,8 @@ struct FPSportsRosterView_iPad: View {
                                             let notes: String?
                                             let organization_id: String
                                             let school_id: String?
-                                            let photo_day: String?    // date type comes as ISO string
-                                            let is_deleted: Bool?     // boolean in Supabase
+                                            let photo_day: String?
+                                            let is_deleted: Bool?
                                         }
 
                                         let galleries: [GalleryRow] = try await SupabaseManager.shared.client
@@ -3581,10 +3597,8 @@ struct FPSportsRosterView_iPad: View {
                                             .execute()
                                             .value
 
-                                        // Filter out soft-deleted, map to SportsShoot so the rest of the view works unchanged
                                         let shoots = galleries.filter { $0.is_deleted != true }.compactMap { g -> SportsShoot? in
                                             guard let id = UUID(uuidString: g.id) else { return nil }
-                                            // Parse photo_day date if available
                                             var shootDate = Date()
                                             if let pd = g.photo_day {
                                                 let fmt = DateFormatter()
@@ -3610,18 +3624,19 @@ struct FPSportsRosterView_iPad: View {
 
                                         await MainActor.run {
                                             self.viewModel.isLoading = false
-                                            print("[DEBUG] FP Sports: loaded \(shoots.count) sports galleries")
                                             self.viewModel.sportsShoots = shoots
                                             self.checkForSelectedSession()
+                                            print("[DEBUG] FP Sports: refreshed \(shoots.count) galleries from network")
                                         }
                                     } catch {
                                         await MainActor.run {
-                                            if !self.viewModel.sportsShoots.isEmpty {
-                                                print("[DEBUG] FP Sports: refresh failed, keeping cached data")
-                                            } else {
-                                                self.viewModel.isLoading = false
+                                            self.viewModel.isLoading = false
+                                            // Only show error if local SQLite also had nothing
+                                            if self.viewModel.sportsShoots.isEmpty {
                                                 self.viewModel.errorMessage = "Failed to load sports galleries: \(error.localizedDescription)"
                                                 self.viewModel.showingErrorAlert = true
+                                            } else {
+                                                print("[DEBUG] FP Sports: network refresh failed, showing cached data")
                                             }
                                         }
                                     }
