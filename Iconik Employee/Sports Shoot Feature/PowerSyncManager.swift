@@ -468,6 +468,25 @@ class PowerSyncManager: ObservableObject {
         return results
     }
 
+    /// Fetch a single sports job by ID from local SQLite — used as offline fallback
+    func getSportsJob(id: UUID) async throws -> SportsShoot? {
+        guard let db = database else {
+            throw PowerSyncManagerError.notInitialized
+        }
+
+        let idString = id.uuidString.lowercased()
+
+        let results: [SportsShoot] = try await db.getAll(
+            sql: "SELECT * FROM sports_jobs WHERE id = ? LIMIT 1",
+            parameters: [idString],
+            mapper: { cursor in
+                try Self.parseSportsJob(from: cursor)
+            }
+        )
+
+        return results.first
+    }
+
     /// Watch sports jobs for real-time updates
     func watchSportsJobs(forOrg orgId: String) -> AsyncThrowingStream<[SportsShoot], Error> {
         guard let db = database else {

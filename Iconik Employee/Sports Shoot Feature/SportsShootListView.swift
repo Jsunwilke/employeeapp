@@ -3644,35 +3644,45 @@ struct SportsShootListView: View {
                                     return
                                 }
 
-                                // PowerSync handles offline caching - start loading
                                 viewModel.isLoading = true
 
-                                // Then refresh from network (service handles caching)
                                 Task {
+                                    // Step 1: Load from local PowerSync SQLite first — instant, works offline.
+                                    // sports_jobs are in the by_org bucket so they're always synced.
+                                    do {
+                                        let localShoots = try await powerSync.getSportsJobs(forOrg: storedUserOrganizationID)
+                                        await MainActor.run {
+                                            if !localShoots.isEmpty {
+                                                self.viewModel.isLoading = false
+                                                self.viewModel.sportsShoots = localShoots.filter { $0.galleryId == nil }
+                                                self.checkForSelectedSession()
+                                                print("[DEBUG] loadSportsShoots: loaded \(localShoots.count) shoots from local SQLite")
+                                            }
+                                        }
+                                    } catch {
+                                        print("[DEBUG] loadSportsShoots: local SQLite read failed: \(error)")
+                                    }
+
+                                    // Step 2: Refresh from network in background — keeps data fresh when online.
+                                    // If offline this silently fails; local data stays displayed.
                                     do {
                                         let shoots = try await SportsShootService.shared.fetchAllSportsShoots(forOrganization: storedUserOrganizationID)
                                         await MainActor.run {
                                             self.viewModel.isLoading = false
-                                            print("[DEBUG] loadSportsShoots SUCCESS: received \(shoots.count) shoots from network")
-                                            // Only show jobs NOT linked to a Production gallery (those belong in FP Sports)
                                             self.viewModel.sportsShoots = shoots.filter { $0.galleryId == nil }
-                                            print("[DEBUG] viewModel.sportsShoots count = \(self.viewModel.sportsShoots.count)")
-                                            print("[DEBUG] viewModel.showArchived = \(self.viewModel.showArchived)")
-                                            print("[DEBUG] viewModel.filteredSportsShoots count = \(self.viewModel.filteredSportsShoots.count)")
-
-                                            // Check if we have a selected session from the widget
                                             self.checkForSelectedSession()
+                                            print("[DEBUG] loadSportsShoots: refreshed \(shoots.count) shoots from network")
                                         }
                                     } catch {
                                         await MainActor.run {
-                                            // If we already have cached data displayed, don't show error alert
-                                            if !self.viewModel.sportsShoots.isEmpty {
-                                                print("[DEBUG] loadSportsShoots: Network refresh failed, continuing with cached data")
-                                            } else {
-                                                self.viewModel.isLoading = false
+                                            self.viewModel.isLoading = false
+                                            // Only show error if local SQLite also had nothing
+                                            if self.viewModel.sportsShoots.isEmpty {
                                                 print("[DEBUG] loadSportsShoots FAILURE: \(error)")
                                                 self.viewModel.errorMessage = "Failed to load sports shoots: \(error.localizedDescription)"
                                                 self.viewModel.showingErrorAlert = true
+                                            } else {
+                                                print("[DEBUG] loadSportsShoots: network refresh failed, showing cached data")
                                             }
                                         }
                                     }

@@ -1933,7 +1933,19 @@ struct SportsShootDetailView: View {
 
     private func loadSportsShoot() async {
         do {
-            let shoot = try await SportsShootService.shared.fetchSportsShoot(id: shootID)
+            // Load shoot metadata — try network first, fall back to local SQLite if offline.
+            let shoot: SportsShoot
+            do {
+                shoot = try await SportsShootService.shared.fetchSportsShoot(id: shootID)
+            } catch {
+                // Network unavailable — try local PowerSync SQLite fallback
+                if let localShoot = try? await powerSync.getSportsJob(id: shootID) {
+                    shoot = localShoot
+                    print("[DEBUG] loadSportsShoot: using local SQLite fallback for shoot \(shootID)")
+                } else {
+                    throw error // Not in local DB either — surface the original error
+                }
+            }
             self.sportsShoot = shoot
 
             // If PowerSync hasn't completed its first sync yet, wait for it.
