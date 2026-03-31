@@ -81,6 +81,7 @@ class MainEmployeeViewModel: ObservableObject {
         FeatureItem(id: "mileageReports", title: "Mileage Reports", systemImage: "car.fill", description: "Track your mileage"),
         FeatureItem(id: "schedule", title: "Schedule", systemImage: "calendar", description: "View your upcoming shifts"),
         FeatureItem(id: "locationPhotos", title: "Location Photos", systemImage: "photo.on.rectangle", description: "Manage photos for locations"),
+        FeatureItem(id: "capture", title: "Capture", systemImage: "camera.fill", description: "Poser station for portrait and sports shoots"),
         FeatureItem(id: "sportsShoot", title: "Sports Shoots", systemImage: "sportscourt", description: "Manage sports shoot rosters and images"),
         FeatureItem(id: "focalPointSports", title: "FP Sports", systemImage: "figure.run", description: "Focal Point Sports — direct subject management via Production"),
         FeatureItem(id: "yearbookChecklists", title: "Yearbook Checklists", systemImage: "list.clipboard", description: "Track yearbook photo requirements"),
@@ -876,6 +877,8 @@ struct MainEmployeeView: View {
             PhotoshootNotesView()
         case "dailyJobReport":
             DailyJobReportView()
+        case "capture":
+            CaptureGalleryListView()
         case "sportsShoot":
             SportsShootListView()
         case "focalPointSports":
@@ -1189,6 +1192,7 @@ struct MainEmployeeView: View {
         case "mileageReports": return .orange
         case "schedule": return .red
         case "locationPhotos": return .pink
+        case "capture": return .blue
         case "sportsShoot": return .indigo
         case "focalPointSports": return .mint
         case "yearbookChecklists": return .purple

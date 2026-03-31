@@ -107,6 +107,7 @@ class FocalPointSyncClient: ObservableObject {
     var onSubjectsDeleted: (([String]) -> Void)?                   // subject_ids deleted on Production
     var onCaptureReassigned: ((Int, String, String) -> Void)?      // imageNumber, oldRosterEntryId, newRosterEntryId
     var onVerificationWarning: ((String, String, String, String, String?) -> Void)?  // subjectId, subjectName, status, message, qrData
+    var onGalleryChanged: ((String, String) -> Void)?                               // oldGalleryId, newGalleryId
 
     // Internal state
     private var webSocket: URLSessionWebSocketTask?
@@ -128,6 +129,15 @@ class FocalPointSyncClient: ObservableObject {
     private var pendingImageHeader: [String: Any]? = nil
     private let imageRequestTimeout: TimeInterval = 30.0
 
+    // Pending message queue (queued while disconnected, flushed on reconnect)
+    private var pendingMessages: [[String: Any]] = []
+    private let pendingQueueMax = 500
+    private let staleMessageTypes: Set<String> = ["heartbeat", "log_report", "device_hello"]
+
+    // Dedup for capture_completed events (prevents double-processing on retransmit)
+    private var seenCaptureIds: Set<String> = []
+    private let maxSeenCaptures = 1000
+
     /// Set the auth token (PIN) for manual connection
     func setAuthToken(_ token: String) {
         authToken = token
@@ -135,6 +145,13 @@ class FocalPointSyncClient: ObservableObject {
 
     /// Set the gallery ID for manual connection
     func setGalleryId(_ id: String) {
+        if galleryId != id {
+            seenCaptureIds.removeAll()
+            if !pendingMessages.isEmpty {
+                print("[FPSync] Cleared \(pendingMessages.count) pending message(s) on gallery switch")
+                pendingMessages.removeAll()
+            }
+        }
         galleryId = id
     }
 
@@ -164,6 +181,10 @@ class FocalPointSyncClient: ObservableObject {
     private var reconnectAttempts: Int = 0
     private let maxReconnectAttempts: Int = 10
 
+    // Auth retry (re-discover mDNS to get fresh token when server restarts)
+    private var authRetryCount: Int = 0
+    private let maxAuthRetries: Int = 3
+
     var isConnected: Bool {
         connectionStatus == .connected
     }
@@ -171,6 +192,13 @@ class FocalPointSyncClient: ObservableObject {
     // MARK: - Discovery
 
     func startDiscovery(galleryId: String, authToken: String? = nil) {
+        if self.galleryId != galleryId {
+            seenCaptureIds.removeAll()
+            if !pendingMessages.isEmpty {
+                print("[FPSync] Cleared \(pendingMessages.count) pending message(s) on gallery switch (discovery)")
+                pendingMessages.removeAll()
+            }
+        }
         self.galleryId = galleryId
         // Only override authToken if explicitly provided (preserve token set via setAuthToken)
         if let token = authToken {
@@ -324,8 +352,19 @@ class FocalPointSyncClient: ObservableObject {
                 self.connectionStatus = .connected
                 self.reconnectDelay = 2.0
                 self.reconnectAttempts = 0
+                self.authRetryCount = 0
                 self.stopDiscovery()
                 self.startHeartbeat()
+
+                // Flush pending messages queued while disconnected
+                if !self.pendingMessages.isEmpty {
+                    let queued = self.pendingMessages
+                    self.pendingMessages.removeAll()
+                    print("[FPSync] Flushing \(queued.count) pending messages")
+                    for msg in queued {
+                        self.send(msg)
+                    }
+                }
 
                 // Remember server for fast reconnect
                 UserDefaults.standard.set(["ip": host, "port": port], forKey: "fp_last_server")
@@ -346,6 +385,7 @@ class FocalPointSyncClient: ObservableObject {
         connectionStatus = .disconnected
         devices = []
         pairedCameraId = nil
+        seenCaptureIds.removeAll()
         UserDefaults.standard.removeObject(forKey: "fp_last_server")
         print("[FPSync] Disconnected")
     }
@@ -398,9 +438,22 @@ class FocalPointSyncClient: ObservableObject {
         send(msg)
     }
 
+    /// Broadcast that a subject was checked in (for poser station queue sync)
+    func broadcastCheckIn(galleryId: String, subjectId: String, subjectName: String) {
+        let msg: [String: Any] = [
+            "type": "subject_checked_in",
+            "device_id": deviceId,
+            "gallery_id": galleryId,
+            "subject_id": subjectId,
+            "subject_name": subjectName,
+            "checked_in_at": ISO8601DateFormatter().string(from: Date()),
+        ]
+        send(msg)
+    }
+
     /// Mark a subject as absent/present and notify Production
     func markSubjectAbsent(subjectId: String, rosterEntryId: String?, isAbsent: Bool) {
-        guard isConnected, let galleryId = galleryId else { return }
+        guard let galleryId = galleryId else { return }
         let msg: [String: Any] = [
             "type": "subject_absent_changed",
             "device_id": deviceId,
@@ -415,7 +468,7 @@ class FocalPointSyncClient: ObservableObject {
 
     /// Send notes update for a subject
     func sendNotes(subjectId: String, rosterEntryId: String?, notes: String) {
-        guard isConnected, let galleryId = galleryId else { return }
+        guard let galleryId = galleryId else { return }
         // Cap notes length
         let trimmed = String(notes.prefix(1000))
         let msg: [String: Any] = [
@@ -432,7 +485,7 @@ class FocalPointSyncClient: ObservableObject {
 
     /// Send name/field update for a subject (when blank placeholder gets a name on iPad)
     func sendSubjectUpdated(subjectId: String?, rosterEntryId: String, firstName: String, lastName: String, rosterId: String) {
-        guard isConnected, let galleryId = galleryId else { return }
+        guard let galleryId = galleryId else { return }
         let msg: [String: Any] = [
             "type": "subject_updated",
             "device_id": deviceId,
@@ -456,7 +509,7 @@ class FocalPointSyncClient: ObservableObject {
         grade: String,
         groupName: String
     ) {
-        guard isConnected, let galleryId = galleryId else { return }
+        guard let galleryId = galleryId else { return }
         let msg: [String: Any] = [
             "type": "subject_created",
             "device_id": deviceId,
@@ -474,7 +527,7 @@ class FocalPointSyncClient: ObservableObject {
 
     /// Broadcast that roster entries were batch-deleted on iPad
     func broadcastEntriesDeleted(rosterEntryIds: [String]) {
-        guard isConnected, let galleryId = galleryId else { return }
+        guard let galleryId = galleryId else { return }
         let capped = Array(rosterEntryIds.prefix(500))
         let msg: [String: Any] = [
             "type": "roster_entries_deleted",
@@ -488,7 +541,7 @@ class FocalPointSyncClient: ObservableObject {
 
     /// Request Production to move a capture from one subject to another
     func sendMoveCapture(imageNumber: Int, fromSubjectId: String, toSubjectId: String, fromRosterEntryId: String, toRosterEntryId: String) {
-        guard isConnected, let galleryId = galleryId else { return }
+        guard let galleryId = galleryId else { return }
         let msg: [String: Any] = [
             "type": "move_capture",
             "device_id": deviceId,
@@ -611,11 +664,18 @@ class FocalPointSyncClient: ObservableObject {
             print("[FPSync] Send failed: could not serialize message")
             return
         }
+        let msgType = dict["type"] as? String ?? "?"
         guard let ws = webSocket else {
-            print("[FPSync] Send failed: webSocket is nil (type=\(dict["type"] ?? "?"))")
+            // Queue non-stale messages for later delivery
+            if !staleMessageTypes.contains(msgType) {
+                pendingMessages.append(dict)
+                if pendingMessages.count > pendingQueueMax {
+                    pendingMessages.removeFirst()
+                }
+                print("[FPSync] Queued \(msgType) (pending: \(pendingMessages.count))")
+            }
             return
         }
-        let msgType = dict["type"] as? String ?? "?"
         ws.send(.string(str)) { error in
             if let error = error {
                 print("[FPSync] Send error (\(msgType)): \(error)")
@@ -775,10 +835,25 @@ class FocalPointSyncClient: ObservableObject {
             // Validate required fields
             guard let subjectId = msg["subject_id"] as? String, !subjectId.isEmpty,
                   UUID(uuidString: subjectId) != nil else { break }
+            let imageNumber = msg["image_number"] as? Int
+            // Dedup: skip if we've already processed this capture event
+            let dedupKey = "\(subjectId)_\(imageNumber ?? 0)"
+            if seenCaptureIds.contains(dedupKey) {
+                print("[FPSync] Duplicate capture_completed, skipping: \(dedupKey)")
+                break
+            }
+            seenCaptureIds.insert(dedupKey)
+            // Trim seen set when it gets too large (keep ~half)
+            if seenCaptureIds.count > maxSeenCaptures {
+                let excess = seenCaptureIds.count - maxSeenCaptures / 2
+                for _ in 0..<excess {
+                    seenCaptureIds.removeFirst()
+                }
+            }
             let event = FPCaptureEvent(
                 subjectId: subjectId,
                 rosterEntryId: msg["roster_entry_id"] as? String,
-                imageNumber: msg["image_number"] as? Int,
+                imageNumber: imageNumber,
                 captureFilename: msg["capture_filename"] as? String,
                 stationName: msg["station_name"] as? String ?? "Unknown",
                 fromDeviceId: msg["device_id"] as? String ?? ""
@@ -786,6 +861,16 @@ class FocalPointSyncClient: ObservableObject {
             // Only process from our paired camera (or any if not paired)
             if pairedCameraId == nil || event.fromDeviceId == pairedCameraId {
                 onCaptureCompleted?(event)
+            }
+
+            // Send ack back to Production so it knows we received this capture event
+            if let captureId = msg["capture_id"] as? String, !captureId.isEmpty {
+                send([
+                    "type": "capture_completed_ack",
+                    "capture_id": captureId,
+                    "device_id": deviceId,
+                    "gallery_id": galleryId ?? "",
+                ])
             }
 
         case "subject_photographed":
@@ -803,8 +888,23 @@ class FocalPointSyncClient: ObservableObject {
             }
 
         case "auth_error":
-            connectionStatus = .authFailed
-            disconnect()
+            authRetryCount += 1
+            if authRetryCount <= maxAuthRetries, let gid = galleryId {
+                print("[FPSync] Auth failed, re-discovering to get fresh token (attempt \(authRetryCount)/\(maxAuthRetries))")
+                // Close current socket without clearing last server (intentional != full disconnect)
+                stopHeartbeat()
+                webSocket?.cancel(with: .normalClosure, reason: nil)
+                webSocket = nil
+                urlSession = nil
+                connectionStatus = .discovering
+                // Clear stale cached server so mDNS discovers fresh TXT record
+                UserDefaults.standard.removeObject(forKey: "fp_last_server")
+                startDiscovery(galleryId: gid)
+            } else {
+                print("[FPSync] Auth failed, max retries reached — giving up")
+                connectionStatus = .authFailed
+                disconnect()
+            }
 
         case "active_subject_changed":
             guard let subjectId = msg["subject_id"] as? String, !subjectId.isEmpty,
@@ -930,6 +1030,15 @@ class FocalPointSyncClient: ObservableObject {
                 onVerificationWarning?(subjectId, subjectName, status, message, qrData)
             }
 
+        case "gallery_changed":
+            let oldGalleryId = msg["old_gallery_id"] as? String ?? ""
+            let newGalleryId = msg["new_gallery_id"] as? String ?? ""
+            if !oldGalleryId.isEmpty && oldGalleryId == galleryId {
+                // Production switched away from our gallery
+                print("[FPSync] Production switched gallery: \(oldGalleryId) -> \(newGalleryId)")
+                onGalleryChanged?(oldGalleryId, newGalleryId)
+            }
+
         default:
             break
         }
@@ -977,6 +1086,7 @@ class FocalPointSyncClient: ObservableObject {
         }
         pendingCaptureListRequests.removeAll()
         pendingImageHeader = nil
+        pendingMessages.removeAll()
 
         guard !intentionalClose, let host = lastHost, let port = lastPort else { return }
         scheduleReconnect(host: host, port: port)

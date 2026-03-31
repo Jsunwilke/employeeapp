@@ -346,6 +346,7 @@ struct SportsShoot: Identifiable, Codable {
     var createdAt: Date
     var updatedAt: Date
     var galleryId: String?       // FK to Production galleries (iPad sync)
+    var shootType: String?       // Gallery shoot_type (sports, springPortraits, underclassFall, etc.)
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -362,6 +363,7 @@ struct SportsShoot: Identifiable, Codable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case galleryId = "gallery_id"
+        case shootType = "shoot_type"
     }
 
     init(from decoder: Decoder) throws {
@@ -381,6 +383,7 @@ struct SportsShoot: Identifiable, Codable {
         createdAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .createdAt)) ?? Date()
         updatedAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .updatedAt)) ?? Date()
         galleryId = try container.decodeIfPresent(String.self, forKey: .galleryId)
+        shootType = try container.decodeIfPresent(String.self, forKey: .shootType)
     }
 
     init(id: UUID = UUID(),

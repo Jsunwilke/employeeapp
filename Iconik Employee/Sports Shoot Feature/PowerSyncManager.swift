@@ -41,6 +41,16 @@ class PowerSyncManager: ObservableObject {
     @Published var isSyncing = false
     @Published var hasSynced = false
     @Published var lastSyncTime: Date?
+    @Published var isUploading = false {
+        didSet {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("PowerSyncUploadingChanged"),
+                object: nil,
+                userInfo: ["isUploading": isUploading]
+            )
+        }
+    }
+    @Published var isDownloading = false
 
     /// Whether the PowerSync database is initialized and ready for operations
     var isReady: Bool { database != nil }
@@ -54,6 +64,7 @@ class PowerSyncManager: ObservableObject {
     private var networkMonitor: NWPathMonitor?
     private let monitorQueue = DispatchQueue(label: "PowerSyncNetworkMonitor")
     private var isConnecting = false
+    private var syncStatusWatchTask: Task<Void, Never>?
 
     // MARK: - Initialization
 
@@ -147,10 +158,32 @@ class PowerSyncManager: ObservableObject {
 
             // Notify views that depend on PowerSync data
             NotificationCenter.default.post(name: NSNotification.Name("PowerSyncDidConnect"), object: nil)
+
+            // Start watching sync status for upload/download indicators
+            startSyncStatusWatch(db: db)
         } catch {
             isConnecting = false
             print("PowerSyncManager: Connection failed: \(error)")
             throw error
+        }
+    }
+
+    /// Watch PowerSync's sync status stream for upload/download state changes
+    private func startSyncStatusWatch(db: PowerSyncDatabaseProtocol) {
+        syncStatusWatchTask?.cancel()
+        syncStatusWatchTask = Task { [weak self] in
+            for await status in db.currentStatus.asFlow() {
+                guard !Task.isCancelled else { break }
+                guard let self = self else { break }
+                let newUploading = status.uploading
+                let newDownloading = status.downloading
+                if self.isUploading != newUploading {
+                    self.isUploading = newUploading
+                }
+                if self.isDownloading != newDownloading {
+                    self.isDownloading = newDownloading
+                }
+            }
         }
     }
 
@@ -207,8 +240,12 @@ class PowerSyncManager: ObservableObject {
     func disconnect() async {
         guard let db = database else { return }
 
+        syncStatusWatchTask?.cancel()
+        syncStatusWatchTask = nil
         try? await db.disconnect()
         isConnected = false
+        isUploading = false
+        isDownloading = false
 
         print("PowerSyncManager: Disconnected")
     }
@@ -313,15 +350,14 @@ class PowerSyncManager: ObservableObject {
         print("PowerSyncManager: Linked roster entry \(rosterEntryId) -> subject \(subjectId)")
     }
 
-    /// Batch delete multiple roster entries
+    /// Batch delete multiple roster entries using a single SQL statement
     func deleteBatchRosterEntries(ids: [UUID]) async throws {
         guard let db = database else { throw PowerSyncManagerError.notInitialized }
-        for id in ids {
-            _ = try await db.execute(
-                sql: "DELETE FROM roster_entries WHERE id = ?",
-                parameters: [id.uuidString.lowercased()]
-            )
-        }
+        guard !ids.isEmpty else { return }
+        let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
+        let sql = "DELETE FROM roster_entries WHERE id IN (\(placeholders))"
+        let params: [String] = ids.map { $0.uuidString.lowercased() }
+        _ = try await db.execute(sql: sql, parameters: params)
         print("PowerSyncManager: Batch deleted \(ids.count) roster entries")
     }
 
@@ -506,6 +542,42 @@ class PowerSyncManager: ObservableObject {
         }
     }
 
+    /// Fetch all galleries for the Capture section (all shoot types)
+    func getCaptureGalleries(forOrg orgId: String) async throws -> [SportsShoot] {
+        guard let db = database else {
+            throw PowerSyncManagerError.notInitialized
+        }
+
+        let results: [SportsShoot] = try await db.getAll(
+            sql: "SELECT * FROM galleries WHERE organization_id = ? AND (is_deleted IS NULL OR is_deleted != 'true') ORDER BY created_at DESC",
+            parameters: [orgId],
+            mapper: { cursor in
+                try Self.parseGalleryAsSportsShoot(from: cursor)
+            }
+        )
+
+        return results
+    }
+
+    /// Watch all galleries for the Capture section (real-time updates)
+    func watchCaptureGalleries(forOrg orgId: String) -> AsyncThrowingStream<[SportsShoot], Error> {
+        guard let db = database else {
+            return AsyncThrowingStream { $0.finish() }
+        }
+
+        do {
+            return try db.watch(
+                sql: "SELECT * FROM galleries WHERE organization_id = ? AND (is_deleted IS NULL OR is_deleted != 'true') ORDER BY created_at DESC",
+                parameters: [orgId],
+                mapper: { cursor in
+                    try Self.parseGalleryAsSportsShoot(from: cursor)
+                }
+            )
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
+    }
+
     /// Fetch a single sports job by ID from local SQLite — used as offline fallback
     func getSportsJob(id: UUID) async throws -> SportsShoot? {
         guard let db = database else {
@@ -626,7 +698,7 @@ class PowerSyncManager: ObservableObject {
             shootDate = fmt.date(from: pd) ?? Date()
         }
 
-        return SportsShoot(
+        var shoot = SportsShoot(
             id: id,
             organizationId: (try? cursor.getString(name: "organization_id")) ?? "",
             schoolName: (try? cursor.getString(name: "name")) ?? "",
@@ -643,6 +715,8 @@ class PowerSyncManager: ObservableObject {
             updatedAt: parseDate((try? cursor.getString(name: "updated_at"))) ?? Date(),
             galleryId: idString   // The gallery IS the shoot — its own id is the galleryId
         )
+        shoot.shootType = try? cursor.getString(name: "shoot_type")
+        return shoot
     }
 
     private nonisolated static func parseSportsJob(from cursor: SqlCursor) throws -> SportsShoot {
@@ -791,16 +865,15 @@ class PowerSyncManager: ObservableObject {
         print("PowerSyncManager: Soft-deleted subject \(idString)")
     }
 
-    /// Batch soft-delete multiple subjects
+    /// Batch soft-delete multiple subjects using a single SQL statement
     func deleteBatchSubjects(ids: [UUID]) async throws {
         guard let db = database else { throw PowerSyncManagerError.notInitialized }
+        guard !ids.isEmpty else { return }
         let now = ISO8601DateFormatter().string(from: Date())
-        for id in ids {
-            _ = try await db.execute(
-                sql: "UPDATE subjects SET is_deleted = 'true', deleted_at = ?, updated_at = ? WHERE id = ?",
-                parameters: [now, now, id.uuidString.lowercased()]
-            )
-        }
+        let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
+        let sql = "UPDATE subjects SET is_deleted = 'true', deleted_at = ?, updated_at = ? WHERE id IN (\(placeholders))"
+        let params: [Any] = [now, now] + ids.map { $0.uuidString.lowercased() }
+        _ = try await db.execute(sql: sql, parameters: params)
         print("PowerSyncManager: Batch soft-deleted \(ids.count) subjects")
     }
 
