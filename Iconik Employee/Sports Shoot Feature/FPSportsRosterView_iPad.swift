@@ -15,6 +15,7 @@ class FPSportsRosterViewModel: ObservableObject {
 
     // Network status
     @Published var isOnline = true
+    @Published var isUploading = false
 
     // Roster and Groups data (fetched separately via services)
     @Published var subjects: [FPSubject] = []
@@ -61,13 +62,80 @@ class FPSportsRosterViewModel: ObservableObject {
     // Track if value has changed for save-on-blur
     @Published var hasUnsavedChanges: Bool = false
 
+    // MARK: - Coalesced Watch Updates
+    // Prevents UI flicker when multiple PowerSync watch streams (subjects + groupImages)
+    // emit independently within a short window. Stages pending data and applies all
+    // updates in a single objectWillChange cycle after a 100ms debounce.
+
+    private var pendingSubjects: [FPSubject]? = nil
+    private var pendingGroupImages: [GroupImage]? = nil
+    private var pendingLockedEntries: [UUID: String]? = nil
+    private var coalesceWorkItem: DispatchWorkItem? = nil
+    private let coalesceDelay: TimeInterval = 0.1 // 100ms debounce window
+
+    /// Stage a subjects update from the watch stream. The actual @Published assignment
+    /// is deferred until the debounce window closes, so it can be batched with any
+    /// group images update that arrives in the same window.
+    func stageSubjectsUpdate(_ newSubjects: [FPSubject], lockedEntries newLocks: [UUID: String]) {
+        pendingSubjects = newSubjects
+        pendingLockedEntries = newLocks
+        scheduleCoalescedApply()
+    }
+
+    /// Stage a group images update from the watch stream.
+    func stageGroupImagesUpdate(_ newGroupImages: [GroupImage]) {
+        pendingGroupImages = newGroupImages
+        scheduleCoalescedApply()
+    }
+
+    /// Schedule (or reschedule) the coalesced apply. Each call resets the timer,
+    /// so rapid-fire updates from both streams collapse into one UI cycle.
+    private func scheduleCoalescedApply() {
+        coalesceWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.applyPendingUpdates()
+        }
+        coalesceWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + coalesceDelay, execute: item)
+    }
+
+    /// Apply all staged updates in a single synchronous pass on the main thread.
+    /// Because all @Published assignments happen within one run loop tick,
+    /// SwiftUI coalesces the objectWillChange notifications into a single view update.
+    /// This prevents the double-render that occurs when two independent watch streams
+    /// each trigger a separate @Published assignment in separate async continuations.
+    private func applyPendingUpdates() {
+        guard pendingSubjects != nil || pendingGroupImages != nil else { return }
+
+        if let staged = pendingSubjects {
+            subjects = staged
+            pendingSubjects = nil
+        }
+        if let staged = pendingLockedEntries {
+            lockedEntries = staged
+            pendingLockedEntries = nil
+        }
+        if let staged = pendingGroupImages {
+            groupImages = staged
+            pendingGroupImages = nil
+        }
+    }
+
+    /// Immediately flush any pending staged updates without waiting for the debounce timer.
+    /// Call this when the user is leaving the view or switching shoots.
+    func flushPendingUpdates() {
+        coalesceWorkItem?.cancel()
+        coalesceWorkItem = nil
+        applyPendingUpdates()
+    }
+
     // Enum moved from the view to the view model
     enum ImageFilterType {
         case all
         case hasImages
         case noImages
     }
-    
+
     // Computed property to filter shoots based on archive status
     var filteredSportsShoots: [SportsShoot] {
         sportsShoots.filter { shoot in
@@ -160,6 +228,9 @@ struct FPSportsRosterView_iPad: View {
     @State private var recentlyDeletedGroupIds: Set<UUID> = []
     private var supabase: SupabaseClient { SupabaseManager.shared.client }
 
+    // Lock management (observe lock-lost events)
+    @ObservedObject private var lockManager = LockManager.shared
+
     // Focal Point Production sync (iPad ↔ Surface Pro)
     @StateObject private var fpSync = FocalPointSyncClient.shared
     @State private var showingFPSyncSheet = false
@@ -177,6 +248,11 @@ struct FPSportsRosterView_iPad: View {
     @State private var groupAttendance: [String: Set<String>] = [:] // group description -> set of present roster entry IDs
     @State private var pendingCaptureSaves: [UUID: Task<Void, Never>] = [:] // debounced saves per roster entry
     @State private var lastSyncedEntryId: UUID? = nil // last entry tapped for iPad→Surface sync
+
+    // Pending captures buffer — holds capture_completed events for subjects not yet in local PowerSync
+    @State private var pendingCaptureEvents: [(event: FPCaptureEvent, receivedAt: Date)] = []
+    private let maxPendingCaptures = 50
+    private let pendingCaptureTimeout: TimeInterval = 60 // seconds
 
     // Photo viewer
     @State private var showPhotoViewer = false
@@ -199,6 +275,18 @@ struct FPSportsRosterView_iPad: View {
     @State private var isEditMode = false
     @State private var selectedEntryIds: Set<UUID> = []
     @State private var showingBatchDeleteConfirm = false
+
+    // Lock-lost handling
+    @State private var showLockLostAlert = false
+    @State private var lockLostSubjectName = ""
+    @State private var lockLostSubjectId: UUID? = nil
+    @State private var lockLostHadUnsavedChanges = false
+
+    // Debounce search recomputation
+    @State private var searchDebounceTask: Task<Void, Never>?
+
+    // Cached sorted+filtered roster to avoid O(n log n) sort on every render cycle
+    @State private var cachedFilteredRoster: [FPSubject] = []
 
     // Sync statuses refresh timer - using a longer interval to prevent flickering
     let syncStatusTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -302,50 +390,51 @@ struct FPSportsRosterView_iPad: View {
                             Label("Disconnect", systemImage: "wifi.slash")
                         }
                     } else {
-                        // PIN entry — required for both auto and manual connect
-                        TextField("4-digit PIN", text: $manualSyncPIN)
-                            .textFieldStyle(.roundedBorder)
-                            .keyboardType(.asciiCapableNumberPad)
-                            .onChange(of: manualSyncPIN) { newValue in
-                                // Auto-dismiss keyboard when 4 digits entered
-                                if newValue.count >= 4 {
-                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                                }
-                            }
-
-                        // Auto-discover: finds server via mDNS, uses PIN above
+                        // Auto-discover: finds server via mDNS, connects automatically
                         Button {
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                             let pin = manualSyncPIN.trimmingCharacters(in: .whitespaces)
-                            guard !pin.isEmpty else { return }
-                            fpSync.setAuthToken(pin)
+                            if !pin.isEmpty {
+                                fpSync.setAuthToken(pin)
+                            }
                             if let galleryId = viewModel.selectedShoot?.galleryId {
                                 fpSync.setGalleryId(galleryId)
                             }
                             guard let shoot = viewModel.selectedShoot, let galleryId = shoot.galleryId else { return }
                             fpSync.startDiscovery(galleryId: galleryId)
                         } label: {
-                            Label("Connect", systemImage: "wifi")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(manualSyncPIN.isEmpty || viewModel.selectedShoot?.galleryId == nil)
-
-                        if fpSync.connectionStatus == .discovering {
-                            HStack {
-                                ProgressView()
-                                Text("Scanning for server...")
-                                    .foregroundColor(.secondary)
+                            HStack(spacing: 8) {
+                                if fpSync.connectionStatus == .discovering {
+                                    ProgressView()
+                                        .tint(.white)
+                                } else {
+                                    Image(systemName: "wifi")
+                                }
+                                Text(fpSync.connectionStatus == .discovering ? "Connecting..." : "Connect")
                             }
                         }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.selectedShoot?.galleryId == nil || fpSync.connectionStatus == .discovering)
 
                         if fpSync.connectionStatus == .authFailed {
                             Label("Authentication failed — check PIN", systemImage: "exclamationmark.triangle")
                                 .foregroundColor(.red)
                         }
 
-                        Text("Enter the PIN shown on Production's network panel")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        // Optional PIN entry (only needed if server has PIN enabled)
+                        DisclosureGroup("PIN (optional)") {
+                            TextField("4-digit PIN", text: $manualSyncPIN)
+                                .textFieldStyle(.roundedBorder)
+                                .keyboardType(.asciiCapableNumberPad)
+                                .onChange(of: manualSyncPIN) { newValue in
+                                    if newValue.count >= 4 {
+                                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                    }
+                                }
+                            Text("Only needed if Production has 'Require PIN' enabled")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
 
@@ -359,15 +448,17 @@ struct FPSportsRosterView_iPad: View {
                             Button("Connect") {
                                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                                 let ip = manualSyncIP.trimmingCharacters(in: .whitespaces)
+                                guard !ip.isEmpty else { return }
                                 let pin = manualSyncPIN.trimmingCharacters(in: .whitespaces)
-                                guard !ip.isEmpty, !pin.isEmpty else { return }
-                                fpSync.setAuthToken(pin)
+                                if !pin.isEmpty {
+                                    fpSync.setAuthToken(pin)
+                                }
                                 if let galleryId = viewModel.selectedShoot?.galleryId {
                                     fpSync.setGalleryId(galleryId)
                                 }
                                 fpSync.connect(host: ip, port: 8765)
                             }
-                            .disabled(manualSyncIP.isEmpty || manualSyncPIN.isEmpty)
+                            .disabled(manualSyncIP.isEmpty)
                         }
                         Text("Only needed if auto-connect doesn't find the server")
                             .font(.caption)
@@ -543,7 +634,7 @@ struct FPSportsRosterView_iPad: View {
             pending.append(imageNumber)
             pendingImageNumbers[event.subjectId] = pending
 
-            // Find matching roster entry: try roster_entry_id, then subject_id, then last-tapped entry
+            // Find matching roster entry: try roster_entry_id, then subject_id (NO lastSyncedEntryId fallback)
             let idx: Int? = {
                 // 1. Direct roster entry ID match
                 if let rosterEntryId = event.rosterEntryId,
@@ -554,16 +645,17 @@ struct FPSportsRosterView_iPad: View {
                 if let i = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == event.subjectId.lowercased() }) {
                     return i
                 }
-                // 3. Fall back to the last entry tapped on iPad (most common workflow: tap athlete → take photo)
-                if let lastId = lastSyncedEntryId,
-                   let i = viewModel.subjects.firstIndex(where: { $0.id == lastId }) {
-                    return i
-                }
                 return nil
             }()
 
             guard let idx = idx else {
-                print("[FPSync] No roster entry found for subject \(event.subjectId)")
+                // Subject not found locally yet — queue for replay when PowerSync delivers it
+                if pendingCaptureEvents.count < maxPendingCaptures {
+                    pendingCaptureEvents.append((event: event, receivedAt: Date()))
+                    print("[FPSync] Subject \(event.subjectId) not found, queued capture (pending: \(pendingCaptureEvents.count))")
+                } else {
+                    print("[FPSync] Pending captures buffer full, dropping capture for \(event.subjectId)")
+                }
                 return
             }
 
@@ -914,6 +1006,93 @@ struct FPSportsRosterView_iPad: View {
         }
     }
 
+    // MARK: - Pending Capture Replay
+
+    /// Replays buffered capture_completed events whose subjects were not in local
+    /// PowerSync when the event arrived. Called after each watch stream emission
+    /// so newly-arrived subjects can be matched.
+    private func replayPendingCaptures() {
+        guard !pendingCaptureEvents.isEmpty else { return }
+
+        let now = Date()
+        var replayed: [Int] = []
+        var expired: [Int] = []
+
+        for (i, pending) in pendingCaptureEvents.enumerated() {
+            // Expire entries older than timeout
+            if now.timeIntervalSince(pending.receivedAt) > pendingCaptureTimeout {
+                expired.append(i)
+                continue
+            }
+
+            let event = pending.event
+            guard let imageNumber = event.imageNumber else {
+                expired.append(i) // No image number — nothing to replay
+                continue
+            }
+
+            // Try to find the subject now
+            let idx: Int? = {
+                if let rosterEntryId = event.rosterEntryId,
+                   let i = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) {
+                    return i
+                }
+                if let i = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == event.subjectId.lowercased() }) {
+                    return i
+                }
+                return nil
+            }()
+
+            guard let idx = idx else { continue } // Still not found — keep in buffer
+
+            // Subject found — apply the image number
+            let entryId = viewModel.subjects[idx].id
+            var entry = viewModel.subjects[idx]
+            var numbers = parseImageNumbers(entry.imageNumbers)
+            if !numbers.contains(imageNumber) {
+                numbers.append(imageNumber)
+            }
+            let formatted = formatImageNumberRanges(numbers)
+            entry.imageNumbers = formatted
+            entry.updatedAt = Date()
+            viewModel.subjects[idx] = entry
+
+            if viewModel.currentlyEditingEntry == entryId {
+                viewModel.editingImageNumber = formatted
+            }
+
+            // Debounce save
+            pendingCaptureSaves[entryId]?.cancel()
+            pendingCaptureSaves[entryId] = Task {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
+                if let latestIdx = viewModel.subjects.firstIndex(where: { $0.id == entryId }) {
+                    saveEntryWithRetry(viewModel.subjects[latestIdx])
+                }
+            }
+
+            subjectCaptureCounts[event.subjectId, default: 0] += 1
+            photographedSubjects.insert(event.subjectId)
+
+            print("[FPSync] Replayed pending capture #\(imageNumber) for subject \(entry.id)")
+            replayed.append(i)
+        }
+
+        // Remove replayed and expired entries (iterate in reverse to preserve indices)
+        let toRemove = Set(replayed).union(expired)
+        if !toRemove.isEmpty {
+            pendingCaptureEvents = pendingCaptureEvents.enumerated()
+                .filter { !toRemove.contains($0.offset) }
+                .map { $0.element }
+            if !expired.isEmpty {
+                print("[FPSync] Expired \(expired.count) pending captures (>\(Int(pendingCaptureTimeout))s old)")
+            }
+            if !replayed.isEmpty {
+                print("[FPSync] Replayed \(replayed.count) pending captures, \(pendingCaptureEvents.count) still pending")
+            }
+        }
+    }
+
     // MARK: - Helper Functions
 
     // Check if a lock is owned by this device
@@ -1045,6 +1224,15 @@ struct FPSportsRosterView_iPad: View {
             if let shootID = viewModel.selectedShoot?.id, viewModel.subjects.isEmpty {
                 Task { await loadRosterForSelectedShoot(shootID: shootID, galleryId: viewModel.selectedShoot?.galleryId) }
             }
+            // Re-acquire locks for any subjects we're actively editing
+            if let editingId = viewModel.currentlyEditingEntry {
+                Task {
+                    await LockManager.shared.handleNetworkReconnection()
+                    // If lock was lost during reconnection, LockManager publishes lockLostEvent
+                    // which is handled by the .onChange(of: LockManager.shared.lockLostEvent?.id) above
+                    _ = editingId // suppress unused warning
+                }
+            }
         }
         .onReceive(syncStatusTimer) { _ in
             if isViewVisible {
@@ -1064,6 +1252,65 @@ struct FPSportsRosterView_iPad: View {
         } message: {
             Text("This cannot be undone.")
         }
+        .alert("Edit Lock Lost", isPresented: $showLockLostAlert) {
+            if lockLostHadUnsavedChanges {
+                Button("Save Anyway") {
+                    saveCurrentEditingEntry()
+                    viewModel.currentlyEditingEntry = nil
+                    viewModel.editingImageNumber = ""
+                    lockLostSubjectId = nil
+                }
+                Button("Discard", role: .destructive) {
+                    viewModel.currentlyEditingEntry = nil
+                    viewModel.editingImageNumber = ""
+                    lockLostSubjectId = nil
+                }
+            } else {
+                Button("OK") {
+                    lockLostSubjectId = nil
+                }
+            }
+        } message: {
+            if lockLostHadUnsavedChanges {
+                Text("Your edit lock on \(lockLostSubjectName) was lost. Another device may be editing. You have unsaved changes.")
+            } else {
+                Text("Your edit lock on \(lockLostSubjectName) was lost. Another device may be editing.")
+            }
+        }
+        .onChange(of: lockManager.lockLostEvent?.id) { _ in
+            guard let event = lockManager.lockLostEvent,
+                  event.type == .subject else { return }
+            let lostId = event.entryId
+            // Look up the subject name for the alert message
+            let subjectName: String
+            if let subject = viewModel.subjects.first(where: { $0.id == lostId }) {
+                subjectName = "\(subject.firstName) \(subject.lastName)"
+            } else {
+                subjectName = "Unknown"
+            }
+            lockLostSubjectName = subjectName
+            lockLostSubjectId = lostId
+            // Check if user was actively editing this subject
+            let wasEditing = viewModel.currentlyEditingEntry == lostId
+            if wasEditing {
+                // Check for unsaved changes
+                let hasChanges: Bool
+                if let currentEntry = viewModel.subjects.first(where: { $0.id == lostId }) {
+                    hasChanges = viewModel.editingImageNumber != currentEntry.imageNumbers
+                } else {
+                    hasChanges = false
+                }
+                lockLostHadUnsavedChanges = hasChanges
+                if !hasChanges {
+                    // No unsaved changes — just clear editing state
+                    viewModel.currentlyEditingEntry = nil
+                    viewModel.editingImageNumber = ""
+                }
+            } else {
+                lockLostHadUnsavedChanges = false
+            }
+            showLockLostAlert = true
+        }
         .sheet(isPresented: $showMoveImagePicker) {
             NavigationView {
                 List {
@@ -1079,15 +1326,25 @@ struct FPSportsRosterView_iPad: View {
                     }
                     ForEach(filtered) { entry in
                         Button(action: {
-                            // Find source roster entry
                             let sourceEntry = viewModel.subjects.first(where: { $0.id.uuidString.lowercased() == photoViewerSubjectId.lowercased() })
+                            let targetId = entry.id.uuidString.lowercased()
                             fpSync.sendMoveCapture(
                                 imageNumber: moveImageNumber,
                                 fromSubjectId: photoViewerSubjectId,
-                                toSubjectId: entry.id.uuidString.lowercased(),
+                                toSubjectId: targetId,
                                 fromRosterEntryId: sourceEntry?.id.uuidString.lowercased() ?? "",
-                                toRosterEntryId: entry.id.uuidString.lowercased()
+                                toRosterEntryId: targetId
                             )
+                            // Move thumbnail locally so iPad UI updates immediately
+                            if var fromThumbs = subjectThumbnails[photoViewerSubjectId] {
+                                if let idx = fromThumbs.firstIndex(where: { $0.imageNumber == moveImageNumber }) {
+                                    let moved = fromThumbs.remove(at: idx)
+                                    subjectThumbnails[photoViewerSubjectId] = fromThumbs.isEmpty ? nil : fromThumbs
+                                    var toThumbs = subjectThumbnails[targetId] ?? []
+                                    toThumbs.append(moved)
+                                    subjectThumbnails[targetId] = toThumbs
+                                }
+                            }
                             showMoveImagePicker = false
                             showPhotoViewer = false
                         }) {
@@ -1603,7 +1860,27 @@ struct FPSportsRosterView_iPad: View {
                                     // Add the connection status indicator
                                     CompactConnectionIndicator()
                                         .padding(.horizontal, 2)
-                                    
+
+                                    // CRUD queue upload indicator
+                                    if viewModel.isUploading {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: "arrow.up.circle.fill")
+                                                .font(.system(size: 11))
+                                                .foregroundColor(.blue)
+                                            Text("Syncing")
+                                                .font(.system(size: 10, weight: .medium))
+                                                .foregroundColor(.blue)
+                                        }
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .fill(Color.blue.opacity(0.1))
+                                        )
+                                        .transition(.opacity)
+                                        .animation(.easeInOut(duration: 0.3), value: viewModel.isUploading)
+                                    }
+
                                     Text(formatDate(shoot.shootDate))
                                         .font(.caption)
                                         .foregroundColor(.gray)
@@ -1685,19 +1962,42 @@ struct FPSportsRosterView_iPad: View {
                         
                         // Offline notification banner (if applicable)
                         if !viewModel.isOnline {
-                            HStack {
-                                Image(systemName: "wifi.slash")
-                                    .foregroundColor(.orange)
-                                
-                                Text("You're offline - changes will sync when you reconnect")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                                
+                            HStack(spacing: 8) {
+                                Image(systemName: "icloud.slash")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.white)
+
+                                Text("Offline — changes will sync when connected")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.white)
+
                                 Spacer()
                             }
-                            .padding(.horizontal)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.orange)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .animation(.easeInOut(duration: 0.3), value: viewModel.isOnline)
+                        }
+
+                        // CRUD queue status banner (uploading/downloading)
+                        if viewModel.isOnline && viewModel.isUploading {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.7)
+
+                                Text("Syncing changes...")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white)
+
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(Color.orange.opacity(0.1))
+                            .background(Color.blue.opacity(0.85))
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .animation(.easeInOut(duration: 0.3), value: viewModel.isUploading)
                         }
                         
                         // Notes (if any, in a collapsible section)
@@ -1907,6 +2207,9 @@ struct FPSportsRosterView_iPad: View {
                     shootListener?.remove()
                     shootListener = nil
 
+                    // Flush any staged watch updates before tearing down
+                    viewModel.flushPendingUpdates()
+
                     // Cancel PowerSync watch tasks
                     rosterWatchTask?.cancel()
                     groupWatchTask?.cancel()
@@ -1951,6 +2254,9 @@ struct FPSportsRosterView_iPad: View {
                     pendingCaptureSaves = [:]
                 }
                 .onChange(of: shoot.id) { newShootID in
+                    // Flush any staged updates from the old shoot before switching
+                    viewModel.flushPendingUpdates()
+
                     // Cancel old watchers and set up new ones for the new shoot
                     rosterWatchTask?.cancel()
                     groupWatchTask?.cancel()
@@ -2280,6 +2586,7 @@ struct FPSportsRosterView_iPad: View {
         // Use PowerSync's connection status - it handles network monitoring internally
         // Initial sync of status
         viewModel.isOnline = PowerSyncManager.shared.isConnected
+        viewModel.isUploading = PowerSyncManager.shared.isUploading
 
         // Listen for PowerSync connection changes
         NotificationCenter.default.addObserver(
@@ -2289,6 +2596,17 @@ struct FPSportsRosterView_iPad: View {
         ) { notification in
             if let isConnected = notification.userInfo?["isConnected"] as? Bool {
                 self.viewModel.isOnline = isConnected
+            }
+        }
+
+        // Listen for PowerSync uploading state changes
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("PowerSyncUploadingChanged"),
+            object: nil,
+            queue: .main
+        ) { notification in
+            if let isUploading = notification.userInfo?["isUploading"] as? Bool {
+                self.viewModel.isUploading = isUploading
             }
         }
     }
@@ -2716,7 +3034,7 @@ struct FPSportsRosterView_iPad: View {
             // List of roster entries with ScrollViewReader for reverse selection
             ScrollViewReader { scrollProxy in
                 List {
-                    ForEach(Array(sortedRoster(filterRoster(viewModel.subjects)).enumerated()), id: \.element.id) { index, entry in
+                    ForEach(Array(cachedFilteredRoster.enumerated()), id: \.element.id) { index, entry in
                         rosterEntryRow(shoot: shoot, entry: entry, isEven: index % 2 == 0)
                             .listRowInsets(EdgeInsets(
                                 top: 4,
@@ -2727,7 +3045,7 @@ struct FPSportsRosterView_iPad: View {
                             .listRowBackground(Color.clear)
                     }
                     .onMove { source, destination in
-                        var reordered = sortedRoster(filterRoster(viewModel.subjects))
+                        var reordered = cachedFilteredRoster
                         reordered.move(fromOffsets: source, toOffset: destination)
                         let orderedIds = reordered.map { $0.id.uuidString.lowercased() }
                         if !orderedIds.isEmpty {
@@ -2760,22 +3078,38 @@ struct FPSportsRosterView_iPad: View {
                         scrollProxy.scrollTo(entryId, anchor: .center)
                     }
                 }
+                // Recompute cached roster when inputs change
+                .onChange(of: viewModel.subjects) { _ in recomputeCachedRoster() }
+                .onChange(of: viewModel.sortField) { _ in recomputeCachedRoster() }
+                .onChange(of: viewModel.sortAscending) { _ in recomputeCachedRoster() }
+                .onChange(of: viewModel.selectedFilters) { _ in recomputeCachedRoster() }
+                .onChange(of: viewModel.selectedSpecialFilters) { _ in recomputeCachedRoster() }
+                .onChange(of: viewModel.imageFilterType) { _ in recomputeCachedRoster() }
+                .onChange(of: searchText) { _ in
+                    searchDebounceTask?.cancel()
+                    searchDebounceTask = Task {
+                        try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+                        guard !Task.isCancelled else { return }
+                        recomputeCachedRoster()
+                    }
+                }
+                .onAppear { recomputeCachedRoster() }
             }
-            
+
             // Batch action bar (visible in edit mode)
             if isEditMode {
                 HStack(spacing: 12) {
                     Button(action: {
-                        if selectedEntryIds.count == sortedRoster(filterRoster(viewModel.subjects)).count {
+                        if selectedEntryIds.count == cachedFilteredRoster.count {
                             selectedEntryIds.removeAll()
                         } else {
                             let locked = Set(viewModel.lockedEntries.keys)
-                            selectedEntryIds = Set(sortedRoster(filterRoster(viewModel.subjects))
+                            selectedEntryIds = Set(cachedFilteredRoster
                                 .filter { !locked.contains($0.id) }
                                 .map { $0.id })
                         }
                     }) {
-                        Text(selectedEntryIds.count == sortedRoster(filterRoster(viewModel.subjects)).count ? "Deselect All" : "Select All")
+                        Text(selectedEntryIds.count == cachedFilteredRoster.count ? "Deselect All" : "Select All")
                             .font(.system(size: 14, weight: .medium))
                     }
 
@@ -3339,9 +3673,9 @@ struct FPSportsRosterView_iPad: View {
                             // Function to move to the next editable entry when pressing Enter or Down arrow
                             private func moveToNextEditableEntry(currentID: UUID) {
                                 guard let shoot = viewModel.selectedShoot else { return }
-                                
-                                // Get the filtered and sorted roster as displayed in the list
-                                let displayedRoster = sortedRoster(filterRoster(viewModel.subjects))
+
+                                // Use the cached filtered and sorted roster
+                                let displayedRoster = cachedFilteredRoster
                                 
                                 // Find the index of the current entry
                                 guard let currentIndex = displayedRoster.firstIndex(where: { $0.id == currentID }) else {
@@ -3396,9 +3730,9 @@ struct FPSportsRosterView_iPad: View {
                             // Function to move to the previous editable entry when pressing Up arrow
                             private func moveToPreviousEditableEntry(currentID: UUID) {
                                 guard let shoot = viewModel.selectedShoot else { return }
-                                
-                                // Get the filtered and sorted roster as displayed in the list
-                                let displayedRoster = sortedRoster(filterRoster(viewModel.subjects))
+
+                                // Use the cached filtered and sorted roster
+                                let displayedRoster = cachedFilteredRoster
                                 
                                 // Find the index of the current entry
                                 guard let currentIndex = displayedRoster.firstIndex(where: { $0.id == currentID }) else {
@@ -3508,6 +3842,11 @@ struct FPSportsRosterView_iPad: View {
                                 }
                             }
                             
+                            // Recompute the cached sorted+filtered roster
+                            private func recomputeCachedRoster() {
+                                cachedFilteredRoster = sortedRoster(filterRoster(viewModel.subjects))
+                            }
+
                             // Sort roster entries
                             private func sortedRoster(_ roster: [FPSubject]) -> [FPSubject] {
                                 return roster.sorted { (a, b) -> Bool in
@@ -3742,23 +4081,23 @@ struct FPSportsRosterView_iPad: View {
                                 // Save entries for restore on failure
                                 let entriesToDelete = viewModel.subjects.filter { ids.contains($0.id) }
 
-                                // Remove from local state immediately
-                                viewModel.subjects.removeAll { ids.contains($0.id) }
-                                selectedEntryIds.removeAll()
-                                withAnimation { isEditMode = false }
-
-                                // Delete from PowerSync + broadcast
+                                // DB delete FIRST, then update local state, then broadcast
                                 Task {
                                     do {
                                         try await powerSync.deleteBatchSubjects(ids: Array(ids))
+
+                                        await MainActor.run {
+                                            viewModel.subjects.removeAll { ids.contains($0.id) }
+                                            selectedEntryIds.removeAll()
+                                            withAnimation { isEditMode = false }
+                                        }
+
                                         let idStrings = entriesToDelete.map { $0.id.uuidString.lowercased() }
                                         fpSync.broadcastEntriesDeleted(rosterEntryIds: idStrings)
                                         print("[FPSportsRosterView_iPad] Batch deleted \(ids.count) entries")
                                     } catch {
                                         print("[FPSportsRosterView_iPad] Batch delete failed: \(error)")
-                                        await MainActor.run {
-                                            viewModel.subjects.append(contentsOf: entriesToDelete)
-                                        }
+                                        // Don't modify local state since DB delete failed
                                     }
                                 }
                             }
@@ -4004,6 +4343,8 @@ struct FPSportsRosterView_iPad: View {
                             private func setupPowerSyncWatchers() {
                                 guard let shootID = viewModel.selectedShoot?.id else { return }
 
+                                // Flush any staged updates from previous watchers before replacing them
+                                viewModel.flushPendingUpdates()
                                 rosterWatchTask?.cancel()
                                 groupWatchTask?.cancel()
 
@@ -4023,7 +4364,6 @@ struct FPSportsRosterView_iPad: View {
                                                         locks[entry.id] = lockedByName
                                                     }
                                                 }
-                                                viewModel.lockedEntries = locks
 
                                                 // Protect currently-editing entry with live typed value
                                                 if let editingId = viewModel.currentlyEditingEntry,
@@ -4045,18 +4385,18 @@ struct FPSportsRosterView_iPad: View {
                                                     continue
                                                 }
 
-                                                // Diff-merge: only update if data actually changed (prevents scroll jump)
+                                                // Diff-merge: only stage if data actually changed (prevents scroll jump)
                                                 let current = viewModel.subjects
                                                 let mergedIds = merged.map { $0.id }
                                                 let currentIds = current.map { $0.id }
 
                                                 if mergedIds == currentIds {
-                                                    // Same entries in same order — update only changed items
+                                                    // Same entries in same order — check if anything actually changed
                                                     var anyChanged = false
                                                     for i in merged.indices {
                                                         if merged[i] != current[i] {
-                                                            viewModel.subjects[i] = merged[i]
                                                             anyChanged = true
+                                                            break
                                                         }
                                                     }
                                                     // If nothing changed, skip entirely
@@ -4064,19 +4404,24 @@ struct FPSportsRosterView_iPad: View {
                                                         retryDelay = 1_000_000_000
                                                         continue
                                                     }
+                                                    // Stage the merged data through the coalesced update path
+                                                    viewModel.stageSubjectsUpdate(merged, lockedEntries: locks)
                                                 } else {
                                                     // Count or order changed — full replacement needed
-                                                    // Remember anchor for scroll-restore
+                                                    // Stage through coalesced update, then restore scroll position
                                                     let anchor = viewModel.currentlyEditingEntry ?? lastSyncedEntryId
-                                                    viewModel.subjects = merged
+                                                    viewModel.stageSubjectsUpdate(merged, lockedEntries: locks)
                                                     // Restore scroll position after SwiftUI re-renders
+                                                    // Use coalesceDelay + small margin so scroll-restore runs after the staged apply
                                                     if let anchorId = anchor, merged.contains(where: { $0.id == anchorId }) {
                                                         scrollAnchorEntryId = nil
-                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                                                             scrollAnchorEntryId = anchorId
                                                         }
                                                     }
                                                 }
+                                                // Replay any pending captures for subjects that just arrived
+                                                replayPendingCaptures()
                                                 retryDelay = 1_000_000_000 // Reset on success
                                             }
                                         } catch {
@@ -4125,7 +4470,8 @@ struct FPSportsRosterView_iPad: View {
                                                     }
                                                 }
 
-                                                viewModel.groupImages = merged
+                                                // Stage through coalesced update path instead of direct assignment
+                                                viewModel.stageGroupImagesUpdate(merged)
                                                 retryDelay = 1_000_000_000 // Reset backoff on success
                                             }
                                         } catch {
