@@ -3,8 +3,8 @@
 //  Iconik Employee
 //
 //  iPad poser station for spring/underclass portrait shoots.
-//  Shows subject queue, handles check-in, syncs bi-directionally
-//  with Surface Pro camera station via WebSocket.
+//  Full roster with grade/teacher filters, tap to select on camera,
+//  view/edit subject info, show captured images with live thumbnails.
 //
 
 import SwiftUI
@@ -20,14 +20,55 @@ struct PoserStationView: View {
     @State private var subjectWatchTask: Task<Void, Never>?
     @State private var isLoading = true
 
-    // UI state
-    @State private var showFullRoster = false
-    @State private var searchText = ""
+    // Selection
+    @State private var selectedSubjectId: UUID?
     @State private var activeSubjectId: String?
-    @State private var photoCountMap: [String: Int] = [:]
-    @State private var thumbnailMap: [String: String] = [:]
+    @State private var scrollTargetId: UUID?
 
-    // Sync connection
+    // Photo tracking (WebSocket thumbnails — same pipeline as sports)
+    @State private var subjectThumbnails: [String: [CaptureThumb]] = [:]
+    @State private var pendingImageNumbers: [String: [Int]] = [:]
+    @State private var photoCountMap: [String: Int] = [:]
+
+    // Photo viewer
+    @State private var showPhotoViewer = false
+    @State private var photoViewerSubjectName = ""
+    @State private var photoViewerSubjectId = ""
+    @State private var photoViewerThumbs: [CaptureThumb] = []
+
+    // Move photo to another subject
+    @State private var showMoveImagePicker = false
+    @State private var moveImageNumber: Int = 0
+    @State private var moveSearchText = ""
+
+    // Filters
+    @State private var searchText = ""
+    @State private var gradeFilter: String?
+    @State private var teacherFilter: String?
+
+    // Layout
+    @State private var detailPanelVisible = true
+
+    // Add subject
+    @State private var showingAddSubject = false
+
+    // US Card scan flow
+    @State private var showingUSCardQRScan = false
+    @State private var usCardSubject: FPSubject?
+    @State private var showingUSCardDocScan = false
+    @State private var scanProcessing = false
+    @State private var scanError: String?
+
+    // Selection confirmation from Surface Pro
+    @State private var confirmedSubjectId: String?
+    @State private var confirmedSubjectName: String?
+
+    // Move confirmation from Surface Pro
+    @State private var moveConfirmationMessage: String?
+    @State private var moveConfirmationIsError = false
+    @State private var pendingMoveTimer: DispatchWorkItem?
+
+    // Sync
     @State private var showingSyncSheet = false
 
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
@@ -38,412 +79,531 @@ struct PoserStationView: View {
         gallery.galleryId ?? gallery.id.uuidString.lowercased()
     }
 
-    var queue: [FPSubject] {
-        subjects
-            .filter { $0.checkedInAt != nil && !$0.isPhotographed }
-            .sorted { ($0.checkedInAt ?? "") < ($1.checkedInAt ?? "") }
+    var uniqueGrades: [String] {
+        Array(Set(subjects.compactMap { $0.grade.isEmpty ? nil : $0.grade })).sorted()
     }
 
-    var photographed: [FPSubject] {
-        subjects.filter { $0.isPhotographed || (photoCountMap[$0.id.uuidString.lowercased()] ?? 0) > 0 }
+    var uniqueTeachers: [String] {
+        Array(Set(subjects.compactMap { $0.teacher.isEmpty ? nil : $0.teacher })).sorted()
     }
 
-    var rosterSubjects: [FPSubject] {
-        let q = searchText.lowercased()
-        let list = subjects.sorted { $0.lastName < $1.lastName }
-        if q.isEmpty { return list }
-        return list.filter {
-            $0.firstName.lowercased().contains(q) ||
-            $0.lastName.lowercased().contains(q) ||
-            $0.grade.lowercased().contains(q) ||
-            $0.teacher.lowercased().contains(q)
+    var filteredSubjects: [FPSubject] {
+        var list = subjects
+        if let g = gradeFilter { list = list.filter { $0.grade == g } }
+        if let t = teacherFilter { list = list.filter { $0.teacher == t } }
+        if !searchText.isEmpty {
+            let q = searchText.lowercased()
+            list = list.filter {
+                $0.firstName.lowercased().contains(q) ||
+                $0.lastName.lowercased().contains(q) ||
+                $0.studentId.lowercased().contains(q) ||
+                $0.rosterId.lowercased().contains(q)
+            }
         }
+        return list.sorted { $0.lastName < $1.lastName }
     }
 
-    var shotCount: Int { photographed.count }
-    var totalCount: Int { subjects.count }
+    var selectedSubject: FPSubject? {
+        guard let id = selectedSubjectId else { return nil }
+        return subjects.first { $0.id == id }
+    }
+
+    var shotCount: Int {
+        subjects.filter { $0.isPhotographed || (photoCountMap[$0.id.uuidString.lowercased()] ?? 0) > 0 }.count
+    }
 
     // MARK: - Body
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             headerBar
+            filterBar
 
-            // Content
             if isLoading {
-                ProgressView("Loading subjects...")
+                ProgressView("Loading roster...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if showFullRoster {
-                fullRosterLayout
             } else {
-                queueOnlyLayout
+                HStack(spacing: 0) {
+                    subjectList
+                        .frame(maxWidth: .infinity)
+
+                    if detailPanelVisible {
+                        Rectangle().fill(Color(.separator)).frame(width: 1)
+                    }
+
+                    if detailPanelVisible, let subject = selectedSubject {
+                        SubjectDetailPanel(
+                            subject: subject,
+                            thumbnails: subjectThumbnails[subject.id.uuidString.lowercased()] ?? [],
+                            photoCount: photoCountMap[subject.id.uuidString.lowercased()] ?? 0,
+                            galleryId: galleryId,
+                            onSave: { updated in saveSubject(updated) },
+                            onSelect: { selectOnCamera(subject) },
+                            onViewPhotos: { name, thumbs in
+                                photoViewerSubjectName = name
+                                photoViewerSubjectId = subject.id.uuidString.lowercased()
+                                photoViewerThumbs = thumbs
+                                showPhotoViewer = true
+                            }
+                        )
+                        .frame(width: 360)
+                    } else if detailPanelVisible {
+                        VStack(spacing: 12) {
+                            Image(systemName: "person.crop.rectangle")
+                                .font(.system(size: 40))
+                                .foregroundColor(.secondary)
+                            Text("Select a student")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxHeight: .infinity)
+                        .frame(width: 360)
+                        .background(Color(.secondarySystemBackground))
+                    }
+                }
             }
         }
         .navigationTitle("")
         .navigationBarHidden(true)
         .task {
             await loadSubjects()
+            await loadCachedThumbnails()
             startWatching()
             setupSyncCallbacks()
         }
-        .onDisappear {
-            subjectWatchTask?.cancel()
+        .onDisappear { subjectWatchTask?.cancel() }
+        .sheet(isPresented: $showingSyncSheet) { syncSheet }
+        .sheet(isPresented: $showingAddSubject) { addSubjectSheet }
+        .sheet(isPresented: $showingUSCardQRScan) { usCardQRSheet }
+        .sheet(isPresented: $showingUSCardDocScan) { usCardDocScanSheet }
+        .overlay(alignment: .top) {
+            if let error = scanError {
+                Text(error)
+                    .font(.subheadline).fontWeight(.medium)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(error.contains("on-device") ? Color.orange : Color.red)
+                    )
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                            withAnimation { scanError = nil }
+                        }
+                    }
+            }
         }
-        .sheet(isPresented: $showingSyncSheet) {
-            syncConnectionSheet
+        .fullScreenCover(isPresented: $showPhotoViewer) {
+            CapturePhotoViewer(
+                subjectName: photoViewerSubjectName,
+                thumbs: photoViewerThumbs,
+                isPresented: $showPhotoViewer,
+                onMoveRequested: fpSync.isConnected ? { imageNumber in
+                    moveImageNumber = imageNumber
+                    moveSearchText = ""
+                    showMoveImagePicker = true
+                } : nil
+            )
+        }
+        .sheet(isPresented: $showMoveImagePicker) {
+            NavigationView {
+                List {
+                    let filtered = subjects.filter { entry in
+                        guard entry.id.uuidString.lowercased() != photoViewerSubjectId else { return false }
+                        if moveSearchText.isEmpty { return true }
+                        let q = moveSearchText.lowercased()
+                        return entry.firstName.lowercased().contains(q)
+                            || entry.lastName.lowercased().contains(q)
+                            || entry.rosterId.lowercased().contains(q)
+                    }
+                    ForEach(filtered) { entry in
+                        Button(action: {
+                            let targetId = entry.id.uuidString.lowercased()
+                            fpSync.sendMoveCapture(
+                                imageNumber: moveImageNumber,
+                                fromSubjectId: photoViewerSubjectId,
+                                toSubjectId: targetId,
+                                fromRosterEntryId: photoViewerSubjectId,
+                                toRosterEntryId: targetId
+                            )
+                            // Move thumbnail locally for instant UI update
+                            if var fromThumbs = subjectThumbnails[photoViewerSubjectId] {
+                                if let idx = fromThumbs.firstIndex(where: { $0.imageNumber == moveImageNumber }) {
+                                    let moved = fromThumbs.remove(at: idx)
+                                    subjectThumbnails[photoViewerSubjectId] = fromThumbs.isEmpty ? nil : fromThumbs
+                                    var toThumbs = subjectThumbnails[targetId] ?? []
+                                    toThumbs.append(moved)
+                                    subjectThumbnails[targetId] = toThumbs
+                                }
+                            }
+                            // Start timeout — if no confirmation in 5 seconds, show failure
+                            pendingMoveTimer?.cancel()
+                            let timer = DispatchWorkItem {
+                                if moveConfirmationMessage == nil {
+                                    moveConfirmationMessage = "Move failed — no confirmation from Surface Pro"
+                                    moveConfirmationIsError = true
+                                    let generator = UINotificationFeedbackGenerator()
+                                    generator.notificationOccurred(.error)
+                                }
+                            }
+                            pendingMoveTimer = timer
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timer)
+                            showMoveImagePicker = false
+                            showPhotoViewer = false
+                        }) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(entry.firstName) \(entry.lastName)")
+                                        .font(.headline)
+                                    if !entry.rosterId.isEmpty {
+                                        Text("ID: \(entry.rosterId)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                if !entry.grade.isEmpty {
+                                    Text(entry.grade)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                .searchable(text: $moveSearchText, prompt: "Search subjects")
+                .navigationTitle("Move Image #\(moveImageNumber) to...")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Cancel") { showMoveImagePicker = false }
+                    }
+                }
+            }
         }
     }
 
     // MARK: - Header
 
     private var headerBar: some View {
-        HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(gallery.schoolName)
-                    .font(.headline)
-                    .fontWeight(.bold)
-
-                Text("\(shotCount) of \(totalCount) photographed")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            // Toggle roster/queue
-            Button(action: { showFullRoster.toggle() }) {
-                Label(showFullRoster ? "Queue" : "Roster", systemImage: showFullRoster ? "list.number" : "person.3")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-            }
-            .buttonStyle(.bordered)
-            .tint(.blue)
-
-            // Sync connection
-            Button(action: { showingSyncSheet = true }) {
-                Image(systemName: fpSync.isConnected ? "wifi" : "wifi.slash")
-                    .font(.title3)
-                    .foregroundColor(fpSync.isConnected ? .green : .secondary)
-            }
-            .frame(width: 44, height: 44)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(Color(.systemBackground))
-        .overlay(
-            Rectangle().frame(height: 1).foregroundColor(Color(.separator)),
-            alignment: .bottom
-        )
-    }
-
-    // MARK: - Queue Only Layout
-
-    private var queueOnlyLayout: some View {
-        ScrollView {
-            LazyVStack(spacing: 6) {
-                if queue.isEmpty {
-                    emptyQueueView
-                } else {
-                    ForEach(queue) { subject in
-                        subjectRow(subject, isActive: activeSubjectId == subject.id.uuidString.lowercased())
-                            .onTapGesture {
-                                selectSubject(subject)
-                            }
-                    }
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(gallery.schoolName)
+                        .font(.headline).fontWeight(.bold)
+                    Text("\(shotCount) of \(filteredSubjects.count) photographed")
+                        .font(.subheadline).foregroundColor(.secondary)
                 }
+                Spacer()
 
-                if !photographed.isEmpty {
-                    Section {
-                        ForEach(photographed) { subject in
-                            subjectRow(subject, isActive: false)
-                                .opacity(0.45)
-                        }
-                    } header: {
-                        Text("Photographed")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.secondary)
-                            .textCase(.uppercase)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, 20)
-                            .padding(.horizontal, 4)
-                    }
+                Button(action: { showingUSCardQRScan = true }) {
+                    Label("Scan US Card", systemImage: "qrcode.viewfinder")
+                        .font(.subheadline).fontWeight(.medium)
                 }
-            }
-            .padding(16)
-        }
-    }
+                .buttonStyle(.bordered).tint(.orange)
 
-    // MARK: - Full Roster Layout
-
-    private var fullRosterLayout: some View {
-        HStack(spacing: 0) {
-            // Left: Full roster
-            VStack(spacing: 0) {
-                // Search
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
-                    TextField("Search...", text: $searchText)
-                        .textFieldStyle(.plain)
+                Button(action: { showingAddSubject = true }) {
+                    Label("Add Student", systemImage: "person.badge.plus")
+                        .font(.subheadline).fontWeight(.medium)
                 }
-                .padding(10)
-                .background(Color(.systemGray6))
-                .cornerRadius(10)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .buttonStyle(.bordered).tint(.blue)
 
-                // Roster list
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(rosterSubjects) { subject in
-                            let isCheckedIn = subject.checkedInAt != nil
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("\(subject.firstName) \(subject.lastName)")
-                                        .font(.body)
-                                        .fontWeight(.medium)
-                                    let rosterInfo = subjectInfo(subject)
-                                    if !rosterInfo.isEmpty {
-                                        Text(rosterInfo)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                                Spacer()
-                                if isCheckedIn {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                } else {
-                                    Button("Check In") {
-                                        checkIn(subject)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .tint(.blue)
-                                    .controlSize(.small)
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(isCheckedIn ? Color.green.opacity(0.06) : Color.clear)
-                            .cornerRadius(8)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .background(Color(.systemBackground))
-
-            // Divider
-            Rectangle()
-                .fill(Color(.separator))
-                .frame(width: 1)
-
-            // Right: Queue
-            VStack(spacing: 0) {
-                Text("Queue")
-                    .font(.subheadline)
-                    .fontWeight(.bold)
-                    .foregroundColor(.secondary)
-                    .textCase(.uppercase)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color(.systemGray6))
-
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        if queue.isEmpty {
-                            Text("No students checked in")
-                                .foregroundColor(.secondary)
-                                .padding(40)
-                        } else {
-                            ForEach(queue) { subject in
-                                subjectRow(subject, isActive: activeSubjectId == subject.id.uuidString.lowercased())
-                                    .onTapGesture {
-                                        selectSubject(subject)
-                                    }
-                            }
-                        }
-                    }
-                    .padding(12)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .background(Color(.secondarySystemBackground))
-        }
-    }
-
-    // MARK: - Subject Row
-
-    private func subjectRow(_ subject: FPSubject, isActive: Bool) -> some View {
-        let sid = subject.id.uuidString.lowercased()
-        let count = photoCountMap[sid] ?? 0
-
-        return HStack(spacing: 12) {
-            // Thumbnail or initials
-            if let thumbUrl = thumbnailMap[sid], let url = URL(string: thumbUrl) {
-                AsyncImage(url: url) { image in
-                    image.resizable().aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    initialsView(subject)
+                // Toggle detail panel
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { detailPanelVisible.toggle() } }) {
+                    Image(systemName: detailPanelVisible ? "sidebar.trailing" : "sidebar.leading")
+                        .font(.title3).foregroundColor(.secondary)
                 }
                 .frame(width: 44, height: 44)
-                .clipShape(Circle())
+
+                Button(action: { showingSyncSheet = true }) {
+                    Image(systemName: fpSync.isConnected ? "wifi" : "wifi.slash")
+                        .font(.title3)
+                        .foregroundColor(fpSync.isConnected ? .green : .secondary)
+                }
+                .frame(width: 44, height: 44)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 10)
+
+            // Progress bar
+            GeometryReader { geo in
+                let progress = filteredSubjects.isEmpty ? 0.0 : Double(shotCount) / Double(filteredSubjects.count)
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(Color(.systemGray5)).frame(height: 4)
+                    Rectangle().fill(Color.green).frame(width: geo.size.width * progress, height: 4)
+                }
+            }
+            .frame(height: 4)
+        }
+        .background(Color(.systemBackground))
+    }
+
+    // MARK: - Filter Bar
+
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundColor(.secondary).font(.caption)
+                    TextField("Search...", text: $searchText)
+                        .textFieldStyle(.plain).font(.subheadline)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(Color(.systemGray6)).cornerRadius(8)
+                .frame(width: 180)
+
+                if !uniqueGrades.isEmpty {
+                    Menu {
+                        Button("All Grades") { gradeFilter = nil }
+                        Divider()
+                        ForEach(uniqueGrades, id: \.self) { grade in
+                            Button(grade) { gradeFilter = grade }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(gradeFilter ?? "Grade").font(.subheadline)
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(gradeFilter != nil ? Color.blue.opacity(0.12) : Color(.systemGray6))
+                        .foregroundColor(gradeFilter != nil ? .blue : .primary)
+                        .cornerRadius(8)
+                    }
+                }
+
+                if !uniqueTeachers.isEmpty {
+                    Menu {
+                        Button("All Teachers") { teacherFilter = nil }
+                        Divider()
+                        ForEach(uniqueTeachers, id: \.self) { teacher in
+                            Button(teacher) { teacherFilter = teacher }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(teacherFilter ?? "Teacher").font(.subheadline)
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(teacherFilter != nil ? Color.blue.opacity(0.12) : Color(.systemGray6))
+                        .foregroundColor(teacherFilter != nil ? .blue : .primary)
+                        .cornerRadius(8)
+                    }
+                }
+
+                if gradeFilter != nil || teacherFilter != nil || !searchText.isEmpty {
+                    Button("Clear") { gradeFilter = nil; teacherFilter = nil; searchText = "" }
+                        .font(.subheadline).foregroundColor(.red)
+                }
+
+                Spacer()
+
+                Text("\(filteredSubjects.count) student\(filteredSubjects.count == 1 ? "" : "s")")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 8)
+        }
+        .background(Color(.systemBackground))
+        .overlay(Rectangle().frame(height: 1).foregroundColor(Color(.separator)), alignment: .bottom)
+    }
+
+    // MARK: - Subject List
+
+    private var subjectList: some View {
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                // Confirmation banner — shows when Surface Pro confirms subject selection
+                if let name = confirmedSubjectName {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.white)
+                            .font(.system(size: 16, weight: .bold))
+                        Text("Selected on Camera: \(name)")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.green)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.25), value: confirmedSubjectName)
+                }
+
+                // Move confirmation banner
+                if let msg = moveConfirmationMessage {
+                    HStack(spacing: 8) {
+                        Image(systemName: moveConfirmationIsError ? "exclamationmark.circle.fill" : "arrow.right.circle.fill")
+                            .foregroundColor(.white)
+                            .font(.system(size: 16, weight: .bold))
+                        Text(msg)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                        Spacer()
+                        Button(action: { moveConfirmationMessage = nil }) {
+                            Image(systemName: "xmark").foregroundColor(.white.opacity(0.8)).font(.caption)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(moveConfirmationIsError ? Color.red : Color.blue)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.25), value: moveConfirmationMessage)
+                }
+
+                List {
+                    ForEach(filteredSubjects) { subject in
+                        subjectRow(subject)
+                    }
+                }
+                .listStyle(.plain)
+            }
+            .onChange(of: scrollTargetId) { target in
+                if let target = target {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo(target, anchor: .center)
+                    }
+                    scrollTargetId = nil
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func subjectRow(_ subject: FPSubject) -> some View {
+        let sid = subject.id.uuidString.lowercased()
+        let isSelected = selectedSubjectId == subject.id
+        let isActive = activeSubjectId == sid
+        let hasPhotos = subject.isPhotographed || (photoCountMap[sid] ?? 0) > 0
+        let latestThumb = subjectThumbnails[sid]?.last?.image
+        let count = photoCountMap[sid] ?? 0
+
+        HStack(spacing: 12) {
+            if let thumb = latestThumb {
+                Image(uiImage: thumb)
+                    .resizable().aspectRatio(contentMode: .fill)
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
-                initialsView(subject)
+                Text("\(subject.firstName.prefix(1))\(subject.lastName.prefix(1))")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 44, height: 44)
+                    .background(Color(.systemGray5))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
-            // Name + info
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(subject.firstName) \(subject.lastName)")
-                    .font(.system(size: 18, weight: .semibold))
-
+                    .font(.system(size: 16, weight: .semibold))
                 let info = subjectInfo(subject)
                 if !info.isEmpty {
-                    Text(info)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Text(info).font(.caption).foregroundColor(.secondary)
                 }
+            }
+
+            if subject.isAbsent {
+                Text("ABSENT").font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.white).padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.red).cornerRadius(4)
+            }
+            if subject.needsRetake {
+                Text("RETAKE").font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.white).padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.orange).cornerRadius(4)
             }
 
             Spacer()
 
-            // Photo count
+            if !detailPanelVisible {
+                if !subject.grade.isEmpty { Text(subject.grade).font(.caption).foregroundColor(.secondary) }
+                if !subject.teacher.isEmpty { Text(subject.teacher).font(.caption).foregroundColor(.secondary) }
+            }
+
             if count > 0 {
-                Text("+\(count)")
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(.green)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.green.opacity(0.12))
-                    .cornerRadius(99)
+                Text("+\(count)").font(.caption).fontWeight(.bold)
+                    .foregroundColor(.green).padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.green.opacity(0.12)).cornerRadius(99)
+            }
+
+            if hasPhotos {
+                Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14).padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(isActive ? Color.green.opacity(0.12) : Color(.secondarySystemGroupedBackground))
+                .fill(isActive ? Color.green.opacity(0.12) :
+                      isSelected ? Color.blue.opacity(0.08) :
+                      subject.isAbsent ? Color.red.opacity(0.04) :
+                      Color(.secondarySystemGroupedBackground))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(isActive ? Color.green.opacity(0.4) : Color.clear, lineWidth: 2)
+                .stroke(isActive ? Color.green.opacity(0.4) :
+                        isSelected ? Color.blue.opacity(0.3) :
+                        Color.clear, lineWidth: 2)
         )
+        .opacity(subject.isAbsent ? 0.4 : (hasPhotos && !isSelected && !isActive ? 0.5 : 1.0))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedSubjectId = subject.id
+            confirmedSubjectId = nil
+            confirmedSubjectName = nil
+        }
+        .swipeActions(edge: .trailing) {
+            Button(subject.isAbsent ? "Present" : "Absent") {
+                toggleAbsent(subject)
+            }
+            .tint(subject.isAbsent ? .green : .red)
+        }
+        .id(subject.id)
     }
 
-    private func initialsView(_ subject: FPSubject) -> some View {
-        let initials = "\(subject.firstName.prefix(1))\(subject.lastName.prefix(1))"
-        return Text(initials)
-            .font(.system(size: 14, weight: .bold))
-            .foregroundColor(.secondary)
-            .frame(width: 44, height: 44)
-            .background(Color.gray.opacity(0.2))
-            .clipShape(Circle())
-    }
+    // MARK: - Helpers
 
     private func subjectInfo(_ subject: FPSubject) -> String {
-        if !subject.homeroom.isEmpty {
-            return subject.homeroom
-        }
+        if !subject.homeroom.isEmpty { return subject.homeroom }
         var parts: [String] = []
         if !subject.grade.isEmpty { parts.append(subject.grade) }
         if !subject.teacher.isEmpty { parts.append(subject.teacher) }
         return parts.joined(separator: " \u{00B7} ")
     }
 
-    private var emptyQueueView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "person.3")
-                .font(.system(size: 40))
-                .foregroundColor(.secondary)
-            Text("No students in queue")
-                .font(.headline)
-                .foregroundColor(.secondary)
-            Text("Switch to Roster view to check students in, or use the kiosk on the Surface Pro.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-        }
-        .padding(60)
-    }
-
-    // MARK: - Sync Connection Sheet
-
-    private var syncConnectionSheet: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                Image(systemName: fpSync.isConnected ? "wifi" : "wifi.slash")
-                    .font(.system(size: 48))
-                    .foregroundColor(fpSync.isConnected ? .green : .secondary)
-
-                Text(fpSync.isConnected ? "Connected to Surface Pro" : "Not Connected")
-                    .font(.headline)
-
-                if !fpSync.isConnected {
-                    Text("Make sure the Surface Pro has networking started and both devices are on the same WiFi network.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-
-                    Button("Connect") {
-                        fpSync.startDiscovery(galleryId: galleryId, authToken: nil)
-                    }
-                    .buttonStyle(.borderedProminent)
-                } else {
-                    Button("Disconnect") {
-                        fpSync.disconnect()
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                }
-
-                Spacer()
-            }
-            .padding(.top, 40)
-            .navigationTitle("Sync Connection")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { showingSyncSheet = false }
-                }
-            }
-        }
-    }
-
     // MARK: - Actions
 
-    private func selectSubject(_ subject: FPSubject) {
-        let sid = subject.id.uuidString.lowercased()
-        activeSubjectId = sid
-
-        // Tell camera station to select this subject
-        fpSync.selectSubject(
-            subjectId: sid,
-            rosterEntryId: nil,
-            subjectName: "\(subject.firstName) \(subject.lastName)"
-        )
-    }
-
-    private func checkIn(_ subject: FPSubject) {
+    private func toggleAbsent(_ subject: FPSubject) {
         var updated = subject
-        updated.checkedInAt = ISO8601DateFormatter().string(from: Date())
-
+        updated.isAbsent = !subject.isAbsent
+        updated.updatedAt = Date()
         Task {
             do {
                 try await powerSync.saveSubject(updated)
-                // Broadcast to other stations
                 let sid = subject.id.uuidString.lowercased()
-                let name = "\(subject.firstName) \(subject.lastName)"
-                fpSync.broadcastCheckIn(galleryId: galleryId, subjectId: sid, subjectName: name)
-            } catch {
-                print("Check-in failed: \(error)")
-            }
+                fpSync.markSubjectAbsent(subjectId: sid, rosterEntryId: nil, isAbsent: updated.isAbsent)
+            } catch { print("Toggle absent failed: \(error)") }
+        }
+    }
+
+    private func triggerCaptureHaptic() {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+    }
+
+    private func selectOnCamera(_ subject: FPSubject) {
+        let sid = subject.id.uuidString.lowercased()
+        activeSubjectId = sid
+        fpSync.selectSubject(subjectId: sid, rosterEntryId: nil, subjectName: "\(subject.firstName) \(subject.lastName)")
+    }
+
+    private func saveSubject(_ updated: FPSubject) {
+        Task {
+            do {
+                try await powerSync.saveSubject(updated)
+                let sid = updated.id.uuidString.lowercased()
+                fpSync.sendSubjectUpdated(subjectId: sid, rosterEntryId: sid, firstName: updated.firstName, lastName: updated.lastName, rosterId: updated.rosterId)
+            } catch { print("Save subject failed: \(error)") }
         }
     }
 
@@ -451,12 +611,23 @@ struct PoserStationView: View {
 
     private func loadSubjects() async {
         isLoading = true
-        do {
-            subjects = try await powerSync.getSubjects(forGalleryId: galleryId)
-        } catch {
-            print("Failed to load subjects: \(error)")
-        }
+        do { subjects = try await powerSync.getSubjects(forGalleryId: galleryId) }
+        catch { print("Failed to load subjects: \(error)") }
         isLoading = false
+    }
+
+    private func loadCachedThumbnails() async {
+        let shootId = galleryId
+        let cached = await Task.detached(priority: .utility) {
+            ThumbnailCache.shared.loadAll(shootId: shootId)
+        }.value
+        if !cached.isEmpty {
+            subjectThumbnails = cached
+            // Update photo counts from cached data
+            for (sid, thumbs) in cached {
+                photoCountMap[sid] = thumbs.count
+            }
+        }
     }
 
     private func startWatching() {
@@ -471,9 +642,7 @@ struct PoserStationView: View {
                     }
                 }
             } catch {
-                if !Task.isCancelled {
-                    print("Subject watch error: \(error)")
-                }
+                if !Task.isCancelled { print("Subject watch error: \(error)") }
             }
         }
     }
@@ -481,24 +650,553 @@ struct PoserStationView: View {
     // MARK: - Sync Callbacks
 
     private func setupSyncCallbacks() {
+        // When camera station selects a subject: auto-select + scroll on iPad + confirm
         fpSync.onActiveSubjectChanged = { (subjectId: String) in
             DispatchQueue.main.async {
                 activeSubjectId = subjectId
+                // Auto-select and scroll to the subject
+                if let subject = subjects.first(where: { $0.id.uuidString.lowercased() == subjectId.lowercased() }) {
+                    selectedSubjectId = subject.id
+                    scrollTargetId = subject.id
+                    // Confirm selection — shows banner + haptic
+                    confirmedSubjectId = subjectId
+                    confirmedSubjectName = "\(subject.firstName) \(subject.lastName)"
+                    let generator = UINotificationFeedbackGenerator()
+                    generator.notificationOccurred(.success)
+                }
             }
         }
 
-        fpSync.onSubjectPhotographed = { (subjectId: String, _: String?, _: Int?) in
-            DispatchQueue.main.async {
-                let count = photoCountMap[subjectId] ?? 0
-                photoCountMap[subjectId] = count + 1
-            }
-        }
-
+        // Stage 1: capture completed — queue the image number + haptic, clear selection confirmation
         fpSync.onCaptureCompleted = { (event: FPCaptureEvent) in
             DispatchQueue.main.async {
                 let sid = event.subjectId
-                let count = photoCountMap[sid] ?? 0
-                photoCountMap[sid] = count + 1
+                photoCountMap[sid] = (photoCountMap[sid] ?? 0) + 1
+                if let imgNum = event.imageNumber {
+                    var pending = pendingImageNumbers[sid] ?? []
+                    pending.append(imgNum)
+                    pendingImageNumbers[sid] = pending
+                }
+                confirmedSubjectId = nil
+                confirmedSubjectName = nil
+                triggerCaptureHaptic()
+            }
+        }
+
+        // Stage 2: thumbnail arrives — decode base64, pair with queued image number
+        fpSync.onSubjectPhotographed = { (subjectId: String, thumbnail: String?, _: Int?) in
+            DispatchQueue.main.async {
+                guard let thumbStr = thumbnail, !thumbStr.isEmpty else { return }
+
+                // Strip data URI prefix if present
+                let base64 = thumbStr.replacingOccurrences(of: "data:image/jpeg;base64,", with: "")
+                    .replacingOccurrences(of: "data:image/webp;base64,", with: "")
+
+                guard let data = Data(base64Encoded: base64),
+                      let image = UIImage(data: data) else { return }
+
+                // Pop oldest pending image number
+                var imgNum: Int? = nil
+                if var pending = pendingImageNumbers[subjectId], !pending.isEmpty {
+                    imgNum = pending.removeFirst()
+                    pendingImageNumbers[subjectId] = pending.isEmpty ? nil : pending
+                }
+
+                // Append thumbnail
+                var thumbs = subjectThumbnails[subjectId] ?? []
+                thumbs.append(CaptureThumb(image: image, imageNumber: imgNum))
+                if thumbs.count > 20 { thumbs = Array(thumbs.suffix(20)) }
+                subjectThumbnails[subjectId] = thumbs
+
+                // Save to disk cache
+                ThumbnailCache.shared.save(shootId: galleryId, subjectId: subjectId, imageNumber: imgNum, image: image)
+            }
+        }
+
+        // New subject created on another device — add to local list
+        fpSync.onSubjectCreated = { (rosterEntryId: String, firstName: String, lastName: String, rosterId: String, grade: String, groupName: String) in
+            DispatchQueue.main.async {
+                // Skip if we already have this subject
+                guard !subjects.contains(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
+                if let uuid = UUID(uuidString: rosterEntryId) {
+                    var newSubject = FPSubject(id: uuid, galleryId: UUID(uuidString: galleryId) ?? UUID())
+                    newSubject.firstName = firstName
+                    newSubject.lastName = lastName
+                    newSubject.rosterId = rosterId
+                    newSubject.grade = grade
+                    newSubject.sport = groupName
+                    subjects.append(newSubject)
+                    subjects.sort { $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending }
+                }
+            }
+        }
+
+        // Move photo confirmed by Surface Pro — update local thumbnails + confirm
+        fpSync.onCaptureReassigned = { (imageNumber: Int, oldSubjectId: String, newSubjectId: String) in
+            DispatchQueue.main.async {
+                if var fromThumbs = subjectThumbnails[oldSubjectId] {
+                    if let idx = fromThumbs.firstIndex(where: { $0.imageNumber == imageNumber }) {
+                        let moved = fromThumbs.remove(at: idx)
+                        subjectThumbnails[oldSubjectId] = fromThumbs.isEmpty ? nil : fromThumbs
+                        var toThumbs = subjectThumbnails[newSubjectId] ?? []
+                        toThumbs.append(moved)
+                        subjectThumbnails[newSubjectId] = toThumbs
+                    }
+                }
+                // Cancel failure timeout and show success
+                pendingMoveTimer?.cancel()
+                pendingMoveTimer = nil
+                let targetName = subjects.first(where: { $0.id.uuidString.lowercased() == newSubjectId.lowercased() })
+                    .map { "\($0.firstName) \($0.lastName)" } ?? "subject"
+                moveConfirmationMessage = "Image #\(imageNumber) moved to \(targetName)"
+                moveConfirmationIsError = false
+                let generator = UINotificationFeedbackGenerator()
+                generator.notificationOccurred(.success)
+                // Auto-dismiss success after 3 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if moveConfirmationIsError == false { moveConfirmationMessage = nil }
+                }
+            }
+        }
+    }
+
+    // MARK: - Sync Sheet
+
+    private var syncSheet: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                Image(systemName: fpSync.isConnected ? "wifi" : "wifi.slash")
+                    .font(.system(size: 48))
+                    .foregroundColor(fpSync.isConnected ? .green : .secondary)
+                Text(fpSync.isConnected ? "Connected to Surface Pro" : "Not Connected")
+                    .font(.headline)
+                if !fpSync.isConnected {
+                    Text("Make sure the Surface Pro has networking started and both devices are on the same WiFi.")
+                        .font(.subheadline).foregroundColor(.secondary)
+                        .multilineTextAlignment(.center).padding(.horizontal, 40)
+                    Button("Connect") { fpSync.startDiscovery(galleryId: galleryId, authToken: nil) }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Disconnect") { fpSync.disconnect() }
+                        .buttonStyle(.bordered).tint(.red)
+                }
+
+                if fpSync.isConnected && fpSync.cameraDevices.count > 1 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Camera Pairing")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .textCase(.uppercase)
+                        ForEach(fpSync.cameraDevices) { device in
+                            Button {
+                                fpSync.pairWithCamera(deviceId: device.id)
+                            } label: {
+                                HStack {
+                                    Label(device.name, systemImage: "camera")
+                                    Spacer()
+                                    if device.id == fpSync.pairedCameraId {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+
+                if fpSync.isConnected && !fpSync.devices.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Connected Devices")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .textCase(.uppercase)
+                        ForEach(fpSync.devices) { device in
+                            HStack {
+                                Image(systemName: device.stationMode == "camera" ? "camera" : (device.stationMode == "ios_roster" ? "ipad" : "desktopcomputer"))
+                                VStack(alignment: .leading) {
+                                    Text(device.name).font(.body)
+                                    Text(device.stationMode.replacingOccurrences(of: "_", with: " ").capitalized)
+                                        .font(.caption).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if device.captureCount > 0 {
+                                    Text("\(device.captureCount) photos")
+                                        .font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+
+                Spacer()
+            }
+            .padding(.top, 40)
+            .navigationTitle("Sync Connection").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showingSyncSheet = false } } }
+        }
+    }
+
+    // MARK: - US Card QR Scan Sheet
+
+    private var usCardQRSheet: some View {
+        NavigationView {
+            QRScannerCameraView(
+                isScanning: .constant(true),
+                torchOn: .constant(false),
+                onCodeScanned: { code in
+                    // Find matching subject by qr_code, roster_id, or student_id
+                    if let match = subjects.first(where: {
+                        $0.rosterId == code || $0.studentId == code ||
+                        $0.id.uuidString.lowercased() == code.lowercased()
+                    }) {
+                        usCardSubject = match
+                        showingUSCardQRScan = false
+                        // Small delay to let the QR sheet dismiss before presenting doc scan
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            showingUSCardDocScan = true
+                        }
+                    } else {
+                        scanError = "No matching US card found for code: \(code)"
+                    }
+                }
+            )
+            .ignoresSafeArea()
+            .overlay(alignment: .top) {
+                if let error = scanError {
+                    Text(error)
+                        .font(.subheadline).fontWeight(.medium)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(Color.red.cornerRadius(10))
+                        .padding(.top, 60)
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { scanError = nil }
+                        }
+                }
+            }
+            .navigationTitle("Scan US Card QR")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showingUSCardQRScan = false; scanError = nil }
+                }
+            }
+        }
+    }
+
+    // MARK: - US Card Document Scan Sheet
+
+    private var usCardDocScanSheet: some View {
+        Group {
+            if scanProcessing {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                    Text("Reading handwritten card...")
+                        .font(.headline)
+                    if let name = usCardSubject.map({ "\($0.firstName) \($0.lastName)".trimmingCharacters(in: .whitespaces) }),
+                       !name.isEmpty, name != " " {
+                        Text("Updating: \(name)")
+                            .font(.subheadline).foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                DocumentScannerView(onScan: { images in
+                    guard let image = images.first, let usSubject = usCardSubject else {
+                        showingUSCardDocScan = false
+                        return
+                    }
+                    scanProcessing = true
+                    ClaudeRosterService.shared.extractPortraitCard(
+                        image,
+                        galleryId: galleryId,
+                        organizationId: storedUserOrganizationID
+                    ) { result in
+                        scanProcessing = false
+                        switch result {
+                        case .success(let cardResult):
+                            let extracted = cardResult.subject
+                            // Update the US subject with extracted fields
+                            var updated = usSubject
+                            if !extracted.firstName.isEmpty { updated.firstName = extracted.firstName }
+                            if !extracted.lastName.isEmpty { updated.lastName = extracted.lastName }
+                            if !extracted.grade.isEmpty { updated.grade = extracted.grade }
+                            if !extracted.teacher.isEmpty { updated.teacher = extracted.teacher }
+                            if !extracted.studentId.isEmpty { updated.studentId = extracted.studentId }
+                            updated.updatedAt = Date()
+
+                            saveSubject(updated)
+                            selectedSubjectId = updated.id
+                            showingUSCardDocScan = false
+                            usCardSubject = nil
+
+                            if cardResult.usedOnDeviceOCR {
+                                scanError = "Used on-device OCR (offline) — please verify the scanned info"
+                            }
+                        case .failure(let error):
+                            scanError = "Card scan failed: \(error.localizedDescription)"
+                            showingUSCardDocScan = false
+                            usCardSubject = nil
+                        }
+                    }
+                })
+            }
+        }
+    }
+
+    // MARK: - Add Subject Sheet
+
+    private var addSubjectSheet: some View {
+        AddSubjectSheet(galleryId: galleryId, organizationId: storedUserOrganizationID, subjects: subjects) { newSubject in
+            Task {
+                do {
+                    try await powerSync.saveSubject(newSubject)
+                    let sid = newSubject.id.uuidString.lowercased()
+                    fpSync.broadcastSubjectCreated(rosterEntryId: sid, firstName: newSubject.firstName, lastName: newSubject.lastName, rosterId: newSubject.rosterId, grade: newSubject.grade, groupName: newSubject.sport.isEmpty ? newSubject.homeroom : newSubject.sport)
+                    showingAddSubject = false
+                } catch { print("Add subject failed: \(error)") }
+            }
+        }
+    }
+}
+
+// MARK: - Subject Detail Panel
+
+struct SubjectDetailPanel: View {
+    let subject: FPSubject
+    let thumbnails: [CaptureThumb]
+    let photoCount: Int
+    let galleryId: String
+    let onSave: (FPSubject) -> Void
+    let onSelect: () -> Void
+    let onViewPhotos: (String, [CaptureThumb]) -> Void
+
+    @State private var draft: FPSubject?
+
+    private var editing: FPSubject { draft ?? subject }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // Header + select button
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(subject.firstName) \(subject.lastName)")
+                            .font(.title3).fontWeight(.bold)
+                        if photoCount > 0 {
+                            Text("\(photoCount) photo\(photoCount == 1 ? "" : "s")")
+                                .font(.caption).foregroundColor(.green)
+                        }
+                    }
+                    Spacer()
+                    Button(action: onSelect) {
+                        Label("Select", systemImage: "camera")
+                            .font(.subheadline).fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                // Thumbnail grid
+                if !thumbnails.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("PHOTOS")
+                            .font(.caption).fontWeight(.bold).foregroundColor(.secondary)
+
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 70), spacing: 6)], spacing: 6) {
+                            ForEach(thumbnails) { thumb in
+                                Image(uiImage: thumb.image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 70, height: 70)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .onTapGesture {
+                                        onViewPhotos("\(subject.firstName) \(subject.lastName)", thumbnails)
+                                    }
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                // Editable fields
+                Group {
+                    fieldRow("First Name", value: binding(\.firstName))
+                    fieldRow("Last Name", value: binding(\.lastName))
+                    fieldRow("Grade", value: binding(\.grade))
+                    fieldRow("Teacher", value: binding(\.teacher))
+                    fieldRow("Homeroom", value: binding(\.homeroom))
+                    fieldRow("Student ID", value: binding(\.studentId))
+                    fieldRow("Roster ID", value: binding(\.rosterId))
+                }
+
+                Divider()
+
+                Group {
+                    fieldRow("Email", value: binding(\.email))
+                    fieldRow("Phone", value: binding(\.phone))
+                    fieldRow("Notes", value: binding(\.notes))
+                }
+
+                if !subject.jerseyNumber.isEmpty || !subject.sport.isEmpty {
+                    Divider()
+                    Group {
+                        fieldRow("Jersey #", value: binding(\.jerseyNumber))
+                        fieldRow("Sport", value: binding(\.sport))
+                        fieldRow("Position", value: binding(\.position))
+                    }
+                }
+
+                Divider()
+                HStack(spacing: 20) {
+                    Toggle("Absent", isOn: absentBinding).toggleStyle(.switch)
+                    Toggle("Retake", isOn: retakeBinding).toggleStyle(.switch)
+                }
+                .font(.subheadline)
+
+                Spacer(minLength: 40)
+            }
+            .padding(20)
+        }
+        .background(Color(.secondarySystemBackground))
+        .onChange(of: subject.id) { _ in draft = nil }
+    }
+
+    private func fieldRow(_ label: String, value: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption).fontWeight(.semibold).foregroundColor(.secondary).textCase(.uppercase)
+            TextField(label, text: value)
+                .textFieldStyle(.roundedBorder).font(.body)
+                .onChange(of: value.wrappedValue) { _ in
+                    if let d = draft { onSave(d) }
+                }
+        }
+    }
+
+    private func binding(_ keyPath: WritableKeyPath<FPSubject, String>) -> Binding<String> {
+        Binding(
+            get: { editing[keyPath: keyPath] },
+            set: { newValue in
+                if draft == nil { draft = subject }
+                draft![keyPath: keyPath] = newValue
+            }
+        )
+    }
+
+    private var absentBinding: Binding<Bool> {
+        Binding(get: { editing.isAbsent }, set: { v in
+            if draft == nil { draft = subject }
+            draft!.isAbsent = v; onSave(draft!)
+        })
+    }
+
+    private var retakeBinding: Binding<Bool> {
+        Binding(get: { editing.needsRetake }, set: { v in
+            if draft == nil { draft = subject }
+            draft!.needsRetake = v; onSave(draft!)
+        })
+    }
+}
+
+// MARK: - Add Subject Sheet
+
+struct AddSubjectSheet: View {
+    let galleryId: String
+    let organizationId: String
+    let subjects: [FPSubject]
+    let onAdd: (FPSubject) -> Void
+
+    @State private var firstName = ""
+    @State private var lastName = ""
+    @State private var grade = ""
+    @State private var teacher = ""
+    @State private var homeroom = ""
+    @State private var studentId = ""
+    @State private var showingCardScan = false
+    @State private var scanProcessing = false
+    @State private var ocrWarning: String?
+    @Environment(\.dismiss) private var dismiss
+
+    private var showGrade: Bool { subjects.contains { !$0.grade.isEmpty } }
+    private var showTeacher: Bool { subjects.contains { !$0.teacher.isEmpty } }
+    private var showHomeroom: Bool { subjects.contains { !$0.homeroom.isEmpty } }
+    private var showStudentId: Bool { subjects.contains { !$0.studentId.isEmpty } }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                // Scan Card option
+                Section {
+                    if scanProcessing {
+                        HStack {
+                            ProgressView()
+                            Text("Reading card...").foregroundColor(.secondary)
+                        }
+                    } else {
+                        Button(action: { showingCardScan = true }) {
+                            Label("Scan Handwritten Card", systemImage: "doc.viewfinder")
+                        }
+                    }
+                }
+
+                if let warning = ocrWarning {
+                    Section {
+                        Label(warning, systemImage: "exclamationmark.triangle")
+                            .font(.subheadline)
+                            .foregroundColor(.orange)
+                    }
+                }
+
+                Section("Name") {
+                    TextField("First Name", text: $firstName)
+                    TextField("Last Name", text: $lastName)
+                }
+                if showGrade || showTeacher || showHomeroom || showStudentId {
+                    Section("Info") {
+                        if showGrade { TextField("Grade", text: $grade) }
+                        if showTeacher { TextField("Teacher", text: $teacher) }
+                        if showHomeroom { TextField("Homeroom", text: $homeroom) }
+                        if showStudentId { TextField("Student ID", text: $studentId) }
+                    }
+                }
+            }
+            .navigationTitle("Add Student").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        let subject = FPSubject(galleryId: galleryId, organizationId: organizationId, firstName: firstName.trimmingCharacters(in: .whitespaces), lastName: lastName.trimmingCharacters(in: .whitespaces), grade: grade, teacher: teacher, homeroom: homeroom, studentId: studentId)
+                        onAdd(subject)
+                    }
+                    .disabled(firstName.trimmingCharacters(in: .whitespaces).isEmpty || lastName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .sheet(isPresented: $showingCardScan) {
+                DocumentScannerView(onScan: { images in
+                    guard let image = images.first else { return }
+                    scanProcessing = true
+                    ClaudeRosterService.shared.extractPortraitCard(
+                        image,
+                        galleryId: galleryId,
+                        organizationId: organizationId
+                    ) { result in
+                        scanProcessing = false
+                        if case .success(let cardResult) = result {
+                            let extracted = cardResult.subject
+                            if !extracted.firstName.isEmpty { firstName = extracted.firstName }
+                            if !extracted.lastName.isEmpty { lastName = extracted.lastName }
+                            if !extracted.grade.isEmpty { grade = extracted.grade }
+                            if !extracted.teacher.isEmpty { teacher = extracted.teacher }
+                            if !extracted.studentId.isEmpty { studentId = extracted.studentId }
+                            if cardResult.usedOnDeviceOCR {
+                                ocrWarning = "Used on-device OCR (offline) — please verify"
+                            }
+                        }
+                    }
+                })
             }
         }
     }

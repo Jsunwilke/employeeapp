@@ -105,6 +105,7 @@ class FocalPointSyncClient: ObservableObject {
     var onGroupPhotoReady: ((String, [String], Int) -> Void)?      // groupName, presentSubjectIds, total
     var onSubjectLinked: ((String, String) -> Void)?               // rosterEntryId, subjectId — Production created a subject for this roster entry
     var onSubjectsDeleted: (([String]) -> Void)?                   // subject_ids deleted on Production
+    var onSubjectCreated: ((String, String, String, String, String, String) -> Void)?  // rosterEntryId, firstName, lastName, rosterId, grade, groupName
     var onCaptureReassigned: ((Int, String, String) -> Void)?      // imageNumber, oldRosterEntryId, newRosterEntryId
     var onVerificationWarning: ((String, String, String, String, String?) -> Void)?  // subjectId, subjectName, status, message, qrData
     var onGalleryChanged: ((String, String) -> Void)?                               // oldGalleryId, newGalleryId
@@ -944,6 +945,18 @@ class FocalPointSyncClient: ObservableObject {
             let lastName = String((msg["last_name"] as? String ?? "").prefix(200))
             let rosterId = String((msg["roster_id"] as? String ?? "").prefix(50))
             onSubjectUpdated?(rosterEntryId, subjectId, firstName, lastName, rosterId)
+
+        case "subject_created":
+            guard let rosterEntryId = msg["roster_entry_id"] as? String,
+                  UUID(uuidString: rosterEntryId) != nil else { break }
+            // Skip if this device sent it
+            if let senderId = msg["device_id"] as? String, senderId == deviceId { break }
+            let firstName = String((msg["first_name"] as? String ?? "").prefix(200))
+            let lastName = String((msg["last_name"] as? String ?? "").prefix(200))
+            let rosterId = String((msg["roster_id"] as? String ?? "").prefix(50))
+            let grade = String((msg["grade"] as? String ?? "").prefix(50))
+            let groupName = String((msg["group_name"] as? String ?? "").prefix(200))
+            onSubjectCreated?(rosterEntryId, firstName, lastName, rosterId, grade, groupName)
 
         case "queue_reorder":
             if let orderedIds = msg["ordered_subject_ids"] as? [String],

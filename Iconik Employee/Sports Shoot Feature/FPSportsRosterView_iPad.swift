@@ -44,6 +44,7 @@ class FPSportsRosterViewModel: ObservableObject {
     // Field editing state
     @Published var currentlyEditingEntry: UUID? = nil // ID of entry being edited
     @Published var editingImageNumber: String = ""
+    @Published var originalImageNumber: String = "" // Value when editing started — used by save guard to avoid false "no changes" from watch merge
     @Published var lockedEntries: [UUID: String] = [:] // [entryID: editorName]
     
     // UI state - header collapsed in landscape
@@ -236,6 +237,15 @@ struct FPSportsRosterView_iPad: View {
     @State private var showingFPSyncSheet = false
     @State private var manualSyncIP = ""
     @State private var manualSyncPIN = ""
+
+    // Selection confirmation from Surface Pro
+    @State private var confirmedSubjectId: String?
+    @State private var confirmedSubjectName: String?
+
+    // Move confirmation from Surface Pro
+    @State private var moveConfirmationMessage: String?
+    @State private var moveConfirmationIsError = false
+    @State private var pendingMoveTimer: DispatchWorkItem?
 
     // Sync state: real-time indicators from Production
     @State private var highlightedEntryId: UUID? = nil          // Flash highlight on reverse select
@@ -625,6 +635,9 @@ struct FPSportsRosterView_iPad: View {
         fpSync.onCaptureCompleted = { event in
             guard let imageNumber = event.imageNumber else { return }
 
+            // Clear selection confirmation on capture
+            confirmedSubjectId = nil
+            confirmedSubjectName = nil
             // Track capture count
             subjectCaptureCounts[event.subjectId, default: 0] += 1
             // Mark as photographed
@@ -722,7 +735,7 @@ struct FPSportsRosterView_iPad: View {
             }
         }
 
-        // Active subject changed — reverse selection (scroll to entry)
+        // Active subject changed — reverse selection (scroll to entry) + confirmation
         fpSync.onActiveSubjectChanged = { subjectId in
             if let entry = viewModel.subjects.first(where: { $0.id.uuidString.lowercased() == subjectId.lowercased() }) {
                 withAnimation(.easeInOut(duration: 0.3)) {
@@ -732,6 +745,11 @@ struct FPSportsRosterView_iPad: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     withAnimation { highlightedEntryId = nil }
                 }
+                // Confirm selection — shows banner + haptic
+                confirmedSubjectId = subjectId
+                confirmedSubjectName = "\(entry.firstName) \(entry.lastName)"
+                let generator = UINotificationFeedbackGenerator()
+                generator.notificationOccurred(.success)
             }
         }
 
@@ -816,6 +834,23 @@ struct FPSportsRosterView_iPad: View {
             }
         }
 
+        // New subject created on another device — add to local list
+        fpSync.onSubjectCreated = { (rosterEntryId: String, firstName: String, lastName: String, rosterId: String, grade: String, groupName: String) in
+            DispatchQueue.main.async {
+                guard !viewModel.subjects.contains(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
+                if let uuid = UUID(uuidString: rosterEntryId) {
+                    var newSubject = FPSubject(id: uuid, galleryId: viewModel.selectedShoot?.id ?? UUID())
+                    newSubject.firstName = firstName
+                    newSubject.lastName = lastName
+                    newSubject.rosterId = rosterId
+                    newSubject.grade = grade
+                    newSubject.sport = groupName
+                    viewModel.subjects.append(newSubject)
+                    viewModel.subjects.sort { $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending }
+                }
+            }
+        }
+
         fpSync.onCaptureReassigned = { [self] imageNumber, oldRosterEntryId, newRosterEntryId in
             // Update image numbers: remove from old entry, add to new entry
             let oldId = oldRosterEntryId.lowercased()
@@ -878,6 +913,20 @@ struct FPSportsRosterView_iPad: View {
                     }
                 }
             }
+
+            // Cancel failure timeout and show success
+            pendingMoveTimer?.cancel()
+            pendingMoveTimer = nil
+            let targetName = viewModel.subjects.first(where: { $0.id.uuidString.lowercased() == newId })
+                .map { "\($0.firstName) \($0.lastName)" } ?? "subject"
+            moveConfirmationMessage = "Image #\(imageNumber) moved to \(targetName)"
+            moveConfirmationIsError = false
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+            // Auto-dismiss success after 3 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                if moveConfirmationIsError == false { moveConfirmationMessage = nil }
+            }
         }
 
         // Verification warning — show alert on iPad when Production detects QR/face mismatch
@@ -889,6 +938,9 @@ struct FPSportsRosterView_iPad: View {
     }
 
     private func sendSubjectSelection(entry: FPSubject) {
+        // Clear previous confirmation when selecting a new subject
+        confirmedSubjectId = nil
+        confirmedSubjectName = nil
         // Always track the last-tapped entry for capture_completed matching
         lastSyncedEntryId = entry.id
 
@@ -1258,11 +1310,13 @@ struct FPSportsRosterView_iPad: View {
                     saveCurrentEditingEntry()
                     viewModel.currentlyEditingEntry = nil
                     viewModel.editingImageNumber = ""
+                    viewModel.originalImageNumber = ""
                     lockLostSubjectId = nil
                 }
                 Button("Discard", role: .destructive) {
                     viewModel.currentlyEditingEntry = nil
                     viewModel.editingImageNumber = ""
+                    viewModel.originalImageNumber = ""
                     lockLostSubjectId = nil
                 }
             } else {
@@ -1293,18 +1347,14 @@ struct FPSportsRosterView_iPad: View {
             // Check if user was actively editing this subject
             let wasEditing = viewModel.currentlyEditingEntry == lostId
             if wasEditing {
-                // Check for unsaved changes
-                let hasChanges: Bool
-                if let currentEntry = viewModel.subjects.first(where: { $0.id == lostId }) {
-                    hasChanges = viewModel.editingImageNumber != currentEntry.imageNumbers
-                } else {
-                    hasChanges = false
-                }
+                // Check for unsaved changes (compare against original, not watch-merged subjects array)
+                let hasChanges = viewModel.editingImageNumber != viewModel.originalImageNumber
                 lockLostHadUnsavedChanges = hasChanges
                 if !hasChanges {
                     // No unsaved changes — just clear editing state
                     viewModel.currentlyEditingEntry = nil
                     viewModel.editingImageNumber = ""
+                    viewModel.originalImageNumber = ""
                 }
             } else {
                 lockLostHadUnsavedChanges = false
@@ -1345,6 +1395,18 @@ struct FPSportsRosterView_iPad: View {
                                     subjectThumbnails[targetId] = toThumbs
                                 }
                             }
+                            // Start timeout — if no confirmation in 5 seconds, show failure
+                            pendingMoveTimer?.cancel()
+                            let timer = DispatchWorkItem {
+                                if moveConfirmationMessage == nil {
+                                    moveConfirmationMessage = "Move failed — no confirmation from Surface Pro"
+                                    moveConfirmationIsError = true
+                                    let generator = UINotificationFeedbackGenerator()
+                                    generator.notificationOccurred(.error)
+                                }
+                            }
+                            pendingMoveTimer = timer
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timer)
                             showMoveImagePicker = false
                             showPhotoViewer = false
                         }) {
@@ -2240,6 +2302,7 @@ struct FPSportsRosterView_iPad: View {
                     fpSync.onSubjectLinked = nil
                     fpSync.onSubjectsDeleted = nil
                     fpSync.onCaptureReassigned = nil
+                    fpSync.onSubjectCreated = nil
                     fpSync.onVerificationWarning = nil
                     // Reset sync state
                     subjectCaptureCounts = [:]
@@ -2342,6 +2405,7 @@ struct FPSportsRosterView_iPad: View {
             if let shoot = viewModel.selectedShoot {
                 AddGroupImageView(
                     shootID: shoot.id,
+                    organizationId: shoot.organizationId,
                     existingGroup: viewModel.selectedGroupImage,
                     onComplete: { success in
                         if success { refreshSelectedShoot() }
@@ -2947,6 +3011,45 @@ struct FPSportsRosterView_iPad: View {
     
     private func rosterListView(_ shoot: SportsShoot) -> some View {
         VStack(spacing: 0) {
+            // Confirmation banner — shows when Surface Pro confirms subject selection
+            if let name = confirmedSubjectName {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.white)
+                        .font(.system(size: 16, weight: .bold))
+                    Text("Selected on Camera: \(name)")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.green)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.25), value: confirmedSubjectName)
+            }
+
+            // Move confirmation banner
+            if let msg = moveConfirmationMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: moveConfirmationIsError ? "exclamationmark.circle.fill" : "arrow.right.circle.fill")
+                        .foregroundColor(.white)
+                        .font(.system(size: 16, weight: .bold))
+                    Text(msg)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Button(action: { moveConfirmationMessage = nil }) {
+                        Image(systemName: "xmark").foregroundColor(.white.opacity(0.8)).font(.caption)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(moveConfirmationIsError ? Color.red : Color.blue)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.25), value: moveConfirmationMessage)
+            }
+
             // Column headers with sorting functionality and filter button
             HStack {
                 sortableHeader("Name", field: "lastName")
@@ -4569,6 +4672,7 @@ struct FPSportsRosterView_iPad: View {
                                             self.saveCurrentEditingEntry()
                                             self.viewModel.currentlyEditingEntry = nil
                                             self.viewModel.editingImageNumber = ""
+                                            self.viewModel.originalImageNumber = ""
                                         }
                                     }
                                 }
@@ -4588,7 +4692,7 @@ struct FPSportsRosterView_iPad: View {
 
                                 guard let entryID = viewModel.currentlyEditingEntry,
                                       let currentEntry = viewModel.subjects.first(where: { $0.id == entryID }),
-                                      viewModel.editingImageNumber != currentEntry.imageNumbers else {
+                                      viewModel.editingImageNumber != viewModel.originalImageNumber else {
                                     return
                                 }
 
@@ -4600,6 +4704,9 @@ struct FPSportsRosterView_iPad: View {
                                 if let index = viewModel.subjects.firstIndex(where: { $0.id == entryID }) {
                                     viewModel.subjects[index] = updatedEntry
                                 }
+
+                                // Mark as saved so subsequent guard checks don't re-trigger
+                                viewModel.originalImageNumber = viewModel.editingImageNumber
 
                                 // Haptic feedback on save
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -4640,6 +4747,7 @@ struct FPSportsRosterView_iPad: View {
                                     // We already have the lock, just start editing without acquiring a new lock
                                     viewModel.currentlyEditingEntry = entry.id
                                     viewModel.editingImageNumber = entry.imageNumbers
+                                    viewModel.originalImageNumber = entry.imageNumbers
                                     return
                                 }
 
@@ -4651,6 +4759,7 @@ struct FPSportsRosterView_iPad: View {
 
                                 // Set up editing state
                                 viewModel.editingImageNumber = entry.imageNumbers
+                                viewModel.originalImageNumber = entry.imageNumbers
                                 viewModel.currentlyEditingEntry = entry.id // Set synchronously to avoid placeholder showing
 
                                 // Acquire lock for this entry
