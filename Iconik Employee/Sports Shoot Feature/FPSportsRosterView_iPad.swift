@@ -839,7 +839,7 @@ struct FPSportsRosterView_iPad: View {
             DispatchQueue.main.async {
                 guard !viewModel.subjects.contains(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
                 if let uuid = UUID(uuidString: rosterEntryId) {
-                    var newSubject = FPSubject(id: uuid, galleryId: viewModel.selectedShoot?.id ?? UUID())
+                    var newSubject = FPSubject(id: uuid, galleryId: viewModel.selectedShoot?.id.uuidString.lowercased() ?? "")
                     newSubject.firstName = firstName
                     newSubject.lastName = lastName
                     newSubject.rosterId = rosterId

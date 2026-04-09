@@ -719,7 +719,7 @@ struct PoserStationView: View {
                 // Skip if we already have this subject
                 guard !subjects.contains(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
                 if let uuid = UUID(uuidString: rosterEntryId) {
-                    var newSubject = FPSubject(id: uuid, galleryId: UUID(uuidString: galleryId) ?? UUID())
+                    var newSubject = FPSubject(id: uuid, galleryId: galleryId)
                     newSubject.firstName = firstName
                     newSubject.lastName = lastName
                     newSubject.rosterId = rosterId
