@@ -247,6 +247,11 @@ struct FPSportsRosterView_iPad: View {
     @State private var moveConfirmationIsError = false
     @State private var pendingMoveTimer: DispatchWorkItem?
 
+    // Verification warning from Surface Pro
+    @State private var verificationWarning: String?
+    @State private var verificationSubjectId: String?
+    @State private var verificationDismissTimer: DispatchWorkItem?
+
     // Sync state: real-time indicators from Production
     @State private var highlightedEntryId: UUID? = nil          // Flash highlight on reverse select
     @State private var subjectCaptureCounts: [String: Int] = [:] // subject_id -> photo count
@@ -931,9 +936,17 @@ struct FPSportsRosterView_iPad: View {
 
         // Verification warning — show alert on iPad when Production detects QR/face mismatch
         fpSync.onVerificationWarning = { subjectId, subjectName, status, message, qrData in
-            let title = status == "mismatch" ? "Assignment Mismatch" : "Verification Warning"
-            viewModel.errorMessage = "\(title): \(subjectName) — \(message)"
-            viewModel.showingErrorAlert = true
+            DispatchQueue.main.async {
+                let prefix = status == "mismatch" ? "⚠ Mismatch" : "⚠ Warning"
+                verificationWarning = "\(prefix): \(subjectName) — \(message)"
+                verificationSubjectId = subjectId
+                verificationDismissTimer?.cancel()
+                let timer = DispatchWorkItem { verificationWarning = nil; verificationSubjectId = nil }
+                verificationDismissTimer = timer
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timer)
+                let generator = UINotificationFeedbackGenerator()
+                generator.notificationOccurred(.warning)
+            }
         }
     }
 
@@ -3048,6 +3061,48 @@ struct FPSportsRosterView_iPad: View {
                 .background(moveConfirmationIsError ? Color.red : Color.blue)
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .animation(.easeInOut(duration: 0.25), value: moveConfirmationMessage)
+            }
+
+            // Verification warning banner
+            if let warning = verificationWarning {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.white)
+                        .font(.system(size: 16, weight: .bold))
+                    Text(warning)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Button(action: {
+                        verificationDismissTimer?.cancel()
+                        verificationWarning = nil
+                        verificationSubjectId = nil
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "person.fill.checkmark")
+                                .font(.system(size: 12))
+                            Text("Same Subject")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.25))
+                        .cornerRadius(6)
+                    }
+                    Button(action: {
+                        verificationDismissTimer?.cancel()
+                        verificationWarning = nil
+                        verificationSubjectId = nil
+                    }) {
+                        Image(systemName: "xmark").foregroundColor(.white.opacity(0.8)).font(.caption)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.orange)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.25), value: verificationWarning)
             }
 
             // Column headers with sorting functionality and filter button
