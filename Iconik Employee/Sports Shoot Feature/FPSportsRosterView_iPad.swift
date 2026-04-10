@@ -941,7 +941,8 @@ struct FPSportsRosterView_iPad: View {
                 verificationWarning = "\(prefix): \(subjectName) — \(message)"
                 verificationSubjectId = subjectId
                 verificationDismissTimer?.cancel()
-                let timer = DispatchWorkItem { verificationWarning = nil; verificationSubjectId = nil }
+                let sid = subjectId
+                let timer = DispatchWorkItem { fpSync.sendVerificationResponse(subjectId: sid, confirmed: false); verificationWarning = nil; verificationSubjectId = nil }
                 verificationDismissTimer = timer
                 DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timer)
                 let generator = UINotificationFeedbackGenerator()
@@ -3075,6 +3076,7 @@ struct FPSportsRosterView_iPad: View {
                     Spacer()
                     Button(action: {
                         verificationDismissTimer?.cancel()
+                        if let sid = verificationSubjectId { fpSync.sendVerificationResponse(subjectId: sid, confirmed: true) }
                         verificationWarning = nil
                         verificationSubjectId = nil
                     }) {
@@ -3092,6 +3094,7 @@ struct FPSportsRosterView_iPad: View {
                     }
                     Button(action: {
                         verificationDismissTimer?.cancel()
+                        if let sid = verificationSubjectId { fpSync.sendVerificationResponse(subjectId: sid, confirmed: false) }
                         verificationWarning = nil
                         verificationSubjectId = nil
                     }) {

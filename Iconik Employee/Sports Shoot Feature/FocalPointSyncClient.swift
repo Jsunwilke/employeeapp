@@ -526,6 +526,18 @@ class FocalPointSyncClient: ObservableObject {
         send(msg)
     }
 
+    /// Respond to verification warning — dismiss (unresolved mismatch) or confirm same subject
+    func sendVerificationResponse(subjectId: String, confirmed: Bool) {
+        let msg: [String: Any] = [
+            "type": "verification_response",
+            "device_id": deviceId,
+            "subject_id": subjectId,
+            "confirmed": confirmed, // true = same subject, false = dismissed (mismatch)
+            "station_name": "iPad - \(deviceName)",
+        ]
+        send(msg)
+    }
+
     /// Broadcast that roster entries were batch-deleted on iPad
     func broadcastEntriesDeleted(rosterEntryIds: [String]) {
         guard let galleryId = galleryId else { return }

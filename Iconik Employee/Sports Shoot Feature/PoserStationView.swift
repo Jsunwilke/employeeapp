@@ -469,6 +469,7 @@ struct PoserStationView: View {
                         Spacer()
                         Button(action: {
                             verificationDismissTimer?.cancel()
+                            if let sid = verificationSubjectId { fpSync.sendVerificationResponse(subjectId: sid, confirmed: true) }
                             verificationWarning = nil
                             verificationSubjectId = nil
                         }) {
@@ -486,6 +487,7 @@ struct PoserStationView: View {
                         }
                         Button(action: {
                             verificationDismissTimer?.cancel()
+                            if let sid = verificationSubjectId { fpSync.sendVerificationResponse(subjectId: sid, confirmed: false) }
                             verificationWarning = nil
                             verificationSubjectId = nil
                         }) {
@@ -768,7 +770,8 @@ struct PoserStationView: View {
                 verificationSubjectId = subjectId
                 // Auto-dismiss after 20 seconds
                 verificationDismissTimer?.cancel()
-                let timer = DispatchWorkItem { verificationWarning = nil; verificationSubjectId = nil }
+                let sid = subjectId
+                let timer = DispatchWorkItem { fpSync.sendVerificationResponse(subjectId: sid, confirmed: false); verificationWarning = nil; verificationSubjectId = nil }
                 verificationDismissTimer = timer
                 DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timer)
                 let generator = UINotificationFeedbackGenerator()
