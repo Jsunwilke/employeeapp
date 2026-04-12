@@ -1,6 +1,7 @@
 import SwiftUI
 import Supabase
 import Combine
+import UserNotifications
 
 // CaptureThumb defined in FPSportsRosterView_iPad.swift (module-wide, shared)
 
@@ -384,6 +385,14 @@ struct FPSportsRosterView_iPad: View {
 
     // MARK: - Focal Point Production Sync UI
 
+    /// Whether the sheet can be dismissed — requires pairing if connected with multiple cameras
+    private var canDismissSyncSheet: Bool {
+        if !fpSync.isConnected { return true }
+        if fpSync.cameraDevices.isEmpty { return true }
+        if fpSync.cameraDevices.count == 1 { return true } // auto-paired
+        return fpSync.pairedCameraId != nil
+    }
+
     @ViewBuilder
     private var fpSyncSheet: some View {
         NavigationView {
@@ -481,8 +490,9 @@ struct FPSportsRosterView_iPad: View {
                     }
                 }
 
-                if fpSync.isConnected && fpSync.cameraDevices.count > 1 {
-                    Section("Camera Pairing") {
+                // Station pairing — always shown when connected with cameras available
+                if fpSync.isConnected && !fpSync.cameraDevices.isEmpty {
+                    Section {
                         ForEach(fpSync.cameraDevices) { device in
                             Button {
                                 fpSync.pairWithCamera(deviceId: device.id)
@@ -496,6 +506,13 @@ struct FPSportsRosterView_iPad: View {
                                     }
                                 }
                             }
+                        }
+                    } header: {
+                        Text("Choose Your Station")
+                    } footer: {
+                        if fpSync.pairedCameraId == nil && fpSync.cameraDevices.count > 1 {
+                            Text("You must select a camera station before you can control it.")
+                                .foregroundColor(.orange)
                         }
                     }
                 }
@@ -528,8 +545,10 @@ struct FPSportsRosterView_iPad: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { showingFPSyncSheet = false }
+                        .disabled(!canDismissSyncSheet)
                 }
             }
+            .interactiveDismissDisabled(!canDismissSyncSheet)
         }
     }
 
@@ -758,21 +777,35 @@ struct FPSportsRosterView_iPad: View {
             }
         }
 
-        // QC flag changed — show/hide retake indicator
+        // QC flag changed — show/hide retake indicator and persist to SQLite
         fpSync.onQCFlagChanged = { subjectId, flagged in
             if flagged {
                 flaggedSubjects.insert(subjectId)
             } else {
                 flaggedSubjects.remove(subjectId)
             }
+            if let idx = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == subjectId.lowercased() }) {
+                var entry = viewModel.subjects[idx]
+                entry.needsRetake = flagged
+                entry.updatedAt = Date()
+                viewModel.subjects[idx] = entry
+                saveEntryWithRetry(entry)
+            }
         }
 
-        // Absent changed (from another iPad or Production)
+        // Absent changed (from another iPad or Production) — persist to SQLite
         fpSync.onSubjectAbsentChanged = { subjectId, isAbsent in
             if isAbsent {
                 absentSubjects.insert(subjectId)
             } else {
                 absentSubjects.remove(subjectId)
+            }
+            if let idx = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == subjectId.lowercased() }) {
+                var entry = viewModel.subjects[idx]
+                entry.isAbsent = isAbsent
+                entry.updatedAt = Date()
+                viewModel.subjects[idx] = entry
+                saveEntryWithRetry(entry)
             }
         }
 
@@ -788,7 +821,7 @@ struct FPSportsRosterView_iPad: View {
             }
         }
 
-        // Queue reorder (from Production or another iPad)
+        // Queue reorder (from Production or another iPad) — persist to SQLite
         fpSync.onQueueReorder = { orderedSubjectIds in
             // Reorder roster entries to match the new order
             var reordered: [FPSubject] = []
@@ -802,6 +835,14 @@ struct FPSportsRosterView_iPad: View {
                 reordered.append(entry)
             }
             viewModel.subjects = reordered
+            // Persist new sort order
+            Task {
+                for (index, entry) in reordered.enumerated() {
+                    var updated = entry
+                    updated.updatedAt = Date()
+                    try? await powerSync.saveSubject(updated)
+                }
+            }
         }
 
         // Group photo ready (from Production)
@@ -813,6 +854,19 @@ struct FPSportsRosterView_iPad: View {
                 .map { $0.id.uuidString }
             groupAttendance[groupName] = Set(memberIds)
             print("[FPSync] Group '\(groupName)' ready: \(presentSubjectIds.count)/\(totalInGroup)")
+        }
+
+        // Subject name/field updated on another device — persist to SQLite
+        fpSync.onSubjectUpdated = { (rosterEntryId: String, subjectId: String?, firstName: String, lastName: String, rosterId: String) in
+            if let idx = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) {
+                var entry = viewModel.subjects[idx]
+                entry.firstName = firstName
+                entry.lastName = lastName
+                entry.rosterId = rosterId
+                entry.updatedAt = Date()
+                viewModel.subjects[idx] = entry
+                saveEntryWithRetry(entry)
+            }
         }
 
         // onSubjectLinked — NOT NEEDED (FPSubject IS the subject, no linking required)
@@ -839,12 +893,13 @@ struct FPSportsRosterView_iPad: View {
             }
         }
 
-        // New subject created on another device — add to local list
+        // New subject created on another device — add to local list and persist to SQLite
         fpSync.onSubjectCreated = { (rosterEntryId: String, firstName: String, lastName: String, rosterId: String, grade: String, groupName: String) in
             DispatchQueue.main.async {
                 guard !viewModel.subjects.contains(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
                 if let uuid = UUID(uuidString: rosterEntryId) {
                     var newSubject = FPSubject(id: uuid, galleryId: viewModel.selectedShoot?.id.uuidString.lowercased() ?? "")
+                    newSubject.organizationId = storedUserOrganizationID
                     newSubject.firstName = firstName
                     newSubject.lastName = lastName
                     newSubject.rosterId = rosterId
@@ -852,6 +907,7 @@ struct FPSportsRosterView_iPad: View {
                     newSubject.sport = groupName
                     viewModel.subjects.append(newSubject)
                     viewModel.subjects.sort { $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending }
+                    saveEntryWithRetry(newSubject)
                 }
             }
         }
@@ -947,6 +1003,14 @@ struct FPSportsRosterView_iPad: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timer)
                 let generator = UINotificationFeedbackGenerator()
                 generator.notificationOccurred(.warning)
+
+                // Local notification — plays at notification volume even if media volume is down
+                let content = UNMutableNotificationContent()
+                content.title = "Assignment Mismatch"
+                content.body = "\(subjectName) — \(message)"
+                content.sound = .defaultCritical
+                let request = UNNotificationRequest(identifier: "mismatch_\(subjectId)", content: content, trigger: nil)
+                UNUserNotificationCenter.current().add(request)
             }
         }
     }
@@ -959,6 +1023,10 @@ struct FPSportsRosterView_iPad: View {
         lastSyncedEntryId = entry.id
 
         guard fpSync.isConnected else { return }
+        guard fpSync.pairedCameraId != nil else {
+            showingFPSyncSheet = true
+            return
+        }
         // Use subjectId if linked, otherwise use roster entry ID as the identifier
         let subjectId = entry.id.uuidString.lowercased()
         fpSync.selectSubject(
@@ -1937,6 +2005,21 @@ struct FPSportsRosterView_iPad: View {
                                     CompactConnectionIndicator()
                                         .padding(.horizontal, 2)
 
+                                    // Paired station battery level
+                                    if let pairedId = fpSync.pairedCameraId,
+                                       let pairedDevice = fpSync.devices.first(where: { $0.id == pairedId }),
+                                       let level = pairedDevice.batteryLevel {
+                                        HStack(spacing: 2) {
+                                            Image(systemName: batteryIconName(level: level, charging: pairedDevice.batteryCharging ?? false))
+                                                .font(.system(size: 12))
+                                                .foregroundColor(batteryColor(level: level))
+                                            Text("\(level)%")
+                                                .font(.system(size: 10, weight: .medium))
+                                                .foregroundColor(batteryColor(level: level))
+                                        }
+                                        .padding(.horizontal, 2)
+                                    }
+
                                     // CRUD queue upload indicator
                                     if viewModel.isUploading {
                                         HStack(spacing: 3) {
@@ -2311,6 +2394,7 @@ struct FPSportsRosterView_iPad: View {
                     fpSync.onQCFlagChanged = nil
                     fpSync.onSubjectAbsentChanged = nil
                     fpSync.onNotesChanged = nil
+                    fpSync.onSubjectUpdated = nil
                     fpSync.onQueueReorder = nil
                     fpSync.onGroupPhotoReady = nil
                     fpSync.onSubjectLinked = nil
@@ -2453,6 +2537,12 @@ struct FPSportsRosterView_iPad: View {
         }
         .sheet(isPresented: $showingFPSyncSheet) {
             fpSyncSheet
+        }
+        .onChange(of: fpSync.connectionStatus) { newStatus in
+            // Re-show the sync sheet when connection drops so user can reconnect and re-pair
+            if newStatus == .disconnected && !fpSync.intentionalClose {
+                showingFPSyncSheet = true
+            }
         }
         .sheet(isPresented: $viewModel.showingImportExport) {
             if let shoot = viewModel.selectedShoot {
@@ -4311,7 +4401,22 @@ struct FPSportsRosterView_iPad: View {
                                 formatter.dateStyle = .medium
                                 return formatter.string(from: date)
                             }
-                            
+
+                            private func batteryIconName(level: Int, charging: Bool) -> String {
+                                if charging { return "battery.100.bolt" }
+                                if level > 75 { return "battery.100" }
+                                if level > 50 { return "battery.75" }
+                                if level > 25 { return "battery.50" }
+                                if level > 10 { return "battery.25" }
+                                return "battery.0"
+                            }
+
+                            private func batteryColor(level: Int) -> Color {
+                                if level <= 15 { return .red }
+                                if level <= 30 { return .orange }
+                                return .green
+                            }
+
                             // MARK: - Orientation Management
                             
                             private func setupOrientationNotification() {

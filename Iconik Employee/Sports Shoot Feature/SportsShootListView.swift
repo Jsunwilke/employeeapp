@@ -1563,10 +1563,25 @@ struct SportsShootListView: View {
                 .frame(minWidth: 320)
             }
             .navigationTitle(viewModel.showArchived ? "Archived Sports Shoots" : "Sports Shoots")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        TabBarManager.shared.isFullScreenOverlayActive = false
+                        TabBarManager.shared.selectedTab = "home"
+                    }) {
+                        HStack(spacing: 2) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 14, weight: .medium))
+                            Text("Home")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                    }
+                }
+            }
             .refreshable {
                 loadSportsShoots()
             }
-            
+
             // Right side - Detail view
             if let shoot = viewModel.selectedShoot {
                 ZStack {
@@ -2054,6 +2069,7 @@ struct SportsShootListView: View {
             if let shoot = viewModel.selectedShoot {
                 AddGroupImageView(
                     shootID: shoot.id,
+                    organizationId: shoot.organizationId,
                     existingGroup: viewModel.selectedGroupImage,
                     onComplete: { success in
                         if success {

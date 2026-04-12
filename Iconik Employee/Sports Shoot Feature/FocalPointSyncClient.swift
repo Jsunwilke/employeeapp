@@ -31,6 +31,8 @@ struct FPSyncDevice: Identifiable, Equatable {
     let name: String
     let stationMode: String
     var captureCount: Int
+    var batteryLevel: Int?      // 0-100
+    var batteryCharging: Bool?
 }
 
 // MARK: - Capture Completed Event
@@ -119,7 +121,7 @@ class FocalPointSyncClient: ObservableObject {
     private let maxMissedPongs: Int = 2  // 2 missed pongs (20s) = dead
     private var reconnectTimer: Timer?
     private var reconnectDelay: TimeInterval = 2.0
-    private var intentionalClose = false
+    private(set) var intentionalClose = false
     private var galleryId: String?
     private var authToken: String = ""
 
@@ -409,7 +411,7 @@ class FocalPointSyncClient: ObservableObject {
 
     // MARK: - Actions
 
-    /// Send subject selection to the paired camera station
+    /// Send subject selection to the paired camera station (requires pairing)
     func selectSubject(subjectId: String, rosterEntryId: String?, subjectName: String) {
         guard isConnected else {
             print("[FPSync] Cannot select subject — not connected")
@@ -417,6 +419,10 @@ class FocalPointSyncClient: ObservableObject {
         }
         guard let galleryId = galleryId else {
             print("[FPSync] Cannot select subject — no gallery linked")
+            return
+        }
+        guard let pairedId = pairedCameraId else {
+            print("[FPSync] Cannot select subject — not paired to a camera station")
             return
         }
 
@@ -433,7 +439,7 @@ class FocalPointSyncClient: ObservableObject {
             "subject_id": subjectId,
             "roster_entry_id": rosterEntryId ?? NSNull(),
             "subject_name": subjectName,
-            "target_device_id": pairedCameraId ?? NSNull(),
+            "target_device_id": pairedId,
             "station_name": "iPad - \(deviceName)",
         ]
         send(msg)
@@ -714,9 +720,12 @@ class FocalPointSyncClient: ObservableObject {
 
     private func startHeartbeat() {
         stopHeartbeat()
+        UIDevice.current.isBatteryMonitoringEnabled = true
         heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
+                let batteryLevel = Int(UIDevice.current.batteryLevel * 100)
+                let batteryCharging = UIDevice.current.batteryState == .charging || UIDevice.current.batteryState == .full
                 let msg: [String: Any] = [
                     "type": "heartbeat",
                     "device_id": self.deviceId,
@@ -725,6 +734,8 @@ class FocalPointSyncClient: ObservableObject {
                     "active_subject_id": "",
                     "capture_count": 0,
                     "queue_length": 0,
+                    "battery_level": batteryLevel,
+                    "battery_charging": batteryCharging,
                 ]
                 self.send(msg)
             }
@@ -831,7 +842,9 @@ class FocalPointSyncClient: ObservableObject {
                         id: id,
                         name: name,
                         stationMode: d["station_mode"] as? String ?? "unknown",
-                        captureCount: d["capture_count"] as? Int ?? 0
+                        captureCount: d["capture_count"] as? Int ?? 0,
+                        batteryLevel: d["battery_level"] as? Int,
+                        batteryCharging: d["battery_charging"] as? Bool
                     )
                 }.filter { $0.id != deviceId }
 
@@ -848,9 +861,10 @@ class FocalPointSyncClient: ObservableObject {
             // Validate required fields
             guard let subjectId = msg["subject_id"] as? String, !subjectId.isEmpty,
                   UUID(uuidString: subjectId) != nil else { break }
-            let imageNumber = msg["image_number"] as? Int
-            // Dedup: skip if we've already processed this capture event
-            let dedupKey = "\(subjectId)_\(imageNumber ?? 0)"
+            // Parse image_number — handle both Int and String from JSON
+            let imageNumber: Int? = (msg["image_number"] as? Int) ?? (msg["image_number"] as? String).flatMap { Int($0) }
+            // Dedup using capture_id (unique per capture) with fallback to subject+image
+            let dedupKey = (msg["capture_id"] as? String) ?? "\(subjectId)_\(imageNumber ?? 0)_\(msg["capture_filename"] as? String ?? "")"
             if seenCaptureIds.contains(dedupKey) {
                 print("[FPSync] Duplicate capture_completed, skipping: \(dedupKey)")
                 break
