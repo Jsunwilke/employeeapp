@@ -32,6 +32,9 @@ struct UserProfile: Codable {
     var is_photographer: Bool?
     var is_accountant: Bool?
 
+    // Camera settings
+    var camera_prefix: String?
+
     // Payroll fields
     var compensation_type: String?  // "hourly" or "salary"
     var hourly_rate: Double?
@@ -80,6 +83,7 @@ struct UserProfile: Codable {
     var updatedAt: Date? { updated_at }
 
     // New camelCase computed properties
+    var cameraPrefix: String? { camera_prefix }
     var isPhotographer: Bool { is_photographer ?? false }
     var isAccountant: Bool { is_accountant ?? false }
     var compensationType: String? { compensation_type }
@@ -115,7 +119,7 @@ struct UserProfile: Codable {
          position: String? = nil, amount_per_mile: Double? = nil, is_active: Bool? = nil,
          is_flagged: Bool? = nil, photo_url: String? = nil,
          created_at: Date? = nil, updated_at: Date? = nil,
-         is_photographer: Bool? = nil, is_accountant: Bool? = nil,
+         is_photographer: Bool? = nil, is_accountant: Bool? = nil, camera_prefix: String? = nil,
          compensation_type: String? = nil, hourly_rate: Double? = nil,
          salary_amount: Double? = nil, overtime_threshold: Int? = nil,
          original_photo_url: String? = nil, photo_crop_settings: AnyJSON? = nil,
@@ -147,6 +151,7 @@ struct UserProfile: Codable {
         self.updated_at = updated_at
         self.is_photographer = is_photographer
         self.is_accountant = is_accountant
+        self.camera_prefix = camera_prefix
         self.compensation_type = compensation_type
         self.hourly_rate = hourly_rate
         self.salary_amount = salary_amount

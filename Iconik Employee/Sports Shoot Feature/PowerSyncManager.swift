@@ -420,14 +420,15 @@ class PowerSyncManager: ObservableObject {
         _ = try await db.execute(
             sql: """
                 INSERT OR REPLACE INTO group_images
-                (id, sports_job_id, description, image_numbers, notes, sport, gender,
+                (id, sports_job_id, organization_id, description, image_numbers, notes, sport, gender,
                  team_level, sort_order, version, updated_at, updated_by,
-                 locked_by, locked_by_name, locked_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 locked_by, locked_by_name, locked_at, created_at, photographer_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             parameters: [
                 idString,
                 jobIdString,
+                group.organizationId,
                 group.description,
                 group.imageNumbers,
                 group.notes,
@@ -441,11 +442,64 @@ class PowerSyncManager: ObservableObject {
                 lockedByString,
                 group.lockedByName,
                 lockedAtISO,
-                createdAtISO
+                createdAtISO,
+                group.photographerId
             ]
         )
 
         print("PowerSyncManager: Saved group image \(idString)")
+    }
+
+    /// Backfill organization_id on local group_images that are missing it.
+    /// Looks up the org from the linked sports_jobs or galleries table.
+    private func backfillGroupImageOrgIds() async {
+        guard let db = database else { return }
+
+        do {
+            // Find group_images missing organization_id
+            let missing: [[String: String]] = try await db.getAll(
+                sql: "SELECT id, sports_job_id FROM group_images WHERE organization_id IS NULL OR organization_id = ''",
+                parameters: [],
+                mapper: { cursor in
+                    let id = try cursor.getString(name: "id")
+                    let jobId = try cursor.getString(name: "sports_job_id")
+                    return ["id": id, "sports_job_id": jobId]
+                }
+            )
+
+            guard !missing.isEmpty else { return }
+            print("PowerSyncManager: Backfilling organization_id on \(missing.count) group_images")
+
+            for row in missing {
+                guard let id = row["id"], let jobId = row["sports_job_id"] else { continue }
+
+                // Try sports_jobs first, then galleries
+                var orgId: String? = nil
+                if let sj: [String] = try? await db.getAll(
+                    sql: "SELECT organization_id FROM sports_jobs WHERE id = ? LIMIT 1",
+                    parameters: [jobId],
+                    mapper: { try $0.getString(name: "organization_id") }
+                ), let first = sj.first {
+                    orgId = first
+                } else if let gal: [String] = try? await db.getAll(
+                    sql: "SELECT organization_id FROM galleries WHERE id = ? LIMIT 1",
+                    parameters: [jobId],
+                    mapper: { try $0.getString(name: "organization_id") }
+                ), let first = gal.first {
+                    orgId = first
+                }
+
+                if let orgId = orgId, !orgId.isEmpty {
+                    _ = try? await db.execute(
+                        sql: "UPDATE group_images SET organization_id = ? WHERE id = ?",
+                        parameters: [orgId, id]
+                    )
+                    print("PowerSyncManager: Backfilled org_id on group_image \(id)")
+                }
+            }
+        } catch {
+            print("PowerSyncManager: Backfill failed (non-fatal): \(error)")
+        }
     }
 
     /// Delete a group image
@@ -665,6 +719,7 @@ class PowerSyncManager: ObservableObject {
         return GroupImage(
             id: id,
             sportsJobId: jobId,
+            organizationId: (try? cursor.getString(name: "organization_id")) ?? "",
             description: (try? cursor.getString(name: "description")) ?? "",
             imageNumbers: (try? cursor.getString(name: "image_numbers")) ?? "",
             notes: (try? cursor.getString(name: "notes")) ?? "",
@@ -678,7 +733,8 @@ class PowerSyncManager: ObservableObject {
             lockedBy: (try? cursor.getString(name: "locked_by")).flatMap { UUID(uuidString: $0) },
             lockedByName: try? cursor.getString(name: "locked_by_name"),
             lockedAt: parseDate((try? cursor.getString(name: "locked_at"))),
-            createdAt: parseDate((try? cursor.getString(name: "created_at"))) ?? Date()
+            createdAt: parseDate((try? cursor.getString(name: "created_at"))) ?? Date(),
+            photographerId: try? cursor.getString(name: "photographer_id")
         )
     }
 

@@ -73,7 +73,8 @@ let powerSyncSchema = Schema(
             .text("locked_by"),
             .text("locked_by_name"),
             .text("locked_at"),
-            .text("created_at")
+            .text("created_at"),
+            .text("photographer_id")
         ]
     ),
 

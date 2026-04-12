@@ -213,6 +213,7 @@ struct RosterEntry: Identifiable, Codable, Hashable {
 struct GroupImage: Identifiable, Codable, Hashable {
     var id: UUID
     var sportsJobId: UUID
+    var organizationId: String
     var description: String
     var imageNumbers: String
     var notes: String
@@ -233,10 +234,14 @@ struct GroupImage: Identifiable, Codable, Hashable {
 
     var createdAt: Date
 
+    // Photographer who shot this group photo
+    var photographerId: String?
+
     // CodingKeys to map snake_case database fields to camelCase Swift properties
     enum CodingKeys: String, CodingKey {
         case id, description, notes, sport, gender, version
         case sportsJobId = "sports_job_id"
+        case organizationId = "organization_id"
         case imageNumbers = "image_numbers"
         case teamLevel = "team_level"
         case sortOrder = "sort_order"
@@ -246,6 +251,7 @@ struct GroupImage: Identifiable, Codable, Hashable {
         case lockedByName = "locked_by_name"
         case lockedAt = "locked_at"
         case createdAt = "created_at"
+        case photographerId = "photographer_id"
     }
 
     // Custom decoder to handle missing fields with defaults
@@ -253,6 +259,7 @@ struct GroupImage: Identifiable, Codable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         sportsJobId = try container.decode(UUID.self, forKey: .sportsJobId)
+        organizationId = try container.decodeIfPresent(String.self, forKey: .organizationId) ?? ""
         description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
         imageNumbers = try container.decodeIfPresent(String.self, forKey: .imageNumbers) ?? ""
         notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
@@ -267,10 +274,12 @@ struct GroupImage: Identifiable, Codable, Hashable {
         lockedByName = try container.decodeIfPresent(String.self, forKey: .lockedByName)
         lockedAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .lockedAt))
         createdAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .createdAt)) ?? Date()
+        photographerId = try container.decodeIfPresent(String.self, forKey: .photographerId)
     }
 
     init(id: UUID = UUID(),
          sportsJobId: UUID,
+         organizationId: String = "",
          description: String = "",
          imageNumbers: String = "",
          notes: String = "",
@@ -284,9 +293,11 @@ struct GroupImage: Identifiable, Codable, Hashable {
          lockedBy: UUID? = nil,
          lockedByName: String? = nil,
          lockedAt: Date? = nil,
-         createdAt: Date = Date()) {
+         createdAt: Date = Date(),
+         photographerId: String? = nil) {
         self.id = id
         self.sportsJobId = sportsJobId
+        self.organizationId = organizationId
         self.description = description
         self.imageNumbers = imageNumbers
         self.notes = notes
@@ -301,6 +312,7 @@ struct GroupImage: Identifiable, Codable, Hashable {
         self.lockedByName = lockedByName
         self.lockedAt = lockedAt
         self.createdAt = createdAt
+        self.photographerId = photographerId
     }
 
     // Check if entry is currently locked by someone else

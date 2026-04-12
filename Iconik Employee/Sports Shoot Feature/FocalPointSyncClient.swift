@@ -105,6 +105,7 @@ class FocalPointSyncClient: ObservableObject {
     var onSubjectUpdated: ((String, String?, String, String, String) -> Void)?  // rosterEntryId, subjectId?, firstName, lastName, rosterId
     var onQueueReorder: (([String]) -> Void)?                      // ordered subject_ids
     var onGroupPhotoReady: ((String, [String], Int) -> Void)?      // groupName, presentSubjectIds, total
+    var onGroupCaptureCompleted: ((String, Int, String) -> Void)?  // groupId, imageNumber, filename — auto-fill image_numbers on group
     var onSubjectLinked: ((String, String) -> Void)?               // rosterEntryId, subjectId — Production created a subject for this roster entry
     var onSubjectsDeleted: (([String]) -> Void)?                   // subject_ids deleted on Production
     var onSubjectCreated: ((String, String, String, String, String, String) -> Void)?  // rosterEntryId, firstName, lastName, rosterId, grade, groupName
@@ -996,6 +997,14 @@ class FocalPointSyncClient: ObservableObject {
                let total = msg["total_in_group"] as? Int,
                presentIds.count <= 2000 {
                 onGroupPhotoReady?(groupName, presentIds, total)
+            }
+
+        case "group_capture_completed":
+            if let groupId = msg["group_id"] as? String, !groupId.isEmpty,
+               UUID(uuidString: groupId) != nil {
+                let imageNumber = (msg["image_number"] as? Int) ?? (msg["image_number"] as? String).flatMap { Int($0) } ?? 0
+                let filename = msg["capture_filename"] as? String ?? ""
+                onGroupCaptureCompleted?(groupId, imageNumber, filename)
             }
 
         case "device_disconnected":
