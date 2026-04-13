@@ -9,10 +9,10 @@
 import SwiftUI
 import Supabase
 
-/// Lightweight photographer model for the picker (fetched from Supabase)
-private struct PhotographerOption: Identifiable, Hashable {
+/// Lightweight photographer model for the group image picker (fetched from Supabase)
+private struct GroupPhotographer: Identifiable, Hashable {
     let id: String
-    let name: String
+    let displayName: String
     let cameraPrefix: String?
 }
 
@@ -37,7 +37,7 @@ struct AddGroupImageView: View {
     @State private var isLoadingSports = true
 
     // Photographer picker state
-    @State private var photographers: [PhotographerOption] = []
+    @State private var photographers: [GroupPhotographer] = []
     @State private var selectedPhotographerId: String = ""
     @State private var isLoadingPhotographers = true
 
@@ -213,7 +213,7 @@ struct AddGroupImageView: View {
                         Picker("Photographer", selection: $selectedPhotographerId) {
                             Text("Select Photographer").tag("")
                             ForEach(photographers) { photographer in
-                                Text(photographer.name).tag(photographer.id)
+                                Text(photographer.displayName).tag(photographer.id)
                             }
                         }
 
@@ -420,16 +420,16 @@ struct AddGroupImageView: View {
                     .execute()
                     .value
 
-                let options = rows.map { row in
+                let options = rows.map { row -> GroupPhotographer in
                     let name = [row.first_name, row.last_name]
                         .compactMap { $0 }
                         .joined(separator: " ")
-                    return PhotographerOption(
+                    return GroupPhotographer(
                         id: row.id,
-                        name: name.isEmpty ? "Unknown" : name,
+                        displayName: name.isEmpty ? "Unknown" : name,
                         cameraPrefix: row.camera_prefix
                     )
-                }.sorted { $0.name < $1.name }
+                }.sorted { $0.displayName < $1.displayName }
 
                 await MainActor.run {
                     self.photographers = options
