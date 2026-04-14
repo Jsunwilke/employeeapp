@@ -157,6 +157,11 @@ struct PoserStationView: View {
             }
         }
         return list.sorted {
+            // Blank/no-name subjects always sort last
+            let a_blank = $0.firstName.trimmingCharacters(in: .whitespaces).isEmpty && $0.lastName.trimmingCharacters(in: .whitespaces).isEmpty
+            let b_blank = $1.firstName.trimmingCharacters(in: .whitespaces).isEmpty && $1.lastName.trimmingCharacters(in: .whitespaces).isEmpty
+            if a_blank != b_blank { return !a_blank }
+
             switch sortField {
             case "organization_name":
                 return $0.organizationName.localizedCaseInsensitiveCompare($1.organizationName) == .orderedAscending
