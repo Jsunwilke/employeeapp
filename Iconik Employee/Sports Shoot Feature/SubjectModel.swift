@@ -32,6 +32,9 @@ struct FPSubject: Identifiable, Hashable {
     var sport: String                   // Maps from RosterEntry.groupName
     var position: String
 
+    // Organization/event
+    var organizationName: String
+
     // Contact
     var email: String
     var phone: String
@@ -72,6 +75,7 @@ struct FPSubject: Identifiable, Hashable {
         jerseyNumber: String = "",
         sport: String = "",
         position: String = "",
+        organizationName: String = "",
         email: String = "",
         phone: String = "",
         imageCount: Int = 0,
@@ -100,6 +104,7 @@ struct FPSubject: Identifiable, Hashable {
         self.jerseyNumber = jerseyNumber
         self.sport = sport
         self.position = position
+        self.organizationName = organizationName
         self.email = email
         self.phone = phone
         self.imageCount = imageCount

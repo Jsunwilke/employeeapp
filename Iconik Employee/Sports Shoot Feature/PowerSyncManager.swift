@@ -1030,6 +1030,7 @@ class PowerSyncManager: ObservableObject {
             jerseyNumber: (try? cursor.getString(name: "jersey_number")) ?? "",
             sport: (try? cursor.getString(name: "sport")) ?? "",
             position: (try? cursor.getString(name: "position")) ?? "",
+            organizationName: (try? cursor.getString(name: "organization_name")) ?? "",
             email: (try? cursor.getString(name: "email")) ?? "",
             phone: (try? cursor.getString(name: "phone")) ?? "",
             imageCount: (try? cursor.getIntOptional(name: "image_count")) ?? 0,

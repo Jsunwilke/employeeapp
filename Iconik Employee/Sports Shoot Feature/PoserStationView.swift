@@ -546,7 +546,7 @@ struct PoserStationView: View {
                     .frame(width: 44, height: 44)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
-                Text("\(subject.firstName.prefix(1))\(subject.lastName.prefix(1))")
+                Text(initialsDisplay(subject))
                     .font(.system(size: 13, weight: .bold))
                     .foregroundColor(.secondary)
                     .frame(width: 44, height: 44)
@@ -555,9 +555,9 @@ struct PoserStationView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(subject.firstName) \(subject.lastName)")
+                Text(primaryDisplay(subject))
                     .font(.system(size: 16, weight: .semibold))
-                let info = subjectInfo(subject)
+                let info = secondaryDisplay(subject)
                 if !info.isEmpty {
                     Text(info).font(.caption).foregroundColor(.secondary)
                 }
@@ -625,6 +625,40 @@ struct PoserStationView: View {
     }
 
     // MARK: - Helpers
+
+    private var isEventType: Bool {
+        let st = gallery.shootType ?? ""
+        return st == "events" || st == "event" || st == "faculty"
+    }
+
+    private func primaryDisplay(_ subject: FPSubject) -> String {
+        if isEventType && !subject.organizationName.isEmpty {
+            return subject.organizationName
+        }
+        let name = "\(subject.firstName) \(subject.lastName)".trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? (subject.rosterId.isEmpty ? "(no name)" : subject.rosterId) : name
+    }
+
+    private func secondaryDisplay(_ subject: FPSubject) -> String {
+        if isEventType {
+            // Show name as secondary when organization is primary
+            let name = "\(subject.firstName) \(subject.lastName)".trimmingCharacters(in: .whitespaces)
+            var parts: [String] = []
+            if !name.isEmpty { parts.append(name) }
+            if !subject.teacher.isEmpty { parts.append(subject.teacher) }
+            return parts.joined(separator: " \u{00B7} ")
+        }
+        return subjectInfo(subject)
+    }
+
+    private func initialsDisplay(_ subject: FPSubject) -> String {
+        if isEventType && !subject.organizationName.isEmpty {
+            let words = subject.organizationName.split(separator: " ")
+            if words.count >= 2 { return "\(words[0].prefix(1))\(words[1].prefix(1))" }
+            return String(subject.organizationName.prefix(2)).uppercased()
+        }
+        return "\(subject.firstName.prefix(1))\(subject.lastName.prefix(1))"
+    }
 
     private func subjectInfo(_ subject: FPSubject) -> String {
         if !subject.homeroom.isEmpty { return subject.homeroom }

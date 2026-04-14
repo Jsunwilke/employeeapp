@@ -186,6 +186,7 @@ let powerSyncSchema = Schema(
             .text("school_id"),
             .text("shoot_type"),
             .text("photo_day"),
+            .text("display_config"),
             .text("is_deleted"),
             .text("created_at"),
             .text("updated_at")
