@@ -46,6 +46,7 @@ struct PoserStationView: View {
     @State private var searchText = ""
     @State private var activeFilters: [String: Set<String>] = [:]  // field_key -> selected values (multiple fields, AND logic)
     @State private var sortField: String = "last_name"
+    @State private var showFilterPopover: Bool = false
 
     // Layout
     @State private var detailPanelVisible = true
@@ -113,6 +114,16 @@ struct PoserStationView: View {
     /// Only show fields that actually have data in this gallery
     var availableFilterFields: [(key: String, label: String)] {
         Self.allFilterFields.filter { !uniqueValues(for: $0.key).isEmpty }
+    }
+
+    /// Count of subjects per value for a field
+    func valueCounts(for field: String) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for subject in subjects {
+            let val = fieldValue(subject, field)
+            if !val.isEmpty { counts[val, default: 0] += 1 }
+        }
+        return counts
     }
 
     /// Get a subject's value for a given field key
@@ -441,42 +452,8 @@ struct PoserStationView: View {
                 .background(Color(.systemGray6)).cornerRadius(8)
                 .frame(width: 180)
 
-                // Filter — single menu with all fields + checkboxes
-                Menu {
-                    ForEach(availableFilterFields, id: \.key) { field in
-                        let values = uniqueValues(for: field.key)
-                        let selected = activeFilters[field.key] ?? []
-                        Menu(field.label) {
-                            Button(selected.count == values.count ? "Deselect All" : "Select All") {
-                                if selected.count == values.count {
-                                    activeFilters.removeValue(forKey: field.key)
-                                } else {
-                                    activeFilters[field.key] = Set(values)
-                                }
-                            }
-                            Divider()
-                            ForEach(values, id: \.self) { value in
-                                Button(action: {
-                                    var current = activeFilters[field.key] ?? []
-                                    if current.contains(value) {
-                                        current.remove(value)
-                                        if current.isEmpty { activeFilters.removeValue(forKey: field.key) }
-                                        else { activeFilters[field.key] = current }
-                                    } else {
-                                        current.insert(value)
-                                        activeFilters[field.key] = current
-                                    }
-                                }) {
-                                    Label(value, systemImage: selected.contains(value) ? "checkmark.square.fill" : "square")
-                                }
-                            }
-                        }
-                    }
-                    if !activeFilters.isEmpty {
-                        Divider()
-                        Button("Clear All Filters", role: .destructive) { activeFilters.removeAll() }
-                    }
-                } label: {
+                // Filter — popover stays open for multi-select
+                Button(action: { showFilterPopover.toggle() }) {
                     HStack(spacing: 4) {
                         Image(systemName: "line.3.horizontal.decrease").font(.caption)
                         Text("Filter").font(.subheadline)
@@ -493,6 +470,10 @@ struct PoserStationView: View {
                     .background(!activeFilters.isEmpty ? Color.blue.opacity(0.12) : Color(.systemGray6))
                     .foregroundColor(!activeFilters.isEmpty ? .blue : .primary)
                     .cornerRadius(8)
+                }
+                .popover(isPresented: $showFilterPopover) {
+                    filterPopoverContent
+                        .frame(width: 300, height: 400)
                 }
 
                 // Sort
@@ -799,6 +780,74 @@ struct PoserStationView: View {
         if !subject.grade.isEmpty { parts.append(subject.grade) }
         if !subject.teacher.isEmpty { parts.append(subject.teacher) }
         return parts.joined(separator: " \u{00B7} ")
+    }
+
+    // MARK: - Filter Popover
+
+    private var filterPopoverContent: some View {
+        NavigationView {
+            List {
+                ForEach(availableFilterFields, id: \.key) { field in
+                    let values = uniqueValues(for: field.key)
+                    let counts = valueCounts(for: field.key)
+                    let selected = activeFilters[field.key] ?? []
+
+                    Section(header: HStack {
+                        Text(field.label)
+                        Spacer()
+                        Button(selected.count == values.count ? "None" : "All") {
+                            if selected.count == values.count {
+                                activeFilters.removeValue(forKey: field.key)
+                            } else {
+                                activeFilters[field.key] = Set(values)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    }) {
+                        ForEach(values, id: \.self) { value in
+                            Button(action: {
+                                var current = activeFilters[field.key] ?? []
+                                if current.contains(value) {
+                                    current.remove(value)
+                                    if current.isEmpty { activeFilters.removeValue(forKey: field.key) }
+                                    else { activeFilters[field.key] = current }
+                                } else {
+                                    current.insert(value)
+                                    activeFilters[field.key] = current
+                                }
+                            }) {
+                                HStack {
+                                    Image(systemName: selected.contains(value) ? "checkmark.square.fill" : "square")
+                                        .foregroundColor(selected.contains(value) ? .blue : .secondary)
+                                    Text(value)
+                                        .foregroundColor(.primary)
+                                    Spacer()
+                                    Text("\(counts[value] ?? 0)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Filter")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if !activeFilters.isEmpty {
+                        Button("Clear All") { activeFilters.removeAll() }
+                            .foregroundColor(.red)
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showFilterPopover = false }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
     }
 
     // MARK: - Actions
