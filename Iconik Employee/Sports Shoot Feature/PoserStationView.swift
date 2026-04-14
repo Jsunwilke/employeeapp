@@ -163,6 +163,8 @@ struct PoserStationView: View {
             if a_blank != b_blank { return !a_blank }
 
             switch sortField {
+            case "first_name":
+                return $0.firstName.localizedCaseInsensitiveCompare($1.firstName) == .orderedAscending
             case "organization_name":
                 return $0.organizationName.localizedCaseInsensitiveCompare($1.organizationName) == .orderedAscending
             case "grade": return $0.grade < $1.grade
@@ -495,7 +497,7 @@ struct PoserStationView: View {
 
                 // Sort
                 Menu {
-                    ForEach([("last_name", "Last Name"), ("organization_name", "Organization"), ("grade", "Grade"), ("teacher", "Teacher")], id: \.0) { key, label in
+                    ForEach([("last_name", "Last Name"), ("first_name", "First Name"), ("organization_name", "Organization"), ("grade", "Grade"), ("teacher", "Teacher")], id: \.0) { key, label in
                         Button(action: { sortField = key }) {
                             Label(label, systemImage: sortField == key ? "checkmark" : "")
                         }
