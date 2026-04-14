@@ -46,6 +46,8 @@ struct PoserStationView: View {
     @State private var searchText = ""
     @State private var gradeFilter: String?
     @State private var teacherFilter: String?
+    @State private var orgFilter: String?
+    @State private var sortField: String = "last_name" // last_name, organization_name, grade, teacher
 
     // Layout
     @State private var detailPanelVisible = true
@@ -93,20 +95,35 @@ struct PoserStationView: View {
         Array(Set(subjects.compactMap { $0.teacher.isEmpty ? nil : $0.teacher })).sorted()
     }
 
+    var uniqueOrgs: [String] {
+        Array(Set(subjects.compactMap { $0.organizationName.isEmpty ? nil : $0.organizationName })).sorted()
+    }
+
     var filteredSubjects: [FPSubject] {
         var list = subjects
         if let g = gradeFilter { list = list.filter { $0.grade == g } }
         if let t = teacherFilter { list = list.filter { $0.teacher == t } }
+        if let o = orgFilter { list = list.filter { $0.organizationName == o } }
         if !searchText.isEmpty {
             let q = searchText.lowercased()
             list = list.filter {
                 $0.firstName.lowercased().contains(q) ||
                 $0.lastName.lowercased().contains(q) ||
                 $0.studentId.lowercased().contains(q) ||
-                $0.rosterId.lowercased().contains(q)
+                $0.rosterId.lowercased().contains(q) ||
+                $0.organizationName.lowercased().contains(q)
             }
         }
-        return list.sorted { $0.lastName < $1.lastName }
+        return list.sorted {
+            switch sortField {
+            case "organization_name":
+                return $0.organizationName.localizedCaseInsensitiveCompare($1.organizationName) == .orderedAscending
+            case "grade": return $0.grade < $1.grade
+            case "teacher": return $0.teacher < $1.teacher
+            case "roster_id": return $0.rosterId < $1.rosterId
+            default: return $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending
+            }
+        }
     }
 
     var selectedSubject: FPSubject? {
@@ -408,8 +425,51 @@ struct PoserStationView: View {
                     }
                 }
 
-                if gradeFilter != nil || teacherFilter != nil || !searchText.isEmpty {
-                    Button("Clear") { gradeFilter = nil; teacherFilter = nil; searchText = "" }
+                if !uniqueOrgs.isEmpty {
+                    Menu {
+                        Button("All Organizations") { orgFilter = nil }
+                        Divider()
+                        ForEach(uniqueOrgs, id: \.self) { org in
+                            Button(org) { orgFilter = org }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(orgFilter ?? "Organization").font(.subheadline)
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(orgFilter != nil ? Color.blue.opacity(0.12) : Color(.systemGray6))
+                        .foregroundColor(orgFilter != nil ? .blue : .primary)
+                        .cornerRadius(8)
+                    }
+                }
+
+                // Sort
+                Menu {
+                    Button(action: { sortField = "last_name" }) {
+                        Label("Last Name", systemImage: sortField == "last_name" ? "checkmark" : "")
+                    }
+                    Button(action: { sortField = "organization_name" }) {
+                        Label("Organization", systemImage: sortField == "organization_name" ? "checkmark" : "")
+                    }
+                    Button(action: { sortField = "grade" }) {
+                        Label("Grade", systemImage: sortField == "grade" ? "checkmark" : "")
+                    }
+                    Button(action: { sortField = "teacher" }) {
+                        Label("Teacher", systemImage: sortField == "teacher" ? "checkmark" : "")
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.arrow.down").font(.caption)
+                        Text("Sort").font(.subheadline)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                }
+
+                if gradeFilter != nil || teacherFilter != nil || orgFilter != nil || !searchText.isEmpty {
+                    Button("Clear") { gradeFilter = nil; teacherFilter = nil; orgFilter = nil; searchText = "" }
                         .font(.subheadline).foregroundColor(.red)
                 }
 
