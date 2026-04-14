@@ -324,21 +324,14 @@ struct PoserStationView: View {
                 }
                 .frame(width: 44, height: 44)
 
-                // Auto-select toggle
+                // Auto-select toggle: blue = taps select on camera, gray = browse only
                 if fpSync.isConnected {
                     Button(action: { withAnimation { autoSelectEnabled.toggle() } }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: autoSelectEnabled ? "camera.viewfinder" : "eye")
-                                .font(.system(size: 14))
-                            Text(autoSelectEnabled ? "Auto" : "Browse")
-                                .font(.system(size: 13, weight: .medium))
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(autoSelectEnabled ? Color.blue.opacity(0.15) : Color(.systemGray5))
-                        .foregroundColor(autoSelectEnabled ? .blue : .secondary)
-                        .cornerRadius(8)
+                        Image(systemName: "camera.viewfinder")
+                            .font(.title3)
+                            .foregroundColor(autoSelectEnabled ? .blue : .secondary)
                     }
+                    .frame(width: 44, height: 44)
                 }
 
                 Button(action: { showingSyncSheet = true }) {
