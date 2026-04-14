@@ -44,10 +44,8 @@ struct PoserStationView: View {
 
     // Filters
     @State private var searchText = ""
-    @State private var gradeFilter: String?
-    @State private var teacherFilter: String?
-    @State private var orgFilter: String?
-    @State private var sortField: String = "last_name" // last_name, organization_name, grade, teacher
+    @State private var activeFilters: [String: Set<String>] = [:]  // field_key -> selected values (multiple fields, AND logic)
+    @State private var sortField: String = "last_name"
 
     // Layout
     @State private var detailPanelVisible = true
@@ -87,23 +85,61 @@ struct PoserStationView: View {
         gallery.galleryId ?? gallery.id.uuidString.lowercased()
     }
 
-    var uniqueGrades: [String] {
-        Array(Set(subjects.compactMap { $0.grade.isEmpty ? nil : $0.grade })).sorted()
+    /// All filterable fields with labels
+    static let filterFields: [(key: String, label: String)] = [
+        ("grade", "Grade"),
+        ("teacher", "Teacher"),
+        ("organization_name", "Organization"),
+        ("homeroom", "Homeroom"),
+        ("sport", "Sport"),
+    ]
+
+    /// Get unique non-empty values for a given field key
+    func uniqueValues(for field: String) -> [String] {
+        let values: [String] = subjects.compactMap { subject in
+            let val: String
+            switch field {
+            case "grade": val = subject.grade
+            case "teacher": val = subject.teacher
+            case "organization_name": val = subject.organizationName
+            case "homeroom": val = subject.homeroom
+            case "sport": val = subject.sport
+            default: return nil
+            }
+            return val.isEmpty ? nil : val
+        }
+        return Array(Set(values)).sorted()
     }
 
-    var uniqueTeachers: [String] {
-        Array(Set(subjects.compactMap { $0.teacher.isEmpty ? nil : $0.teacher })).sorted()
+    /// Fields that actually have data (hide empty ones from the picker)
+    var availableFilterFields: [(key: String, label: String)] {
+        Self.filterFields.filter { !uniqueValues(for: $0.key).isEmpty }
     }
 
-    var uniqueOrgs: [String] {
-        Array(Set(subjects.compactMap { $0.organizationName.isEmpty ? nil : $0.organizationName })).sorted()
+    /// Get a subject's value for a given field key
+    private func fieldValue(_ subject: FPSubject, _ field: String) -> String {
+        switch field {
+        case "grade": return subject.grade
+        case "teacher": return subject.teacher
+        case "organization_name": return subject.organizationName
+        case "homeroom": return subject.homeroom
+        case "sport": return subject.sport
+        default: return ""
+        }
+    }
+
+    var hasActiveFilters: Bool {
+        !activeFilters.isEmpty || !searchText.isEmpty
     }
 
     var filteredSubjects: [FPSubject] {
         var list = subjects
-        if let g = gradeFilter { list = list.filter { $0.grade == g } }
-        if let t = teacherFilter { list = list.filter { $0.teacher == t } }
-        if let o = orgFilter { list = list.filter { $0.organizationName == o } }
+        // Apply all active filters (AND logic — must match every field)
+        for (field, values) in activeFilters {
+            if !values.isEmpty {
+                list = list.filter { values.contains(fieldValue($0, field)) }
+            }
+        }
         if !searchText.isEmpty {
             let q = searchText.lowercased()
             list = list.filter {
@@ -387,76 +423,66 @@ struct PoserStationView: View {
                 .background(Color(.systemGray6)).cornerRadius(8)
                 .frame(width: 180)
 
-                if !uniqueGrades.isEmpty {
-                    Menu {
-                        Button("All Grades") { gradeFilter = nil }
-                        Divider()
-                        ForEach(uniqueGrades, id: \.self) { grade in
-                            Button(grade) { gradeFilter = grade }
+                // Filter — single menu with all fields + checkboxes
+                Menu {
+                    ForEach(availableFilterFields, id: \.key) { field in
+                        let values = uniqueValues(for: field.key)
+                        let selected = activeFilters[field.key] ?? []
+                        Menu(field.label) {
+                            Button(selected.count == values.count ? "Deselect All" : "Select All") {
+                                if selected.count == values.count {
+                                    activeFilters.removeValue(forKey: field.key)
+                                } else {
+                                    activeFilters[field.key] = Set(values)
+                                }
+                            }
+                            Divider()
+                            ForEach(values, id: \.self) { value in
+                                Button(action: {
+                                    var current = activeFilters[field.key] ?? []
+                                    if current.contains(value) {
+                                        current.remove(value)
+                                        if current.isEmpty { activeFilters.removeValue(forKey: field.key) }
+                                        else { activeFilters[field.key] = current }
+                                    } else {
+                                        current.insert(value)
+                                        activeFilters[field.key] = current
+                                    }
+                                }) {
+                                    Label(value, systemImage: selected.contains(value) ? "checkmark.square.fill" : "square")
+                                }
+                            }
                         }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(gradeFilter ?? "Grade").font(.subheadline)
-                            Image(systemName: "chevron.down").font(.caption2)
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(gradeFilter != nil ? Color.blue.opacity(0.12) : Color(.systemGray6))
-                        .foregroundColor(gradeFilter != nil ? .blue : .primary)
-                        .cornerRadius(8)
                     }
-                }
-
-                if !uniqueTeachers.isEmpty {
-                    Menu {
-                        Button("All Teachers") { teacherFilter = nil }
+                    if !activeFilters.isEmpty {
                         Divider()
-                        ForEach(uniqueTeachers, id: \.self) { teacher in
-                            Button(teacher) { teacherFilter = teacher }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(teacherFilter ?? "Teacher").font(.subheadline)
-                            Image(systemName: "chevron.down").font(.caption2)
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(teacherFilter != nil ? Color.blue.opacity(0.12) : Color(.systemGray6))
-                        .foregroundColor(teacherFilter != nil ? .blue : .primary)
-                        .cornerRadius(8)
+                        Button("Clear All Filters", role: .destructive) { activeFilters.removeAll() }
                     }
-                }
-
-                if !uniqueOrgs.isEmpty {
-                    Menu {
-                        Button("All Organizations") { orgFilter = nil }
-                        Divider()
-                        ForEach(uniqueOrgs, id: \.self) { org in
-                            Button(org) { orgFilter = org }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "line.3.horizontal.decrease").font(.caption)
+                        Text("Filter").font(.subheadline)
+                        if !activeFilters.isEmpty {
+                            Text("\(activeFilters.count)")
+                                .font(.system(size: 10, weight: .bold))
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(99)
                         }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(orgFilter ?? "Organization").font(.subheadline)
-                            Image(systemName: "chevron.down").font(.caption2)
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(orgFilter != nil ? Color.blue.opacity(0.12) : Color(.systemGray6))
-                        .foregroundColor(orgFilter != nil ? .blue : .primary)
-                        .cornerRadius(8)
                     }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(!activeFilters.isEmpty ? Color.blue.opacity(0.12) : Color(.systemGray6))
+                    .foregroundColor(!activeFilters.isEmpty ? .blue : .primary)
+                    .cornerRadius(8)
                 }
 
                 // Sort
                 Menu {
-                    Button(action: { sortField = "last_name" }) {
-                        Label("Last Name", systemImage: sortField == "last_name" ? "checkmark" : "")
-                    }
-                    Button(action: { sortField = "organization_name" }) {
-                        Label("Organization", systemImage: sortField == "organization_name" ? "checkmark" : "")
-                    }
-                    Button(action: { sortField = "grade" }) {
-                        Label("Grade", systemImage: sortField == "grade" ? "checkmark" : "")
-                    }
-                    Button(action: { sortField = "teacher" }) {
-                        Label("Teacher", systemImage: sortField == "teacher" ? "checkmark" : "")
+                    ForEach([("last_name", "Last Name"), ("organization_name", "Organization"), ("grade", "Grade"), ("teacher", "Teacher")], id: \.0) { key, label in
+                        Button(action: { sortField = key }) {
+                            Label(label, systemImage: sortField == key ? "checkmark" : "")
+                        }
                     }
                 } label: {
                     HStack(spacing: 4) {
@@ -468,8 +494,8 @@ struct PoserStationView: View {
                     .cornerRadius(8)
                 }
 
-                if gradeFilter != nil || teacherFilter != nil || orgFilter != nil || !searchText.isEmpty {
-                    Button("Clear") { gradeFilter = nil; teacherFilter = nil; orgFilter = nil; searchText = "" }
+                if hasActiveFilters {
+                    Button("Clear") { activeFilters.removeAll(); searchText = "" }
                         .font(.subheadline).foregroundColor(.red)
                 }
 
