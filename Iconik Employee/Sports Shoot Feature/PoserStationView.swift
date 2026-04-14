@@ -85,45 +85,51 @@ struct PoserStationView: View {
         gallery.galleryId ?? gallery.id.uuidString.lowercased()
     }
 
-    /// All filterable fields with labels
-    static let filterFields: [(key: String, label: String)] = [
+    /// All possible filterable fields — dynamically shows any that have data
+    static let allFilterFields: [(key: String, label: String)] = [
+        ("last_name", "Last Name"),
+        ("first_name", "First Name"),
         ("grade", "Grade"),
         ("teacher", "Teacher"),
         ("organization_name", "Organization"),
         ("homeroom", "Homeroom"),
         ("sport", "Sport"),
+        ("email", "Email"),
+        ("student_id", "Student ID"),
+        ("roster_id", "Roster ID"),
+        ("jersey_number", "Jersey #"),
+        ("position", "Position"),
     ]
 
     /// Get unique non-empty values for a given field key
     func uniqueValues(for field: String) -> [String] {
         let values: [String] = subjects.compactMap { subject in
-            let val: String
-            switch field {
-            case "grade": val = subject.grade
-            case "teacher": val = subject.teacher
-            case "organization_name": val = subject.organizationName
-            case "homeroom": val = subject.homeroom
-            case "sport": val = subject.sport
-            default: return nil
-            }
+            let val = fieldValue(subject, field)
             return val.isEmpty ? nil : val
         }
         return Array(Set(values)).sorted()
     }
 
-    /// Fields that actually have data (hide empty ones from the picker)
+    /// Only show fields that actually have data in this gallery
     var availableFilterFields: [(key: String, label: String)] {
-        Self.filterFields.filter { !uniqueValues(for: $0.key).isEmpty }
+        Self.allFilterFields.filter { !uniqueValues(for: $0.key).isEmpty }
     }
 
     /// Get a subject's value for a given field key
     private func fieldValue(_ subject: FPSubject, _ field: String) -> String {
         switch field {
+        case "first_name": return subject.firstName
+        case "last_name": return subject.lastName
         case "grade": return subject.grade
         case "teacher": return subject.teacher
         case "organization_name": return subject.organizationName
         case "homeroom": return subject.homeroom
         case "sport": return subject.sport
+        case "email": return subject.email
+        case "student_id": return subject.studentId
+        case "roster_id": return subject.rosterId
+        case "jersey_number": return subject.jerseyNumber
+        case "position": return subject.position
         default: return ""
         }
     }
