@@ -967,12 +967,23 @@ struct FPSportsRosterView_iPad: View {
                 if var oldThumbs = subjectThumbnails[oldSid] {
                     if let thumbIdx = oldThumbs.firstIndex(where: { $0.imageNumber == imageNumber }) {
                         let thumb = oldThumbs.remove(at: thumbIdx)
-                        subjectThumbnails[oldSid] = oldThumbs
+                        subjectThumbnails[oldSid] = oldThumbs.isEmpty ? nil : oldThumbs
                         var newThumbs = subjectThumbnails[newSid] ?? []
                         newThumbs.append(thumb)
                         subjectThumbnails[newSid] = newThumbs
                         print("[FPSync] Moved thumbnail for image #\(imageNumber) from \(oldSid) to \(newSid)")
                     }
+                }
+
+                // Mark new subject as photographed
+                photographedSubjects.insert(newSid)
+
+                // If old subject has no images left, un-mark as photographed
+                let oldHasImages = !(subjectThumbnails[oldSid]?.isEmpty ?? true)
+                let oldHasNumbers = viewModel.subjects.first(where: { $0.id.uuidString.lowercased() == oldSid })
+                    .map { !$0.imageNumbers.trimmingCharacters(in: .whitespaces).isEmpty } ?? false
+                if !oldHasImages && !oldHasNumbers {
+                    photographedSubjects.remove(oldSid)
                 }
             }
 

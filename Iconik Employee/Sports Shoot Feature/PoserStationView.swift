@@ -988,6 +988,10 @@ struct PoserStationView: View {
                         var toThumbs = subjectThumbnails[newSubjectId] ?? []
                         toThumbs.append(moved)
                         subjectThumbnails[newSubjectId] = toThumbs
+
+                        // Update photo counts
+                        photoCountMap[newSubjectId] = toThumbs.count
+                        photoCountMap[oldSubjectId] = fromThumbs.count
                     }
                 }
                 // Cancel failure timeout and show success
