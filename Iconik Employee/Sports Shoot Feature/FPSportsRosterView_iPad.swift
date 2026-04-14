@@ -255,6 +255,7 @@ struct FPSportsRosterView_iPad: View {
 
     // Sync state: real-time indicators from Production
     @State private var highlightedEntryId: UUID? = nil          // Flash highlight on reverse select
+    @State private var autoSelectEnabled: Bool = true           // Toggle: tap auto-selects on Surface
     @State private var subjectCaptureCounts: [String: Int] = [:] // subject_id -> photo count
     @State private var flaggedSubjects: Set<String> = []         // subject_ids with QC retake flag
     @State private var photographedSubjects: Set<String> = []    // subject_ids that have been shot
@@ -3390,8 +3391,25 @@ struct FPSportsRosterView_iPad: View {
                 .background(Color(.systemGroupedBackground))
             }
 
-            // Add athlete buttons
+            // Action bar
             HStack(spacing: 10) {
+                    // Auto-select toggle
+                    if fpSync.isConnected {
+                        Button(action: { withAnimation { autoSelectEnabled.toggle() } }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: autoSelectEnabled ? "camera.viewfinder" : "eye")
+                                    .font(.system(size: 13))
+                                Text(autoSelectEnabled ? "Auto" : "Browse")
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(autoSelectEnabled ? Color.blue.opacity(0.15) : Color(.systemGray5))
+                            .foregroundColor(autoSelectEnabled ? .blue : .secondary)
+                            .cornerRadius(8)
+                        }
+                    }
+
                     Spacer()
 
                     Button(action: {
@@ -3629,9 +3647,20 @@ struct FPSportsRosterView_iPad: View {
                     } else {
                         selectedEntryIds.insert(entry.id)
                     }
-                } else {
+                } else if autoSelectEnabled {
                     sendSubjectSelection(entry: entry)
                 }
+            }
+
+            // Manual select button — visible when auto-select is off
+            if !autoSelectEnabled && fpSync.isConnected && fpSync.pairedCameraId != nil {
+                Button(action: { sendSubjectSelection(entry: entry) }) {
+                    Image(systemName: "camera.viewfinder")
+                        .font(.system(size: 16))
+                        .foregroundColor(.blue)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
             }
 
             // Image number box
