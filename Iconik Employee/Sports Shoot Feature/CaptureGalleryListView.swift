@@ -29,9 +29,14 @@ struct CaptureGalleryListView: View {
     var groupedGalleries: [(type: String, label: String, galleries: [SportsShoot])] {
         let typeLabels: [String: String] = [
             "sports": "Sports",
-            "underclassFall": "Fall Portraits",
-            "springPortraits": "Spring Portraits",
+            "fall_portraits": "Fall Portraits",
+            "spring_portraits": "Spring Portraits",
             "graduation": "Graduation",
+            "events": "Events",
+            "dance": "Dance",
+            "prom": "Prom",
+            "preschool": "Preschool",
+            "faculty": "Faculty",
         ]
 
         var groups: [String: [SportsShoot]] = [:]
@@ -40,10 +45,15 @@ struct CaptureGalleryListView: View {
             groups[type, default: []].append(g)
         }
 
-        let order = ["sports", "underclassFall", "springPortraits", "graduation", "other"]
+        // Build order from known types + any remaining types found in data
+        let knownOrder = ["events", "spring_portraits", "fall_portraits", "graduation", "sports", "dance", "prom", "preschool", "faculty"]
+        let allTypes = Set(groups.keys)
+        let extraTypes = allTypes.subtracting(knownOrder).sorted()
+        let order = knownOrder + extraTypes
+
         return order.compactMap { type in
             guard let list = groups[type], !list.isEmpty else { return nil }
-            let label = typeLabels[type] ?? type.capitalized
+            let label = typeLabels[type] ?? type.replacingOccurrences(of: "_", with: " ").capitalized
             return (type: type, label: label, galleries: list)
         }
     }
@@ -146,10 +156,10 @@ struct CaptureGalleryListView: View {
     private func shootTypeLabel(_ type: String) -> String {
         switch type {
         case "sports": return "Sports"
-        case "underclassFall": return "Fall Portraits"
-        case "springPortraits": return "Spring Portraits"
+        case "fall_portraits": return "Fall Portraits"
+        case "spring_portraits": return "Spring Portraits"
         case "graduation": return "Graduation"
-        default: return type.capitalized
+        default: return type.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 

@@ -24,6 +24,7 @@ struct PoserStationView: View {
     @State private var selectedSubjectId: UUID?
     @State private var activeSubjectId: String?
     @State private var scrollTargetId: UUID?
+    @State private var autoSelectEnabled: Bool = false  // Toggle: tap auto-selects on Surface
 
     // Photo tracking (WebSocket thumbnails — same pipeline as sports)
     @State private var subjectThumbnails: [String: [CaptureThumb]] = [:]
@@ -323,6 +324,23 @@ struct PoserStationView: View {
                 }
                 .frame(width: 44, height: 44)
 
+                // Auto-select toggle
+                if fpSync.isConnected {
+                    Button(action: { withAnimation { autoSelectEnabled.toggle() } }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: autoSelectEnabled ? "camera.viewfinder" : "eye")
+                                .font(.system(size: 14))
+                            Text(autoSelectEnabled ? "Auto" : "Browse")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(autoSelectEnabled ? Color.blue.opacity(0.15) : Color(.systemGray5))
+                        .foregroundColor(autoSelectEnabled ? .blue : .secondary)
+                        .cornerRadius(8)
+                    }
+                }
+
                 Button(action: { showingSyncSheet = true }) {
                     Image(systemName: fpSync.isConnected ? "wifi" : "wifi.slash")
                         .font(.title3)
@@ -600,6 +618,9 @@ struct PoserStationView: View {
             selectedSubjectId = subject.id
             confirmedSubjectId = nil
             confirmedSubjectName = nil
+            if autoSelectEnabled && fpSync.isConnected && fpSync.pairedCameraId != nil {
+                selectOnCamera(subject)
+            }
         }
         .swipeActions(edge: .trailing) {
             Button(subject.isAbsent ? "Present" : "Absent") {
