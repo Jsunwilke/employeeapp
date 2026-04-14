@@ -772,6 +772,7 @@ class PowerSyncManager: ObservableObject {
             galleryId: idString   // The gallery IS the shoot — its own id is the galleryId
         )
         shoot.shootType = try? cursor.getString(name: "shoot_type")
+        shoot.displayConfig = try? cursor.getString(name: "display_config")
         return shoot
     }
 

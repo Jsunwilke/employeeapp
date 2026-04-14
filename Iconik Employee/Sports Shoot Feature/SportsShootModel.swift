@@ -359,6 +359,7 @@ struct SportsShoot: Identifiable, Codable {
     var updatedAt: Date
     var galleryId: String?       // FK to Production galleries (iPad sync)
     var shootType: String?       // Gallery shoot_type (sports, springPortraits, underclassFall, etc.)
+    var displayConfig: String?   // JSON: configurable sidebar card layout from gallery settings
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -376,6 +377,7 @@ struct SportsShoot: Identifiable, Codable {
         case updatedAt = "updated_at"
         case galleryId = "gallery_id"
         case shootType = "shoot_type"
+        case displayConfig = "display_config"
     }
 
     init(from decoder: Decoder) throws {
@@ -396,6 +398,7 @@ struct SportsShoot: Identifiable, Codable {
         updatedAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .updatedAt)) ?? Date()
         galleryId = try container.decodeIfPresent(String.self, forKey: .galleryId)
         shootType = try container.decodeIfPresent(String.self, forKey: .shootType)
+        displayConfig = try container.decodeIfPresent(String.self, forKey: .displayConfig)
     }
 
     init(id: UUID = UUID(),
@@ -412,7 +415,8 @@ struct SportsShoot: Identifiable, Codable {
          isArchived: Bool = false,
          createdAt: Date = Date(),
          updatedAt: Date = Date(),
-         galleryId: String? = nil) {
+         galleryId: String? = nil,
+         displayConfig: String? = nil) {
         self.id = id
         self.organizationId = organizationId
         self.schoolName = schoolName
@@ -428,6 +432,7 @@ struct SportsShoot: Identifiable, Codable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.galleryId = galleryId
+        self.displayConfig = displayConfig
     }
 }
 

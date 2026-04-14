@@ -626,38 +626,67 @@ struct PoserStationView: View {
 
     // MARK: - Helpers
 
-    private var isEventType: Bool {
+    // Parse display_config JSON or fall back to shoot_type defaults
+    private var displayPrimary: String {
+        if let json = gallery.displayConfig, let data = json.data(using: .utf8),
+           let config = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+           let primary = config["primary"], !primary.isEmpty { return primary }
         let st = gallery.shootType ?? ""
-        return st == "events" || st == "event" || st == "faculty"
+        if st == "events" || st == "event" { return "organization_name" }
+        if st == "faculty" { return "name" }
+        return "name"
+    }
+
+    private var displaySecondary: String {
+        if let json = gallery.displayConfig, let data = json.data(using: .utf8),
+           let config = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+           let secondary = config["secondary"], !secondary.isEmpty { return secondary }
+        let st = gallery.shootType ?? ""
+        if st == "events" || st == "event" { return "name" }
+        if st == "faculty" { return "title" }
+        return "grade_teacher"
+    }
+
+    private func resolveField(_ subject: FPSubject, _ key: String) -> String {
+        switch key {
+        case "name":
+            let n = "\(subject.firstName) \(subject.lastName)".trimmingCharacters(in: .whitespaces)
+            return n.isEmpty ? (subject.rosterId.isEmpty ? "(no name)" : subject.rosterId) : n
+        case "roster_name":
+            let prefix = subject.rosterId.isEmpty ? "" : "\(subject.rosterId) "
+            return "\(prefix)\(subject.firstName) \(subject.lastName)".trimmingCharacters(in: .whitespaces)
+        case "organization_name": return subject.organizationName.isEmpty ? "(no org)" : subject.organizationName
+        case "grade_teacher": return subjectInfo(subject)
+        case "sport": return subject.sport
+        case "grade": return subject.grade
+        case "teacher": return subject.teacher
+        case "email": return subject.email
+        case "title": return subject.homeroom // title maps to homeroom field
+        case "homeroom": return subject.homeroom
+        case "student_id": return subject.studentId
+        case "roster_id": return subject.rosterId
+        default: return ""
+        }
     }
 
     private func primaryDisplay(_ subject: FPSubject) -> String {
-        if isEventType && !subject.organizationName.isEmpty {
-            return subject.organizationName
-        }
-        let name = "\(subject.firstName) \(subject.lastName)".trimmingCharacters(in: .whitespaces)
-        return name.isEmpty ? (subject.rosterId.isEmpty ? "(no name)" : subject.rosterId) : name
+        return resolveField(subject, displayPrimary)
     }
 
     private func secondaryDisplay(_ subject: FPSubject) -> String {
-        if isEventType {
-            // Show name as secondary when organization is primary
-            let name = "\(subject.firstName) \(subject.lastName)".trimmingCharacters(in: .whitespaces)
-            var parts: [String] = []
-            if !name.isEmpty { parts.append(name) }
-            if !subject.teacher.isEmpty { parts.append(subject.teacher) }
-            return parts.joined(separator: " \u{00B7} ")
+        let value = resolveField(subject, displaySecondary)
+        // If secondary is "name" and primary is also name-based, add teacher
+        if displaySecondary == "name" && displayPrimary != "name" && !subject.teacher.isEmpty {
+            return value.isEmpty ? subject.teacher : "\(value) \u{00B7} \(subject.teacher)"
         }
-        return subjectInfo(subject)
+        return value
     }
 
     private func initialsDisplay(_ subject: FPSubject) -> String {
-        if isEventType && !subject.organizationName.isEmpty {
-            let words = subject.organizationName.split(separator: " ")
-            if words.count >= 2 { return "\(words[0].prefix(1))\(words[1].prefix(1))" }
-            return String(subject.organizationName.prefix(2)).uppercased()
-        }
-        return "\(subject.firstName.prefix(1))\(subject.lastName.prefix(1))"
+        let primary = resolveField(subject, displayPrimary)
+        let words = primary.split(separator: " ")
+        if words.count >= 2 { return "\(words[0].prefix(1))\(words[1].prefix(1))" }
+        return String(primary.prefix(2)).uppercased()
     }
 
     private func subjectInfo(_ subject: FPSubject) -> String {
