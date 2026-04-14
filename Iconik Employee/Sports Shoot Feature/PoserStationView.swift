@@ -178,8 +178,13 @@ struct PoserStationView: View {
         return subjects.first { $0.id == id }
     }
 
+    /// Subjects with actual names (excludes blanks from counts)
+    var namedFilteredSubjects: [FPSubject] {
+        filteredSubjects.filter { !$0.firstName.trimmingCharacters(in: .whitespaces).isEmpty || !$0.lastName.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
     var shotCount: Int {
-        subjects.filter { $0.isPhotographed || (photoCountMap[$0.id.uuidString.lowercased()] ?? 0) > 0 }.count
+        namedFilteredSubjects.filter { $0.isPhotographed || (photoCountMap[$0.id.uuidString.lowercased()] ?? 0) > 0 }.count
     }
 
     // MARK: - Body
@@ -364,7 +369,7 @@ struct PoserStationView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(gallery.schoolName)
                         .font(.headline).fontWeight(.bold)
-                    Text("\(shotCount) of \(filteredSubjects.count) photographed")
+                    Text("\(shotCount) of \(namedFilteredSubjects.count) photographed")
                         .font(.subheadline).foregroundColor(.secondary)
                 }
                 Spacer()
@@ -409,7 +414,7 @@ struct PoserStationView: View {
 
             // Progress bar
             GeometryReader { geo in
-                let progress = filteredSubjects.isEmpty ? 0.0 : Double(shotCount) / Double(filteredSubjects.count)
+                let progress = namedFilteredSubjects.isEmpty ? 0.0 : Double(shotCount) / Double(namedFilteredSubjects.count)
                 ZStack(alignment: .leading) {
                     Rectangle().fill(Color(.systemGray5)).frame(height: 4)
                     Rectangle().fill(Color.green).frame(width: geo.size.width * progress, height: 4)
