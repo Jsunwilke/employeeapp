@@ -341,6 +341,17 @@ struct PoserStationView: View {
         .navigationTitle("")
         .navigationBarHidden(true)
         .task {
+            // Pin the gallery so PowerSync syncs its subjects to this user's device.
+            // Matches the pattern used by FPSportsRosterView_iPad and the Production
+            // app's sync_gallery. Without this, users who haven't previously opened
+            // this gallery (via Production or FP Sports) get an empty roster.
+            if let userId = UserManager.shared.getCurrentUserIDUnified() {
+                try? await powerSync.pinGallery(
+                    userId: userId,
+                    galleryId: galleryId,
+                    organizationId: storedUserOrganizationID
+                )
+            }
             await loadSubjects()
             await loadCachedThumbnails()
             startWatching()
