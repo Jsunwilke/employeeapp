@@ -34,6 +34,21 @@ struct FPSportsMultiPhotoImporter: View {
     @Environment(\.presentationMode) var presentationMode
     private let useClaudeMock = false
 
+    private struct TeamGroup {
+        let team: String
+        let subjects: [FPSubject]
+    }
+
+    private var groupedByTeam: [TeamGroup] {
+        var groups: [String: [FPSubject]] = [:]
+        for subject in allExtractedSubjects {
+            let key = subject.sport
+            groups[key, default: []].append(subject)
+        }
+        return groups.map { TeamGroup(team: $0.key, subjects: $0.value) }
+            .sorted { $0.team < $1.team }
+    }
+
     var body: some View {
         NavigationView {
             VStack {
@@ -93,17 +108,21 @@ struct FPSportsMultiPhotoImporter: View {
                                         .resizable().scaledToFill()
                                         .frame(width: 120, height: 120).clipShape(RoundedRectangle(cornerRadius: 8))
 
-                                    Button(action: { capturedImages.remove(at: index) }) {
+                                    Button(action: { removeImage(at: index) }) {
                                         Image(systemName: "xmark.circle.fill")
                                             .foregroundColor(.white).shadow(radius: 2)
                                     }.offset(x: -4, y: 4)
 
-                                    if let label = teamLabels[index] {
-                                        Text(label).font(.caption2).padding(4)
-                                            .background(Color.blue).foregroundColor(.white).cornerRadius(4)
-                                            .offset(x: -4, y: 96)
-                                    }
                                 }
+
+                                // Team name input under the image
+                                TextField("Team Name", text: Binding(
+                                    get: { teamLabels[index] ?? "" },
+                                    set: { teamLabels[index] = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+                                .frame(width: 120)
                             }
                         }.padding(.horizontal)
 
@@ -169,18 +188,23 @@ struct FPSportsMultiPhotoImporter: View {
         VStack {
             Text("Extracted \(allExtractedSubjects.count) Athletes").font(.headline).padding(.top)
             List {
-                ForEach(allExtractedSubjects) { subject in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(subject.lastName).font(.headline)
-                            Spacer()
-                            Text("ID: \(subject.rosterId)").font(.caption).foregroundColor(.secondary)
+                // Group by sport/team for display
+                ForEach(groupedByTeam, id: \.team) { group in
+                    Section(header: Text(group.team.isEmpty ? "No Team" : group.team)) {
+                        ForEach(group.subjects) { subject in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("\(subject.firstName) \(subject.lastName)".trimmingCharacters(in: .whitespaces))
+                                        .font(.headline)
+                                    Spacer()
+                                    Text("ID: \(subject.rosterId)").font(.caption).foregroundColor(.secondary)
+                                }
+                                if !subject.teacher.isEmpty { Text("Grade: \(subject.teacher)").font(.caption) }
+                            }.padding(.vertical, 2)
                         }
-                        if !subject.sport.isEmpty { Text("Sport: \(subject.sport)").font(.caption) }
-                        if !subject.teacher.isEmpty { Text("Grade: \(subject.teacher)").font(.caption) }
-                    }.padding(.vertical, 2)
+                    }
                 }
-            }
+            }.listStyle(.insetGrouped)
 
             HStack(spacing: 16) {
                 Button(action: { showPreview = false }) {
@@ -199,7 +223,20 @@ struct FPSportsMultiPhotoImporter: View {
     // MARK: - Actions
 
     private func addImage(_ image: UIImage) {
+        teamLabels[capturedImages.count] = ""
         capturedImages.append(image)
+    }
+
+    private func removeImage(at index: Int) {
+        capturedImages.remove(at: index)
+        teamLabels.removeValue(forKey: index)
+        // Reindex team labels
+        var newLabels: [Int: String] = [:]
+        let sorted = teamLabels.sorted { $0.key < $1.key }
+        for (newIdx, (_, label)) in sorted.enumerated() {
+            newLabels[newIdx] = label
+        }
+        teamLabels = newLabels
     }
 
     private func loadExisting() {
@@ -246,21 +283,27 @@ struct FPSportsMultiPhotoImporter: View {
                 }
             }
 
-            // Combine all, reassign IDs sequentially
+            // Combine all, reassign IDs sequentially, apply team labels
             var combined: [FPSubject] = []
             var id = nextRosterId
             for i in 0..<capturedImages.count {
                 if let subjects = extractedSubjectsByImage[i] {
+                    let teamName = teamLabels[i]?.trimmingCharacters(in: .whitespaces) ?? ""
                     for var subject in subjects where !subject.isBlank {
                         subject.rosterId = String(id)
+                        // Use team label if set, otherwise keep what Claude extracted
+                        if !teamName.isEmpty {
+                            subject.sport = teamName.uppercased()
+                        }
                         combined.append(subject)
                         id += 1
                     }
                 }
             }
-            // Append blanks
+            // Append blanks with the last team name
+            let lastTeam = combined.last?.sport ?? ""
             for i in 0..<10 {
-                combined.append(FPSubject(galleryId: galleryId, organizationId: organizationId, firstName: "", lastName: "", grade: "", teacher: "", homeroom: "", studentId: "", rosterId: String(id + i), jerseyNumber: "", sport: combined.first?.sport ?? ""))
+                combined.append(FPSubject(galleryId: galleryId, organizationId: organizationId, firstName: "", lastName: "", grade: "", teacher: "", homeroom: "", studentId: "", rosterId: String(id + i), jerseyNumber: "", sport: lastTeam))
             }
 
             await MainActor.run {

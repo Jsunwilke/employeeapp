@@ -750,6 +750,7 @@ struct SportsShootDetailView: View {
     private var addGroupImageSheet: some View {
         AddGroupImageView(
             shootID: shootID,
+            organizationId: sportsShoot?.organizationId ?? "",
             existingGroup: selectedGroupImage,
             onComplete: { success in
                 if success { Task { await refreshGroupImages() } }

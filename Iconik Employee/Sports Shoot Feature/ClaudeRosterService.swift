@@ -8,6 +8,8 @@
 import Foundation
 import UIKit
 import Supabase
+import Vision
+import SystemConfiguration
 
 // Service to handle AI processing of roster images
 class ClaudeRosterService {
@@ -800,7 +802,9 @@ extension ClaudeRosterService {
         }
     }
 
-    /// Extract roster from image and return as FPSubjects
+    /// Extract roster from image and return as FPSubjects.
+    /// Parses Claude's response and maps to FPSubject with actual first/last names
+    /// (not the old Captura convention of full name in lastName).
     func extractSubjectsFromImage(
         _ image: UIImage,
         galleryId: String,
@@ -808,36 +812,382 @@ extension ClaudeRosterService {
         startingSubjectID: Int,
         completion: @escaping (Result<[FPSubject], Error>) -> Void
     ) {
-        // Use existing extraction then convert
         extractRosterFromImage(image, sportsJobId: UUID(), organizationId: organizationId, startingSubjectID: startingSubjectID) { result in
             switch result {
             case .success(let rosterEntries):
+                var id = startingSubjectID
                 var subjects: [FPSubject] = rosterEntries.map { entry in
-                    FPSubject(
+                    // Claude returns full name in lastName field (e.g. "JOHN SMITH")
+                    // Split into actual first and last name for FP Sports
+                    let nameParts = entry.lastName.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1)
+                    let first: String
+                    let last: String
+                    if nameParts.count >= 2 {
+                        first = String(nameParts[0])
+                        last = String(nameParts[1])
+                    } else {
+                        first = ""
+                        last = String(nameParts.first ?? "")
+                    }
+
+                    let subject = FPSubject(
                         galleryId: galleryId,
                         organizationId: organizationId,
-                        firstName: "",
-                        lastName: entry.lastName,
+                        firstName: first,
+                        lastName: last,
                         grade: "",
                         teacher: entry.teacher,
                         homeroom: "",
                         studentId: "",
-                        rosterId: entry.firstName,  // firstName holds the sequential ID in Captura convention
+                        rosterId: String(id),
                         jerseyNumber: "",
                         sport: entry.groupName,
                         position: "",
                         email: entry.email
                     )
+                    id += 1
+                    return subject
                 }
-                // Append blank entries (same pattern as RosterEntry version)
-                let lastID = startingSubjectID + subjects.count
+                // Append blank entries
                 let sport = subjects.first?.sport ?? ""
-                self.appendBlankFPSubjects(to: &subjects, galleryId: galleryId, organizationId: organizationId, startingFromID: lastID, sport: sport)
+                self.appendBlankFPSubjects(to: &subjects, galleryId: galleryId, organizationId: organizationId, startingFromID: id, sport: sport)
                 completion(.success(subjects))
             case .failure(let error):
                 completion(.failure(error))
             }
         }
+    }
+
+    // MARK: - Portrait Card Extraction
+
+    /// Result includes whether on-device OCR was used (so caller can show a warning)
+    struct PortraitCardResult {
+        let subject: FPSubject
+        let usedOnDeviceOCR: Bool
+    }
+
+    /// Extract student info from a handwritten portrait card (US card, walk-in card).
+    /// Uses Claude API when online, falls back to on-device Vision OCR when offline.
+    func extractPortraitCard(
+        _ image: UIImage,
+        galleryId: String,
+        organizationId: String,
+        completion: @escaping (Result<PortraitCardResult, Error>) -> Void
+    ) {
+        // Check internet connectivity
+        let isOnline = isNetworkAvailable()
+
+        if isOnline {
+            // Try Claude API
+            let doExtract = { [weak self] (key: String) in
+                self?.proceedWithPortraitCardExtraction(image, galleryId: galleryId, organizationId: organizationId, apiKey: key) { result in
+                    switch result {
+                    case .success(let subject):
+                        completion(.success(PortraitCardResult(subject: subject, usedOnDeviceOCR: false)))
+                    case .failure(let error):
+                        // Claude failed (maybe brief connectivity loss) — fall back to on-device
+                        if self?.debugMode == true { print("[ClaudeRosterService] Claude API failed, falling back to on-device OCR: \(error.localizedDescription)") }
+                        self?.extractWithOnDeviceOCR(image, galleryId: galleryId, organizationId: organizationId, completion: completion)
+                    }
+                }
+            }
+
+            if apiKey.isEmpty {
+                fetchAPIKeyFromAppConfig { [weak self] fetchedKey in
+                    if let key = fetchedKey, !key.isEmpty {
+                        doExtract(key)
+                    } else {
+                        self?.fetchAPIKeyFromSupabase { fetchedOrgKey in
+                            if let key = fetchedOrgKey, !key.isEmpty {
+                                doExtract(key)
+                            } else {
+                                // No API key — fall back to on-device
+                                self?.extractWithOnDeviceOCR(image, galleryId: galleryId, organizationId: organizationId, completion: completion)
+                            }
+                        }
+                    }
+                }
+            } else {
+                doExtract(apiKey)
+            }
+        } else {
+            // Offline — use on-device OCR
+            extractWithOnDeviceOCR(image, galleryId: galleryId, organizationId: organizationId, completion: completion)
+        }
+    }
+
+    private func isNetworkAvailable() -> Bool {
+        // Simple reachability check — try to resolve a hostname
+        let host = "api.anthropic.com"
+        guard let ref = SCNetworkReachabilityCreateWithName(nil, host) else { return false }
+        var flags = SCNetworkReachabilityFlags()
+        guard SCNetworkReachabilityGetFlags(ref, &flags) else { return false }
+        return flags.contains(.reachable) && !flags.contains(.connectionRequired)
+    }
+
+    // MARK: - On-Device OCR (Vision framework — works offline)
+
+    private func extractWithOnDeviceOCR(
+        _ image: UIImage,
+        galleryId: String,
+        organizationId: String,
+        completion: @escaping (Result<PortraitCardResult, Error>) -> Void
+    ) {
+        guard let cgImage = image.cgImage else {
+            completion(.failure(NSError(domain: "ClaudeRosterService", code: 110,
+                userInfo: [NSLocalizedDescriptionKey: "Could not get CGImage from scanned image"])))
+            return
+        }
+
+        let request = VNRecognizeTextRequest { request, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(.failure(error))
+                    return
+                }
+
+                guard let observations = request.results as? [VNRecognizedTextObservation] else {
+                    completion(.failure(NSError(domain: "ClaudeRosterService", code: 111,
+                        userInfo: [NSLocalizedDescriptionKey: "No text recognized on card"])))
+                    return
+                }
+
+                // Collect all recognized lines
+                let lines = observations.compactMap { obs -> String? in
+                    obs.topCandidates(1).first?.string
+                }.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+
+                if self.debugMode { print("[ClaudeRosterService] On-device OCR lines: \(lines)") }
+
+                // Parse lines into fields using heuristics
+                let subject = self.parseOCRLines(lines, galleryId: galleryId, organizationId: organizationId)
+                completion(.success(PortraitCardResult(subject: subject, usedOnDeviceOCR: true)))
+            }
+        }
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try? handler.perform([request])
+        }
+    }
+
+    /// Parse OCR text lines into subject fields using simple heuristics.
+    /// Looks for labeled fields (e.g. "Name: John Smith") or positional guesses.
+    private func parseOCRLines(_ lines: [String], galleryId: String, organizationId: String) -> FPSubject {
+        var firstName = ""
+        var lastName = ""
+        var grade = ""
+        var teacher = ""
+        var studentId = ""
+
+        for line in lines {
+            let lower = line.lowercased().trimmingCharacters(in: .whitespaces)
+
+            // Try labeled patterns: "Name: ...", "Grade: ...", "Teacher: ...", "ID: ..."
+            if lower.hasPrefix("name") || lower.hasPrefix("student name") {
+                let value = extractAfterLabel(line)
+                let parts = value.split(separator: " ", maxSplits: 1)
+                if parts.count >= 2 {
+                    firstName = String(parts[0])
+                    lastName = String(parts[1])
+                } else if parts.count == 1 {
+                    lastName = String(parts[0])
+                }
+            } else if lower.hasPrefix("first") {
+                firstName = extractAfterLabel(line)
+            } else if lower.hasPrefix("last") {
+                lastName = extractAfterLabel(line)
+            } else if lower.hasPrefix("grade") || lower.hasPrefix("gr") {
+                grade = extractAfterLabel(line)
+            } else if lower.hasPrefix("teacher") || lower.hasPrefix("tchr") || lower.hasPrefix("hr") || lower.hasPrefix("homeroom") {
+                teacher = extractAfterLabel(line)
+            } else if lower.hasPrefix("id") || lower.hasPrefix("student id") || lower.hasPrefix("sid") {
+                studentId = extractAfterLabel(line)
+            }
+        }
+
+        // If no labeled fields found, try positional: first line = name, second = grade/teacher
+        if firstName.isEmpty && lastName.isEmpty && lines.count >= 1 {
+            let parts = lines[0].split(separator: " ", maxSplits: 1)
+            if parts.count >= 2 {
+                firstName = String(parts[0])
+                lastName = String(parts[1])
+            } else if parts.count == 1 {
+                lastName = String(parts[0])
+            }
+        }
+        if grade.isEmpty && teacher.isEmpty && lines.count >= 2 {
+            // Second line might be grade or teacher
+            let second = lines[1].trimmingCharacters(in: .whitespaces)
+            if second.count <= 3 || second.allSatisfy({ $0.isNumber || $0 == "K" || $0 == "k" }) {
+                grade = second
+            } else {
+                teacher = second
+            }
+        }
+        if grade.isEmpty && lines.count >= 3 {
+            grade = lines[2].trimmingCharacters(in: .whitespaces)
+        }
+
+        return FPSubject(
+            galleryId: galleryId,
+            organizationId: organizationId,
+            firstName: firstName.trimmingCharacters(in: .whitespaces),
+            lastName: lastName.trimmingCharacters(in: .whitespaces),
+            grade: grade.trimmingCharacters(in: .whitespaces),
+            teacher: teacher.trimmingCharacters(in: .whitespaces),
+            studentId: studentId.trimmingCharacters(in: .whitespaces)
+        )
+    }
+
+    /// Extract the value after a label like "Name: John Smith" → "John Smith"
+    private func extractAfterLabel(_ line: String) -> String {
+        if let colonRange = line.range(of: ":") {
+            return String(line[colonRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+        }
+        // Try space after first word
+        let parts = line.split(separator: " ", maxSplits: 1)
+        return parts.count >= 2 ? String(parts[1]).trimmingCharacters(in: .whitespaces) : ""
+    }
+
+    private func proceedWithPortraitCardExtraction(
+        _ image: UIImage,
+        galleryId: String,
+        organizationId: String,
+        apiKey: String,
+        completion: @escaping (Result<FPSubject, Error>) -> Void
+    ) {
+        guard let imageData = compressImageForAPI(image) else {
+            completion(.failure(NSError(domain: "ClaudeRosterService", code: 100,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to compress image"])))
+            return
+        }
+
+        let base64Image = imageData.base64EncodedString()
+
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
+            completion(.failure(NSError(domain: "ClaudeRosterService", code: 102,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid API URL"])))
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
+        let promptText = """
+        This is a photo of a handwritten student portrait card. Please extract the student's information.
+
+        Extract these fields:
+        - "firstName": The student's first name
+        - "lastName": The student's last name
+        - "grade": The student's grade level (e.g. "3", "K", "Pre-K", "10")
+        - "teacher": The student's teacher name
+        - "studentId": Any student ID number if written on the card
+
+        Format your response as a single JSON object. Use empty string for any field you cannot read.
+
+        Example:
+        ```json
+        {
+          "firstName": "Emma",
+          "lastName": "Johnson",
+          "grade": "3",
+          "teacher": "Mrs. Smith",
+          "studentId": "12345"
+        }
+        ```
+
+        Only respond with the JSON, nothing else.
+        """
+
+        let requestBody: [String: Any] = [
+            "model": modelName,
+            "messages": [
+                [
+                    "role": "user",
+                    "content": [
+                        ["type": "text", "text": promptText],
+                        ["type": "image", "source": [
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": base64Image
+                        ]]
+                    ]
+                ]
+            ],
+            "max_tokens": 500
+        ]
+
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: requestBody) else {
+            completion(.failure(NSError(domain: "ClaudeRosterService", code: 103,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to serialize request"])))
+            return
+        }
+        request.httpBody = httpBody
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(.failure(error))
+                    return
+                }
+                guard let data = data else {
+                    completion(.failure(NSError(domain: "ClaudeRosterService", code: 104,
+                        userInfo: [NSLocalizedDescriptionKey: "No data received"])))
+                    return
+                }
+
+                // Parse Claude response
+                do {
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let content = json["content"] as? [[String: Any]],
+                       let textBlock = content.first(where: { ($0["type"] as? String) == "text" }),
+                       let text = textBlock["text"] as? String {
+
+                        // Extract JSON from response (may be wrapped in ```json ... ```)
+                        let cleaned = text
+                            .replacingOccurrences(of: "```json", with: "")
+                            .replacingOccurrences(of: "```", with: "")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                        if let cardData = cleaned.data(using: .utf8),
+                           let cardJson = try JSONSerialization.jsonObject(with: cardData) as? [String: String] {
+                            let subject = FPSubject(
+                                galleryId: galleryId,
+                                organizationId: organizationId,
+                                firstName: cardJson["firstName"] ?? "",
+                                lastName: cardJson["lastName"] ?? "",
+                                grade: cardJson["grade"] ?? "",
+                                teacher: cardJson["teacher"] ?? "",
+                                studentId: cardJson["studentId"] ?? ""
+                            )
+                            completion(.success(subject))
+                        } else {
+                            completion(.failure(NSError(domain: "ClaudeRosterService", code: 105,
+                                userInfo: [NSLocalizedDescriptionKey: "Could not parse card data from response"])))
+                        }
+                    } else {
+                        // Check for error response
+                        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let errorObj = json["error"] as? [String: Any],
+                           let message = errorObj["message"] as? String {
+                            completion(.failure(NSError(domain: "ClaudeRosterService", code: 106,
+                                userInfo: [NSLocalizedDescriptionKey: message])))
+                        } else {
+                            completion(.failure(NSError(domain: "ClaudeRosterService", code: 105,
+                                userInfo: [NSLocalizedDescriptionKey: "Unexpected API response format"])))
+                        }
+                    }
+                } catch {
+                    completion(.failure(error))
+                }
+            }
+        }.resume()
     }
 
     /// Mock extraction returning FPSubjects

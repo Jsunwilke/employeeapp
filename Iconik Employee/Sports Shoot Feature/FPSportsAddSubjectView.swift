@@ -34,6 +34,11 @@ struct FPSportsAddSubjectView: View {
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
     @State private var isLoadingSubjectID = false
+    @State private var existingSubjects: [FPSubject] = []
+
+    // Duplicate roster ID warning
+    @State private var showingDuplicateWarning = false
+    @State private var duplicateSubjectName = ""
 
     // Lock state
     @State private var lockAcquired = false
@@ -176,6 +181,16 @@ struct FPSportsAddSubjectView: View {
         .alert(isPresented: $showingErrorAlert) {
             Alert(title: Text("Error"), message: Text(errorMessage), dismissButton: .default(Text("OK")))
         }
+        .alert(isPresented: $showingDuplicateWarning) {
+            Alert(
+                title: Text("Duplicate Roster ID"),
+                message: Text("Roster ID \(rosterId) is already assigned to \(duplicateSubjectName). Save anyway?"),
+                primaryButton: .default(Text("Save Anyway")) {
+                    executeSave()
+                },
+                secondaryButton: .cancel()
+            )
+        }
         .onAppear {
             if let s = existingSubject {
                 lastName = s.lastName
@@ -231,6 +246,7 @@ struct FPSportsAddSubjectView: View {
                 let subjects = try await powerSync.getSubjects(forGalleryId: galleryId)
                 let highestID = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
                 await MainActor.run {
+                    existingSubjects = subjects
                     rosterId = "\(highestID + 1)"
                     isLoadingSubjectID = false
                 }
@@ -248,6 +264,23 @@ struct FPSportsAddSubjectView: View {
     private func cap(_ s: String, _ max: Int) -> String { String(s.prefix(max)) }
 
     private func saveSubject() {
+        let trimmedRosterId = cap(rosterId.trimmingCharacters(in: .whitespacesAndNewlines), 50)
+
+        // Check for duplicate roster ID (only for new subjects, not edits)
+        if !isEditing && !trimmedRosterId.isEmpty {
+            let dup = existingSubjects.first { $0.rosterId == trimmedRosterId }
+            if let dup = dup {
+                let name = [dup.firstName, dup.lastName].filter { !$0.isEmpty }.joined(separator: " ")
+                duplicateSubjectName = name.isEmpty ? "ID \(dup.rosterId)" : name
+                showingDuplicateWarning = true
+                return
+            }
+        }
+
+        executeSave()
+    }
+
+    private func executeSave() {
         let subject = FPSubject(
             id: existingSubject?.id ?? UUID(),
             galleryId: galleryId,

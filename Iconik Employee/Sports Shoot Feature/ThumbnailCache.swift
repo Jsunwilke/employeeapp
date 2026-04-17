@@ -17,6 +17,10 @@ class ThumbnailCache {
     private let fileManager = FileManager.default
     private let queue = DispatchQueue(label: "com.iconik.thumbnailcache", qos: .utility)
 
+    // LRU eviction
+    private var accessOrder: [(shootId: String, subjectId: String, index: Int, accessedAt: Date)] = []
+    private let maxCacheSize = 500
+
     private var cacheDir: URL {
         let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
         return docs.appendingPathComponent("capture-thumbs")
@@ -46,6 +50,15 @@ class ThumbnailCache {
 
             if let data = image.jpegData(compressionQuality: 0.8) {
                 try? data.write(to: filePath, options: .atomic)
+
+                // Track in LRU access order
+                let index = imageNumber ?? 0
+                self.accessOrder.append((shootId: shootId, subjectId: subjectId, index: index, accessedAt: Date()))
+
+                // Evict oldest entries if over limit
+                if self.accessOrder.count > self.maxCacheSize {
+                    self.evictOldest(100)
+                }
             }
         }
     }
@@ -85,6 +98,15 @@ class ThumbnailCache {
 
             if !thumbs.isEmpty {
                 result[subjectId] = thumbs
+
+                // Update LRU access times for loaded entries
+                let now = Date()
+                for (i, thumb) in thumbs.enumerated() {
+                    let index = thumb.imageNumber ?? i
+                    // Remove old entry if present, then re-add with fresh timestamp
+                    accessOrder.removeAll { $0.shootId == shootId && $0.subjectId == subjectId && $0.index == index }
+                    accessOrder.append((shootId: shootId, subjectId: subjectId, index: index, accessedAt: now))
+                }
             }
         }
 
@@ -106,6 +128,35 @@ class ThumbnailCache {
         queue.async { [self] in
             try? fileManager.removeItem(at: cacheDir)
         }
+    }
+
+    // MARK: - LRU Eviction
+
+    /// Remove the oldest `count` entries from disk and access tracking.
+    /// Must be called on `queue`.
+    private func evictOldest(_ count: Int) {
+        guard accessOrder.count > count else {
+            // Not enough entries to evict
+            accessOrder.removeAll()
+            return
+        }
+
+        // Sort by accessedAt ascending (oldest first)
+        let sorted = accessOrder.sorted { $0.accessedAt < $1.accessedAt }
+        let toEvict = Array(sorted.prefix(count))
+
+        for entry in toEvict {
+            let dir = subjectDir(shootId: entry.shootId, subjectId: entry.subjectId)
+            // Try both naming conventions
+            let numberedPath = dir.appendingPathComponent("\(entry.index).jpg")
+            let fallbackPath = dir.appendingPathComponent("no_\(entry.index).jpg")
+            try? fileManager.removeItem(at: numberedPath)
+            try? fileManager.removeItem(at: fallbackPath)
+        }
+
+        // Remove evicted entries from tracking
+        let evictedSet = Set(toEvict.map { "\($0.shootId)/\($0.subjectId)/\($0.index)" })
+        accessOrder.removeAll { evictedSet.contains("\($0.shootId)/\($0.subjectId)/\($0.index)") }
     }
 
     // MARK: - Private

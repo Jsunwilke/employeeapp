@@ -24,6 +24,12 @@ struct FPSportsBatchAddView: View {
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
     @State private var isLoadingExisting = true
+    @State private var existingSubjects: [FPSubject] = []
+
+    // Duplicate roster ID warning
+    @State private var showingDuplicateWarning = false
+    @State private var duplicateRosterIds: [String] = []
+    @State private var pendingBatchSubjects: [FPSubject] = []
 
     @Environment(\.presentationMode) var presentationMode
 
@@ -117,6 +123,21 @@ struct FPSportsBatchAddView: View {
             .alert(isPresented: $showingErrorAlert) {
                 Alert(title: Text("Error"), message: Text(errorMessage), dismissButton: .default(Text("OK")))
             }
+            .alert(isPresented: $showingDuplicateWarning) {
+                Alert(
+                    title: Text("Duplicate Roster IDs"),
+                    message: Text("These roster IDs already exist: \(duplicateRosterIds.joined(separator: ", ")). Continue anyway?"),
+                    primaryButton: .default(Text("Continue")) {
+                        executeBatchInsert(pendingBatchSubjects)
+                        pendingBatchSubjects = []
+                        duplicateRosterIds = []
+                    },
+                    secondaryButton: .cancel {
+                        pendingBatchSubjects = []
+                        duplicateRosterIds = []
+                    }
+                )
+            }
         }
         .onAppear { loadHighestRosterId() }
     }
@@ -147,6 +168,7 @@ struct FPSportsBatchAddView: View {
                 let subjects = try await powerSync.getSubjects(forGalleryId: galleryId)
                 let highestID = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
                 await MainActor.run {
+                    existingSubjects = subjects
                     startingRosterId = highestID + 1
                     isLoadingExisting = false
                 }
@@ -167,28 +189,48 @@ struct FPSportsBatchAddView: View {
             return
         }
 
+        // Collect all subjects first
+        var subjects: [FPSubject] = []
+        for index in 0..<count {
+            subjects.append(FPSubject(
+                galleryId: galleryId,
+                organizationId: organizationId,
+                firstName: "",
+                lastName: "",
+                grade: "",
+                teacher: specialField,
+                homeroom: "",
+                studentId: "",
+                rosterId: "\(startingRosterId + index)",
+                jerseyNumber: "",
+                sport: sportName.uppercased(),
+                position: "",
+                email: "",
+                phone: "",
+                updatedAt: Date()
+            ))
+        }
+
+        // Check for duplicate roster IDs against existing subjects
+        let existingRosterIds = Set(existingSubjects.compactMap { $0.rosterId.isEmpty ? nil : $0.rosterId })
+        let newRosterIds = subjects.map { $0.rosterId }
+        let dupes = newRosterIds.filter { existingRosterIds.contains($0) }
+        if !dupes.isEmpty {
+            pendingBatchSubjects = subjects
+            duplicateRosterIds = dupes
+            showingDuplicateWarning = true
+            return
+        }
+
+        executeBatchInsert(subjects)
+    }
+
+    private func executeBatchInsert(_ subjects: [FPSubject]) {
         isLoading = true
         Task {
-            var allSuccess = true
-            for index in 0..<count {
-                let subject = FPSubject(
-                    galleryId: galleryId,
-                    organizationId: organizationId,
-                    firstName: "",
-                    lastName: "",
-                    grade: "",
-                    teacher: specialField,
-                    homeroom: "",
-                    studentId: "",
-                    rosterId: "\(startingRosterId + index)",
-                    jerseyNumber: "",
-                    sport: sportName.uppercased(),
-                    position: "",
-                    email: "",
-                    phone: "",
-                    updatedAt: Date()
-                )
-
+            // Attempt all inserts, collecting failures
+            var failedIndices: [Int] = []
+            for (index, subject) in subjects.enumerated() {
                 var saved = false
                 for attempt in 1...3 {
                     do {
@@ -205,15 +247,25 @@ struct FPSportsBatchAddView: View {
                         )
                         break
                     } catch {
+                        print("[FPSportsBatchAdd] Insert failed for roster ID \(subject.rosterId), attempt \(attempt): \(error)")
                         if attempt < 3 {
                             try? await Task.sleep(nanoseconds: UInt64(500_000_000 * attempt))
                         }
                     }
                 }
-                if !saved { allSuccess = false }
+                if !saved {
+                    failedIndices.append(index)
+                }
             }
+
+            let allSuccess = failedIndices.isEmpty
             await MainActor.run {
                 isLoading = false
+                if !allSuccess {
+                    let failedIds = failedIndices.map { subjects[$0].rosterId }
+                    errorMessage = "\(failedIndices.count) of \(subjects.count) athletes failed to create (IDs: \(failedIds.joined(separator: ", ")))"
+                    showingErrorAlert = true
+                }
                 onComplete(allSuccess)
                 presentationMode.wrappedValue.dismiss()
             }

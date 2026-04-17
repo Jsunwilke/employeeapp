@@ -492,9 +492,9 @@ class FocalPointSyncClient: ObservableObject {
     }
 
     /// Send name/field update for a subject (when blank placeholder gets a name on iPad)
-    func sendSubjectUpdated(subjectId: String?, rosterEntryId: String, firstName: String, lastName: String, rosterId: String) {
+    func sendSubjectUpdated(subjectId: String?, rosterEntryId: String, firstName: String, lastName: String, rosterId: String, imageNumbers: String? = nil) {
         guard let galleryId = galleryId else { return }
-        let msg: [String: Any] = [
+        var msg: [String: Any] = [
             "type": "subject_updated",
             "device_id": deviceId,
             "gallery_id": galleryId,
@@ -505,6 +505,45 @@ class FocalPointSyncClient: ObservableObject {
             "roster_id": String(rosterId.prefix(50)),
             "station_name": "iPad - \(deviceName)",
         ]
+        if let nums = imageNumbers {
+            msg["image_numbers"] = String(nums.prefix(500))
+        }
+        send(msg)
+    }
+
+    /// Send a full subject field update — carries every iPad-editable field.
+    /// Used when the iPad skips its own PowerSync write (Surface is connected)
+    /// so the Surface can write all the edits to Supabase authoritatively.
+    func sendSubjectFullUpdate(_ subject: FPSubject) {
+        guard let galleryId = galleryId else { return }
+        let sid = subject.id.uuidString.lowercased()
+        var msg: [String: Any] = [
+            "type": "subject_updated",
+            "device_id": deviceId,
+            "gallery_id": galleryId,
+            "subject_id": sid,
+            "roster_entry_id": sid,
+            "first_name": String(subject.firstName.prefix(200)),
+            "last_name": String(subject.lastName.prefix(200)),
+            "grade": String(subject.grade.prefix(50)),
+            "teacher": String(subject.teacher.prefix(200)),
+            "homeroom": String(subject.homeroom.prefix(200)),
+            "student_id": String(subject.studentId.prefix(50)),
+            "roster_id": String(subject.rosterId.prefix(50)),
+            "jersey_number": String(subject.jerseyNumber.prefix(50)),
+            "sport": String(subject.sport.prefix(100)),
+            "position": String(subject.position.prefix(100)),
+            "email": String(subject.email.prefix(200)),
+            "phone": String(subject.phone.prefix(50)),
+            "notes": String(subject.notes.prefix(1000)),
+            "image_numbers": String(subject.imageNumbers.prefix(500)),
+            "is_absent": subject.isAbsent,
+            "needs_retake": subject.needsRetake,
+            "station_name": "iPad - \(deviceName)",
+        ]
+        if let checkedIn = subject.checkedInAt {
+            msg["checked_in_at"] = checkedIn
+        }
         send(msg)
     }
 
@@ -1072,7 +1111,9 @@ class FocalPointSyncClient: ObservableObject {
             if let subjectId = msg["subject_id"] as? String,
                let subjectName = msg["subject_name"] as? String,
                let status = msg["status"] as? String,
-               let message = msg["message"] as? String {
+               let message = msg["message"] as? String,
+               let fromDevice = msg["device_id"] as? String,
+               pairedCameraId == nil || fromDevice == pairedCameraId {
                 let qrData = msg["qr_data"] as? String
                 print("[FPSync] Verification warning: \(status) for \(subjectName) — \(message)")
                 onVerificationWarning?(subjectId, subjectName, status, message, qrData)

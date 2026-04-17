@@ -214,7 +214,8 @@ struct FPSportsRosterView_iPad: View {
     
     // Device orientation detection
     @State private var orientation = UIDeviceOrientation.unknown
-    
+    @State private var isLandscapeSize = false  // Size-based landscape detection for filmstrip
+
     // Track if view is visible to optimize timers
     @State private var isViewVisible = false
 
@@ -255,7 +256,9 @@ struct FPSportsRosterView_iPad: View {
 
     // Sync state: real-time indicators from Production
     @State private var highlightedEntryId: UUID? = nil          // Flash highlight on reverse select
-    @State private var autoSelectEnabled: Bool = true           // Toggle: tap auto-selects on Surface
+    @AppStorage("captureAutoSelect") private var autoSelectEnabled: Bool = true  // Toggle: tap auto-selects on Surface
+    @AppStorage("capturePreviewEnabled") private var previewEnabled: Bool = true  // Toggle: show capture preview popup
+    @State private var showCaptureSettings = false
     @State private var subjectCaptureCounts: [String: Int] = [:] // subject_id -> photo count
     @State private var flaggedSubjects: Set<String> = []         // subject_ids with QC retake flag
     @State private var photographedSubjects: Set<String> = []    // subject_ids that have been shot
@@ -276,6 +279,10 @@ struct FPSportsRosterView_iPad: View {
     @State private var photoViewerSubjectId: String = ""
     @State private var photoViewerSubjectName: String = ""
     @State private var photoViewerThumbs: [CaptureThumb] = []
+
+    // Capture preview popup (auto-dismiss after 3s)
+    @State private var previewImage: UIImage?
+    @State private var previewDismissTimer: DispatchWorkItem?
 
     // Search
     @State private var searchText: String = ""
@@ -314,6 +321,23 @@ struct FPSportsRosterView_iPad: View {
     // Check if we're on iPhone
     private var isIPhone: Bool {
         UIDevice.current.userInterfaceIdiom == .phone
+    }
+
+    // Filmstrip segments — ALL subjects with photos, sorted by most recently photographed
+    private var filmstripSegments: [FilmstripSegment] {
+        subjectThumbnails
+            .filter { !$0.value.isEmpty }
+            .map { (sid, thumbs) in
+                let subject = viewModel.subjects.first { $0.id.uuidString.lowercased() == sid }
+                let name = subject.map { "\($0.firstName) \($0.lastName)".trimmingCharacters(in: .whitespaces) } ?? "Unknown"
+                return FilmstripSegment(
+                    id: sid,
+                    subjectName: name.isEmpty ? "Unnamed" : name,
+                    photoCount: thumbs.count,
+                    thumbnails: thumbs
+                )
+            }
+            .sorted { ($0.thumbnails.last?.imageNumber ?? 0) > ($1.thumbnails.last?.imageNumber ?? 0) }
     }
 
     // Group archived jobs by school for folder display
@@ -756,6 +780,17 @@ struct FPSportsRosterView_iPad: View {
                 // Persist to disk
                 if let shootId = viewModel.selectedShoot?.id.uuidString {
                     ThumbnailCache.shared.save(shootId: shootId, subjectId: subjectId, imageNumber: imgNum, image: image)
+                }
+
+                // Show capture preview popup — sports shows every photo
+                if previewEnabled {
+                    previewDismissTimer?.cancel()
+                    withAnimation(.easeInOut(duration: 0.2)) { previewImage = image }
+                    let timer = DispatchWorkItem {
+                        withAnimation(.easeInOut(duration: 0.3)) { previewImage = nil }
+                    }
+                    previewDismissTimer = timer
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timer)
                 }
             }
         }
@@ -1455,6 +1490,33 @@ struct FPSportsRosterView_iPad: View {
             }
             showLockLostAlert = true
         }
+        .sheet(isPresented: $showCaptureSettings) {
+            NavigationView {
+                List {
+                    Section(header: Text("Capture")) {
+                        Toggle("Auto-select on camera", isOn: $autoSelectEnabled)
+                        Text("When enabled, tapping a subject on iPad selects them on the Surface Pro camera")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Section(header: Text("Display")) {
+                        Toggle("Show capture preview", isOn: $previewEnabled)
+                        Text("Briefly shows each photo full-screen when it arrives from the camera")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .listStyle(.insetGrouped)
+                .navigationTitle("Capture Settings")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") { showCaptureSettings = false }
+                            .fontWeight(.semibold)
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $showMoveImagePicker) {
             NavigationView {
                 List {
@@ -1563,12 +1625,33 @@ struct FPSportsRosterView_iPad: View {
                 .statusBarHidden(true)
                 .zIndex(999)
             }
+
+            // Capture preview popup — shows photos for 3 seconds, tappable to dismiss
+            if let img = previewImage {
+                Color.black.opacity(0.6)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        previewDismissTimer?.cancel()
+                        withAnimation(.easeInOut(duration: 0.2)) { previewImage = nil }
+                    }
+                    .overlay {
+                        Image(uiImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .shadow(radius: 20)
+                            .padding(40)
+                            .transition(.opacity)
+                    }
+                    .transition(.opacity)
+                    .zIndex(998)
+            }
         } // ZStack
         .onChange(of: showPhotoViewer) { newValue in
             TabBarManager.shared.isFullScreenOverlayActive = newValue
         }
     }
-    
+
     // MARK: - iPhone View
     
     private var iPhoneView: some View {
@@ -1955,6 +2038,8 @@ struct FPSportsRosterView_iPad: View {
             
             // Right side - Detail view
             if let shoot = viewModel.selectedShoot {
+                GeometryReader { detailGeo in
+                HStack(spacing: 0) {
                 ZStack {
                     // Main content
                     VStack(spacing: 0) {
@@ -2341,6 +2426,66 @@ struct FPSportsRosterView_iPad: View {
                     )
                 }
                 .customKeyboardOverlay()
+
+                // Filmstrip — landscape only
+                if isLandscapeSize {
+                    Rectangle().fill(Color(.separator)).frame(width: 1)
+                    CaptureFilmstripPanel(
+                        segments: filmstripSegments,
+                        activeSubjectName: viewModel.subjects.first(where: { $0.id == viewModel.currentlyEditingEntry }).map { "\($0.firstName) \($0.lastName)".trimmingCharacters(in: .whitespaces) },
+                        onTapPhoto: { subjectId, name, thumbs in
+                            photoViewerSubjectId = subjectId
+                            photoViewerSubjectName = name
+                            photoViewerThumbs = thumbs
+                            showPhotoViewer = true
+                        },
+                        onMoveImage: { fromSubjectId, toSubjectId, imageNumber in
+                            // Send move request to Production via WebSocket
+                            fpSync.sendMoveCapture(
+                                imageNumber: imageNumber,
+                                fromSubjectId: fromSubjectId,
+                                toSubjectId: toSubjectId,
+                                fromRosterEntryId: fromSubjectId,
+                                toRosterEntryId: toSubjectId
+                            )
+                            // Move thumbnail locally for instant UI update
+                            if var fromThumbs = subjectThumbnails[fromSubjectId] {
+                                if let idx = fromThumbs.firstIndex(where: { $0.imageNumber == imageNumber }) {
+                                    let moved = fromThumbs.remove(at: idx)
+                                    subjectThumbnails[fromSubjectId] = fromThumbs.isEmpty ? nil : fromThumbs
+                                    var toThumbs = subjectThumbnails[toSubjectId] ?? []
+                                    toThumbs.append(moved)
+                                    subjectThumbnails[toSubjectId] = toThumbs
+                                }
+                            }
+                            // Start 5-second timeout for confirmation
+                            pendingMoveTimer?.cancel()
+                            let timer = DispatchWorkItem {
+                                if moveConfirmationMessage == nil {
+                                    moveConfirmationMessage = "Move failed — no confirmation from Surface Pro"
+                                    moveConfirmationIsError = true
+                                    let generator = UINotificationFeedbackGenerator()
+                                    generator.notificationOccurred(.error)
+                                }
+                            }
+                            pendingMoveTimer = timer
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timer)
+                        }
+                    )
+                    .transition(.move(edge: .trailing))
+                }
+                } // HStack
+                .onChange(of: detailGeo.size) { newSize in
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        let screen = UIScreen.main.bounds
+                        isLandscapeSize = screen.width > screen.height
+                    }
+                }
+                .onAppear {
+                    let screen = UIScreen.main.bounds
+                    isLandscapeSize = screen.width > screen.height
+                }
+                } // GeometryReader
                 // Hide original navigation toolbar
                 .navigationBarHidden(true)
                 .onAppear {
@@ -3404,22 +3549,13 @@ struct FPSportsRosterView_iPad: View {
 
             // Action bar
             HStack(spacing: 10) {
-                    // Auto-select toggle
-                    if fpSync.isConnected {
-                        Button(action: { withAnimation { autoSelectEnabled.toggle() } }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: autoSelectEnabled ? "camera.viewfinder" : "eye")
-                                    .font(.system(size: 13))
-                                Text(autoSelectEnabled ? "Auto" : "Browse")
-                                    .font(.system(size: 13, weight: .medium))
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(autoSelectEnabled ? Color.blue.opacity(0.15) : Color(.systemGray5))
-                            .foregroundColor(autoSelectEnabled ? .blue : .secondary)
-                            .cornerRadius(8)
-                        }
+                    // Capture settings
+                    Button(action: { showCaptureSettings = true }) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 16))
+                            .foregroundColor(.secondary)
                     }
+                    .frame(width: 44, height: 44)
 
                     Spacer()
 
@@ -4914,7 +5050,14 @@ struct FPSportsRosterView_iPad: View {
                                 // Haptic feedback on save
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
-                                // Save to PowerSync (writes to local SQLite, auto-syncs to Supabase)
+                                // When connected to Surface, send via WebSocket and skip PowerSync write.
+                                // Surface writes to Supabase — avoids CRUD queue buildup on iPad.
+                                if fpSync.isConnected {
+                                    fpSync.sendSubjectFullUpdate(updatedEntry)
+                                    return
+                                }
+
+                                // Standalone (no Surface connected) — write through PowerSync as normal
                                 Task {
                                     var retries = 0
                                     while retries < 3 {

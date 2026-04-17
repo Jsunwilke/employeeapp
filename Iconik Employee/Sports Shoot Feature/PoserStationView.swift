@@ -24,7 +24,8 @@ struct PoserStationView: View {
     @State private var selectedSubjectId: UUID?
     @State private var activeSubjectId: String?
     @State private var scrollTargetId: UUID?
-    @State private var autoSelectEnabled: Bool = false  // Toggle: tap auto-selects on Surface
+    @AppStorage("captureAutoSelect") private var autoSelectEnabled: Bool = false  // Toggle: tap auto-selects on Surface
+    @AppStorage("capturePreviewEnabled") private var previewEnabled: Bool = true  // Toggle: show capture preview popup
 
     // Photo tracking (WebSocket thumbnails — same pipeline as sports)
     @State private var subjectThumbnails: [String: [CaptureThumb]] = [:]
@@ -36,6 +37,10 @@ struct PoserStationView: View {
     @State private var photoViewerSubjectName = ""
     @State private var photoViewerSubjectId = ""
     @State private var photoViewerThumbs: [CaptureThumb] = []
+
+    // Capture preview popup (auto-dismiss after 3s)
+    @State private var previewImage: UIImage?
+    @State private var previewDismissTimer: DispatchWorkItem?
 
     // Move photo to another subject
     @State private var showMoveImagePicker = false
@@ -50,6 +55,10 @@ struct PoserStationView: View {
 
     // Layout
     @State private var detailPanelVisible = true
+    @State private var isLandscape = false
+
+    // Settings
+    @State private var showCaptureSettings = false
 
     // Add subject
     @State private var showingAddSubject = false
@@ -200,9 +209,28 @@ struct PoserStationView: View {
         namedFilteredSubjects.filter { $0.isPhotographed || (photoCountMap[$0.id.uuidString.lowercased()] ?? 0) > 0 }.count
     }
 
+    // MARK: - Filmstrip Segments
+
+    var filmstripSegments: [FilmstripSegment] {
+        subjectThumbnails
+            .filter { !$0.value.isEmpty }
+            .map { (sid, thumbs) in
+                let subject = subjects.first { $0.id.uuidString.lowercased() == sid }
+                let name = subject.map { "\($0.firstName) \($0.lastName)".trimmingCharacters(in: .whitespaces) } ?? "Unknown"
+                return FilmstripSegment(
+                    id: sid,
+                    subjectName: name.isEmpty ? "Unnamed" : name,
+                    photoCount: thumbs.count,
+                    thumbnails: thumbs
+                )
+            }
+            .sorted { ($0.thumbnails.last?.imageNumber ?? 0) > ($1.thumbnails.last?.imageNumber ?? 0) }
+    }
+
     // MARK: - Body
 
     var body: some View {
+        GeometryReader { geo in
         VStack(spacing: 0) {
             headerBar
             filterBar
@@ -234,7 +262,7 @@ struct PoserStationView: View {
                                 showPhotoViewer = true
                             }
                         )
-                        .frame(width: 360)
+                        .frame(width: isLandscape ? 320 : 360)
                     } else if detailPanelVisible {
                         VStack(spacing: 12) {
                             Image(systemName: "person.crop.rectangle")
@@ -245,12 +273,71 @@ struct PoserStationView: View {
                                 .foregroundColor(.secondary)
                         }
                         .frame(maxHeight: .infinity)
-                        .frame(width: 360)
+                        .frame(width: isLandscape ? 320 : 360)
                         .background(Color(.secondarySystemBackground))
+                    }
+
+                    // Filmstrip — landscape only
+                    if isLandscape {
+                        Rectangle().fill(Color(.separator)).frame(width: 1)
+                        CaptureFilmstripPanel(
+                            segments: filmstripSegments,
+                            activeSubjectName: selectedSubject.map { "\($0.firstName) \($0.lastName)".trimmingCharacters(in: .whitespaces) },
+                            onTapPhoto: { subjectId, name, thumbs in
+                                photoViewerSubjectId = subjectId
+                                photoViewerSubjectName = name
+                                photoViewerThumbs = thumbs
+                                showPhotoViewer = true
+                            },
+                            onMoveImage: { fromSubjectId, toSubjectId, imageNumber in
+                                // Send move request to Production via WebSocket
+                                fpSync.sendMoveCapture(
+                                    imageNumber: imageNumber,
+                                    fromSubjectId: fromSubjectId,
+                                    toSubjectId: toSubjectId,
+                                    fromRosterEntryId: fromSubjectId,
+                                    toRosterEntryId: toSubjectId
+                                )
+                                // Move thumbnail locally for instant UI update
+                                if var fromThumbs = subjectThumbnails[fromSubjectId] {
+                                    if let idx = fromThumbs.firstIndex(where: { $0.imageNumber == imageNumber }) {
+                                        let moved = fromThumbs.remove(at: idx)
+                                        subjectThumbnails[fromSubjectId] = fromThumbs.isEmpty ? nil : fromThumbs
+                                        var toThumbs = subjectThumbnails[toSubjectId] ?? []
+                                        toThumbs.append(moved)
+                                        subjectThumbnails[toSubjectId] = toThumbs
+                                    }
+                                }
+                                // Start 5-second timeout for confirmation
+                                pendingMoveTimer?.cancel()
+                                let timer = DispatchWorkItem {
+                                    if moveConfirmationMessage == nil {
+                                        moveConfirmationMessage = "Move failed — no confirmation from Surface Pro"
+                                        moveConfirmationIsError = true
+                                        let generator = UINotificationFeedbackGenerator()
+                                        generator.notificationOccurred(.error)
+                                    }
+                                }
+                                pendingMoveTimer = timer
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timer)
+                            }
+                        )
+                        .transition(.move(edge: .trailing))
                     }
                 }
             }
         }
+        .onChange(of: geo.size) { newSize in
+            withAnimation(.easeInOut(duration: 0.25)) {
+                let screen = UIScreen.main.bounds
+                isLandscape = screen.width > screen.height
+            }
+        }
+        .onAppear {
+            let screen = UIScreen.main.bounds
+            isLandscape = screen.width > screen.height
+        }
+        } // GeometryReader
         .navigationTitle("")
         .navigationBarHidden(true)
         .task {
@@ -261,6 +348,7 @@ struct PoserStationView: View {
         }
         .onDisappear { subjectWatchTask?.cancel() }
         .sheet(isPresented: $showingSyncSheet) { syncSheet }
+        .sheet(isPresented: $showCaptureSettings) { captureSettingsSheet }
         .sheet(isPresented: $showingAddSubject) { addSubjectSheet }
         .sheet(isPresented: $showingUSCardQRScan) { usCardQRSheet }
         .sheet(isPresented: $showingUSCardDocScan) { usCardDocScanSheet }
@@ -294,6 +382,27 @@ struct PoserStationView: View {
                     showMoveImagePicker = true
                 } : nil
             )
+        }
+        .overlay {
+            // Capture preview popup — shows non-card photos for 3 seconds
+            if let img = previewImage {
+                Color.black.opacity(0.6)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        previewDismissTimer?.cancel()
+                        withAnimation(.easeInOut(duration: 0.2)) { previewImage = nil }
+                    }
+                    .overlay {
+                        Image(uiImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .shadow(radius: 20)
+                            .padding(40)
+                            .transition(.opacity)
+                    }
+                    .transition(.opacity)
+            }
         }
         .sheet(isPresented: $showMoveImagePicker) {
             NavigationView {
@@ -406,14 +515,26 @@ struct PoserStationView: View {
                 }
                 .frame(width: 44, height: 44)
 
-                // Auto-select toggle: blue = taps select on camera, gray = browse only
-                if fpSync.isConnected {
-                    Button(action: { withAnimation { autoSelectEnabled.toggle() } }) {
-                        Image(systemName: "camera.viewfinder")
-                            .font(.title3)
-                            .foregroundColor(autoSelectEnabled ? .blue : .secondary)
+                // Capture settings
+                Button(action: { showCaptureSettings = true }) {
+                    Image(systemName: "gearshape")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                }
+                .frame(width: 44, height: 44)
+
+                // Paired station battery level
+                if let pairedId = fpSync.pairedCameraId,
+                   let pairedDevice = fpSync.devices.first(where: { $0.id == pairedId }),
+                   let level = pairedDevice.batteryLevel {
+                    HStack(spacing: 2) {
+                        Image(systemName: batteryIconName(level: level, charging: pairedDevice.batteryCharging ?? false))
+                            .font(.system(size: 12))
+                            .foregroundColor(batteryColor(level: level))
+                        Text("\(level)%")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(batteryColor(level: level))
                     }
-                    .frame(width: 44, height: 44)
                 }
 
                 Button(action: { showingSyncSheet = true }) {
@@ -473,7 +594,7 @@ struct PoserStationView: View {
                 }
                 .popover(isPresented: $showFilterPopover) {
                     filterPopoverContent
-                        .frame(width: 300, height: 400)
+                        .frame(width: 320, height: 600)
                 }
 
                 // Sort
@@ -788,45 +909,23 @@ struct PoserStationView: View {
         NavigationView {
             List {
                 ForEach(availableFilterFields, id: \.key) { field in
-                    let values = uniqueValues(for: field.key)
-                    let counts = valueCounts(for: field.key)
                     let selected = activeFilters[field.key] ?? []
-
-                    Section(header: HStack {
-                        Text(field.label)
-                        Spacer()
-                        Button(selected.count == values.count ? "None" : "All") {
-                            if selected.count == values.count {
-                                activeFilters.removeValue(forKey: field.key)
+                    let valueCount = uniqueValues(for: field.key).count
+                    NavigationLink {
+                        filterFieldDetail(field: field)
+                    } label: {
+                        HStack {
+                            Text(field.label)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            if !selected.isEmpty {
+                                Text("\(selected.count) of \(valueCount)")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
                             } else {
-                                activeFilters[field.key] = Set(values)
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundColor(.blue)
-                    }) {
-                        ForEach(values, id: \.self) { value in
-                            Button(action: {
-                                var current = activeFilters[field.key] ?? []
-                                if current.contains(value) {
-                                    current.remove(value)
-                                    if current.isEmpty { activeFilters.removeValue(forKey: field.key) }
-                                    else { activeFilters[field.key] = current }
-                                } else {
-                                    current.insert(value)
-                                    activeFilters[field.key] = current
-                                }
-                            }) {
-                                HStack {
-                                    Image(systemName: selected.contains(value) ? "checkmark.square.fill" : "square")
-                                        .foregroundColor(selected.contains(value) ? .blue : .secondary)
-                                    Text(value)
-                                        .foregroundColor(.primary)
-                                    Spacer()
-                                    Text("\(counts[value] ?? 0)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
+                                Text("\(valueCount)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                         }
                     }
@@ -845,6 +944,53 @@ struct PoserStationView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { showFilterPopover = false }
                         .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    private func filterFieldDetail(field: (key: String, label: String)) -> some View {
+        let values = uniqueValues(for: field.key)
+        let counts = valueCounts(for: field.key)
+        let selected = activeFilters[field.key] ?? []
+
+        return List {
+            ForEach(values, id: \.self) { value in
+                Button(action: {
+                    var current = activeFilters[field.key] ?? []
+                    if current.contains(value) {
+                        current.remove(value)
+                        if current.isEmpty { activeFilters.removeValue(forKey: field.key) }
+                        else { activeFilters[field.key] = current }
+                    } else {
+                        current.insert(value)
+                        activeFilters[field.key] = current
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: selected.contains(value) ? "checkmark.square.fill" : "square")
+                            .foregroundColor(selected.contains(value) ? .blue : .secondary)
+                        Text(value)
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Text("\(counts[value] ?? 0)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(field.label)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(selected.count == values.count ? "None" : "All") {
+                    if selected.count == values.count {
+                        activeFilters.removeValue(forKey: field.key)
+                    } else {
+                        activeFilters[field.key] = Set(values)
+                    }
                 }
             }
         }
@@ -877,11 +1023,23 @@ struct PoserStationView: View {
     }
 
     private func saveSubject(_ updated: FPSubject) {
+        // When connected to a Surface, skip the PowerSync write.
+        // The Surface receives the full edit via WebSocket and handles Supabase.
+        // Avoids CRUD queue buildup that blocks gallery loads the next morning.
+        if fpSync.isConnected {
+            // Update in-memory list so the UI reflects the change immediately
+            if let idx = subjects.firstIndex(where: { $0.id == updated.id }) {
+                subjects[idx] = updated
+            }
+            fpSync.sendSubjectFullUpdate(updated)
+            return
+        }
+
+        // Standalone (no Surface connected) — write through PowerSync as normal
         Task {
             do {
                 try await powerSync.saveSubject(updated)
-                let sid = updated.id.uuidString.lowercased()
-                fpSync.sendSubjectUpdated(subjectId: sid, rosterEntryId: sid, firstName: updated.firstName, lastName: updated.lastName, rosterId: updated.rosterId)
+                fpSync.sendSubjectFullUpdate(updated)
             } catch { print("Save subject failed: \(error)") }
         }
     }
@@ -982,6 +1140,7 @@ struct PoserStationView: View {
                 }
 
                 // Append thumbnail
+                let existingCount = subjectThumbnails[subjectId]?.count ?? 0
                 var thumbs = subjectThumbnails[subjectId] ?? []
                 thumbs.append(CaptureThumb(image: image, imageNumber: imgNum))
                 if thumbs.count > 20 { thumbs = Array(thumbs.suffix(20)) }
@@ -989,6 +1148,20 @@ struct PoserStationView: View {
 
                 // Save to disk cache
                 ThumbnailCache.shared.save(shootId: galleryId, subjectId: subjectId, imageNumber: imgNum, image: image)
+
+                // Show capture preview popup for non-card photos.
+                // Card photo = first photo for a subject on a non-sports shoot.
+                let isSports = gallery.shootType == "sports"
+                let isCardPhoto = existingCount == 0 && !isSports
+                if !isCardPhoto && previewEnabled {
+                    previewDismissTimer?.cancel()
+                    withAnimation(.easeInOut(duration: 0.2)) { previewImage = image }
+                    let timer = DispatchWorkItem {
+                        withAnimation(.easeInOut(duration: 0.3)) { previewImage = nil }
+                    }
+                    previewDismissTimer = timer
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timer)
+                }
             }
         }
 
@@ -1247,6 +1420,36 @@ struct PoserStationView: View {
         }
     }
 
+    // MARK: - Capture Settings Sheet
+
+    private var captureSettingsSheet: some View {
+        NavigationView {
+            List {
+                Section(header: Text("Capture")) {
+                    Toggle("Auto-select on camera", isOn: $autoSelectEnabled)
+                    Text("When enabled, tapping a subject on iPad selects them on the Surface Pro camera")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Section(header: Text("Display")) {
+                    Toggle("Show capture preview", isOn: $previewEnabled)
+                    Text("Briefly shows each photo full-screen when it arrives from the camera")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Capture Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showCaptureSettings = false }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
     // MARK: - Add Subject Sheet
 
     private var addSubjectSheet: some View {
@@ -1260,6 +1463,22 @@ struct PoserStationView: View {
                 } catch { print("Add subject failed: \(error)") }
             }
         }
+    }
+
+    // MARK: - Battery Helpers
+
+    private func batteryIconName(level: Int, charging: Bool) -> String {
+        if charging { return "battery.100.bolt" }
+        if level > 75 { return "battery.100" }
+        if level > 50 { return "battery.75" }
+        if level > 25 { return "battery.25" }
+        return "battery.0"
+    }
+
+    private func batteryColor(level: Int) -> Color {
+        if level <= 15 { return .red }
+        if level <= 30 { return .orange }
+        return .green
     }
 }
 
