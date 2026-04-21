@@ -232,24 +232,39 @@ struct FPSportsBatchAddView: View {
             var failedIndices: [Int] = []
             for (index, subject) in subjects.enumerated() {
                 var saved = false
-                for attempt in 1...3 {
-                    do {
-                        try await powerSync.saveSubject(subject)
-                        saved = true
-                        // Broadcast to Surface Pro via WebSocket
-                        FocalPointSyncClient.shared.broadcastSubjectCreated(
-                            rosterEntryId: subject.id.uuidString.lowercased(),
-                            firstName: subject.firstName,
-                            lastName: subject.lastName,
-                            rosterId: subject.rosterId,
-                            grade: subject.grade,
-                            groupName: subject.sport
-                        )
-                        break
-                    } catch {
-                        print("[FPSportsBatchAdd] Insert failed for roster ID \(subject.rosterId), attempt \(attempt): \(error)")
-                        if attempt < 3 {
-                            try? await Task.sleep(nanoseconds: UInt64(500_000_000 * attempt))
+                // When connected to a Surface, skip the PowerSync write and
+                // send via WebSocket. Surface is the authoritative writer.
+                if FocalPointSyncClient.shared.isConnected {
+                    FocalPointSyncClient.shared.broadcastSubjectCreated(
+                        rosterEntryId: subject.id.uuidString.lowercased(),
+                        firstName: subject.firstName,
+                        lastName: subject.lastName,
+                        rosterId: subject.rosterId,
+                        grade: subject.grade,
+                        groupName: subject.sport
+                    )
+                    FocalPointSyncClient.shared.sendSubjectFullUpdate(subject)
+                    saved = true
+                } else {
+                    // Standalone — write via PowerSync as fallback, with retry.
+                    for attempt in 1...3 {
+                        do {
+                            try await powerSync.saveSubject(subject)
+                            saved = true
+                            FocalPointSyncClient.shared.broadcastSubjectCreated(
+                                rosterEntryId: subject.id.uuidString.lowercased(),
+                                firstName: subject.firstName,
+                                lastName: subject.lastName,
+                                rosterId: subject.rosterId,
+                                grade: subject.grade,
+                                groupName: subject.sport
+                            )
+                            break
+                        } catch {
+                            print("[FPSportsBatchAdd] Insert failed for roster ID \(subject.rosterId), attempt \(attempt): \(error)")
+                            if attempt < 3 {
+                                try? await Task.sleep(nanoseconds: UInt64(500_000_000 * attempt))
+                            }
                         }
                     }
                 }

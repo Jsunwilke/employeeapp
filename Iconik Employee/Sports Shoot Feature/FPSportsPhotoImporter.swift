@@ -201,10 +201,26 @@ struct FPSportsPhotoImporter: View {
         Task {
             var saved = 0
             for subject in extractedSubjects {
+                // When connected to a Surface, skip the PowerSync write and
+                // let Surface handle Supabase. Prevents iPad from racing the
+                // Surface and clobbering Surface edits with stale values.
+                if FocalPointSyncClient.shared.isConnected {
+                    FocalPointSyncClient.shared.broadcastSubjectCreated(
+                        rosterEntryId: subject.id.uuidString.lowercased(),
+                        firstName: subject.firstName,
+                        lastName: subject.lastName,
+                        rosterId: subject.rosterId,
+                        grade: subject.grade,
+                        groupName: subject.sport
+                    )
+                    FocalPointSyncClient.shared.sendSubjectFullUpdate(subject)
+                    saved += 1
+                    continue
+                }
+                // Standalone — write via PowerSync as fallback.
                 do {
                     try await powerSync.saveSubject(subject)
                     saved += 1
-                    // Broadcast to Surface Pro via WebSocket
                     FocalPointSyncClient.shared.broadcastSubjectCreated(
                         rosterEntryId: subject.id.uuidString.lowercased(),
                         firstName: subject.firstName,

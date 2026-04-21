@@ -304,6 +304,33 @@ struct FPSportsAddSubjectView: View {
         )
 
         isLoading = true
+
+        // When connected to a Surface, skip the PowerSync write and send the
+        // edit via WebSocket. Surface is the authoritative writer — iPad
+        // writing directly creates races that have clobbered Surface-typed
+        // names with stale iPad values (see 2026-04-21 "Serenity Braun" bug).
+        if FocalPointSyncClient.shared.isConnected {
+            if !isEditing {
+                FocalPointSyncClient.shared.broadcastSubjectCreated(
+                    rosterEntryId: subject.id.uuidString.lowercased(),
+                    firstName: subject.firstName,
+                    lastName: subject.lastName,
+                    rosterId: subject.rosterId,
+                    grade: subject.grade,
+                    groupName: subject.sport
+                )
+            }
+            // Always follow with a full-field update so fields the
+            // broadcastSubjectCreated message doesn't include (teacher,
+            // jersey, sport, position, email, phone, notes, image_numbers)
+            // land on the Surface too.
+            FocalPointSyncClient.shared.sendSubjectFullUpdate(subject)
+            onComplete(true)
+            presentationMode.wrappedValue.dismiss()
+            return
+        }
+
+        // Standalone (no Surface reachable) — write via PowerSync as fallback.
         Task {
             var lastError: Error?
             for attempt in 1...3 {
