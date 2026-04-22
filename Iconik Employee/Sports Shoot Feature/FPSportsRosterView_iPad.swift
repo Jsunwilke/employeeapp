@@ -607,77 +607,8 @@ struct FPSportsRosterView_iPad: View {
         saveEntryWithRetry(entry)
     }
 
-    private func formatImageNumberRanges(_ numbers: [Int]) -> String {
-        guard !numbers.isEmpty else { return "" }
-        let sorted = numbers.sorted()
-        var ranges: [(Int, Int)] = []
-        var start = sorted[0], end = sorted[0]
-
-        for i in 1..<sorted.count {
-            if sorted[i] == end + 1 {
-                end = sorted[i]
-            } else {
-                ranges.append((start, end))
-                start = sorted[i]
-                end = sorted[i]
-            }
-        }
-        ranges.append((start, end))
-
-        return ranges.map { (s, e) in
-            if s == e {
-                return "\(s)"
-            } else {
-                // Abbreviate end but keep at least 2 digits: 5645-46, not 5645-6
-                let startStr = "\(s)"
-                let endStr = "\(e)"
-                // Find how many leading digits are shared
-                let shared = zip(startStr, endStr).prefix(while: { $0 == $1 }).count
-                let suffix = String(endStr.dropFirst(shared))
-                // Keep at least 2 digits in the suffix for clarity
-                if suffix.count >= 2 && shared > 0 {
-                    return "\(s)-\(suffix)"
-                } else if suffix.count == 1 && shared > 0 && endStr.count >= 2 {
-                    // Only 1 digit abbreviated — show last 2 digits instead
-                    let twoDigitSuffix = String(endStr.suffix(2))
-                    return "\(s)-\(twoDigitSuffix)"
-                }
-                return "\(s)-\(e)"
-            }
-        }.joined(separator: ";")
-    }
-
-    /// Parse image numbers field into array of ints (handles "1456-58, 1462" format)
-    private func parseImageNumbers(_ field: String) -> [Int] {
-        var numbers: [Int] = []
-        let parts = field.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
-        for part in parts {
-            if part.contains("-") {
-                let rangeParts = part.split(separator: "-").map { String($0).trimmingCharacters(in: .whitespaces) }
-                if rangeParts.count == 2, let start = Int(rangeParts[0]) {
-                    let endStr = rangeParts[1]
-                    if let end = Int(endStr) {
-                        if end > start {
-                            // Full range: 1456-1458
-                            for n in start...end { numbers.append(n) }
-                        } else {
-                            // Abbreviated: 1456-58 → 1456-1458
-                            let startStr = "\(start)"
-                            let prefix = String(startStr.prefix(startStr.count - endStr.count))
-                            if let fullEnd = Int(prefix + endStr), fullEnd > start {
-                                for n in start...fullEnd { numbers.append(n) }
-                            } else {
-                                numbers.append(start)
-                            }
-                        }
-                    }
-                }
-            } else if let n = Int(part) {
-                numbers.append(n)
-            }
-        }
-        return numbers
-    }
+    // formatImageNumberRanges + parseImageNumbers moved to ImageNumberFormatting.swift
+    // (parseImageNumberRanges replaces parseImageNumbers — same behavior).
 
     private func setupFPSyncCallbacks() {
         // Capture completed — auto-fill image numbers
@@ -724,7 +655,7 @@ struct FPSportsRosterView_iPad: View {
             let entryId = viewModel.subjects[idx].id
 
             var entry = viewModel.subjects[idx]
-            var numbers = parseImageNumbers(entry.imageNumbers)
+            var numbers = parseImageNumberRanges(entry.imageNumbers)
             if !numbers.contains(imageNumber) {
                 numbers.append(imageNumber)
             }
@@ -1286,7 +1217,7 @@ struct FPSportsRosterView_iPad: View {
             // Subject found — apply the image number
             let entryId = viewModel.subjects[idx].id
             var entry = viewModel.subjects[idx]
-            var numbers = parseImageNumbers(entry.imageNumbers)
+            var numbers = parseImageNumberRanges(entry.imageNumbers)
             if !numbers.contains(imageNumber) {
                 numbers.append(imageNumber)
             }

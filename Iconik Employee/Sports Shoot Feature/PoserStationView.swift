@@ -31,6 +31,13 @@ struct PoserStationView: View {
     @State private var subjectThumbnails: [String: [CaptureThumb]] = [:]
     @State private var pendingImageNumbers: [String: [Int]] = [:]
     @State private var photoCountMap: [String: Int] = [:]
+    // Per-subject debounce for capture-driven saves. Image numbers append
+    // to the in-memory subject immediately on every onCaptureCompleted (no
+    // capture lost). The PowerSync write + WebSocket broadcast is batched
+    // per-subject — 500ms after the last capture for that subject, ONE
+    // save fires carrying ALL accumulated image numbers. This is what
+    // makes burst-firing safe.
+    @State private var pendingCaptureSaves: [UUID: Task<Void, Never>] = [:]
 
     // Photo viewer
     @State private var showPhotoViewer = false
@@ -88,6 +95,7 @@ struct PoserStationView: View {
     @State private var showingSyncSheet = false
 
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
+    @Environment(\.scenePhase) private var scenePhase
 
     // MARK: - Computed
 
@@ -358,7 +366,31 @@ struct PoserStationView: View {
             startWatching()
             setupSyncCallbacks()
         }
-        .onDisappear { subjectWatchTask?.cancel() }
+        .onDisappear {
+            subjectWatchTask?.cancel()
+            // Flush any pending capture-driven saves so burst-shoot-then-
+            // leave doesn't lose the trailing image numbers.
+            for (entryId, task) in pendingCaptureSaves {
+                task.cancel()
+                if let latest = subjects.first(where: { $0.id == entryId }) {
+                    saveSubject(latest)
+                }
+            }
+            pendingCaptureSaves.removeAll()
+        }
+        .onChange(of: scenePhase) { newPhase in
+            // Same flush on app backgrounding (home button, lock, switcher).
+            // iOS may suspend the debounce Task before it fires.
+            if newPhase != .active {
+                for (entryId, task) in pendingCaptureSaves {
+                    task.cancel()
+                    if let latest = subjects.first(where: { $0.id == entryId }) {
+                        saveSubject(latest)
+                    }
+                }
+                pendingCaptureSaves.removeAll()
+            }
+        }
         .sheet(isPresented: $showingSyncSheet) { syncSheet }
         .sheet(isPresented: $showCaptureSettings) { captureSettingsSheet }
         .sheet(isPresented: $showingAddSubject) { addSubjectSheet }
@@ -1063,6 +1095,22 @@ struct PoserStationView: View {
         fpSync.selectSubject(subjectId: sid, rosterEntryId: nil, subjectName: "\(subject.firstName) \(subject.lastName)")
     }
 
+    /// Schedule a per-subject debounced save for capture-driven imageNumbers
+    /// updates. Cancels any in-flight task for the same subject; the latest
+    /// in-memory state is what eventually saves. Burst captures all share
+    /// the same trailing save.
+    private func scheduleCaptureSave(for entryId: UUID) {
+        pendingCaptureSaves[entryId]?.cancel()
+        pendingCaptureSaves[entryId] = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+            if Task.isCancelled { return }
+            if let latest = subjects.first(where: { $0.id == entryId }) {
+                saveSubject(latest)
+            }
+            pendingCaptureSaves[entryId] = nil
+        }
+    }
+
     private func saveSubject(_ updated: FPSubject) {
         // Update in-memory list immediately so the UI reflects the change.
         if let idx = subjects.firstIndex(where: { $0.id == updated.id }) {
@@ -1107,65 +1155,6 @@ struct PoserStationView: View {
                 photoCountMap[sid] = thumbs.count
             }
         }
-    }
-
-    // MARK: - Image number helpers (sports)
-    // Ported verbatim from FPSportsRosterView_iPad so the formatting matches
-    // (e.g., "1456-58;1462" for ranges with abbreviated end). Mirror — keep
-    // in sync with that file's implementation.
-
-    private func formatImageNumberRanges(_ numbers: [Int]) -> String {
-        guard !numbers.isEmpty else { return "" }
-        let sorted = numbers.sorted()
-        var ranges: [(Int, Int)] = []
-        var start = sorted[0], end = sorted[0]
-        for i in 1..<sorted.count {
-            if sorted[i] == end + 1 { end = sorted[i] }
-            else { ranges.append((start, end)); start = sorted[i]; end = sorted[i] }
-        }
-        ranges.append((start, end))
-        return ranges.map { (s, e) in
-            if s == e { return "\(s)" }
-            let startStr = "\(s)"
-            let endStr = "\(e)"
-            let shared = zip(startStr, endStr).prefix(while: { $0 == $1 }).count
-            let suffix = String(endStr.dropFirst(shared))
-            if suffix.count >= 2 && shared > 0 { return "\(s)-\(suffix)" }
-            if suffix.count == 1 && shared > 0 && endStr.count >= 2 {
-                return "\(s)-\(String(endStr.suffix(2)))"
-            }
-            return "\(s)-\(e)"
-        }.joined(separator: ";")
-    }
-
-    private func parseImageNumbers(_ field: String) -> [Int] {
-        var numbers: [Int] = []
-        let parts = field.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
-        for part in parts {
-            if part.contains("-") {
-                let rangeParts = part.split(separator: "-").map { String($0).trimmingCharacters(in: .whitespaces) }
-                if rangeParts.count == 2, let start = Int(rangeParts[0]) {
-                    let endStr = rangeParts[1]
-                    if let end = Int(endStr) {
-                        if end > start {
-                            for n in start...end { numbers.append(n) }
-                        } else {
-                            // Abbreviated: 1456-58 → 1456-1458
-                            let startStr = "\(start)"
-                            let prefix = String(startStr.prefix(startStr.count - endStr.count))
-                            if let fullEnd = Int(prefix + endStr), fullEnd > start {
-                                for n in start...fullEnd { numbers.append(n) }
-                            } else {
-                                numbers.append(start)
-                            }
-                        }
-                    }
-                }
-            } else if let n = Int(part) {
-                numbers.append(n)
-            }
-        }
-        return numbers
     }
 
     private func startWatching() {
@@ -1215,21 +1204,21 @@ struct PoserStationView: View {
                     pending.append(imgNum)
                     pendingImageNumbers[sid] = pending
 
-                    // Sports: also append the image number to the subject's
-                    // imageNumbers field so it shows in the detail panel's
-                    // big box and persists. Mirrors FP Sports view behavior.
+                    // Sports: append the image number to the subject's
+                    // imageNumbers field IMMEDIATELY (in-memory) so no
+                    // capture is ever lost. The save (PowerSync write +
+                    // WebSocket broadcast) is debounced per-subject so
+                    // burst-firing doesn't spam the CRUD queue.
                     if gallery.shootType == "sports",
                        let idx = subjects.firstIndex(where: { $0.id.uuidString.lowercased() == sid.lowercased() }) {
                         var entry = subjects[idx]
-                        var nums = parseImageNumbers(entry.imageNumbers)
+                        var nums = parseImageNumberRanges(entry.imageNumbers)
                         if !nums.contains(imgNum) {
                             nums.append(imgNum)
                             entry.imageNumbers = formatImageNumberRanges(nums)
                             entry.updatedAt = Date()
                             subjects[idx] = entry
-                            // Save through the normal path (debounced + writes
-                            // PowerSync + broadcasts to Surface).
-                            saveSubject(entry)
+                            scheduleCaptureSave(for: entry.id)
                         }
                     }
                 }
