@@ -1014,6 +1014,28 @@ class FocalPointSyncClient: ObservableObject {
             let firstName = String((msg["first_name"] as? String ?? "").prefix(200))
             let lastName = String((msg["last_name"] as? String ?? "").prefix(200))
             let rosterId = String((msg["roster_id"] as? String ?? "").prefix(50))
+            // Phase C of the sync rewrite — emit a structured 'received' event
+            // for every inbound subject_updated when the v2 flag is on. Pure
+            // observability; the existing onSubjectUpdated dispatch below is
+            // unchanged.
+            if isSubjectSyncV2Enabled() {
+                let senderId = (msg["device_id"] as? String) ?? "unknown"
+                let galleryId = msg["gallery_id"] as? String
+                var fieldsTouched: [String] = []
+                if msg["first_name"] != nil { fieldsTouched.append("first_name") }
+                if msg["last_name"] != nil  { fieldsTouched.append("last_name") }
+                if msg["roster_id"] != nil  { fieldsTouched.append("roster_id") }
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: senderId,
+                    deviceRole: "Surface",
+                    operation: .update,
+                    outcome: .received,
+                    sourcePath: "FocalPointSyncClient.subject_updated",
+                    subjectId: subjectId,
+                    galleryId: galleryId,
+                    fieldsTouched: fieldsTouched
+                ))
+            }
             onSubjectUpdated?(rosterEntryId, subjectId, firstName, lastName, rosterId)
 
         case "subject_state_summary":

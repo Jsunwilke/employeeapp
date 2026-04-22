@@ -903,6 +903,24 @@ class PowerSyncManager: ObservableObject {
         }
 
         print("PowerSyncManager: Saved subject \(idString)")
+
+        // Phase B/C of the sync rewrite — emit a structured event for every
+        // local subject save when the v2 flag is on. Pure observability; the
+        // SQLite write above is unchanged. Mirrors update_subject_bg's hook
+        // on the Mac side. See SYNC_REWRITE_OVERNIGHT_REPORT.md.
+        if isSubjectSyncV2Enabled() {
+            await MainActor.run {
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: UserDefaults.standard.string(forKey: "fp_sync_device_id") ?? "unknown",
+                    deviceRole: "iPad",
+                    operation: .update,
+                    outcome: .sent,
+                    sourcePath: "PowerSyncManager.saveSubject",
+                    subjectId: idString,
+                    galleryId: subject.galleryId
+                ))
+            }
+        }
     }
 
     /// Soft-delete a subject (matches Production's soft-delete pattern)
