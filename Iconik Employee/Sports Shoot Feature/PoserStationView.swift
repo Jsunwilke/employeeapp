@@ -940,7 +940,7 @@ struct PoserStationView: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundColor(.white)
                     .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color(.systemGray2))
+                    .background(sportsTeacherBadgeColor(subject.teacher))
                     .cornerRadius(4)
                     .padding(.top, 6)
                     .padding(.trailing, 8)

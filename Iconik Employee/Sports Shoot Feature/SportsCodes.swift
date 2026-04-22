@@ -14,6 +14,7 @@
 //
 
 import Foundation
+import SwiftUI
 
 /// Decode a sports "teacher" field code to its display label. Returns the
 /// input unchanged (case-preserved) when it's not a known code — schools
@@ -37,5 +38,17 @@ public func decodeSportsTeacherCodeShort(_ raw: String) -> String {
     case "s": return "Senior"
     case "8": return "8th"
     default: return raw
+    }
+}
+
+/// Color for the per-row teacher badge. Distinct per code so operators
+/// recognize the role at a glance without reading the label. Defaults to
+/// systemGray2 for real teacher names.
+public func sportsTeacherBadgeColor(_ raw: String) -> Color {
+    switch raw.lowercased() {
+    case "c": return .purple   // Coach — authority/leadership
+    case "s": return .brown    // Senior — graduating, distinct from sport blue
+    case "8": return .teal     // 8th grader — fresh/underclass
+    default: return Color(.systemGray2)
     }
 }
