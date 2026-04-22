@@ -253,6 +253,7 @@ struct PoserStationView: View {
                             thumbnails: subjectThumbnails[subject.id.uuidString.lowercased()] ?? [],
                             photoCount: photoCountMap[subject.id.uuidString.lowercased()] ?? 0,
                             galleryId: galleryId,
+                            isSports: gallery.shootType == "sports",
                             onSave: { updated in saveSubject(updated) },
                             onSelect: { selectOnCamera(subject) },
                             onViewPhotos: { name, thumbs in
@@ -755,6 +756,7 @@ struct PoserStationView: View {
         let hasPhotos = subject.isPhotographed || (photoCountMap[sid] ?? 0) > 0
         let latestThumb = subjectThumbnails[sid]?.last?.image
         let count = photoCountMap[sid] ?? 0
+        let isSports = gallery.shootType == "sports"
 
         HStack(spacing: 12) {
             if let thumb = latestThumb {
@@ -772,12 +774,31 @@ struct PoserStationView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(primaryDisplay(subject))
-                    .font(.system(size: 16, weight: .semibold))
-                let info = secondaryDisplay(subject)
-                if !info.isEmpty {
-                    Text(info).font(.caption).foregroundColor(.secondary)
+                if isSports {
+                    // Sports layout: roster_id + first + last on top line, sport on second.
+                    Text(sportsPrimaryLine(subject))
+                        .font(.system(size: 16, weight: .semibold))
+                    if !subject.sport.isEmpty {
+                        Text(subject.sport).font(.caption).foregroundColor(.secondary)
+                    }
+                } else {
+                    Text(primaryDisplay(subject))
+                        .font(.system(size: 16, weight: .semibold))
+                    let info = secondaryDisplay(subject)
+                    if !info.isEmpty {
+                        Text(info).font(.caption).foregroundColor(.secondary)
+                    }
                 }
+            }
+
+            // Sports grade badge (Coach / Senior / 8th Grader / etc.)
+            if isSports && !subject.grade.isEmpty {
+                Text(subject.grade.uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.indigo)
+                    .cornerRadius(6)
             }
 
             if subject.isAbsent {
@@ -793,7 +814,7 @@ struct PoserStationView: View {
 
             Spacer()
 
-            if !detailPanelVisible {
+            if !detailPanelVisible && !isSports {
                 if !subject.grade.isEmpty { Text(subject.grade).font(.caption).foregroundColor(.secondary) }
                 if !subject.teacher.isEmpty { Text(subject.teacher).font(.caption).foregroundColor(.secondary) }
             }
@@ -884,6 +905,15 @@ struct PoserStationView: View {
         case "roster_id": return subject.rosterId
         default: return ""
         }
+    }
+
+    /// Sports card primary line: "[123] First Last" or "First Last" if no roster id.
+    private func sportsPrimaryLine(_ subject: FPSubject) -> String {
+        let name = "\(subject.firstName) \(subject.lastName)".trimmingCharacters(in: .whitespaces)
+        if !subject.rosterId.isEmpty {
+            return "[\(subject.rosterId)] \(name)"
+        }
+        return name.isEmpty ? "(unnamed)" : name
     }
 
     private func primaryDisplay(_ subject: FPSubject) -> String {
@@ -1079,6 +1109,65 @@ struct PoserStationView: View {
         }
     }
 
+    // MARK: - Image number helpers (sports)
+    // Ported verbatim from FPSportsRosterView_iPad so the formatting matches
+    // (e.g., "1456-58;1462" for ranges with abbreviated end). Mirror — keep
+    // in sync with that file's implementation.
+
+    private func formatImageNumberRanges(_ numbers: [Int]) -> String {
+        guard !numbers.isEmpty else { return "" }
+        let sorted = numbers.sorted()
+        var ranges: [(Int, Int)] = []
+        var start = sorted[0], end = sorted[0]
+        for i in 1..<sorted.count {
+            if sorted[i] == end + 1 { end = sorted[i] }
+            else { ranges.append((start, end)); start = sorted[i]; end = sorted[i] }
+        }
+        ranges.append((start, end))
+        return ranges.map { (s, e) in
+            if s == e { return "\(s)" }
+            let startStr = "\(s)"
+            let endStr = "\(e)"
+            let shared = zip(startStr, endStr).prefix(while: { $0 == $1 }).count
+            let suffix = String(endStr.dropFirst(shared))
+            if suffix.count >= 2 && shared > 0 { return "\(s)-\(suffix)" }
+            if suffix.count == 1 && shared > 0 && endStr.count >= 2 {
+                return "\(s)-\(String(endStr.suffix(2)))"
+            }
+            return "\(s)-\(e)"
+        }.joined(separator: ";")
+    }
+
+    private func parseImageNumbers(_ field: String) -> [Int] {
+        var numbers: [Int] = []
+        let parts = field.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+        for part in parts {
+            if part.contains("-") {
+                let rangeParts = part.split(separator: "-").map { String($0).trimmingCharacters(in: .whitespaces) }
+                if rangeParts.count == 2, let start = Int(rangeParts[0]) {
+                    let endStr = rangeParts[1]
+                    if let end = Int(endStr) {
+                        if end > start {
+                            for n in start...end { numbers.append(n) }
+                        } else {
+                            // Abbreviated: 1456-58 → 1456-1458
+                            let startStr = "\(start)"
+                            let prefix = String(startStr.prefix(startStr.count - endStr.count))
+                            if let fullEnd = Int(prefix + endStr), fullEnd > start {
+                                for n in start...fullEnd { numbers.append(n) }
+                            } else {
+                                numbers.append(start)
+                            }
+                        }
+                    }
+                }
+            } else if let n = Int(part) {
+                numbers.append(n)
+            }
+        }
+        return numbers
+    }
+
     private func startWatching() {
         subjectWatchTask?.cancel()
         subjectWatchTask = Task {
@@ -1125,6 +1214,24 @@ struct PoserStationView: View {
                     var pending = pendingImageNumbers[sid] ?? []
                     pending.append(imgNum)
                     pendingImageNumbers[sid] = pending
+
+                    // Sports: also append the image number to the subject's
+                    // imageNumbers field so it shows in the detail panel's
+                    // big box and persists. Mirrors FP Sports view behavior.
+                    if gallery.shootType == "sports",
+                       let idx = subjects.firstIndex(where: { $0.id.uuidString.lowercased() == sid.lowercased() }) {
+                        var entry = subjects[idx]
+                        var nums = parseImageNumbers(entry.imageNumbers)
+                        if !nums.contains(imgNum) {
+                            nums.append(imgNum)
+                            entry.imageNumbers = formatImageNumberRanges(nums)
+                            entry.updatedAt = Date()
+                            subjects[idx] = entry
+                            // Save through the normal path (debounced + writes
+                            // PowerSync + broadcasts to Surface).
+                            saveSubject(entry)
+                        }
+                    }
                 }
                 confirmedSubjectId = nil
                 confirmedSubjectName = nil
@@ -1516,6 +1623,7 @@ struct SubjectDetailPanel: View {
     let thumbnails: [CaptureThumb]
     let photoCount: Int
     let galleryId: String
+    let isSports: Bool
     let onSave: (FPSubject) -> Void
     let onSelect: () -> Void
     let onViewPhotos: (String, [CaptureThumb]) -> Void
@@ -1557,6 +1665,28 @@ struct SubjectDetailPanel: View {
                             .font(.subheadline).fontWeight(.semibold)
                     }
                     .buttonStyle(.borderedProminent)
+                }
+
+                // Sports: large image-numbers box at the top, auto-fills as
+                // the Surface broadcasts capture_completed events for this
+                // subject. Manually editable too — same field as on the FP
+                // Sports view, just bigger and more prominent.
+                if isSports {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("IMAGE NUMBERS")
+                            .font(.caption).fontWeight(.bold).foregroundColor(.secondary).textCase(.uppercase)
+                        TextField("Image #s", text: binding(\.imageNumbers))
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                            .multilineTextAlignment(.center)
+                            .focused($focusedField, equals: "imageNumbers")
+                            .onChange(of: editing.imageNumbers) { _ in
+                                scheduleDebouncedSave()
+                            }
+                    }
+                    .padding(12)
+                    .background(Color.indigo.opacity(0.08))
+                    .cornerRadius(10)
                 }
 
                 // Thumbnail grid
