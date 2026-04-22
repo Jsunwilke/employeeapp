@@ -100,7 +100,8 @@ final class SubjectSyncService {
         }
 
         // ----- v2 path -----
-        // 1. Apply optimistic overlay so the UI sees the new values immediately.
+        // 1. Apply optimistic overlay so the UI sees the new values immediately,
+        //    independent of whether we write locally or only broadcast.
         SubjectSyncOverlay.shared.apply(
             subjectId: req.subjectId,
             fields: req.fields,
@@ -108,15 +109,18 @@ final class SubjectSyncService {
             source: .localEdit
         )
 
-        // 2. Local PowerSync write so the iPad's offline-first store is the
-        //    durable source of truth. The Surface mirrors via WebSocket and
-        //    also writes to Supabase authoritatively when connected.
-        //    NOTE: this is deliberately the SAME PowerSyncManager.saveSubject
-        //    path that legacy uses. v2 doesn't replace the writer; it adds
-        //    the overlay, ack-tracking, and structured eventing.
         let merged = SubjectSyncService.applyFieldsToSubject(req.fields, base: currentSubject)
-        do {
-            try await PowerSyncManager.shared.saveSubject(merged)
+
+        // 2. Routing decision. Single source of truth: SyncConnection state.
+        //    - Active (connected/degraded/reconnecting): Surface is the cloud
+        //      writer. Send via WebSocket only — skip local PowerSync write to
+        //      avoid the dual-sync race that clobbered Surface-typed names with
+        //      stale iPad values (see 2026-04-21 Serenity Braun bug). Cloud
+        //      round-trip via PowerSync brings the value back into iPad SQLite,
+        //      and reconcileLocalRow then clears the overlay.
+        //    - Terminal (disconnected/failed): standalone iPad. We MUST write
+        //      to PowerSync because there's no other path to durability.
+        if SyncConnection.shared.canDeliverEventually {
             FocalPointSyncClient.shared.sendSubjectFullUpdate(merged)
             SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                 deviceId: deviceId,
@@ -128,26 +132,52 @@ final class SubjectSyncService {
                 idempotencyKey: idempotencyKey,
                 fieldsTouched: fieldsTouched
             ))
-        } catch {
-            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
-                deviceId: deviceId,
-                operation: .update,
-                outcome: .failed,
-                sourcePath: req.sourcePath,
-                subjectId: req.subjectId,
-                galleryId: req.galleryId,
-                idempotencyKey: idempotencyKey,
-                fieldsTouched: fieldsTouched,
-                errorMessage: String(describing: error)
-            ))
+        } else {
+            do {
+                try await PowerSyncManager.shared.saveSubject(merged)
+                // Standalone — also try a best-effort broadcast in case the
+                // socket comes back up before the cloud round-trip completes.
+                FocalPointSyncClient.shared.sendSubjectFullUpdate(merged)
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: deviceId,
+                    operation: .update,
+                    outcome: .committed,
+                    sourcePath: req.sourcePath,
+                    subjectId: req.subjectId,
+                    galleryId: req.galleryId,
+                    idempotencyKey: idempotencyKey,
+                    fieldsTouched: fieldsTouched
+                ))
+                // Clear the overlay — local SQLite now matches our promised value.
+                _ = SubjectSyncOverlay.shared.clearIfMatches(subjectId: req.subjectId, localSubject: merged)
+            } catch {
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: deviceId,
+                    operation: .update,
+                    outcome: .failed,
+                    sourcePath: req.sourcePath,
+                    subjectId: req.subjectId,
+                    galleryId: req.galleryId,
+                    idempotencyKey: idempotencyKey,
+                    fieldsTouched: fieldsTouched,
+                    errorMessage: String(describing: error)
+                ))
+            }
         }
 
         return idempotencyKey
     }
 
     /// Apply an inbound subject update from a remote device (Surface → iPad
-    /// via WebSocket). Same code path as updateSubject from a behavior
-    /// standpoint but tagged differently in events for traceability.
+    /// via WebSocket). Goes into the optimistic overlay rather than writing
+    /// PowerSync directly — Surface is the cloud writer and PowerSync will
+    /// deliver the cloud-confirmed value back to iPad SQLite. The overlay
+    /// bridges the gap so the iPad UI shows Surface's edit immediately;
+    /// reconcileLocalRow clears the overlay once SQLite catches up.
+    ///
+    /// This eliminates the dual-write race that caused names to revert: iPad
+    /// writing to PowerSync from a WebSocket message AND from cloud sync
+    /// would race, and whichever lost would silently clobber the other.
     @discardableResult
     func applyRemoteUpdate(
         _ req: SubjectMutationRequest,
@@ -165,21 +195,18 @@ final class SubjectSyncService {
             idempotencyKey: idempotencyKey,
             fieldsTouched: req.fields.fieldsTouched
         ))
-        let merged = SubjectSyncService.applyFieldsToSubject(req.fields, base: currentSubject)
-        do {
-            try await PowerSyncManager.shared.saveSubject(merged)
-        } catch {
-            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
-                deviceId: senderDeviceId,
-                operation: .update,
-                outcome: .failed,
-                sourcePath: req.sourcePath,
-                subjectId: req.subjectId,
-                galleryId: req.galleryId,
-                idempotencyKey: idempotencyKey,
-                errorMessage: String(describing: error)
-            ))
-        }
+        // Stash the incoming fields in the overlay tagged as remote-websocket.
+        // Views read overlay-merged subjects so the new values appear instantly.
+        SubjectSyncOverlay.shared.apply(
+            subjectId: req.subjectId,
+            fields: req.fields,
+            idempotencyKey: idempotencyKey,
+            source: .remoteWebsocket
+        )
+        // currentSubject and the merged result aren't needed on this path —
+        // overlay.merge happens at view-read time, not here. Reference the
+        // arg to silence "unused" warnings without changing behavior.
+        _ = currentSubject
         return idempotencyKey
     }
 

@@ -309,6 +309,49 @@ struct FPSportsAddSubjectView: View {
 
         isLoading = true
 
+        // Sync rewrite — when v2 flag is on AND this is an edit (not create),
+        // route through SubjectSyncService.updateSubject. The service:
+        //   - applies the optimistic overlay so views see the new value
+        //     immediately and PERSISTENTLY (no revert until cloud catches up)
+        //   - decides write-locally vs broadcast-only based on connection state
+        //   - emits structured events
+        // Creates still take the legacy path because the service expects a
+        // currentSubject to merge fields into; new-subject flow lacks one.
+        if isSubjectSyncV2Enabled() && isEditing, let existing = existingSubject {
+            // Build a SubjectSyncFields from the form values. Only include
+            // fields that actually changed from the existing subject so the
+            // overlay carries user intent precisely.
+            var fields = SubjectSyncFields()
+            if subject.firstName != existing.firstName { fields.firstName = subject.firstName }
+            if subject.lastName  != existing.lastName  { fields.lastName  = subject.lastName }
+            if subject.grade     != existing.grade     { fields.grade     = subject.grade }
+            if subject.teacher   != existing.teacher   { fields.teacher   = subject.teacher }
+            if subject.rosterId  != existing.rosterId  { fields.rosterId  = subject.rosterId }
+            if subject.jerseyNumber != existing.jerseyNumber { fields.jerseyNumber = subject.jerseyNumber }
+            if subject.sport     != existing.sport     { fields.sport     = subject.sport }
+            if subject.position  != existing.position  { fields.position  = subject.position }
+            if subject.email     != existing.email     { fields.email     = subject.email }
+            if subject.phone     != existing.phone     { fields.phone     = subject.phone }
+            if subject.notes     != existing.notes     { fields.notes     = subject.notes }
+            if subject.imageNumbers != existing.imageNumbers { fields.imageNumbers = subject.imageNumbers }
+            Task {
+                _ = await SubjectSyncService.shared.updateSubject(
+                    SubjectMutationRequest(
+                        subjectId: subject.id.uuidString.lowercased(),
+                        galleryId: subject.galleryId,
+                        fields: fields,
+                        sourcePath: "FPSportsAddSubjectView.executeSave"
+                    ),
+                    currentSubject: existing
+                )
+                await MainActor.run {
+                    onComplete(true, subject)
+                    presentationMode.wrappedValue.dismiss()
+                }
+            }
+            return
+        }
+
         // When connected to a Surface, skip the PowerSync write and send the
         // edit via WebSocket. Surface is the authoritative writer — iPad
         // writing directly creates races that have clobbered Surface-typed
