@@ -309,15 +309,15 @@ struct FPSportsAddSubjectView: View {
 
         isLoading = true
 
-        // Sync rewrite — when v2 flag is on AND this is an edit (not create),
-        // route through SubjectSyncService.updateSubject. The service:
+        // Sync rewrite — for edits, route through SubjectSyncService.updateSubject.
+        // The service:
         //   - applies the optimistic overlay so views see the new value
         //     immediately and PERSISTENTLY (no revert until cloud catches up)
         //   - decides write-locally vs broadcast-only based on connection state
         //   - emits structured events
         // Creates still take the legacy path because the service expects a
         // currentSubject to merge fields into; new-subject flow lacks one.
-        if isSubjectSyncV2Enabled() && isEditing, let existing = existingSubject {
+        if isEditing, let existing = existingSubject {
             // Build a SubjectSyncFields from the form values. Only include
             // fields that actually changed from the existing subject so the
             // overlay carries user intent precisely.

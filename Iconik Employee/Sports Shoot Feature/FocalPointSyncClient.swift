@@ -1030,11 +1030,10 @@ class FocalPointSyncClient: ObservableObject {
             let firstName = String((msg["first_name"] as? String ?? "").prefix(200))
             let lastName = String((msg["last_name"] as? String ?? "").prefix(200))
             let rosterId = String((msg["roster_id"] as? String ?? "").prefix(50))
-            // Phase C of the sync rewrite — emit a structured 'received' event
-            // for every inbound subject_updated when the v2 flag is on. Pure
-            // observability; the existing onSubjectUpdated dispatch below is
-            // unchanged.
-            if isSubjectSyncV2Enabled() {
+            // Sync rewrite — emit a structured 'received' event for every
+            // inbound subject_updated. Pure observability; the existing
+            // onSubjectUpdated dispatch below is unchanged.
+            do {
                 let senderId = (msg["device_id"] as? String) ?? "unknown"
                 let galleryId = msg["gallery_id"] as? String
                 var fieldsTouched: [String] = []

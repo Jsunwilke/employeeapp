@@ -7,11 +7,8 @@
 //  Eliminates the "five callers each with their own logic" problem
 //  documented in §2.1 of the rewrite plan.
 //
-//  Behavior is gated on `isV2Enabled` (UserDefaults: fp_subject_sync_v2_enabled).
-//  When OFF (default), this is a thin wrapper around the legacy
-//  PowerSyncManager.saveSubject + FocalPointSyncClient.sendSubjectFullUpdate
-//  pair so behavior is unchanged. When ON, it activates the new architecture:
-//  optimistic overlay, structured event log, ack-aware routing.
+//  No feature flag — the rewrite is the only path. Rollback is the
+//  `pre-sync-rewrite` git tag.
 //
 //  Mirror of src/data/sync/subject-sync-service.ts on the Mac side.
 //
@@ -20,14 +17,6 @@
 
 import Foundation
 import Combine
-
-// MARK: - Feature flag
-
-let kSubjectSyncV2DefaultsKey = "fp_subject_sync_v2_enabled"
-
-func isSubjectSyncV2Enabled() -> Bool {
-    UserDefaults.standard.bool(forKey: kSubjectSyncV2DefaultsKey)
-}
 
 // MARK: - Request shape
 
@@ -63,43 +52,6 @@ final class SubjectSyncService {
         let fieldsTouched = req.fields.fieldsTouched
         let deviceId = SubjectSyncService.deviceIdOrUnknown()
 
-        if !isSubjectSyncV2Enabled() {
-            // Legacy path — preserve the existing two-step behavior:
-            //   1. Local PowerSync write (saveSubject) so iPad UI persists.
-            //   2. Best-effort WebSocket broadcast so Surface picks it up.
-            // Emit a 'committed' event so the debug panel doesn't go silent
-            // when v2 is off.
-            let merged = SubjectSyncService.applyFieldsToSubject(req.fields, base: currentSubject)
-            do {
-                try await PowerSyncManager.shared.saveSubject(merged)
-                FocalPointSyncClient.shared.sendSubjectFullUpdate(merged)
-                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
-                    deviceId: deviceId,
-                    operation: .update,
-                    outcome: .committed,
-                    sourcePath: req.sourcePath,
-                    subjectId: req.subjectId,
-                    galleryId: req.galleryId,
-                    idempotencyKey: idempotencyKey,
-                    fieldsTouched: fieldsTouched
-                ))
-            } catch {
-                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
-                    deviceId: deviceId,
-                    operation: .update,
-                    outcome: .failed,
-                    sourcePath: req.sourcePath,
-                    subjectId: req.subjectId,
-                    galleryId: req.galleryId,
-                    idempotencyKey: idempotencyKey,
-                    fieldsTouched: fieldsTouched,
-                    errorMessage: String(describing: error)
-                ))
-            }
-            return idempotencyKey
-        }
-
-        // ----- v2 path -----
         // 1. Apply optimistic overlay so the UI sees the new values immediately,
         //    independent of whether we write locally or only broadcast.
         SubjectSyncOverlay.shared.apply(
