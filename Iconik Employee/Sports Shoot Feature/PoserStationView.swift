@@ -1521,12 +1521,14 @@ struct SubjectDetailPanel: View {
     let onViewPhotos: (String, [CaptureThumb]) -> Void
 
     @State private var draft: FPSubject?
-    // Debounce: 2-second fallback after the last keystroke. The PRIMARY
-    // commit trigger is focus-loss (clicking out of a field), which fires
-    // immediately. The 2s timer is a safety net in case the user types
-    // without leaving the field.
+    // Debounce: 10-second fallback after the last keystroke. Real commit
+    // triggers (focus-loss, subject-change, scene-phase, disappear) cover
+    // every case where the user signals "done." The timer is just a last-
+    // resort flush for the genuinely odd case where the user types in a
+    // field and never leaves it. Long enough that a first grader spelling
+    // their name slowly doesn't trigger mid-word.
     @State private var saveDebounceTask: Task<Void, Never>?
-    private let saveDebounceNanos: UInt64 = 2_000_000_000  // 2 seconds
+    private let saveDebounceNanos: UInt64 = 10_000_000_000  // 10 seconds
     @FocusState private var focusedField: String?
     // Scene-phase observation: home button / app switcher / screen lock all
     // suspend the app and can kill the in-flight debounce Task before it
