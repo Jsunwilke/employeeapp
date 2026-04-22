@@ -911,6 +911,31 @@ struct FPSportsRosterView_iPad: View {
                 entry.rosterId = rosterId
                 entry.updatedAt = Date()
                 viewModel.subjects[idx] = entry
+                // Sync rewrite — when v2 flag on, ALSO stash the incoming
+                // fields in the optimistic overlay. The viewModel.subjects
+                // assignment above is the legacy in-memory path; the overlay
+                // is what subject-list views read through (see
+                // useOverlaidSubjects on the Mac side and the upcoming view-
+                // layer wiring on iPad).
+                if isSubjectSyncV2Enabled() {
+                    var fields = SubjectSyncFields()
+                    fields.firstName = firstName
+                    fields.lastName = lastName
+                    fields.rosterId = rosterId
+                    let req = SubjectMutationRequest(
+                        subjectId: entry.id.uuidString.lowercased(),
+                        galleryId: entry.galleryId,
+                        fields: fields,
+                        sourcePath: "FPSportsRosterView_iPad.onSubjectUpdated"
+                    )
+                    Task {
+                        _ = await SubjectSyncService.shared.applyRemoteUpdate(
+                            req,
+                            senderDeviceId: subjectId ?? "unknown",
+                            currentSubject: entry
+                        )
+                    }
+                }
             }
         }
 
@@ -3572,6 +3597,11 @@ struct FPSportsRosterView_iPad: View {
                 .onChange(of: viewModel.selectedFilters) { _ in recomputeCachedRoster() }
                 .onChange(of: viewModel.selectedSpecialFilters) { _ in recomputeCachedRoster() }
                 .onChange(of: viewModel.imageFilterType) { _ in recomputeCachedRoster() }
+                // Sync rewrite — re-render whenever an overlay entry is
+                // applied, modified, or cleared. SubjectSyncOverlay publishes
+                // a `revision` Int that bumps on every change; observing it
+                // here triggers recompute to pick up overlay-merged values.
+                .onChange(of: SubjectSyncOverlay.shared.revision) { _ in recomputeCachedRoster() }
                 .onChange(of: searchText) { _ in
                     searchDebounceTask?.cancel()
                     searchDebounceTask = Task {
@@ -4348,9 +4378,27 @@ struct FPSportsRosterView_iPad: View {
                                 }
                             }
                             
-                            // Recompute the cached sorted+filtered roster
+                            // Recompute the cached sorted+filtered roster.
+                            // Sync rewrite — when v2 flag is on, layer the
+                            // optimistic overlay on top of viewModel.subjects
+                            // so in-flight edits (local OR remote-WebSocket)
+                            // appear immediately and persistently. Without
+                            // this, an iPad-modal edit reverts the moment the
+                            // PowerSync watch stream re-fetches the OLD value.
                             private func recomputeCachedRoster() {
-                                cachedFilteredRoster = sortedRoster(filterRoster(viewModel.subjects))
+                                let raw = viewModel.subjects
+                                let display: [FPSubject]
+                                if isSubjectSyncV2Enabled() {
+                                    display = raw.map { s in
+                                        SubjectSyncOverlay.shared.merge(
+                                            subjectId: s.id.uuidString.lowercased(),
+                                            base: s
+                                        )
+                                    }
+                                } else {
+                                    display = raw
+                                }
+                                cachedFilteredRoster = sortedRoster(filterRoster(display))
                             }
 
                             // Sort roster entries
@@ -4844,6 +4892,18 @@ struct FPSportsRosterView_iPad: View {
                                     await MainActor.run {
                                         viewModel.subjects = entries
                                         viewModel.groupImages = groups
+                                        // Sync rewrite — reconcile overlay
+                                        // entries against the freshly-loaded
+                                        // PowerSync rows. Any overlay entry
+                                        // whose fields now match the local
+                                        // SQLite value clears, which is how
+                                        // we know the cloud round-trip caught
+                                        // up.
+                                        if isSubjectSyncV2Enabled() {
+                                            for entry in entries {
+                                                _ = SubjectSyncService.shared.reconcileLocalRow(entry)
+                                            }
+                                        }
                                         // Restore cached thumbnails + mark photographed subjects
                                         if !cached.isEmpty {
                                             subjectThumbnails = cached
