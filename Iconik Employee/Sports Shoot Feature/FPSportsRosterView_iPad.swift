@@ -917,6 +917,35 @@ struct FPSportsRosterView_iPad: View {
         // onSubjectLinked — NOT NEEDED (FPSubject IS the subject, no linking required)
         fpSync.onSubjectLinked = nil
 
+        // Reconciliation: every minute Surface advertises its subject count
+        // and a stable hash of (id, first_name, last_name) tuples. If our
+        // local view diverges, show the operator a banner so they can
+        // investigate before sync wipes anything.
+        fpSync.onSubjectStateSummary = { (incomingGalleryId: String, surfaceCount: Int, surfaceHash: String) in
+            DispatchQueue.main.async {
+                guard let activeGid = viewModel.selectedShoot?.galleryId,
+                      activeGid.lowercased() == incomingGalleryId.lowercased() else { return }
+                let local = viewModel.subjects
+                let localCount = local.count
+                // FNV-1a 32-bit, mirroring Surface's compute_subjects_name_hash.
+                let sorted = local.sorted { $0.id.uuidString.lowercased() < $1.id.uuidString.lowercased() }
+                var hash: UInt32 = 0x811c9dc5
+                for r in sorted {
+                    let s = "\(r.id.uuidString.lowercased())|\(r.firstName.lowercased())|\(r.lastName.lowercased())|"
+                    for byte in s.utf8 {
+                        hash ^= UInt32(byte)
+                        hash = hash &+ ((hash << 1) &+ (hash << 4) &+ (hash << 7) &+ (hash << 8) &+ (hash << 24))
+                    }
+                }
+                let localHash = String(hash, radix: 16)
+                if localCount != surfaceCount || localHash != surfaceHash {
+                    print("[FPSync] DRIFT: surface=\(surfaceCount)/\(surfaceHash) local=\(localCount)/\(localHash)")
+                    viewModel.errorMessage = "Out of sync with Surface (Surface: \(surfaceCount) subjects, iPad: \(localCount)). Pull-to-refresh to reconcile."
+                    viewModel.showingErrorAlert = true
+                }
+            }
+        }
+
         fpSync.onSubjectsDeleted = { subjectIds in
             // In-memory removal only. Surface (the originator of the delete)
             // is the authoritative writer. Calling deleteBatchSubjects here

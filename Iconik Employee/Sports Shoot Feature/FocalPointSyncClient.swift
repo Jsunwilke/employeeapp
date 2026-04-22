@@ -112,6 +112,10 @@ class FocalPointSyncClient: ObservableObject {
     var onCaptureReassigned: ((Int, String, String) -> Void)?      // imageNumber, oldRosterEntryId, newRosterEntryId
     var onVerificationWarning: ((String, String, String, String, String?) -> Void)?  // subjectId, subjectName, status, message, qrData
     var onGalleryChanged: ((String, String) -> Void)?                               // oldGalleryId, newGalleryId
+    /// Reconciliation snapshot from Surface — Surface periodically advertises
+    /// its current view of the gallery's subjects so we can detect drift
+    /// without waiting for cloud sync. Args: (galleryId, subjectCount, nameHash).
+    var onSubjectStateSummary: ((String, Int, String) -> Void)?
 
     // Internal state
     private var webSocket: URLSessionWebSocketTask?
@@ -1011,6 +1015,14 @@ class FocalPointSyncClient: ObservableObject {
             let lastName = String((msg["last_name"] as? String ?? "").prefix(200))
             let rosterId = String((msg["roster_id"] as? String ?? "").prefix(50))
             onSubjectUpdated?(rosterEntryId, subjectId, firstName, lastName, rosterId)
+
+        case "subject_state_summary":
+            // Reconciliation snapshot from Surface — compare to local view to
+            // detect drift without waiting for cloud sync.
+            guard let galleryId = msg["gallery_id"] as? String,
+                  let count = msg["subject_count"] as? Int else { break }
+            let nameHash = (msg["name_hash"] as? String) ?? ""
+            onSubjectStateSummary?(galleryId, count, nameHash)
 
         case "subject_created":
             guard let rosterEntryId = msg["roster_entry_id"] as? String,
