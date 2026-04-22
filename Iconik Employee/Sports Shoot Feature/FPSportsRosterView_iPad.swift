@@ -2682,20 +2682,26 @@ struct FPSportsRosterView_iPad: View {
                             // in-memory list so the user's edit is visible
                             // immediately. The PowerSync watch guard at
                             // setupPowerSyncWatchers (lines ~4818-4823) keeps
-                            // this in place until cloud catches up. Without
-                            // this, edits made via the modal stayed blank in
-                            // the iPad UI for the full Surface→Supabase→
-                            // PowerSync round-trip — and on 2026-04-22 they
-                            // never reappeared at all because Surface dropped
-                            // the write silently.
+                            // this in place until cloud catches up.
+                            //
+                            // CRITICAL: do NOT call refreshSelectedShoot when
+                            // we have an optimisticSubject. refreshSelectedShoot
+                            // re-reads viewModel.subjects from PowerSync local
+                            // SQLite, which (because iPad doesn't write
+                            // subjects locally when offloaded to Surface) still
+                            // has the pre-edit value. It then overwrites our
+                            // splice and the user sees the edit revert.
+                            // 2026-04-23 root cause for "name changed on Mac
+                            // but not on iPad" symptom.
                             if let opt = optimisticSubject {
                                 if let idx = viewModel.subjects.firstIndex(where: { $0.id == opt.id }) {
                                     viewModel.subjects[idx] = opt
                                 } else {
                                     viewModel.subjects.append(opt)
                                 }
+                            } else {
+                                refreshSelectedShoot()
                             }
-                            refreshSelectedShoot()
                         }
                         viewModel.selectedSubject = nil
                     }
