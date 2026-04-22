@@ -823,13 +823,16 @@ struct PoserStationView: View {
                 }
             }
 
-            // Sports grade badge (Coach / Senior / 8th Grader / etc.)
+            // Sports grade badge (Coach / Senior / 8th Grader / etc.).
+            // Neutral gray — indigo is reserved as the sportsShoot module
+            // color (BottomTabBar, MainEmployeeView, etc.) so we avoid it
+            // here to keep that signal unambiguous.
             if isSports && !subject.grade.isEmpty {
                 Text(subject.grade.uppercased())
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.white)
                     .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Color.indigo)
+                    .background(Color(.systemGray2))
                     .cornerRadius(6)
             }
 
@@ -1656,26 +1659,25 @@ struct SubjectDetailPanel: View {
                     .buttonStyle(.borderedProminent)
                 }
 
-                // Sports: large image-numbers box at the top, auto-fills as
-                // the Surface broadcasts capture_completed events for this
-                // subject. Manually editable too — same field as on the FP
-                // Sports view, just bigger and more prominent.
+                // Sports: image-numbers field at the top, auto-fills as the
+                // Surface broadcasts capture_completed events. Visual style
+                // mirrors FP Sports view: blue 0.25 background, 16pt medium,
+                // 44pt height — operators recognize the field consistently.
                 if isSports {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("IMAGE NUMBERS")
                             .font(.caption).fontWeight(.bold).foregroundColor(.secondary).textCase(.uppercase)
-                        TextField("Image #s", text: binding(\.imageNumbers))
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                        TextField("Image #", text: binding(\.imageNumbers))
+                            .font(.system(size: 16, weight: .medium))
+                            .frame(maxWidth: .infinity, minHeight: 44)
                             .multilineTextAlignment(.center)
+                            .background(Color.blue.opacity(0.25))
+                            .cornerRadius(8)
                             .focused($focusedField, equals: "imageNumbers")
                             .onChange(of: editing.imageNumbers) { _ in
                                 scheduleDebouncedSave()
                             }
                     }
-                    .padding(12)
-                    .background(Color.indigo.opacity(0.08))
-                    .cornerRadius(10)
                 }
 
                 // Thumbnail grid
@@ -1748,12 +1750,10 @@ struct SubjectDetailPanel: View {
             flushPendingSave()
             draft = nil
         }
-        .onChange(of: focusedField) { newField in
+        .onChange(of: focusedField) { _ in
             // Primary commit trigger: the user clicked out of a field (or
             // into a different one). Flush whatever's in the draft now —
-            // no waiting on the 2s debounce. `newField` could be nil
-            // (dismissed keyboard) or another field label (tab to next).
-            _ = newField
+            // no waiting on the debounce timer.
             flushPendingSave()
         }
         .onDisappear {
