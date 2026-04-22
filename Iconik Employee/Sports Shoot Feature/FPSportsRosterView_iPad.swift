@@ -892,7 +892,17 @@ struct FPSportsRosterView_iPad: View {
             print("[FPSync] Group '\(groupName)' ready: \(presentSubjectIds.count)/\(totalInGroup)")
         }
 
-        // Subject name/field updated on another device — persist to SQLite
+        // Subject name/field updated on another device — in-memory only.
+        // Surface (the sender) is the authoritative writer to Supabase. If
+        // iPad ALSO writes to its own PowerSync here, iPad's PowerSync would
+        // upload the same data to Supabase — duplicate cloud writes and a
+        // dual-write race with Surface. Per Jason: "iPad should not be
+        // syncing data the surface will already by syncing." So we update
+        // viewModel.subjects in memory only. PowerSync's watch stream will
+        // catch the same edit when cloud syncs back, replacing this in-memory
+        // value with itself (no-op). Trade: if the iPad app restarts during
+        // an offline session before cloud has synced, this in-memory edit
+        // is lost — re-fetched from cloud once internet returns.
         fpSync.onSubjectUpdated = { (rosterEntryId: String, subjectId: String?, firstName: String, lastName: String, rosterId: String) in
             if let idx = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) {
                 var entry = viewModel.subjects[idx]
@@ -901,7 +911,6 @@ struct FPSportsRosterView_iPad: View {
                 entry.rosterId = rosterId
                 entry.updatedAt = Date()
                 viewModel.subjects[idx] = entry
-                saveEntryWithRetry(entry)
             }
         }
 
@@ -909,7 +918,11 @@ struct FPSportsRosterView_iPad: View {
         fpSync.onSubjectLinked = nil
 
         fpSync.onSubjectsDeleted = { subjectIds in
-            // Remove subjects whose ID matches a deleted Production subject
+            // In-memory removal only. Surface (the originator of the delete)
+            // is the authoritative writer. Calling deleteBatchSubjects here
+            // would re-upload the soft-delete from iPad and double-write to
+            // Supabase. Cloud → PowerSync watch will eventually mark these
+            // is_deleted in iPad's local SQLite.
             let deletedSet = Set(subjectIds.map { $0.lowercased() })
             let toDelete = viewModel.subjects.filter { entry in
                 return deletedSet.contains(entry.id.uuidString.lowercased())
@@ -919,17 +932,14 @@ struct FPSportsRosterView_iPad: View {
                 let sid = entry.id.uuidString.lowercased()
                 return deletedSet.contains(sid.lowercased())
             }
-            Task {
-                do {
-                    try await powerSync.deleteBatchSubjects(ids: toDelete.map { $0.id })
-                    print("[FPSync] Removed \(toDelete.count) roster entries — subjects deleted on Production")
-                } catch {
-                    print("[FPSync] Failed to delete roster entries from sync: \(error)")
-                }
-            }
+            print("[FPSync] Removed \(toDelete.count) roster entries from in-memory list — subjects deleted on Production")
         }
 
-        // New subject created on another device — add to local list and persist to SQLite
+        // New subject created on another device — add to in-memory list only.
+        // Same rationale as onSubjectUpdated: Surface is the only writer to
+        // Supabase for subjects. iPad's PowerSync would otherwise duplicate
+        // the upload. Cloud round-trip via PowerSync watch will materialize
+        // this row in iPad's local SQLite once Supabase has it.
         fpSync.onSubjectCreated = { (rosterEntryId: String, firstName: String, lastName: String, rosterId: String, grade: String, groupName: String) in
             DispatchQueue.main.async {
                 guard !viewModel.subjects.contains(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
@@ -943,7 +953,6 @@ struct FPSportsRosterView_iPad: View {
                     newSubject.sport = groupName
                     viewModel.subjects.append(newSubject)
                     viewModel.subjects.sort { $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending }
-                    saveEntryWithRetry(newSubject)
                 }
             }
         }
