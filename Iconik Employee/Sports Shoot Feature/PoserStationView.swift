@@ -215,24 +215,38 @@ struct PoserStationView: View {
             }
         }
         return list.sorted {
-            // Blank/no-name subjects always sort last
-            let a_blank = $0.firstName.trimmingCharacters(in: .whitespaces).isEmpty && $0.lastName.trimmingCharacters(in: .whitespaces).isEmpty
-            let b_blank = $1.firstName.trimmingCharacters(in: .whitespaces).isEmpty && $1.lastName.trimmingCharacters(in: .whitespaces).isEmpty
-            if a_blank != b_blank { return !a_blank }
+            // Blanks-last logic only applies when sorting BY a name field.
+            // For roster_id (and other non-name sorts), the chosen sort key
+            // is the source of truth — a blank-named subject with roster_id
+            // "120" should appear between "119" and "121", not pushed to the
+            // bottom. Only TRUE blanks (no name AND no value for the sort
+            // key) sort last.
+            let a_name_blank = $0.firstName.trimmingCharacters(in: .whitespaces).isEmpty && $0.lastName.trimmingCharacters(in: .whitespaces).isEmpty
+            let b_name_blank = $1.firstName.trimmingCharacters(in: .whitespaces).isEmpty && $1.lastName.trimmingCharacters(in: .whitespaces).isEmpty
 
             switch sortField {
             case "first_name":
+                if a_name_blank != b_name_blank { return !a_name_blank }
                 return $0.firstName.localizedCaseInsensitiveCompare($1.firstName) == .orderedAscending
             case "organization_name":
+                if a_name_blank != b_name_blank { return !a_name_blank }
                 return $0.organizationName.localizedCaseInsensitiveCompare($1.organizationName) == .orderedAscending
-            case "grade": return $0.grade < $1.grade
-            case "teacher": return $0.teacher < $1.teacher
+            case "grade":
+                if a_name_blank != b_name_blank { return !a_name_blank }
+                return $0.grade < $1.grade
+            case "teacher":
+                if a_name_blank != b_name_blank { return !a_name_blank }
+                return $0.teacher < $1.teacher
             case "roster_id":
-                // Numeric-aware compare so "2" < "10" (string compare puts
-                // "10" first because '1' < '2'). Falls back to lexicographic
-                // for non-numeric ids like "C-12".
+                // Sort by roster_id regardless of name. Subjects with NO
+                // roster_id go last. Numeric-aware compare so "2" < "10".
+                let a_no_id = $0.rosterId.trimmingCharacters(in: .whitespaces).isEmpty
+                let b_no_id = $1.rosterId.trimmingCharacters(in: .whitespaces).isEmpty
+                if a_no_id != b_no_id { return !a_no_id }
                 return $0.rosterId.compare($1.rosterId, options: .numeric) == .orderedAscending
-            default: return $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending
+            default:
+                if a_name_blank != b_name_blank { return !a_name_blank }
+                return $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending
             }
         }
     }
