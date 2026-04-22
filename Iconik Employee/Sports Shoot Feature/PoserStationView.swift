@@ -863,14 +863,20 @@ struct PoserStationView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 if isSports {
-                    // Sports layout: roster_id + first + last on top line, sport on second.
+                    // Sport as a small badge above the name line. Reads as
+                    // "this kid plays Football" before you see who they are.
+                    if !subject.sport.isEmpty {
+                        Text(subject.sport.uppercased())
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.7))
+                            .cornerRadius(4)
+                    }
                     Text(sportsPrimaryLine(subject))
                         .font(.system(size: 16, weight: .semibold))
-                    if !subject.sport.isEmpty {
-                        Text(subject.sport).font(.caption).foregroundColor(.secondary)
-                    }
                 } else {
                     Text(primaryDisplay(subject))
                         .font(.system(size: 16, weight: .semibold))
@@ -879,19 +885,6 @@ struct PoserStationView: View {
                         Text(info).font(.caption).foregroundColor(.secondary)
                     }
                 }
-            }
-
-            // Sports grade badge (Coach / Senior / 8th Grader / etc.).
-            // Neutral gray — indigo is reserved as the sportsShoot module
-            // color (BottomTabBar, MainEmployeeView, etc.) so we avoid it
-            // here to keep that signal unambiguous.
-            if isSports && !subject.grade.isEmpty {
-                Text(subject.grade.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Color(.systemGray2))
-                    .cornerRadius(6)
             }
 
             if subject.isAbsent {
@@ -936,6 +929,22 @@ struct PoserStationView: View {
                         isSelected ? Color.blue.opacity(0.3) :
                         Color.clear, lineWidth: 2)
         )
+        // Sports: teacher badge floats in the top-right corner of the row.
+        // The teacher field is where coach / senior / 8th-grader lives for
+        // sports rosters. Floated as an overlay so it sits visually above
+        // the row without consuming HStack flex space.
+        .overlay(alignment: .topTrailing) {
+            if isSports && !subject.teacher.isEmpty {
+                Text(subject.teacher.uppercased())
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color(.systemGray2))
+                    .cornerRadius(4)
+                    .padding(.top, 6)
+                    .padding(.trailing, 8)
+            }
+        }
         .opacity(subject.isAbsent ? 0.4 : (hasPhotos && !isSelected && !isActive ? 0.5 : 1.0))
         .contentShape(Rectangle())
         .onTapGesture {
