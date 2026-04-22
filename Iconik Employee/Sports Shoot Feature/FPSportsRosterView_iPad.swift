@@ -1370,7 +1370,6 @@ struct FPSportsRosterView_iPad: View {
 
             loadSportsShoots()
             setupNetworkMonitoring()
-            setupConflictHandling()
         }
         .onDisappear {
             isViewVisible = false
@@ -2616,9 +2615,6 @@ struct FPSportsRosterView_iPad: View {
             
             // Monitor network status
             setupNetworkMonitoring()
-            
-            // Listen for conflict notifications
-            setupConflictHandling()
         }
         .sheet(isPresented: $viewModel.showingAddSubject) {
             if let shoot = viewModel.selectedShoot {
@@ -2966,43 +2962,6 @@ struct FPSportsRosterView_iPad: View {
     }
     
     // MARK: - Conflict Handling
-    // NOTE: PowerSync uses last-write-wins conflict resolution, so manual conflict handling is not needed.
-    // This method is kept for backwards compatibility but will never trigger the conflict view.
-
-    private func setupConflictHandling() {
-        // PowerSync handles conflicts automatically with last-write-wins strategy
-        // This notification handler is kept for backwards compatibility but won't be triggered
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("SyncConflictsDetected"),
-            object: nil,
-            queue: .main
-        ) { _ in
-            // PowerSync handles conflicts automatically - this guard always returns
-            guard false else { return }
-
-            // Legacy conflict resolution view (never reached with PowerSync)
-            DispatchQueue.main.async {
-                let keyWindow = UIApplication.shared.connectedScenes
-                    .filter { $0.activationState == .foregroundActive }
-                    .compactMap { $0 as? UIWindowScene }
-                    .first?.windows
-                    .filter { $0.isKeyWindow }.first
-                if let rootVC = keyWindow?.rootViewController {
-                    let conflictView = ConflictResolutionView(
-                        onComplete: { success in
-                            if success {
-                                self.refreshSelectedShoot()
-                            }
-                        }
-                    )
-
-                    let hostingController = UIHostingController(rootView: conflictView)
-                    rootVC.present(hostingController, animated: true)
-                }
-            }
-        }
-    }
-    
     // MARK: - Filter Panel View
     
     struct FilterPanelView: View {
