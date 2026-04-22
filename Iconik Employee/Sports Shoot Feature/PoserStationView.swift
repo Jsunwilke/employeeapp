@@ -930,12 +930,13 @@ struct PoserStationView: View {
                         Color.clear, lineWidth: 2)
         )
         // Sports: teacher badge floats in the top-right corner of the row.
-        // The teacher field is where coach / senior / 8th-grader lives for
-        // sports rosters. Floated as an overlay so it sits visually above
-        // the row without consuming HStack flex space.
+        // Teacher field carries short codes (c=Coach, s=Senior, 8=8th Grader)
+        // — the badge decodes them via the shared SportsCodes helper so the
+        // user sees "Coach" not just "C". Falls through unchanged for actual
+        // teacher names.
         .overlay(alignment: .topTrailing) {
             if isSports && !subject.teacher.isEmpty {
-                Text(subject.teacher.uppercased())
+                Text(decodeSportsTeacherCodeShort(subject.teacher).uppercased())
                     .font(.system(size: 9, weight: .bold))
                     .foregroundColor(.white)
                     .padding(.horizontal, 6).padding(.vertical, 2)
