@@ -1034,24 +1034,25 @@ struct PoserStationView: View {
     }
 
     private func saveSubject(_ updated: FPSubject) {
-        // When connected to a Surface, skip the PowerSync write.
-        // The Surface receives the full edit via WebSocket and handles Supabase.
-        // Avoids CRUD queue buildup that blocks gallery loads the next morning.
-        if fpSync.isConnected {
-            // Update in-memory list so the UI reflects the change immediately
-            if let idx = subjects.firstIndex(where: { $0.id == updated.id }) {
-                subjects[idx] = updated
-            }
-            fpSync.sendSubjectFullUpdate(updated)
-            return
+        // Update in-memory list immediately so the UI reflects the change.
+        if let idx = subjects.firstIndex(where: { $0.id == updated.id }) {
+            subjects[idx] = updated
         }
-
-        // Standalone (no Surface connected) — write through PowerSync as normal
+        // Always write to local PowerSync for durability — even when Surface
+        // is connected. Previously skipped to avoid "dual-write race", but the
+        // audit caught a data-loss case: if Surface receives the broadcast but
+        // crashes before its Supabase write commits AND the iPad subsequently
+        // goes offline, the edit is permanently lost. PowerSync handles the
+        // dual-upload via last-write-wins on updated_at.
         Task {
             do {
                 try await powerSync.saveSubject(updated)
-                fpSync.sendSubjectFullUpdate(updated)
-            } catch { print("Save subject failed: \(error)") }
+            } catch {
+                print("Save subject failed: \(error)")
+            }
+            // Best-effort broadcast — fast UI sync to Surface independent of
+            // the cloud round-trip.
+            await MainActor.run { fpSync.sendSubjectFullUpdate(updated) }
         }
     }
 
@@ -1190,6 +1191,21 @@ struct PoserStationView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timer)
                 let generator = UINotificationFeedbackGenerator()
                 generator.notificationOccurred(.warning)
+            }
+        }
+
+        // Subject name/field updated on another device (Surface) — patch the
+        // local in-memory subject so the panel and roster reflect the change
+        // immediately, without waiting for a cloud round-trip.
+        fpSync.onSubjectUpdated = { (rosterEntryId: String, _: String?, firstName: String, lastName: String, rosterId: String, _: String) in
+            DispatchQueue.main.async {
+                guard let idx = subjects.firstIndex(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
+                var entry = subjects[idx]
+                entry.firstName = firstName
+                entry.lastName = lastName
+                entry.rosterId = rosterId
+                entry.updatedAt = Date()
+                subjects[idx] = entry
             }
         }
 
