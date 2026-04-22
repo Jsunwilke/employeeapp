@@ -102,7 +102,7 @@ class FocalPointSyncClient: ObservableObject {
     var onQCFlagChanged: ((String, Bool) -> Void)?                 // subjectId, flagged
     var onSubjectAbsentChanged: ((String, Bool) -> Void)?          // subjectId, isAbsent
     var onNotesChanged: ((String, String?, String) -> Void)?       // subjectId, rosterEntryId, notes
-    var onSubjectUpdated: ((String, String?, String, String, String) -> Void)?  // rosterEntryId, subjectId?, firstName, lastName, rosterId
+    var onSubjectUpdated: ((String, String?, String, String, String, String) -> Void)?  // rosterEntryId, subjectId?, firstName, lastName, rosterId, senderDeviceId
     var onQueueReorder: (([String]) -> Void)?                      // ordered subject_ids
     var onGroupPhotoReady: ((String, [String], Int) -> Void)?      // groupName, presentSubjectIds, total
     var onGroupCaptureCompleted: ((String, Int, String) -> Void)?  // groupId, imageNumber, filename — auto-fill image_numbers on group
@@ -121,6 +121,10 @@ class FocalPointSyncClient: ObservableObject {
     private var webSocket: URLSessionWebSocketTask?
     private var urlSession: URLSession?
     private var heartbeatTimer: Timer?
+    // Sync rewrite — handshake watchdog. Set when sendHello fires; cleared
+    // either on first inbound message or when this fires noteHandshakeTimeout.
+    private var handshakeTimer: Timer?
+    private let handshakeTimeoutSeconds: TimeInterval = 10.0
     private var pingTimer: Timer?
     private var missedPongs: Int = 0
     private let maxMissedPongs: Int = 2  // 2 missed pongs (20s) = dead
@@ -367,6 +371,24 @@ class FocalPointSyncClient: ObservableObject {
                 // signal. The server's device_list response confirms shortly
                 // after but the existing client doesn't gate on it.
                 SyncConnection.shared.noteHandshakeComplete()
+                // Start handshake watchdog — fires noteHandshakeTimeout if
+                // no inbound message arrives within the window. The server
+                // could be stuck at the application layer even with a live
+                // TCP socket; without this the state machine sits in a
+                // never-arriving state.
+                self.handshakeTimer?.invalidate()
+                self.handshakeTimer = Timer.scheduledTimer(withTimeInterval: self.handshakeTimeoutSeconds, repeats: false) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self = self else { return }
+                        // If we've received any message since arming, lastHeartbeatAt
+                        // will have moved forward — bail. Otherwise treat as failed.
+                        if SyncConnection.shared.lastHeartbeatAt == nil {
+                            print("[FPSync] Handshake timeout (\(self.handshakeTimeoutSeconds)s) — no inbound message")
+                            SyncConnection.shared.noteHandshakeTimeout()
+                            self.handleDisconnect()
+                        }
+                    }
+                }
                 self.reconnectDelay = 2.0
                 self.reconnectAttempts = 0
                 self.authRetryCount = 0
@@ -396,6 +418,8 @@ class FocalPointSyncClient: ObservableObject {
         stopHeartbeat()
         stopReconnect()
         stopDiscovery()
+        handshakeTimer?.invalidate()
+        handshakeTimer = nil
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         urlSession = nil
@@ -874,7 +898,12 @@ class FocalPointSyncClient: ObservableObject {
 
     private func handleMessage(_ msg: [String: Any]) {
         // Sync rewrite — any inbound message is evidence the socket is alive.
-        // The state machine recovers from `degraded` on this signal.
+        // The state machine recovers from `degraded` on this signal. Also
+        // clear the handshake watchdog — we're past the handshake window.
+        if handshakeTimer != nil {
+            handshakeTimer?.invalidate()
+            handshakeTimer = nil
+        }
         SyncConnection.shared.noteMessageReceived()
         guard let type = msg["type"] as? String else {
             print("[FPSync] Received message with no type field")
@@ -1033,25 +1062,23 @@ class FocalPointSyncClient: ObservableObject {
             // Sync rewrite — emit a structured 'received' event for every
             // inbound subject_updated. Pure observability; the existing
             // onSubjectUpdated dispatch below is unchanged.
-            do {
-                let senderId = (msg["device_id"] as? String) ?? "unknown"
-                let galleryId = msg["gallery_id"] as? String
-                var fieldsTouched: [String] = []
-                if msg["first_name"] != nil { fieldsTouched.append("first_name") }
-                if msg["last_name"] != nil  { fieldsTouched.append("last_name") }
-                if msg["roster_id"] != nil  { fieldsTouched.append("roster_id") }
-                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
-                    deviceId: senderId,
-                    deviceRole: "Surface",
-                    operation: .update,
-                    outcome: .received,
-                    sourcePath: "FocalPointSyncClient.subject_updated",
-                    subjectId: subjectId,
-                    galleryId: galleryId,
-                    fieldsTouched: fieldsTouched
-                ))
-            }
-            onSubjectUpdated?(rosterEntryId, subjectId, firstName, lastName, rosterId)
+            let senderId = (msg["device_id"] as? String) ?? "unknown"
+            let galleryId = msg["gallery_id"] as? String
+            var fieldsTouched: [String] = []
+            if msg["first_name"] != nil { fieldsTouched.append("first_name") }
+            if msg["last_name"] != nil  { fieldsTouched.append("last_name") }
+            if msg["roster_id"] != nil  { fieldsTouched.append("roster_id") }
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: senderId,
+                deviceRole: "Surface",
+                operation: .update,
+                outcome: .received,
+                sourcePath: "FocalPointSyncClient.subject_updated",
+                subjectId: subjectId,
+                galleryId: galleryId,
+                fieldsTouched: fieldsTouched
+            ))
+            onSubjectUpdated?(rosterEntryId, subjectId, firstName, lastName, rosterId, senderId)
 
         case "subject_state_summary":
             // Reconciliation snapshot from Surface — compare to local view to

@@ -96,7 +96,10 @@ final class SubjectSyncEvents: ObservableObject {
     @Published private(set) var recent: [SubjectSyncEvent] = []
 
     private let maxBufferedEvents = 500
-    private var listeners: [(SubjectSyncEvent) -> Void] = []
+    // Listeners keyed by a UUID token so removal is order-independent.
+    // The previous index-based scheme would remove the wrong listener if
+    // an earlier registrant unsubscribed first.
+    private var listeners: [UUID: (SubjectSyncEvent) -> Void] = [:]
 
     private init() {}
 
@@ -112,7 +115,7 @@ final class SubjectSyncEvents: ObservableObject {
               "key=\(event.idempotencyKey ?? "-") " +
               "src=\(event.sourcePath) " +
               "err=\(event.errorMessage ?? "-")")
-        for cb in listeners {
+        for cb in listeners.values {
             cb(event)
         }
     }
@@ -124,13 +127,10 @@ final class SubjectSyncEvents: ObservableObject {
 
     @discardableResult
     func onEvent(_ listener: @escaping (SubjectSyncEvent) -> Void) -> () -> Void {
-        listeners.append(listener)
-        let idx = listeners.count - 1
+        let token = UUID()
+        listeners[token] = listener
         return { [weak self] in
-            guard let self = self else { return }
-            if idx < self.listeners.count {
-                self.listeners.remove(at: idx)
-            }
+            self?.listeners.removeValue(forKey: token)
         }
     }
 
@@ -144,6 +144,6 @@ final class SubjectSyncEvents: ObservableObject {
 
     func _testReset() {
         recent.removeAll()
-        listeners.removeAll()
+        listeners.removeAll()  // [UUID: callback] dict — removeAll empties it
     }
 }

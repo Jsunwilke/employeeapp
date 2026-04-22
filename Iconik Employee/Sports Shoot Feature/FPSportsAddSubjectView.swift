@@ -320,20 +320,28 @@ struct FPSportsAddSubjectView: View {
         if isEditing, let existing = existingSubject {
             // Build a SubjectSyncFields from the form values. Only include
             // fields that actually changed from the existing subject so the
-            // overlay carries user intent precisely.
+            // overlay carries user intent precisely. ALL editable fields
+            // are diffed — silent omission would mean the overlay misses
+            // the change and the UI reverts to the pre-edit value.
             var fields = SubjectSyncFields()
-            if subject.firstName != existing.firstName { fields.firstName = subject.firstName }
-            if subject.lastName  != existing.lastName  { fields.lastName  = subject.lastName }
-            if subject.grade     != existing.grade     { fields.grade     = subject.grade }
-            if subject.teacher   != existing.teacher   { fields.teacher   = subject.teacher }
-            if subject.rosterId  != existing.rosterId  { fields.rosterId  = subject.rosterId }
+            if subject.firstName    != existing.firstName    { fields.firstName    = subject.firstName }
+            if subject.lastName     != existing.lastName     { fields.lastName     = subject.lastName }
+            if subject.grade        != existing.grade        { fields.grade        = subject.grade }
+            if subject.teacher      != existing.teacher      { fields.teacher      = subject.teacher }
+            if subject.homeroom     != existing.homeroom     { fields.homeroom     = subject.homeroom }
+            if subject.studentId    != existing.studentId    { fields.studentId    = subject.studentId }
+            if subject.rosterId     != existing.rosterId     { fields.rosterId     = subject.rosterId }
             if subject.jerseyNumber != existing.jerseyNumber { fields.jerseyNumber = subject.jerseyNumber }
-            if subject.sport     != existing.sport     { fields.sport     = subject.sport }
-            if subject.position  != existing.position  { fields.position  = subject.position }
-            if subject.email     != existing.email     { fields.email     = subject.email }
-            if subject.phone     != existing.phone     { fields.phone     = subject.phone }
-            if subject.notes     != existing.notes     { fields.notes     = subject.notes }
+            if subject.sport        != existing.sport        { fields.sport        = subject.sport }
+            if subject.position     != existing.position     { fields.position     = subject.position }
+            if subject.email        != existing.email        { fields.email        = subject.email }
+            if subject.phone        != existing.phone        { fields.phone        = subject.phone }
+            if subject.notes        != existing.notes        { fields.notes        = subject.notes }
             if subject.imageNumbers != existing.imageNumbers { fields.imageNumbers = subject.imageNumbers }
+            if subject.isAbsent     != existing.isAbsent     { fields.isAbsent     = subject.isAbsent }
+            if subject.needsRetake  != existing.needsRetake  { fields.needsRetake  = subject.needsRetake }
+            if subject.isPhotographed != existing.isPhotographed { fields.isPhotographed = subject.isPhotographed }
+            if subject.checkedInAt  != existing.checkedInAt  { fields.checkedInAt  = subject.checkedInAt }
             Task {
                 _ = await SubjectSyncService.shared.updateSubject(
                     SubjectMutationRequest(

@@ -63,58 +63,48 @@ final class SubjectSyncService {
 
         let merged = SubjectSyncService.applyFieldsToSubject(req.fields, base: currentSubject)
 
-        // 2. Routing decision. Single source of truth: SyncConnection state.
-        //    - Active (connected/degraded/reconnecting): Surface is the cloud
-        //      writer. Send via WebSocket only — skip local PowerSync write to
-        //      avoid the dual-sync race that clobbered Surface-typed names with
-        //      stale iPad values (see 2026-04-21 Serenity Braun bug). Cloud
-        //      round-trip via PowerSync brings the value back into iPad SQLite,
-        //      and reconcileLocalRow then clears the overlay.
-        //    - Terminal (disconnected/failed): standalone iPad. We MUST write
-        //      to PowerSync because there's no other path to durability.
-        if SyncConnection.shared.canDeliverEventually {
+        // 2. Always write to local PowerSync. The audit caught a data-loss
+        //    case in the WS-only routing: if Surface receives the broadcast
+        //    but crashes before its Supabase write commits, AND the iPad
+        //    goes offline before reconnecting, the edit is permanently lost
+        //    (overlay expires after 5 min, no PowerSync row was written).
+        //
+        //    PowerSync's eventual-consistency model handles the dual-write
+        //    case fine: both sides upload the same row keyed by id, and
+        //    last-write-wins on updated_at. Worst case is one extra cloud
+        //    write per edit. Original "Serenity Braun" bug was iPad writing
+        //    a STALE value (because of the splice-then-update race in the
+        //    WebSocket receive handler), not the local write itself —
+        //    that's fixed by FPSportsRosterView_iPad's overlay-only receive
+        //    path.
+        do {
+            try await PowerSyncManager.shared.saveSubject(merged)
+            // Best-effort broadcast — may queue if the socket is mid-reconnect.
             FocalPointSyncClient.shared.sendSubjectFullUpdate(merged)
             SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                 deviceId: deviceId,
                 operation: .update,
-                outcome: .sent,
+                outcome: .committed,
                 sourcePath: req.sourcePath,
                 subjectId: req.subjectId,
                 galleryId: req.galleryId,
                 idempotencyKey: idempotencyKey,
                 fieldsTouched: fieldsTouched
             ))
-        } else {
-            do {
-                try await PowerSyncManager.shared.saveSubject(merged)
-                // Standalone — also try a best-effort broadcast in case the
-                // socket comes back up before the cloud round-trip completes.
-                FocalPointSyncClient.shared.sendSubjectFullUpdate(merged)
-                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
-                    deviceId: deviceId,
-                    operation: .update,
-                    outcome: .committed,
-                    sourcePath: req.sourcePath,
-                    subjectId: req.subjectId,
-                    galleryId: req.galleryId,
-                    idempotencyKey: idempotencyKey,
-                    fieldsTouched: fieldsTouched
-                ))
-                // Clear the overlay — local SQLite now matches our promised value.
-                _ = SubjectSyncOverlay.shared.clearIfMatches(subjectId: req.subjectId, localSubject: merged)
-            } catch {
-                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
-                    deviceId: deviceId,
-                    operation: .update,
-                    outcome: .failed,
-                    sourcePath: req.sourcePath,
-                    subjectId: req.subjectId,
-                    galleryId: req.galleryId,
-                    idempotencyKey: idempotencyKey,
-                    fieldsTouched: fieldsTouched,
-                    errorMessage: String(describing: error)
-                ))
-            }
+            // Local SQLite now matches the promised value — clear overlay.
+            _ = SubjectSyncOverlay.shared.clearIfMatches(subjectId: req.subjectId, localSubject: merged)
+        } catch {
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .update,
+                outcome: .failed,
+                sourcePath: req.sourcePath,
+                subjectId: req.subjectId,
+                galleryId: req.galleryId,
+                idempotencyKey: idempotencyKey,
+                fieldsTouched: fieldsTouched,
+                errorMessage: String(describing: error)
+            ))
         }
 
         return idempotencyKey

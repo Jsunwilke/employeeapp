@@ -903,37 +903,34 @@ struct FPSportsRosterView_iPad: View {
         // value with itself (no-op). Trade: if the iPad app restarts during
         // an offline session before cloud has synced, this in-memory edit
         // is lost — re-fetched from cloud once internet returns.
-        fpSync.onSubjectUpdated = { (rosterEntryId: String, subjectId: String?, firstName: String, lastName: String, rosterId: String) in
-            if let idx = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) {
-                var entry = viewModel.subjects[idx]
-                entry.firstName = firstName
-                entry.lastName = lastName
-                entry.rosterId = rosterId
-                entry.updatedAt = Date()
-                viewModel.subjects[idx] = entry
-                // Sync rewrite — ALSO stash the incoming fields in the
-                // optimistic overlay. The viewModel.subjects assignment
-                // above is the legacy in-memory path; the overlay is what
-                // subject-list views read through (recomputeCachedRoster
-                // below + useOverlaidSubjects on the Mac side).
-                var fields = SubjectSyncFields()
-                fields.firstName = firstName
-                fields.lastName = lastName
-                fields.rosterId = rosterId
-                let req = SubjectMutationRequest(
-                    subjectId: entry.id.uuidString.lowercased(),
-                    galleryId: entry.galleryId,
-                    fields: fields,
-                    sourcePath: "FPSportsRosterView_iPad.onSubjectUpdated"
+        fpSync.onSubjectUpdated = { (rosterEntryId: String, subjectId: String?, firstName: String, lastName: String, rosterId: String, senderDeviceId: String) in
+            guard let idx = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
+            let entry = viewModel.subjects[idx]
+            // Apply overlay synchronously FIRST so the next render is correct.
+            // Don't splice into viewModel.subjects[idx] — the splice would
+            // satisfy clearIfMatches prematurely (overlay matches local in-
+            // memory copy → clears → next PowerSync re-fetch reverts to OLD
+            // SQLite value before cloud round-trip catches up). Let the
+            // overlay be the durable display value until reconcileLocalRow
+            // confirms SQLite caught up.
+            var fields = SubjectSyncFields()
+            fields.firstName = firstName
+            fields.lastName = lastName
+            fields.rosterId = rosterId
+            let req = SubjectMutationRequest(
+                subjectId: entry.id.uuidString.lowercased(),
+                galleryId: entry.galleryId,
+                fields: fields,
+                sourcePath: "FPSportsRosterView_iPad.onSubjectUpdated"
+            )
+            Task {
+                _ = await SubjectSyncService.shared.applyRemoteUpdate(
+                    req,
+                    senderDeviceId: senderDeviceId,
+                    currentSubject: entry
                 )
-                Task {
-                    _ = await SubjectSyncService.shared.applyRemoteUpdate(
-                        req,
-                        senderDeviceId: subjectId ?? "unknown",
-                        currentSubject: entry
-                    )
-                }
             }
+            _ = subjectId  // not used downstream; subject id matches entry.id
         }
 
         // onSubjectLinked — NOT NEEDED (FPSubject IS the subject, no linking required)
