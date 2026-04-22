@@ -865,14 +865,16 @@ struct PoserStationView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 if isSports {
-                    // Sport as a small badge above the name line. Reads as
-                    // "this kid plays Football" before you see who they are.
+                    // Sport as a small badge above the name line. Color is
+                    // a deterministic hash of the sport name (same algorithm
+                    // FP Sports view uses) so "Football" is always the same
+                    // color across views and across app launches.
                     if !subject.sport.isEmpty {
                         Text(subject.sport.uppercased())
                             .font(.system(size: 9, weight: .bold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.blue.opacity(0.7))
+                            .background(sportBadgeColor(subject.sport))
                             .cornerRadius(4)
                     }
                     Text(sportsPrimaryLine(subject))

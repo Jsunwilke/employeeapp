@@ -52,3 +52,28 @@ public func sportsTeacherBadgeColor(_ raw: String) -> Color {
     default: return Color(.systemGray2)
     }
 }
+
+/// Deterministic color for a sport/group name. Same algorithm as
+/// FPSportsRosterView_iPad.colorForGroup so a given sport ("Football",
+/// "Basketball", etc.) gets the same color across views and across
+/// app launches. Empty input returns gray.
+public func sportBadgeColor(_ sport: String) -> Color {
+    if sport.isEmpty { return Color.gray }
+    let hash = abs(sport.utf8.reduce(0) { ($0 &* 31) &+ Int($1) })
+    let palette: [Color] = [
+        .blue,
+        .green,
+        Color(red: 0.0, green: 0.6, blue: 0.4),  // Teal green
+        .purple,
+        .pink,
+        .teal,
+        .indigo,
+        .red,
+        Color(red: 0.2, green: 0.5, blue: 0.9),  // Light blue
+        Color(red: 0.1, green: 0.6, blue: 0.4),  // Forest green
+        Color(red: 0.8, green: 0.4, blue: 0.0),  // Amber
+        Color(red: 0.5, green: 0.1, blue: 0.7),  // Violet
+        Color(red: 0.9, green: 0.2, blue: 0.5),  // Rose
+    ]
+    return palette[hash % palette.count]
+}
