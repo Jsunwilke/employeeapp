@@ -13,7 +13,11 @@ struct FPSportsAddSubjectView: View {
     let galleryId: String
     let organizationId: String
     let existingSubject: FPSubject?
-    let onComplete: (Bool) -> Void
+    /// Called on save complete. Second arg is the optimistic subject the
+    /// caller can splice into its in-memory list so the UI shows the edit
+    /// immediately (without waiting for Surface→Supabase→PowerSync round-trip).
+    /// Nil on cancel/failure. See 2026-04-22 walk-in name loss analysis.
+    let onComplete: (Bool, FPSubject?) -> Void
 
     private let powerSync = PowerSyncManager.shared
 
@@ -325,7 +329,10 @@ struct FPSportsAddSubjectView: View {
             // jersey, sport, position, email, phone, notes, image_numbers)
             // land on the Surface too.
             FocalPointSyncClient.shared.sendSubjectFullUpdate(subject)
-            onComplete(true)
+            // Pass the freshly-built subject back so the parent can splice it
+            // into its in-memory list — without this, the iPad UI shows the
+            // pre-edit (blank) value until the cloud round-trip completes.
+            onComplete(true, subject)
             presentationMode.wrappedValue.dismiss()
             return
         }
@@ -355,7 +362,7 @@ struct FPSportsAddSubjectView: View {
                         )
                     }
                     await MainActor.run {
-                        onComplete(true)
+                        onComplete(true, subject)
                         presentationMode.wrappedValue.dismiss()
                     }
                     return

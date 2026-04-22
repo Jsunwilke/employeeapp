@@ -11,7 +11,11 @@ import SwiftUI
 struct FPSportsBatchAddView: View {
     let galleryId: String
     let organizationId: String
-    let onComplete: (Bool) -> Void
+    /// Called on save complete. Second arg is the list of optimistic subjects
+    /// the caller can splice into its in-memory list so the UI shows the new
+    /// rows immediately (without waiting for Surface→Supabase→PowerSync
+    /// round-trip). Empty on cancel/failure.
+    let onComplete: (Bool, [FPSubject]) -> Void
 
     private let powerSync = PowerSyncManager.shared
 
@@ -274,6 +278,12 @@ struct FPSportsBatchAddView: View {
             }
 
             let allSuccess = failedIndices.isEmpty
+            // Pass back only the subjects that successfully saved/sent so the
+            // parent can optimistically splice them into its in-memory list.
+            let failedSet = Set(failedIndices)
+            let optimisticSubjects = subjects.enumerated().compactMap { (i, s) -> FPSubject? in
+                failedSet.contains(i) ? nil : s
+            }
             await MainActor.run {
                 isLoading = false
                 if !allSuccess {
@@ -281,7 +291,7 @@ struct FPSportsBatchAddView: View {
                     errorMessage = "\(failedIndices.count) of \(subjects.count) athletes failed to create (IDs: \(failedIds.joined(separator: ", ")))"
                     showingErrorAlert = true
                 }
-                onComplete(allSuccess)
+                onComplete(allSuccess, optimisticSubjects)
                 presentationMode.wrappedValue.dismiss()
             }
         }

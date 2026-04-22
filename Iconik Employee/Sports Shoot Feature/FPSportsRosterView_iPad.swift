@@ -2638,8 +2638,27 @@ struct FPSportsRosterView_iPad: View {
                     galleryId: shoot.galleryId ?? shoot.id.uuidString.lowercased(),
                     organizationId: shoot.organizationId,
                     existingSubject: viewModel.selectedSubject,
-                    onComplete: { success in
-                        if success { refreshSelectedShoot() }
+                    onComplete: { success, optimisticSubject in
+                        if success {
+                            // Optimistically splice the edited subject into our
+                            // in-memory list so the user's edit is visible
+                            // immediately. The PowerSync watch guard at
+                            // setupPowerSyncWatchers (lines ~4818-4823) keeps
+                            // this in place until cloud catches up. Without
+                            // this, edits made via the modal stayed blank in
+                            // the iPad UI for the full Surface→Supabase→
+                            // PowerSync round-trip — and on 2026-04-22 they
+                            // never reappeared at all because Surface dropped
+                            // the write silently.
+                            if let opt = optimisticSubject {
+                                if let idx = viewModel.subjects.firstIndex(where: { $0.id == opt.id }) {
+                                    viewModel.subjects[idx] = opt
+                                } else {
+                                    viewModel.subjects.append(opt)
+                                }
+                            }
+                            refreshSelectedShoot()
+                        }
                         viewModel.selectedSubject = nil
                     }
                 )
@@ -2650,7 +2669,19 @@ struct FPSportsRosterView_iPad: View {
                 FPSportsBatchAddView(
                     galleryId: shoot.galleryId ?? shoot.id.uuidString.lowercased(),
                     organizationId: shoot.organizationId,
-                    onComplete: { success in
+                    onComplete: { success, optimisticSubjects in
+                        // Splice optimistic batch into the in-memory list so
+                        // every newly-added athlete shows up immediately. The
+                        // PowerSync watch guard preserves these until cloud
+                        // catches up. See FPSportsAddSubjectView callback for
+                        // background.
+                        for opt in optimisticSubjects {
+                            if let idx = viewModel.subjects.firstIndex(where: { $0.id == opt.id }) {
+                                viewModel.subjects[idx] = opt
+                            } else {
+                                viewModel.subjects.append(opt)
+                            }
+                        }
                         if success { refreshSelectedShoot() }
                     }
                 )
