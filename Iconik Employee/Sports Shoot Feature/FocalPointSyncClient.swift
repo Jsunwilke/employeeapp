@@ -331,6 +331,10 @@ class FocalPointSyncClient: ObservableObject {
 
         intentionalClose = false
         connectionStatus = .connecting
+        // Sync rewrite — tell the connection state machine we're attempting
+        // a socket. SubjectSyncService.canDeliverEventually reads this state
+        // to decide whether to write locally vs broadcast-only.
+        SyncConnection.shared.noteConnectStarted()
         lastHost = host
         lastPort = port
 
@@ -357,7 +361,12 @@ class FocalPointSyncClient: ObservableObject {
                     return
                 }
                 self.sendHello()
+                SyncConnection.shared.noteSocketOpenHelloSent()
                 self.connectionStatus = .connected
+                // Treat connectionStatus=.connected as the handshake-complete
+                // signal. The server's device_list response confirms shortly
+                // after but the existing client doesn't gate on it.
+                SyncConnection.shared.noteHandshakeComplete()
                 self.reconnectDelay = 2.0
                 self.reconnectAttempts = 0
                 self.authRetryCount = 0
@@ -391,6 +400,7 @@ class FocalPointSyncClient: ObservableObject {
         webSocket = nil
         urlSession = nil
         connectionStatus = .disconnected
+        SyncConnection.shared.noteSocketClosed(intentional: true)
         devices = []
         pairedCameraId = nil
         seenCaptureIds.removeAll()
@@ -782,6 +792,9 @@ class FocalPointSyncClient: ObservableObject {
                     "battery_charging": batteryCharging,
                 ]
                 self.send(msg)
+                // Sync rewrite — promote `connected` to `degraded` if no
+                // inbound message arrived in the heartbeat-silence window.
+                SyncConnection.shared.watchdogTick()
             }
         }
         // Ping/pong every 10s to detect dead connections fast
@@ -860,6 +873,9 @@ class FocalPointSyncClient: ObservableObject {
     }
 
     private func handleMessage(_ msg: [String: Any]) {
+        // Sync rewrite — any inbound message is evidence the socket is alive.
+        // The state machine recovers from `degraded` on this signal.
+        SyncConnection.shared.noteMessageReceived()
         guard let type = msg["type"] as? String else {
             print("[FPSync] Received message with no type field")
             return
@@ -1197,6 +1213,12 @@ class FocalPointSyncClient: ObservableObject {
 
     private func handleDisconnect() {
         connectionStatus = .disconnected
+        // Sync rewrite — this is the unintentional-disconnect path. The
+        // intentional close path goes through disconnect() which already
+        // notes its own state transition. Pass intentional=false here so
+        // the state machine moves to `reconnecting` and SubjectSyncService
+        // keeps queueing rather than falling back to standalone PowerSync.
+        SyncConnection.shared.noteSocketClosed(intentional: false)
         stopHeartbeat()
 
         // Cancel all pending image/capture requests
