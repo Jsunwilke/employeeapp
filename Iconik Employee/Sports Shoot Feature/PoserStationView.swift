@@ -1776,7 +1776,14 @@ struct SubjectDetailPanel: View {
                     fieldRow("First Name", value: binding(\.firstName))
                     fieldRow("Last Name", value: binding(\.lastName))
                     fieldRow("Grade", value: binding(\.grade))
-                    fieldRow("Teacher", value: binding(\.teacher))
+                    if isSports {
+                        // Teacher field on sports rosters is always one of
+                        // the four codes (empty/c/s/8). A picker prevents
+                        // typos and reinforces the contract.
+                        teacherPicker
+                    } else {
+                        fieldRow("Teacher", value: binding(\.teacher))
+                    }
                     fieldRow("Homeroom", value: binding(\.homeroom))
                     fieldRow("Student ID", value: binding(\.studentId))
                     fieldRow("Roster ID", value: binding(\.rosterId))
@@ -1837,6 +1844,38 @@ struct SubjectDetailPanel: View {
             if newPhase != .active {
                 flushPendingSave()
             }
+        }
+    }
+
+    /// Picker for the sports teacher-code field. Maps the four valid states
+    /// (empty / c / s / 8) to human labels (None / Coach / Senior / 8th
+    /// Grader). Selection writes the code value back through the same
+    /// draft binding the text fields use, so save/flush plumbing is shared.
+    private var teacherPicker: some View {
+        let options: [(code: String, label: String)] = [
+            ("", "None"),
+            ("c", "Coach"),
+            ("s", "Senior"),
+            ("8", "8th Grader"),
+        ]
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("Teacher").font(.caption).fontWeight(.semibold).foregroundColor(.secondary).textCase(.uppercase)
+            Picker("Teacher", selection: binding(\.teacher)) {
+                ForEach(options, id: \.code) { opt in
+                    Text(opt.label).tag(opt.code)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground))
+            .cornerRadius(6)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(.separator), lineWidth: 1)
+            )
+            .onChange(of: editing.teacher) { _ in scheduleDebouncedSave() }
         }
     }
 
