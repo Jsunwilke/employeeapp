@@ -2677,6 +2677,7 @@ struct FPSportsRosterView_iPad: View {
                     organizationId: shoot.organizationId,
                     existingSubject: viewModel.selectedSubject,
                     onComplete: { success, optimisticSubject in
+                        print("[FP-DEBUG] modal onComplete success=\(success) hasOptimistic=\(optimisticSubject != nil) name=\(optimisticSubject.map { "\($0.firstName) \($0.lastName)" } ?? "nil")")
                         if success {
                             // Optimistically splice the edited subject into our
                             // in-memory list so the user's edit is visible
@@ -2695,11 +2696,14 @@ struct FPSportsRosterView_iPad: View {
                             // but not on iPad" symptom.
                             if let opt = optimisticSubject {
                                 if let idx = viewModel.subjects.firstIndex(where: { $0.id == opt.id }) {
+                                    print("[FP-DEBUG] splicing into idx=\(idx)")
                                     viewModel.subjects[idx] = opt
                                 } else {
+                                    print("[FP-DEBUG] no idx match, appending")
                                     viewModel.subjects.append(opt)
                                 }
                             } else {
+                                print("[FP-DEBUG] no optimistic — calling refreshSelectedShoot (this WILL clobber any mid-flight edit)")
                                 refreshSelectedShoot()
                             }
                         }
