@@ -1528,6 +1528,11 @@ struct SubjectDetailPanel: View {
     @State private var saveDebounceTask: Task<Void, Never>?
     private let saveDebounceNanos: UInt64 = 2_000_000_000  // 2 seconds
     @FocusState private var focusedField: String?
+    // Scene-phase observation: home button / app switcher / screen lock all
+    // suspend the app and can kill the in-flight debounce Task before it
+    // fires. Flush on transition out of .active so partial edits don't get
+    // stranded if iOS later kills the app for memory pressure.
+    @Environment(\.scenePhase) private var scenePhase
 
     private var editing: FPSubject { draft ?? subject }
 
@@ -1634,6 +1639,15 @@ struct SubjectDetailPanel: View {
             // Panel closed: flush any pending edit so partial keystrokes
             // don't sit in a cancelled debounce.
             flushPendingSave()
+        }
+        .onChange(of: scenePhase) { newPhase in
+            // App backgrounded / inactive (home button, app switcher, lock
+            // screen, incoming call). Flush before iOS suspends the
+            // debounce task — otherwise the edit can be lost if the app
+            // gets killed for memory pressure while in the background.
+            if newPhase != .active {
+                flushPendingSave()
+            }
         }
     }
 
