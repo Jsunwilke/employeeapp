@@ -1505,6 +1505,12 @@ struct SubjectDetailPanel: View {
     let onViewPhotos: (String, [CaptureThumb]) -> Void
 
     @State private var draft: FPSubject?
+    // Debounce: after the last keystroke, wait this long before broadcasting.
+    // Without this, every character typed becomes a separate WebSocket message
+    // and the Mac's dedup window drops all but the first — so "Jason Wilkey"
+    // arrives as "Jason Wil" or worse.
+    @State private var saveDebounceTask: Task<Void, Never>?
+    private let saveDebounceNanos: UInt64 = 500_000_000  // 500ms
 
     private var editing: FPSubject { draft ?? subject }
 
@@ -1592,7 +1598,22 @@ struct SubjectDetailPanel: View {
             .padding(20)
         }
         .background(Color(.secondarySystemBackground))
-        .onChange(of: subject.id) { _ in draft = nil }
+        .onChange(of: subject.id) { _ in
+            // Switching to a different subject: flush any pending edit on the
+            // outgoing subject FIRST so the keystrokes don't get lost, then
+            // reset draft for the incoming subject.
+            saveDebounceTask?.cancel()
+            saveDebounceTask = nil
+            if let d = draft { onSave(d) }
+            draft = nil
+        }
+        .onDisappear {
+            // Panel closed: flush any pending edit so partial keystrokes
+            // don't sit in a cancelled debounce.
+            saveDebounceTask?.cancel()
+            saveDebounceTask = nil
+            if let d = draft { onSave(d) }
+        }
     }
 
     private func fieldRow(_ label: String, value: Binding<String>) -> some View {
@@ -1601,8 +1622,22 @@ struct SubjectDetailPanel: View {
             TextField(label, text: value)
                 .textFieldStyle(.roundedBorder).font(.body)
                 .onChange(of: value.wrappedValue) { _ in
-                    if let d = draft { onSave(d) }
+                    scheduleDebouncedSave()
                 }
+        }
+    }
+
+    /// Cancel any in-flight debounce timer and start a new one. The save
+    /// fires once, after the user has been idle for `saveDebounceNanos`,
+    /// carrying the FULL current draft — not one WebSocket message per
+    /// keystroke.
+    private func scheduleDebouncedSave() {
+        saveDebounceTask?.cancel()
+        let delay = saveDebounceNanos
+        saveDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delay)
+            if Task.isCancelled { return }
+            if let d = draft { onSave(d) }
         }
     }
 
