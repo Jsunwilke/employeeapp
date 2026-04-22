@@ -57,7 +57,7 @@ struct PoserStationView: View {
     // Filters
     @State private var searchText = ""
     @State private var activeFilters: [String: Set<String>] = [:]  // field_key -> selected values (multiple fields, AND logic)
-    @State private var sortField: String = "last_name"
+    @State private var sortField: String = "last_name"  // overridden in onAppear when shoot is sports
     @State private var showFilterPopover: Bool = false
 
     // Layout
@@ -130,7 +130,37 @@ struct PoserStationView: View {
 
     /// Only show fields that actually have data in this gallery
     var availableFilterFields: [(key: String, label: String)] {
-        Self.allFilterFields.filter { !uniqueValues(for: $0.key).isEmpty }
+        let nonEmpty = Self.allFilterFields.filter { !uniqueValues(for: $0.key).isEmpty }
+        // For sports galleries, hoist "Sport" to the top of the list — it's
+        // the operator's primary segmentation (filter to football, basketball,
+        // etc.) and shouldn't be buried mid-list.
+        if gallery.shootType == "sports" {
+            let sport = nonEmpty.filter { $0.key == "sport" }
+            let rest = nonEmpty.filter { $0.key != "sport" }
+            return sport + rest
+        }
+        return nonEmpty
+    }
+
+    /// Sort menu options. Sports adds Roster ID (at top, since it's the
+    /// default and the operator's primary sort). Non-sports keeps the legacy
+    /// list with Last Name as default.
+    var sortOptions: [(String, String)] {
+        if gallery.shootType == "sports" {
+            return [
+                ("roster_id", "Roster ID"),
+                ("last_name", "Last Name"),
+                ("first_name", "First Name"),
+                ("grade", "Grade"),
+            ]
+        }
+        return [
+            ("last_name", "Last Name"),
+            ("first_name", "First Name"),
+            ("organization_name", "Organization"),
+            ("grade", "Grade"),
+            ("teacher", "Teacher"),
+        ]
     }
 
     /// Count of subjects per value for a field
@@ -197,7 +227,11 @@ struct PoserStationView: View {
                 return $0.organizationName.localizedCaseInsensitiveCompare($1.organizationName) == .orderedAscending
             case "grade": return $0.grade < $1.grade
             case "teacher": return $0.teacher < $1.teacher
-            case "roster_id": return $0.rosterId < $1.rosterId
+            case "roster_id":
+                // Numeric-aware compare so "2" < "10" (string compare puts
+                // "10" first because '1' < '2'). Falls back to lexicographic
+                // for non-numeric ids like "C-12".
+                return $0.rosterId.compare($1.rosterId, options: .numeric) == .orderedAscending
             default: return $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending
             }
         }
@@ -345,6 +379,14 @@ struct PoserStationView: View {
         .onAppear {
             let screen = UIScreen.main.bounds
             isLandscape = screen.width > screen.height
+            // For sports galleries, default the sort to Roster ID. The
+            // operator's primary mental model on a sports shoot is "next
+            // jersey number up," not alphabetical name. Only flips on
+            // first appear so a manual sort change persists if the user
+            // navigates away and back.
+            if gallery.shootType == "sports" && sortField == "last_name" {
+                sortField = "roster_id"
+            }
         }
         } // GeometryReader
         .navigationTitle("")
@@ -641,9 +683,11 @@ struct PoserStationView: View {
                         .frame(width: 320, height: 600)
                 }
 
-                // Sort
+                // Sort. Sports gets Roster ID at the top of the list (and
+                // it's the default — set in .onAppear). Non-sports keeps
+                // Last Name as the default and doesn't expose Roster ID.
                 Menu {
-                    ForEach([("last_name", "Last Name"), ("first_name", "First Name"), ("organization_name", "Organization"), ("grade", "Grade"), ("teacher", "Teacher")], id: \.0) { key, label in
+                    ForEach(sortOptions, id: \.0) { key, label in
                         Button(action: { sortField = key }) {
                             Label(label, systemImage: sortField == key ? "checkmark" : "")
                         }
