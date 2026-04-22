@@ -1521,12 +1521,13 @@ struct SubjectDetailPanel: View {
     let onViewPhotos: (String, [CaptureThumb]) -> Void
 
     @State private var draft: FPSubject?
-    // Debounce: after the last keystroke, wait this long before broadcasting.
-    // Without this, every character typed becomes a separate WebSocket message
-    // and the Mac's dedup window drops all but the first — so "Jason Wilkey"
-    // arrives as "Jason Wil" or worse.
+    // Debounce: 2-second fallback after the last keystroke. The PRIMARY
+    // commit trigger is focus-loss (clicking out of a field), which fires
+    // immediately. The 2s timer is a safety net in case the user types
+    // without leaving the field.
     @State private var saveDebounceTask: Task<Void, Never>?
-    private let saveDebounceNanos: UInt64 = 500_000_000  // 500ms
+    private let saveDebounceNanos: UInt64 = 2_000_000_000  // 2 seconds
+    @FocusState private var focusedField: String?
 
     private var editing: FPSubject { draft ?? subject }
 
@@ -1618,17 +1619,21 @@ struct SubjectDetailPanel: View {
             // Switching to a different subject: flush any pending edit on the
             // outgoing subject FIRST so the keystrokes don't get lost, then
             // reset draft for the incoming subject.
-            saveDebounceTask?.cancel()
-            saveDebounceTask = nil
-            if let d = draft { onSave(d) }
+            flushPendingSave()
             draft = nil
+        }
+        .onChange(of: focusedField) { newField in
+            // Primary commit trigger: the user clicked out of a field (or
+            // into a different one). Flush whatever's in the draft now —
+            // no waiting on the 2s debounce. `newField` could be nil
+            // (dismissed keyboard) or another field label (tab to next).
+            _ = newField
+            flushPendingSave()
         }
         .onDisappear {
             // Panel closed: flush any pending edit so partial keystrokes
             // don't sit in a cancelled debounce.
-            saveDebounceTask?.cancel()
-            saveDebounceTask = nil
-            if let d = draft { onSave(d) }
+            flushPendingSave()
         }
     }
 
@@ -1637,10 +1642,20 @@ struct SubjectDetailPanel: View {
             Text(label).font(.caption).fontWeight(.semibold).foregroundColor(.secondary).textCase(.uppercase)
             TextField(label, text: value)
                 .textFieldStyle(.roundedBorder).font(.body)
+                .focused($focusedField, equals: label)
                 .onChange(of: value.wrappedValue) { _ in
                     scheduleDebouncedSave()
                 }
         }
+    }
+
+    /// Cancel any pending debounce and fire the save immediately (if there's
+    /// a draft). Used by focus-change, subject-change, and panel-disappear
+    /// to avoid waiting the full 2 seconds when the user signals "done."
+    private func flushPendingSave() {
+        saveDebounceTask?.cancel()
+        saveDebounceTask = nil
+        if let d = draft { onSave(d) }
     }
 
     /// Cancel any in-flight debounce timer and start a new one. The save
