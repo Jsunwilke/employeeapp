@@ -17,11 +17,6 @@ struct CaptureGalleryListView: View {
     @State private var searchText = ""
 
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
-    // Opt-in: when true, sports galleries open in PoserStationView (the new
-    // FP capture view) with sports-conditional UI. Default false so Captura
-    // photographers keep going to SportsShootDetailView. Flip this on in
-    // Settings → "Use new capture view for sports" to test the new view.
-    @AppStorage("fp_use_new_capture_view_for_sports") private var useNewSportsCapture: Bool = false
 
     var filteredGalleries: [SportsShoot] {
         let active = galleries.filter { !$0.isArchived }
@@ -151,16 +146,13 @@ struct CaptureGalleryListView: View {
 
     @ViewBuilder
     private func destinationView(for gallery: SportsShoot) -> some View {
-        if gallery.shootType == "sports" && !useNewSportsCapture {
-            // Captura users default — preserves the workflow other photographers
-            // use day-to-day. Do not change this default without explicit user
-            // approval (see feedback_dont_touch_captura_roster.md).
-            SportsShootDetailView(shootID: gallery.id)
-        } else {
-            // Non-sports always goes to PoserStationView. Sports goes here too
-            // when the fp_use_new_capture_view_for_sports opt-in is enabled.
-            PoserStationView(gallery: gallery)
-        }
+        // All shoot types open in the capture view (PoserStationView). The
+        // capture view shows sports-conditional UI (image numbers box, grade
+        // badge, roster id + sport on cards) when shootType == "sports".
+        // Captura photographers still reach the legacy SportsShootDetailView
+        // through the Sports tab (SportsShootListView), which is unaffected
+        // by this routing change.
+        PoserStationView(gallery: gallery)
     }
 
     private func shootTypeLabel(_ type: String) -> String {
