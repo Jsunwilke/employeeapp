@@ -470,6 +470,7 @@ struct PoserStationView: View {
             // we own end-to-end.
             fpSync.onGroupPhotoReady = nil
             fpSync.onGroupCaptureCompleted = nil
+            fpSync.onGroupUpdated = nil
             // Flush any pending capture-driven saves so burst-shoot-then-
             // leave doesn't lose the trailing image numbers. Same pattern
             // for subjects and groups.
@@ -1531,6 +1532,10 @@ struct PoserStationView: View {
             } catch {
                 print("Save group image failed: \(error)")
             }
+            // Fast-path broadcast — Surface and other iPads refresh
+            // instantly without waiting for the PowerSync cloud sync.
+            // Mirrors how saveSubject broadcasts subject edits.
+            await MainActor.run { fpSync.sendGroupFullUpdate(toSave) }
         }
     }
 
@@ -1821,6 +1826,17 @@ struct PoserStationView: View {
                     scheduleGroupCaptureSave(for: group.id)
                 }
                 triggerCaptureHaptic()
+            }
+        }
+
+        // Group row was edited on another device (Surface or another
+        // iPad). Refresh the local list from PowerSync so the Groups tab
+        // reflects the change without waiting for the cloud round-trip.
+        // We don't trust the payload fields as canonical — PowerSync is
+        // the source of truth; this is just a "refetch now" signal.
+        fpSync.onGroupUpdated = { (_: String, _: String) in
+            Task { @MainActor in
+                await loadGroupImages()
             }
         }
     }

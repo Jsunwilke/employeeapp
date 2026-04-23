@@ -106,6 +106,11 @@ class FocalPointSyncClient: ObservableObject {
     var onQueueReorder: (([String]) -> Void)?                      // ordered subject_ids
     var onGroupPhotoReady: ((String, [String], Int) -> Void)?      // groupName, presentSubjectIds, total
     var onGroupCaptureCompleted: ((String, Int, String) -> Void)?  // groupId, imageNumber, filename — auto-fill image_numbers on group
+    /// A device on the network edited a group row (description, sport, image_numbers, etc).
+    /// Receiver should refetch the row via PowerSync rather than trusting the payload
+    /// fields as canonical — this is a fast-path notification, not a replicated write.
+    /// Args: (groupId, senderDeviceId)
+    var onGroupUpdated: ((String, String) -> Void)?
     var onSubjectLinked: ((String, String) -> Void)?               // rosterEntryId, subjectId — Production created a subject for this roster entry
     var onSubjectsDeleted: (([String]) -> Void)?                   // subject_ids deleted on Production
     var onSubjectCreated: ((String, String, String, String, String, String) -> Void)?  // rosterEntryId, firstName, lastName, rosterId, grade, groupName
@@ -582,6 +587,30 @@ class FocalPointSyncClient: ObservableObject {
         if let checkedIn = subject.checkedInAt {
             msg["checked_in_at"] = checkedIn
         }
+        send(msg)
+    }
+
+    /// Send a full group-row edit — broadcasts after an iPad save so the
+    /// Surface and other iPads on the network refresh their in-memory
+    /// groups list instantly instead of waiting for PowerSync cloud
+    /// round-trip. Mirrors the sendSubjectFullUpdate fast-path pattern
+    /// for individual subjects.
+    func sendGroupFullUpdate(_ group: GroupImage) {
+        guard let galleryId = galleryId else { return }
+        let gid = group.id.uuidString.lowercased()
+        let msg: [String: Any] = [
+            "type": "group_updated",
+            "device_id": deviceId,
+            "gallery_id": galleryId,
+            "group_id": gid,
+            "description": String(group.description.prefix(500)),
+            "image_numbers": String(group.imageNumbers.prefix(500)),
+            "notes": String(group.notes.prefix(1000)),
+            "sport": String(group.sport.prefix(100)),
+            "gender": String(group.gender.prefix(50)),
+            "team_level": String(group.teamLevel.prefix(100)),
+            "station_name": "iPad - \(deviceName)",
+        ]
         send(msg)
     }
 
@@ -1120,6 +1149,16 @@ class FocalPointSyncClient: ObservableObject {
                 let imageNumber = (msg["image_number"] as? Int) ?? (msg["image_number"] as? String).flatMap { Int($0) } ?? 0
                 let filename = msg["capture_filename"] as? String ?? ""
                 onGroupCaptureCompleted?(groupId, imageNumber, filename)
+            }
+
+        case "group_updated":
+            // Fast-path: Surface (or another iPad) just edited a group
+            // row. Signal the receiver to refetch from PowerSync local
+            // SQLite; we don't trust the payload as canonical.
+            if let groupId = msg["group_id"] as? String, !groupId.isEmpty,
+               UUID(uuidString: groupId) != nil {
+                let senderDeviceId = msg["device_id"] as? String ?? ""
+                onGroupUpdated?(groupId, senderDeviceId)
             }
 
         case "device_disconnected":
