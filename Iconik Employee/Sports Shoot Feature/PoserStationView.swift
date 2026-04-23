@@ -39,6 +39,23 @@ struct PoserStationView: View {
     // makes burst-firing safe.
     @State private var pendingCaptureSaves: [UUID: Task<Void, Never>] = [:]
 
+    // Groups (sports only) — team/squad photos, separate from per-subject
+    // photos. Lives under a "Groups" tab alongside the roster. Data flows
+    // through the same PowerSync + Surface-broadcast pipeline as subjects.
+    @State private var groupImages: [GroupImage] = []
+    @State private var groupWatchTask: Task<Void, Never>?
+    @State private var showingAddGroupImage = false
+    @State private var selectedGroupImage: GroupImage? = nil
+    @State private var selectedTab: Int = 0  // 0 = Roster, 1 = Groups
+    // groupName -> set of present subject id strings, populated from
+    // onGroupPhotoReady broadcasts. Currently informational (available for
+    // future UI); mirrors FP Sports' groupAttendance dictionary.
+    @State private var groupAttendance: [String: Set<String>] = [:]
+    // Per-group debounce for capture-driven saves — same pattern as
+    // pendingCaptureSaves on subjects. Burst group captures collapse into
+    // one save per group after 500ms of quiet.
+    @State private var pendingGroupCaptureSaves: [UUID: Task<Void, Never>] = [:]
+
     // Photo viewer
     @State private var showPhotoViewer = false
     @State private var photoViewerSubjectName = ""
@@ -289,6 +306,16 @@ struct PoserStationView: View {
         GeometryReader { geo in
         VStack(spacing: 0) {
             headerBar
+            // Sports only: tab selector between the roster and group
+            // (team/squad) photos. Non-sports shoots never render this —
+            // they don't have groups.
+            if gallery.shootType == "sports" {
+                groupsTabSelector
+            }
+
+            if selectedTab == 1 && gallery.shootType == "sports" {
+                groupsView
+            } else {
             filterBar
 
             if isLoading {
@@ -383,6 +410,7 @@ struct PoserStationView: View {
                     }
                 }
             }
+            } // Roster-tab branch (else of groupsView)
         }
         .onChange(of: geo.size) { newSize in
             withAnimation(.easeInOut(duration: 0.25)) {
@@ -421,11 +449,32 @@ struct PoserStationView: View {
             await loadCachedThumbnails()
             startWatching()
             setupSyncCallbacks()
+            // Sports only — prime the groups list and clear any stale locks
+            // from a previous session. Safe to call for non-sports too but
+            // skipped as a micro-optimization (non-sports galleries never
+            // have rows in group_images).
+            if gallery.shootType == "sports" {
+                await loadGroupImages()
+                startWatchingGroups()
+                try? await GroupImageService.shared.releaseExpiredLocks(forJob: gallery.id)
+            }
         }
         .onDisappear {
             subjectWatchTask?.cancel()
+            groupWatchTask?.cancel()
+            // Null the group-photo fpSync callbacks we installed in
+            // setupSyncCallbacks. FocalPointSyncClient is a process-wide
+            // singleton — if we leave our closures assigned, a later firing
+            // of the WS event mutates @State on a view that's gone, and
+            // whatever view appears next inherits stale handlers. Subject
+            // callbacks aren't nulled here because they predate this file
+            // and their lifecycle has been stable; groups are new plumbing
+            // we own end-to-end.
+            fpSync.onGroupPhotoReady = nil
+            fpSync.onGroupCaptureCompleted = nil
             // Flush any pending capture-driven saves so burst-shoot-then-
-            // leave doesn't lose the trailing image numbers.
+            // leave doesn't lose the trailing image numbers. Same pattern
+            // for subjects and groups.
             for (entryId, task) in pendingCaptureSaves {
                 task.cancel()
                 if let latest = subjects.first(where: { $0.id == entryId }) {
@@ -433,6 +482,13 @@ struct PoserStationView: View {
                 }
             }
             pendingCaptureSaves.removeAll()
+            for (groupId, task) in pendingGroupCaptureSaves {
+                task.cancel()
+                if let latest = groupImages.first(where: { $0.id == groupId }) {
+                    saveGroupImage(latest)
+                }
+            }
+            pendingGroupCaptureSaves.removeAll()
         }
         .onChange(of: scenePhase) { newPhase in
             // Same flush on app backgrounding (home button, lock, switcher).
@@ -445,6 +501,13 @@ struct PoserStationView: View {
                     }
                 }
                 pendingCaptureSaves.removeAll()
+                for (groupId, task) in pendingGroupCaptureSaves {
+                    task.cancel()
+                    if let latest = groupImages.first(where: { $0.id == groupId }) {
+                        saveGroupImage(latest)
+                    }
+                }
+                pendingGroupCaptureSaves.removeAll()
             }
         }
         .sheet(isPresented: $showingSyncSheet) { syncSheet }
@@ -452,6 +515,21 @@ struct PoserStationView: View {
         .sheet(isPresented: $showingAddSubject) { addSubjectSheet }
         .sheet(isPresented: $showingUSCardQRScan) { usCardQRSheet }
         .sheet(isPresented: $showingUSCardDocScan) { usCardDocScanSheet }
+        .sheet(isPresented: $showingAddGroupImage, onDismiss: {
+            // Sheet dismissed — whether saved or cancelled, clear the edit
+            // pointer so a subsequent "+ Add Group" tap starts fresh.
+            selectedGroupImage = nil
+        }) {
+            AddGroupImageView(
+                shootID: gallery.id,
+                organizationId: storedUserOrganizationID,
+                existingGroup: selectedGroupImage
+            ) { _ in
+                showingAddGroupImage = false
+                // PowerSync watch stream will refresh groupImages on its
+                // own — no manual reload needed.
+            }
+        }
         .overlay(alignment: .top) {
             if let error = scanError {
                 Text(error)
@@ -730,6 +808,177 @@ struct PoserStationView: View {
         }
         .background(Color(.systemBackground))
         .overlay(Rectangle().frame(height: 1).foregroundColor(Color(.separator)), alignment: .bottom)
+    }
+
+    // MARK: - Groups Tab (sports only)
+
+    /// Segmented picker between Roster and Groups. Shown only on sports
+    /// galleries — non-sports shoots never have groups. No bottom
+    /// separator here because the downstream content (filterBar on the
+    /// Roster tab, groupsView's header bar on the Groups tab) already
+    /// owns its own top-of-content separator; adding one here creates a
+    /// doubled 1pt line.
+    private var groupsTabSelector: some View {
+        Picker("", selection: $selectedTab) {
+            Text("Roster").tag(0)
+            Text("Groups").tag(1)
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 20).padding(.vertical, 8)
+        .background(Color(.systemBackground))
+    }
+
+    /// Full Groups-tab content — header bar with count and Add button,
+    /// then the list of groups or an empty state. Edit/delete happen
+    /// through tap (opens AddGroupImageView) and context menu respectively.
+    /// Expands to fill the remaining vertical space in the parent VStack
+    /// so the empty state and the scrollable list both anchor correctly.
+    private var groupsView: some View {
+        VStack(spacing: 0) {
+            // Header bar — count + Add Group button.
+            HStack {
+                Text("\(groupImages.count) group\(groupImages.count == 1 ? "" : "s")")
+                    .font(.subheadline).foregroundColor(.secondary)
+                Spacer()
+                Button {
+                    selectedGroupImage = nil
+                    showingAddGroupImage = true
+                } label: {
+                    Label("Add Group", systemImage: "person.3.fill")
+                }
+                .buttonStyle(.bordered)
+                .tint(.blue)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 10)
+            .background(Color(.systemBackground))
+            .overlay(Rectangle().frame(height: 1).foregroundColor(Color(.separator)), alignment: .bottom)
+
+            if groupImages.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "person.3.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+                    Text("No groups yet")
+                        .font(.headline).foregroundColor(.secondary)
+                    Text("Tap Add Group to create a team or squad photo.")
+                        .font(.caption).foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(.systemGroupedBackground))
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(groupImages.sorted(by: { $0.sortOrder < $1.sortOrder }), id: \.id) { group in
+                            groupRow(group)
+                        }
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                }
+                .background(Color(.systemGroupedBackground))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Single group row — name + metadata badges + image-number pill +
+    /// optional lock badge (when another user is editing). Tap to edit,
+    /// context-menu delete.
+    private func groupRow(_ group: GroupImage) -> some View {
+        let currentUser = UserManager.shared.getCurrentUserIDUnified()
+        let lockedByOther: Bool = {
+            guard let lockedBy = group.lockedBy else { return false }
+            guard let currentUser = currentUser else { return true }
+            return lockedBy.uuidString.lowercased() != currentUser.lowercased()
+        }()
+
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(group.description.isEmpty ? "(Unnamed group)" : group.description)
+                    .font(.system(size: 16, weight: .medium))
+                    .lineLimit(1)
+
+                // Metadata badges — sport gets the same size-9 bold
+                // UPPERCASE colored badge as the subject row so the
+                // visual grammar is identical across tabs. teamLevel
+                // and gender stay as plain secondary text.
+                HStack(spacing: 6) {
+                    if !group.sport.isEmpty {
+                        Text(group.sport.uppercased())
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(sportBadgeColor(group.sport))
+                            .cornerRadius(4)
+                    }
+                    if !group.teamLevel.isEmpty {
+                        Text(group.teamLevel)
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                    if !group.gender.isEmpty {
+                        Text(group.gender)
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Spacer()
+
+            if !group.imageNumbers.isEmpty {
+                Text(group.imageNumbers)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Color.blue.opacity(0.15))
+                    .cornerRadius(6)
+            } else {
+                Text("No photos")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .frame(minHeight: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        // Lock-by-other badge floats top-trailing as an overlay —
+        // matches the subject row's teacher badge placement so state
+        // alerts live in the same visual slot across both tabs.
+        .overlay(alignment: .topTrailing) {
+            if lockedByOther, let name = group.lockedByName, !name.isEmpty {
+                HStack(spacing: 3) {
+                    Image(systemName: "lock.fill").font(.system(size: 9))
+                    Text(name).font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Color.orange)
+                .cornerRadius(4)
+                .padding(.top, 6)
+                .padding(.trailing, 8)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedGroupImage = group
+            showingAddGroupImage = true
+        }
+        .contextMenu {
+            // Primary action first — iOS convention — even though tapping
+            // the row also opens edit, having it in the menu aids
+            // discoverability.
+            Button {
+                selectedGroupImage = group
+                showingAddGroupImage = true
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            Divider()
+            Button(role: .destructive, action: { deleteGroup(group) }) {
+                Label("Delete", systemImage: "trash")
+            }
+        }
     }
 
     // MARK: - Subject List
@@ -1242,6 +1491,83 @@ struct PoserStationView: View {
         }
     }
 
+    // MARK: - Groups (sports)
+
+    /// Schedule a per-group debounced save for capture-driven imageNumbers
+    /// updates. Same pattern as scheduleCaptureSave on subjects — burst
+    /// group captures collapse into one save after 500ms of quiet.
+    /// Marked @MainActor so the dictionary mutation is actor-isolated
+    /// regardless of caller context.
+    @MainActor
+    private func scheduleGroupCaptureSave(for groupId: UUID) {
+        pendingGroupCaptureSaves[groupId]?.cancel()
+        pendingGroupCaptureSaves[groupId] = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+            if Task.isCancelled { return }
+            if let latest = groupImages.first(where: { $0.id == groupId }) {
+                saveGroupImage(latest)
+            }
+            pendingGroupCaptureSaves[groupId] = nil
+        }
+    }
+
+    /// Persist a GroupImage edit. Increments `version` so PowerSync's
+    /// last-write-wins on `updated_at` also records a monotonic version
+    /// for any future optimistic-concurrency checks. Note: no WebSocket
+    /// fast-path broadcast to Surface — FocalPointSyncClient has no
+    /// sendGroupFullUpdate equivalent of sendSubjectFullUpdate, and the
+    /// plan explicitly forbids wire-protocol changes. Surface picks up
+    /// group edits via PowerSync cloud sync (slightly slower than the
+    /// subject fast-path but correct).
+    private func saveGroupImage(_ updated: GroupImage) {
+        var toSave = updated
+        toSave.version += 1
+        toSave.updatedAt = Date()
+        if let idx = groupImages.firstIndex(where: { $0.id == toSave.id }) {
+            groupImages[idx] = toSave
+        }
+        Task {
+            do {
+                try await powerSync.saveGroupImage(toSave)
+            } catch {
+                print("Save group image failed: \(error)")
+            }
+        }
+    }
+
+    private func loadGroupImages() async {
+        do {
+            groupImages = try await powerSync.getGroupImages(forJob: gallery.id)
+        } catch {
+            print("Failed to load group images: \(error)")
+        }
+    }
+
+    private func startWatchingGroups() {
+        groupWatchTask?.cancel()
+        groupWatchTask = Task {
+            do {
+                for try await updated in powerSync.watchGroupImages(forJob: gallery.id) {
+                    if !Task.isCancelled {
+                        groupImages = updated
+                    }
+                }
+            } catch {
+                if !Task.isCancelled { print("Group watch error: \(error)") }
+            }
+        }
+    }
+
+    private func deleteGroup(_ group: GroupImage) {
+        Task {
+            do {
+                try await powerSync.deleteGroupImage(id: group.id)
+            } catch {
+                print("Failed to delete group image: \(error)")
+            }
+        }
+    }
+
     // MARK: - Data Loading
 
     private func loadSubjects() async {
@@ -1460,6 +1786,42 @@ struct PoserStationView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     if moveConfirmationIsError == false { moveConfirmationMessage = nil }
                 }
+            }
+        }
+
+        // Group photo ready — fires when Surface has finished verifying the
+        // group's member attendance. Stores the present-member set by group
+        // name. Matches FP Sports' pattern; currently informational.
+        fpSync.onGroupPhotoReady = { (groupName: String, presentSubjectIds: [String], _: Int) in
+            DispatchQueue.main.async {
+                let present = Set(presentSubjectIds.map { $0.lowercased() })
+                let memberIds = subjects
+                    .filter { present.contains($0.id.uuidString.lowercased()) }
+                    .map { $0.id.uuidString }
+                groupAttendance[groupName] = Set(memberIds)
+            }
+        }
+
+        // Group capture completed — Surface tethered a capture tagged for a
+        // group. Append the image number to the group's imageNumbers field
+        // in memory immediately (no capture lost), then save via the
+        // per-group debounce so burst group captures collapse into one
+        // PowerSync write. FP Sports never wired this callback — this is
+        // new behavior in the capture view.
+        fpSync.onGroupCaptureCompleted = { (groupId: String, imageNumber: Int, _: String) in
+            DispatchQueue.main.async {
+                guard let uuid = UUID(uuidString: groupId),
+                      let idx = groupImages.firstIndex(where: { $0.id == uuid }) else { return }
+                var group = groupImages[idx]
+                var nums = parseImageNumberRanges(group.imageNumbers)
+                if !nums.contains(imageNumber) {
+                    nums.append(imageNumber)
+                    group.imageNumbers = formatImageNumberRanges(nums)
+                    group.updatedAt = Date()
+                    groupImages[idx] = group
+                    scheduleGroupCaptureSave(for: group.id)
+                }
+                triggerCaptureHaptic()
             }
         }
     }
