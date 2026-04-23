@@ -931,21 +931,39 @@ struct PoserStationView: View {
                         isSelected ? Color.blue.opacity(0.3) :
                         Color.clear, lineWidth: 2)
         )
-        // Sports: teacher badge floats in the top-right corner of the row.
-        // Teacher field carries short codes (c=Coach, s=Senior, 8=8th Grader)
-        // — the badge decodes them via the shared SportsCodes helper so the
-        // user sees "Coach" not just "C". Falls through unchanged for actual
-        // teacher names.
+        // Sports: teacher dropdown floats in the top-right corner of the row.
+        // Tap to set the sports code (None / Coach / Senior / 8th Grader)
+        // inline without opening the detail panel — the most frequent edit
+        // during a sports shoot. Empty-state shows a tag icon so operators
+        // can set a code on subjects that don't have one yet. Menu consumes
+        // the tap so the row's subject-select gesture does not fire.
         .overlay(alignment: .topTrailing) {
-            if isSports && !subject.teacher.isEmpty {
-                Text(decodeSportsTeacherCodeShort(subject.teacher).uppercased())
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(sportsTeacherBadgeColor(subject.teacher))
-                    .cornerRadius(4)
-                    .padding(.top, 6)
-                    .padding(.trailing, 8)
+            if isSports {
+                Menu {
+                    Button("— None") { updateTeacherCode(subject, value: "") }
+                    Button("C — Coach") { updateTeacherCode(subject, value: "c") }
+                    Button("S — Senior") { updateTeacherCode(subject, value: "s") }
+                    Button("8 — 8th Grader") { updateTeacherCode(subject, value: "8") }
+                } label: {
+                    if subject.teacher.isEmpty {
+                        Image(systemName: "tag")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary.opacity(0.6))
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(Color(.systemGray5))
+                            .clipShape(Capsule())
+                    } else {
+                        Text(decodeSportsTeacherCodeShort(subject.teacher).uppercased())
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(sportsTeacherBadgeColor(subject.teacher))
+                            .cornerRadius(4)
+                    }
+                }
+                .frame(minWidth: 44, minHeight: 44, alignment: .topTrailing)
+                .padding(.top, 2)
+                .padding(.trailing, 4)
             }
         }
         .opacity(subject.isAbsent ? 0.4 : (hasPhotos && !isSelected && !isActive ? 0.5 : 1.0))
@@ -1155,6 +1173,23 @@ struct PoserStationView: View {
                 fpSync.markSubjectAbsent(subjectId: sid, rosterEntryId: nil, isAbsent: updated.isAbsent)
             } catch { print("Toggle absent failed: \(error)") }
         }
+    }
+
+    /// Inline teacher-code update from the per-row dropdown. Writes the
+    /// short sports code ("c" / "s" / "8") or empty to clear, then routes
+    /// through the standard save path so PowerSync + Surface broadcast
+    /// both pick it up. Lowercase matches the SIS-import canonical form
+    /// documented in SportsCodes.swift; decoders are case-insensitive so
+    /// mixed-case legacy values from FP Sports also render correctly.
+    /// Re-reads from the live `subjects` array before mutating so a
+    /// capture-driven watch update that landed between render and tap
+    /// cannot be overwritten with a stale `imageNumbers` value.
+    private func updateTeacherCode(_ subject: FPSubject, value: String) {
+        guard let idx = subjects.firstIndex(where: { $0.id == subject.id }) else { return }
+        var updated = subjects[idx]
+        updated.teacher = value
+        updated.updatedAt = Date()
+        saveSubject(updated)
     }
 
     private func triggerCaptureHaptic() {
