@@ -306,14 +306,15 @@ struct PoserStationView: View {
         GeometryReader { geo in
         VStack(spacing: 0) {
             headerBar
-            // Sports only: tab selector between the roster and group
-            // (team/squad) photos. Non-sports shoots never render this —
-            // they don't have groups.
-            if gallery.shootType == "sports" {
-                groupsTabSelector
-            }
+            // Tab selector between the roster and group photos. Groups
+            // map to team/squad photos for sports, class groups for
+            // spring / underclass portraits, clubs for events, etc. The
+            // selector renders for every shoot type — the AddGroupImageView
+            // form adapts its fields based on shootType so non-sports
+            // shoots get a simpler create/edit flow.
+            groupsTabSelector
 
-            if selectedTab == 1 && gallery.shootType == "sports" {
+            if selectedTab == 1 {
                 groupsView
             } else {
             filterBar
@@ -449,15 +450,12 @@ struct PoserStationView: View {
             await loadCachedThumbnails()
             startWatching()
             setupSyncCallbacks()
-            // Sports only — prime the groups list and clear any stale locks
-            // from a previous session. Safe to call for non-sports too but
-            // skipped as a micro-optimization (non-sports galleries never
-            // have rows in group_images).
-            if gallery.shootType == "sports" {
-                await loadGroupImages()
-                startWatchingGroups()
-                try? await GroupImageService.shared.releaseExpiredLocks(forJob: gallery.id)
-            }
+            // Prime the groups list and clear any stale locks from a
+            // previous session for every shoot type — class groups and
+            // clubs live inside spring / underclass galleries too.
+            await loadGroupImages()
+            startWatchingGroups()
+            try? await GroupImageService.shared.releaseExpiredLocks(forJob: gallery.id)
         }
         .onDisappear {
             subjectWatchTask?.cancel()
@@ -523,7 +521,8 @@ struct PoserStationView: View {
             AddGroupImageView(
                 shootID: gallery.id,
                 organizationId: storedUserOrganizationID,
-                existingGroup: selectedGroupImage
+                existingGroup: selectedGroupImage,
+                shootType: gallery.shootType ?? ""
             ) { _ in
                 showingAddGroupImage = false
                 // PowerSync watch stream will refresh groupImages on its
@@ -860,7 +859,7 @@ struct PoserStationView: View {
                         .foregroundColor(.secondary)
                     Text("No groups yet")
                         .font(.headline).foregroundColor(.secondary)
-                    Text("Tap Add Group to create a team or squad photo.")
+                    Text("Tap Add Group to create your first group.")
                         .font(.caption).foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                 }

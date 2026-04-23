@@ -20,7 +20,22 @@ struct AddGroupImageView: View {
     let shootID: UUID
     let organizationId: String
     let existingGroup: GroupImage?
+    /// The shoot type of the gallery this group lives on. Defaults to
+    /// "sports" so existing callers (Captura's SportsShootListView and
+    /// SportsShootDetailView, FPSportsRosterView) keep the original
+    /// sport-picker / gender / team-level form behavior without any call
+    /// site change. Non-sports callers (the capture view for spring /
+    /// underclass / portraits galleries) pass the actual shoot type so
+    /// the form hides the sports-specific fields and the description is
+    /// free-form.
+    var shootType: String = "sports"
     let onComplete: (Bool) -> Void
+
+    /// Whether this instance is editing a group on a sports gallery. Used
+    /// to gate the sport / gender / team-level pickers and the
+    /// auto-description logic. The sports-specific flow is the
+    /// original, pre-generalization behavior.
+    private var isSports: Bool { shootType == "sports" }
 
     // PowerSync for offline-first operations
     @StateObject private var powerSync = PowerSyncManager.shared
@@ -142,61 +157,76 @@ struct AddGroupImageView: View {
     private var formContent: some View {
         Form {
                 Section(header: Text("Group Information")) {
-                    // Sport selection
-                    if isLoadingSports {
-                        HStack {
-                            Text("Loading sports...")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        }
-                    } else if !availableSports.isEmpty {
-                        Picker("Sport/Team", selection: $selectedSport) {
-                            Text("Select Sport").tag("")
-                            ForEach(availableSports, id: \.self) { sport in
-                                Text(sport).tag(sport)
+                    // Sports-only pickers — sport/gender/team-level only
+                    // make sense for sports galleries. Non-sports shoots
+                    // (spring / underclass / portraits) skip these entirely
+                    // and get a simpler free-form Description flow below.
+                    if isSports {
+                        // Sport selection
+                        if isLoadingSports {
+                            HStack {
+                                Text("Loading sports...")
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                        } else if !availableSports.isEmpty {
+                            Picker("Sport/Team", selection: $selectedSport) {
+                                Text("Select Sport").tag("")
+                                ForEach(availableSports, id: \.self) { sport in
+                                    Text(sport).tag(sport)
+                                }
+                            }
+                            .onChange(of: selectedSport) { _ in
+                                updateDescription()
                             }
                         }
-                        .onChange(of: selectedSport) { _ in
-                            updateDescription()
+
+                        // Gender selection
+                        if !selectedSport.isEmpty {
+                            Picker("Gender", selection: $selectedGender) {
+                                Text("Select Gender (Optional)").tag("")
+                                ForEach(genderOptions, id: \.self) { gender in
+                                    Text(gender).tag(gender)
+                                }
+                            }
+                            .onChange(of: selectedGender) { _ in
+                                updateDescription()
+                            }
+                        }
+
+                        // Team level selection
+                        if !selectedSport.isEmpty {
+                            Picker("Team Level", selection: $selectedTeamLevel) {
+                                Text("Select Level").tag("")
+                                ForEach(teamLevels, id: \.self) { level in
+                                    Text(level).tag(level)
+                                }
+                            }
+                            .onChange(of: selectedTeamLevel) { _ in
+                                updateDescription()
+                            }
                         }
                     }
 
-                    // Gender selection
-                    if !selectedSport.isEmpty {
-                        Picker("Gender", selection: $selectedGender) {
-                            Text("Select Gender (Optional)").tag("")
-                            ForEach(genderOptions, id: \.self) { gender in
-                                Text(gender).tag(gender)
-                            }
-                        }
-                        .onChange(of: selectedGender) { _ in
-                            updateDescription()
-                        }
-                    }
+                    // Description field. Sports: disabled until a sport is
+                    // picked, unless the "Custom Description" toggle is on
+                    // (auto-derived from sport + gender + level). Non-sports:
+                    // always free-form, no toggle needed since there's
+                    // nothing to auto-derive from.
+                    if isSports {
+                        VStack(alignment: .leading) {
+                            Toggle("Custom Description", isOn: $useCustomDescription)
+                                .font(.caption)
 
-                    // Team level selection
-                    if !selectedSport.isEmpty {
-                        Picker("Team Level", selection: $selectedTeamLevel) {
-                            Text("Select Level").tag("")
-                            ForEach(teamLevels, id: \.self) { level in
-                                Text(level).tag(level)
-                            }
+                            TextField("Description", text: $description)
+                                .autocapitalization(.sentences)
+                                .disabled(!useCustomDescription && !selectedSport.isEmpty)
                         }
-                        .onChange(of: selectedTeamLevel) { _ in
-                            updateDescription()
-                        }
-                    }
-
-                    // Description field
-                    VStack(alignment: .leading) {
-                        Toggle("Custom Description", isOn: $useCustomDescription)
-                            .font(.caption)
-
-                        TextField("Description", text: $description)
+                    } else {
+                        TextField("Group Name", text: $description)
                             .autocapitalization(.sentences)
-                            .disabled(!useCustomDescription && !selectedSport.isEmpty)
                     }
                 }
 
@@ -265,7 +295,7 @@ struct AddGroupImageView: View {
                     Button(isEditing ? "Update" : "Save") {
                         saveGroupImage()
                     }
-                    .disabled(description.isEmpty)
+                    .disabled(description.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
             .alert(isPresented: $showingErrorAlert) {
@@ -277,7 +307,22 @@ struct AddGroupImageView: View {
             }
             .onAppear {
                 loadExistingGroupData()
-                loadAvailableSports()
+                // Sports-only: the roster drives the sport picker. Non-sports
+                // galleries have no roster keyed by sport, so skip the fetch
+                // entirely — the picker is hidden for non-sports anyway.
+                if isSports {
+                    loadAvailableSports()
+                } else {
+                    // Form relies on !isLoadingSports to not render the
+                    // loading row; flip the flag so the (already-hidden)
+                    // sport section doesn't block layout.
+                    isLoadingSports = false
+                    // Non-sports has no auto-description source. Force the
+                    // custom-description flag so updateDescription / isAuto
+                    // guards short-circuit correctly and Description stays
+                    // free-form.
+                    useCustomDescription = true
+                }
                 loadPhotographers()
             }
     }
