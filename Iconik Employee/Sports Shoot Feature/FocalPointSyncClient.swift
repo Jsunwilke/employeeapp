@@ -84,6 +84,34 @@ enum FPSyncError: LocalizedError {
     }
 }
 
+// MARK: - RemoteGroupRow
+
+/// Full group_images row received over the LAN WebSocket. Used by the
+/// onGroupUpdated callback so the receiver can apply the row directly to
+/// local PowerSync without a cloud round-trip — required for offline
+/// shoots. Fields are non-optional with safe defaults so missing wire
+/// fields (older sender) still produce a usable row.
+struct RemoteGroupRow {
+    let id: String
+    let galleryId: String
+    let organizationId: String
+    let description: String
+    let imageNumbers: String
+    let notes: String
+    let sport: String
+    let gender: String
+    let teamLevel: String
+    let sortOrder: Int
+    let version: Int
+    let updatedAt: String      // ISO 8601
+    let updatedBy: String?
+    let lockedBy: String?
+    let lockedByName: String?
+    let lockedAt: String?
+    let createdAt: String      // ISO 8601
+    let photographerId: String?
+}
+
 // MARK: - FocalPointSyncClient
 
 @MainActor
@@ -106,11 +134,17 @@ class FocalPointSyncClient: ObservableObject {
     var onQueueReorder: (([String]) -> Void)?                      // ordered subject_ids
     var onGroupPhotoReady: ((String, [String], Int) -> Void)?      // groupName, presentSubjectIds, total
     var onGroupCaptureCompleted: ((String, Int, String) -> Void)?  // groupId, imageNumber, filename — auto-fill image_numbers on group
-    /// A device on the network edited a group row (description, sport, image_numbers, etc).
-    /// Receiver should refetch the row via PowerSync rather than trusting the payload
-    /// fields as canonical — this is a fast-path notification, not a replicated write.
-    /// Args: (groupId, senderDeviceId)
-    var onGroupUpdated: ((String, String) -> Void)?
+    /// A device on the network created or edited a group row. Carries the FULL
+    /// row payload so the receiver can apply it directly to local PowerSync —
+    /// required for offline shoots where the LAN is the only path between
+    /// iPad and Surface. The receiver should INSERT OR REPLACE on local
+    /// SQLite; PowerSync's CRDT handles dedup once cloud sync resumes.
+    /// Args: (groupId, senderDeviceId, fullRow as RemoteGroupRow)
+    var onGroupUpdated: ((String, String, RemoteGroupRow) -> Void)?
+    /// A device on the network hard-deleted a group row. Receiver should
+    /// DELETE from local PowerSync; the same delete will propagate via
+    /// cloud sync once both sides are online. Args: (groupId)
+    var onGroupDeleted: ((String) -> Void)?
     var onSubjectLinked: ((String, String) -> Void)?               // rosterEntryId, subjectId — Production created a subject for this roster entry
     var onSubjectsDeleted: (([String]) -> Void)?                   // subject_ids deleted on Production
     var onSubjectCreated: ((String, String, String, String, String, String) -> Void)?  // rosterEntryId, firstName, lastName, rosterId, grade, groupName
@@ -598,17 +632,47 @@ class FocalPointSyncClient: ObservableObject {
     func sendGroupFullUpdate(_ group: GroupImage) {
         guard let galleryId = galleryId else { return }
         let gid = group.id.uuidString.lowercased()
-        let msg: [String: Any] = [
+        let isoFormatter = ISO8601DateFormatter()
+        // Send the FULL row so the receiver can INSERT OR REPLACE on
+        // local PowerSync without a cloud round-trip — required for
+        // offline shoots. Field caps stay in place to bound message
+        // size on the LAN.
+        var msg: [String: Any] = [
             "type": "group_updated",
             "device_id": deviceId,
             "gallery_id": galleryId,
             "group_id": gid,
+            "organization_id": group.organizationId,
             "description": String(group.description.prefix(500)),
             "image_numbers": String(group.imageNumbers.prefix(500)),
             "notes": String(group.notes.prefix(1000)),
             "sport": String(group.sport.prefix(100)),
             "gender": String(group.gender.prefix(50)),
             "team_level": String(group.teamLevel.prefix(100)),
+            "sort_order": group.sortOrder,
+            "version": group.version,
+            "updated_at": isoFormatter.string(from: group.updatedAt),
+            "created_at": isoFormatter.string(from: group.createdAt),
+            "station_name": "iPad - \(deviceName)",
+        ]
+        if let updatedBy = group.updatedBy { msg["updated_by"] = updatedBy.uuidString.lowercased() }
+        if let lockedBy = group.lockedBy { msg["locked_by"] = lockedBy.uuidString.lowercased() }
+        if let lockedByName = group.lockedByName { msg["locked_by_name"] = lockedByName }
+        if let lockedAt = group.lockedAt { msg["locked_at"] = isoFormatter.string(from: lockedAt) }
+        if let photographerId = group.photographerId { msg["photographer_id"] = photographerId }
+        send(msg)
+    }
+
+    /// Broadcast that a group row was hard-deleted on this iPad. Receivers
+    /// remove the row from local PowerSync immediately so the delete is
+    /// visible across the LAN even when offline.
+    func sendGroupDeleted(groupId: UUID) {
+        guard let galleryId = galleryId else { return }
+        let msg: [String: Any] = [
+            "type": "group_deleted",
+            "device_id": deviceId,
+            "gallery_id": galleryId,
+            "group_id": groupId.uuidString.lowercased(),
             "station_name": "iPad - \(deviceName)",
         ]
         send(msg)
@@ -1152,13 +1216,48 @@ class FocalPointSyncClient: ObservableObject {
             }
 
         case "group_updated":
-            // Fast-path: Surface (or another iPad) just edited a group
-            // row. Signal the receiver to refetch from PowerSync local
-            // SQLite; we don't trust the payload as canonical.
+            // Fast-path: Surface (or another iPad) just created or edited
+            // a group row. Carries the FULL row so we can apply it
+            // directly to local PowerSync without a cloud round-trip —
+            // required for offline shoots where the LAN is the only
+            // path between devices. PowerSync's CRDT dedups when both
+            // sides eventually reach the cloud (LWW by updated_at).
+            if let groupId = msg["group_id"] as? String, !groupId.isEmpty,
+               UUID(uuidString: groupId) != nil,
+               let galleryId = msg["gallery_id"] as? String, !galleryId.isEmpty,
+               UUID(uuidString: galleryId) != nil {
+                let senderDeviceId = msg["device_id"] as? String ?? ""
+                let nowISO = ISO8601DateFormatter().string(from: Date())
+                let row = RemoteGroupRow(
+                    id: groupId,
+                    galleryId: galleryId,
+                    organizationId: (msg["organization_id"] as? String) ?? "",
+                    description: (msg["description"] as? String) ?? "",
+                    imageNumbers: (msg["image_numbers"] as? String) ?? "",
+                    notes: (msg["notes"] as? String) ?? "",
+                    sport: (msg["sport"] as? String) ?? "",
+                    gender: (msg["gender"] as? String) ?? "",
+                    teamLevel: (msg["team_level"] as? String) ?? "",
+                    sortOrder: (msg["sort_order"] as? Int) ?? 0,
+                    version: (msg["version"] as? Int) ?? 1,
+                    updatedAt: (msg["updated_at"] as? String) ?? nowISO,
+                    updatedBy: msg["updated_by"] as? String,
+                    lockedBy: msg["locked_by"] as? String,
+                    lockedByName: msg["locked_by_name"] as? String,
+                    lockedAt: msg["locked_at"] as? String,
+                    createdAt: (msg["created_at"] as? String) ?? nowISO,
+                    photographerId: msg["photographer_id"] as? String
+                )
+                onGroupUpdated?(groupId, senderDeviceId, row)
+            }
+
+        case "group_deleted":
+            // Fast-path: a device deleted a group. Receiver should DELETE
+            // from local PowerSync immediately; the same delete will
+            // propagate via cloud sync once both sides are online.
             if let groupId = msg["group_id"] as? String, !groupId.isEmpty,
                UUID(uuidString: groupId) != nil {
-                let senderDeviceId = msg["device_id"] as? String ?? ""
-                onGroupUpdated?(groupId, senderDeviceId)
+                onGroupDeleted?(groupId)
             }
 
         case "device_disconnected":

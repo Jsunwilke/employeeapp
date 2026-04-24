@@ -545,6 +545,7 @@ struct PoserStationView: View {
             fpSync.onGroupPhotoReady = nil
             fpSync.onGroupCaptureCompleted = nil
             fpSync.onGroupUpdated = nil
+            fpSync.onGroupDeleted = nil
             // End any in-flight inline image-# edit so the value the
             // user typed gets persisted and the lock gets released
             // before the view goes away.
@@ -1836,14 +1837,14 @@ struct PoserStationView: View {
         }
     }
 
-    /// Persist a GroupImage edit. Increments `version` so PowerSync's
-    /// last-write-wins on `updated_at` also records a monotonic version
-    /// for any future optimistic-concurrency checks. Note: no WebSocket
-    /// fast-path broadcast to Surface — FocalPointSyncClient has no
-    /// sendGroupFullUpdate equivalent of sendSubjectFullUpdate, and the
-    /// plan explicitly forbids wire-protocol changes. Surface picks up
-    /// group edits via PowerSync cloud sync (slightly slower than the
-    /// subject fast-path but correct).
+    /// Persist a GroupImage create or edit. Increments `version` so
+    /// PowerSync's last-write-wins on `updated_at` also records a
+    /// monotonic version for any future optimistic-concurrency checks.
+    /// Broadcasts the full row over the LAN WebSocket so Surface and
+    /// other iPads apply it directly to local PowerSync — required
+    /// for offline shoots where the LAN is the only path between
+    /// devices. PowerSync's CRDT dedups when both sides eventually
+    /// reach the cloud (LWW by updated_at).
     private func saveGroupImage(_ updated: GroupImage) {
         var toSave = updated
         toSave.version += 1
@@ -1891,6 +1892,10 @@ struct PoserStationView: View {
         Task {
             do {
                 try await powerSync.deleteGroupImage(id: group.id)
+                // Fast-path: broadcast the delete to LAN-connected
+                // Surfaces / iPads so they remove the row immediately,
+                // even with no internet at the shoot.
+                await MainActor.run { fpSync.sendGroupDeleted(groupId: group.id) }
             } catch {
                 print("Failed to delete group image: \(error)")
             }
@@ -2176,14 +2181,63 @@ struct PoserStationView: View {
             }
         }
 
-        // Group row was edited on another device (Surface or another
-        // iPad). Refresh the local list from PowerSync so the Groups tab
-        // reflects the change without waiting for the cloud round-trip.
-        // We don't trust the payload fields as canonical — PowerSync is
-        // the source of truth; this is just a "refetch now" signal.
-        fpSync.onGroupUpdated = { (_: String, _: String) in
+        // Group row was created or edited on another device (Surface or
+        // another iPad). Apply the FULL row directly to local PowerSync
+        // so the change is visible offline — required because PowerSync
+        // cloud sync needs internet, and the LAN may be the only path
+        // between devices at a shoot. PowerSync's CRDT dedups when both
+        // sides eventually reach the cloud (LWW by updated_at).
+        fpSync.onGroupUpdated = { (_: String, _: String, row: RemoteGroupRow) in
             Task { @MainActor in
-                await loadGroupImages()
+                guard let gid = UUID(uuidString: row.id),
+                      let galleryUuid = UUID(uuidString: row.galleryId) else { return }
+                let isoFormatter = ISO8601DateFormatter()
+                let updatedDate = isoFormatter.date(from: row.updatedAt) ?? Date()
+                let createdDate = isoFormatter.date(from: row.createdAt) ?? Date()
+                let lockedDate = row.lockedAt.flatMap { isoFormatter.date(from: $0) }
+                let updatedByUuid = row.updatedBy.flatMap { UUID(uuidString: $0) }
+                let lockedByUuid = row.lockedBy.flatMap { UUID(uuidString: $0) }
+                let group = GroupImage(
+                    id: gid,
+                    sportsJobId: galleryUuid,
+                    organizationId: row.organizationId,
+                    description: row.description,
+                    imageNumbers: row.imageNumbers,
+                    notes: row.notes,
+                    sport: row.sport,
+                    gender: row.gender,
+                    teamLevel: row.teamLevel,
+                    sortOrder: row.sortOrder,
+                    version: row.version,
+                    updatedAt: updatedDate,
+                    updatedBy: updatedByUuid,
+                    lockedBy: lockedByUuid,
+                    lockedByName: row.lockedByName,
+                    lockedAt: lockedDate,
+                    createdAt: createdDate,
+                    photographerId: row.photographerId
+                )
+                do {
+                    try await powerSync.saveGroupImage(group)
+                    await loadGroupImages()
+                } catch {
+                    print("PoserStationView: remote group_updated apply failed: \(error)")
+                }
+            }
+        }
+
+        // Group row was hard-deleted on another device. Apply the same
+        // delete locally so it's visible offline. PowerSync propagates
+        // the delete to Supabase when this iPad next has internet.
+        fpSync.onGroupDeleted = { (groupId: String) in
+            Task { @MainActor in
+                guard let gid = UUID(uuidString: groupId) else { return }
+                do {
+                    try await powerSync.deleteGroupImage(id: gid)
+                    await loadGroupImages()
+                } catch {
+                    print("PoserStationView: remote group_deleted apply failed: \(error)")
+                }
             }
         }
     }
