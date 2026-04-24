@@ -58,7 +58,12 @@ let powerSyncSchema = Schema(
     Table(
         name: "group_images",
         columns: [
-            .text("sports_job_id"),
+            // Renamed from sports_job_id to gallery_id in the 20260423
+            // Supabase migration. The Swift property on GroupImage stays
+            // sportsJobId for backward compatibility with Captura (which
+            // we don't touch); CodingKeys maps the property to this
+            // column name.
+            .text("gallery_id"),
             .text("organization_id"),
             .text("description"),
             .text("image_numbers"),

@@ -393,7 +393,7 @@ class PowerSyncManager: ObservableObject {
         let jobIdString = jobId.uuidString.lowercased()
 
         let results: [GroupImage] = try await db.getAll(
-            sql: "SELECT * FROM group_images WHERE sports_job_id = ? ORDER BY sort_order ASC",
+            sql: "SELECT * FROM group_images WHERE gallery_id = ? ORDER BY sort_order ASC",
             parameters: [jobIdString],
             mapper: { cursor in
                 try Self.parseGroupImage(from: cursor)
@@ -420,7 +420,7 @@ class PowerSyncManager: ObservableObject {
         _ = try await db.execute(
             sql: """
                 INSERT OR REPLACE INTO group_images
-                (id, sports_job_id, organization_id, description, image_numbers, notes, sport, gender,
+                (id, gallery_id, organization_id, description, image_numbers, notes, sport, gender,
                  team_level, sort_order, version, updated_at, updated_by,
                  locked_by, locked_by_name, locked_at, created_at, photographer_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -458,12 +458,12 @@ class PowerSyncManager: ObservableObject {
         do {
             // Find group_images missing organization_id
             let missing: [[String: String]] = try await db.getAll(
-                sql: "SELECT id, sports_job_id FROM group_images WHERE organization_id IS NULL OR organization_id = ''",
+                sql: "SELECT id, gallery_id FROM group_images WHERE organization_id IS NULL OR organization_id = ''",
                 parameters: [],
                 mapper: { cursor in
                     let id = try cursor.getString(name: "id")
-                    let jobId = try cursor.getString(name: "sports_job_id")
-                    return ["id": id, "sports_job_id": jobId]
+                    let jobId = try cursor.getString(name: "gallery_id")
+                    return ["id": id, "gallery_id": jobId]
                 }
             )
 
@@ -471,7 +471,7 @@ class PowerSyncManager: ObservableObject {
             print("PowerSyncManager: Backfilling organization_id on \(missing.count) group_images")
 
             for row in missing {
-                guard let id = row["id"], let jobId = row["sports_job_id"] else { continue }
+                guard let id = row["id"], let jobId = row["gallery_id"] else { continue }
 
                 // Try sports_jobs first, then galleries
                 var orgId: String? = nil
@@ -528,7 +528,7 @@ class PowerSyncManager: ObservableObject {
 
         do {
             return try db.watch(
-                sql: "SELECT * FROM group_images WHERE sports_job_id = ? ORDER BY sort_order ASC",
+                sql: "SELECT * FROM group_images WHERE gallery_id = ? ORDER BY sort_order ASC",
                 parameters: [jobIdString],
                 mapper: { cursor in
                     try Self.parseGroupImage(from: cursor)
@@ -709,7 +709,7 @@ class PowerSyncManager: ObservableObject {
 
     private nonisolated static func parseGroupImage(from cursor: SqlCursor) throws -> GroupImage {
         let idString = try cursor.getString(name: "id")
-        let jobIdString = try cursor.getString(name: "sports_job_id")
+        let jobIdString = try cursor.getString(name: "gallery_id")
 
         guard let id = UUID(uuidString: idString),
               let jobId = UUID(uuidString: jobIdString) else {

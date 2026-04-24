@@ -240,7 +240,10 @@ struct GroupImage: Identifiable, Codable, Hashable {
     // CodingKeys to map snake_case database fields to camelCase Swift properties
     enum CodingKeys: String, CodingKey {
         case id, description, notes, sport, gender, version
-        case sportsJobId = "sports_job_id"
+        // The Supabase column was renamed to gallery_id in the 20260423
+        // migration. Keep the Swift property name sportsJobId so Captura
+        // legacy files (don't touch per memory rule) keep compiling.
+        case sportsJobId = "gallery_id"
         case organizationId = "organization_id"
         case imageNumbers = "image_numbers"
         case teamLevel = "team_level"

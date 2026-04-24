@@ -34,7 +34,7 @@ class GroupImageService {
             let groups: [GroupImage] = try await supabase
                 .from(tableName)
                 .select()
-                .eq("sports_job_id", value: jobId)
+                .eq("gallery_id", value: jobId)
                 .order("sort_order", ascending: true)
                 .order("description", ascending: true)
                 .range(from: offset, to: offset + batchSize - 1)
@@ -119,7 +119,7 @@ class GroupImageService {
         try await supabase
             .from(tableName)
             .delete()
-            .eq("sports_job_id", value: jobId)
+            .eq("gallery_id", value: jobId)
             .execute()
     }
 
@@ -220,7 +220,7 @@ class GroupImageService {
         try await supabase
             .from(tableName)
             .update(updateData)
-            .eq("sports_job_id", value: jobId)
+            .eq("gallery_id", value: jobId)
             .lt("locked_at", value: twoMinutesAgo.ISO8601Format())
             .execute()
     }
@@ -241,7 +241,7 @@ class GroupImageService {
             AnyAction.self,
             schema: "public",
             table: tableName,
-            filter: "sports_job_id=eq.\(jobId.uuidString)"
+            filter: "gallery_id=eq.\(jobId.uuidString)"
         )
 
         await channel.subscribe()
