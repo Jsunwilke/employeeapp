@@ -70,6 +70,20 @@ struct PoserStationView: View {
     // Empty entry means not locked.
     @State private var lockedEntries: [UUID: String] = [:]
 
+    // Inline image-number editing on the row. Tap an existing image-#
+    // cell to put it into edit mode without opening the detail panel —
+    // the most frequent edit on a sports shoot. Mirrors FP Sports'
+    // currentlyEditingEntry / editingImageNumber / originalImageNumber
+    // trio so behavior matches across views.
+    // currentlyEditingEntry — id of the row in edit mode, or nil
+    // editingImageNumber  — live buffer the AutosaveTextField writes to
+    // originalImageNumber — value when editing started, used by the
+    //   save guard to avoid spurious saves from watch-stream merges
+    //   that didn't actually change the value.
+    @State private var currentlyEditingEntry: UUID? = nil
+    @State private var editingImageNumber: String = ""
+    @State private var originalImageNumber: String = ""
+
     // Photo viewer
     @State private var showPhotoViewer = false
     @State private var photoViewerSubjectName = ""
@@ -531,6 +545,10 @@ struct PoserStationView: View {
             fpSync.onGroupPhotoReady = nil
             fpSync.onGroupCaptureCompleted = nil
             fpSync.onGroupUpdated = nil
+            // End any in-flight inline image-# edit so the value the
+            // user typed gets persisted and the lock gets released
+            // before the view goes away.
+            endEditingImageNumber()
             // Flush any pending capture-driven saves so burst-shoot-then-
             // leave doesn't lose the trailing image numbers. Same pattern
             // for subjects and groups.
@@ -567,6 +585,22 @@ struct PoserStationView: View {
                     }
                 }
                 pendingGroupCaptureSaves.removeAll()
+                // End any in-flight inline image-# edit so the value
+                // persists before iOS suspends the app.
+                endEditingImageNumber()
+            }
+        }
+        .onChange(of: lockManager.lockLostEvent?.id) { _ in
+            // Lock yanked out from under us — likely another device
+            // grabbed it after our TTL or via the takenByOtherUser path.
+            // Save whatever's in the buffer (better than dropping the
+            // user's typing) and unwind the edit state.
+            if let lost = lockManager.lockLostEvent,
+               currentlyEditingEntry == lost.entryId {
+                saveCurrentEditingEntry()
+                currentlyEditingEntry = nil
+                editingImageNumber = ""
+                originalImageNumber = ""
             }
         }
         .sheet(isPresented: $showingSyncSheet) { syncSheet }
@@ -1273,6 +1307,51 @@ struct PoserStationView: View {
                     .background(Color.green.opacity(0.12)).cornerRadius(99)
             }
 
+            // Sports: inline image-number cell next to the count chip.
+            // Either a tap-to-edit display of the current imageNumbers
+            // value, or an AutosaveTextField when this row is in edit
+            // mode. Shape mirrors FP Sports: 120pt wide, blue 0.25
+            // background, 16pt medium so the operator recognizes it as
+            // the same control they use in FP Sports.
+            if isSports {
+                let isCurrentlyEditing = currentlyEditingEntry == subject.id
+                let lockedByOther = lockedEntries[subject.id] != nil
+                    && lockedEntries[subject.id] != lockManager.currentEditorIdentifier
+                if isCurrentlyEditing {
+                    AutosaveTextField(
+                        text: $editingImageNumber,
+                        placeholder: "Image #",
+                        context: "\(subject.firstName) - \(subject.lastName)",
+                        onTapOutside: { endEditingImageNumber() },
+                        onEnterOrDown: {
+                            saveCurrentEditingEntry()
+                            moveToNextEditableEntry(currentID: subject.id)
+                        },
+                        onEnterOrUp: {
+                            saveCurrentEditingEntry()
+                            moveToPreviousEditableEntry(currentID: subject.id)
+                        }
+                    )
+                    .font(.system(size: 16, weight: .medium))
+                    .frame(width: 120, height: 36)
+                    .multilineTextAlignment(.center)
+                    .background(Color.blue.opacity(0.25))
+                    .cornerRadius(8)
+                } else {
+                    Button(action: { startEditingImageNumber(subject) }) {
+                        Text(subject.imageNumbers.isEmpty ? "Image #" : subject.imageNumbers)
+                            .font(.system(size: 14, weight: .medium))
+                            .frame(width: 120, height: 32)
+                            .multilineTextAlignment(.center)
+                            .background(Color.blue.opacity(lockedByOther ? 0.08 : 0.15))
+                            .foregroundColor(subject.imageNumbers.isEmpty ? Color(.systemGray2) : .primary)
+                            .cornerRadius(8)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(lockedByOther)
+                }
+            }
+
             if hasPhotos {
                 Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
             }
@@ -1602,6 +1681,141 @@ struct PoserStationView: View {
         }
     }
 
+    // MARK: - Inline image-number editing
+
+    /// Begin inline editing of `subject`'s image-numbers cell. Acquires
+    /// the subject lock first so two devices can't edit simultaneously
+    /// (acquisition is async — if it fails, surface a toast and bail).
+    /// If a previous row was being edited, save it before switching.
+    private func startEditingImageNumber(_ subject: FPSubject) {
+        // Locked by another editor — refuse and tell the user.
+        if let editor = lockedEntries[subject.id], editor != lockManager.currentEditorIdentifier {
+            // Use the existing scanError overlay to surface the message
+            // (same pattern QR-scan errors already use, so the toast
+            // styling and dismiss timing are familiar to operators).
+            scanError = "Locked by \(editor)"
+            return
+        }
+        // Save and end any prior in-flight inline edit first.
+        if let priorId = currentlyEditingEntry, priorId != subject.id {
+            saveCurrentEditingEntry()
+            Task { await lockManager.releaseSubjectLock(subjectId: priorId) }
+        }
+        // Seed the buffer + originalImageNumber synchronously so the
+        // text field shows the current value with no flicker.
+        editingImageNumber = subject.imageNumbers
+        originalImageNumber = subject.imageNumbers
+        currentlyEditingEntry = subject.id
+        // Acquire the lock async. If it fails (another device snuck in
+        // between the check above and now), unwind the edit state.
+        let target = subject.id
+        Task {
+            let acquired = await lockManager.acquireSubjectLock(subjectId: target)
+            await MainActor.run {
+                if !acquired && currentlyEditingEntry == target {
+                    currentlyEditingEntry = nil
+                    editingImageNumber = ""
+                    originalImageNumber = ""
+                }
+            }
+        }
+    }
+
+    /// Save the currently-edited image-numbers value. Short-circuits
+    /// when nothing changed (the watch stream merge can re-call this
+    /// without an actual user edit). Routes through saveSubject so the
+    /// PowerSync write + Surface broadcast pipeline is shared.
+    private func saveCurrentEditingEntry() {
+        guard let entryId = currentlyEditingEntry,
+              let idx = subjects.firstIndex(where: { $0.id == entryId }) else { return }
+        // Same-content guard — protects against the watch stream looping
+        // a no-op update through this path.
+        guard editingImageNumber != originalImageNumber else { return }
+        var updated = subjects[idx]
+        updated.imageNumbers = editingImageNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.updatedAt = Date()
+        // Mark saved so the next watch tick doesn't re-trigger the save.
+        originalImageNumber = editingImageNumber
+        saveSubject(updated)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    /// End the inline edit session — flush save, release the lock, and
+    /// clear all edit state. Called from the AutosaveTextField's
+    /// onTapOutside path and from anywhere we need to bail (subject
+    /// switch, lock-lost, panel disappear).
+    private func endEditingImageNumber() {
+        if let entryId = currentlyEditingEntry {
+            saveCurrentEditingEntry()
+            Task { await lockManager.releaseSubjectLock(subjectId: entryId) }
+        }
+        currentlyEditingEntry = nil
+        editingImageNumber = ""
+        originalImageNumber = ""
+    }
+
+    /// Move inline editing to the next row in the displayed list. Used
+    /// by AutosaveTextField's onEnterOrDown — Enter/Down keyboard nav
+    /// jumps to the next editable subject. Skips rows locked by other
+    /// devices and wraps to the top if we're at the bottom.
+    private func moveToNextEditableEntry(currentID: UUID) {
+        let displayed = filteredSubjects
+        guard let idx = displayed.firstIndex(where: { $0.id == currentID }) else { return }
+        // Forward sweep first.
+        for i in (idx + 1)..<displayed.count {
+            let candidate = displayed[i]
+            let lockedByOther = lockedEntries[candidate.id] != nil
+                && lockedEntries[candidate.id] != lockManager.currentEditorIdentifier
+            if !lockedByOther {
+                startEditingImageNumber(candidate)
+                scrollTargetId = candidate.id
+                return
+            }
+        }
+        // Wrap to top.
+        for i in 0..<idx {
+            let candidate = displayed[i]
+            let lockedByOther = lockedEntries[candidate.id] != nil
+                && lockedEntries[candidate.id] != lockManager.currentEditorIdentifier
+            if !lockedByOther {
+                startEditingImageNumber(candidate)
+                scrollTargetId = candidate.id
+                return
+            }
+        }
+        // Nothing editable — just end the current edit.
+        endEditingImageNumber()
+    }
+
+    /// Move inline editing to the previous editable row. Mirror of
+    /// moveToNextEditableEntry — Enter/Up keyboard nav jumps backward,
+    /// wraps to the bottom if at the top.
+    private func moveToPreviousEditableEntry(currentID: UUID) {
+        let displayed = filteredSubjects
+        guard let idx = displayed.firstIndex(where: { $0.id == currentID }) else { return }
+        for i in (0..<idx).reversed() {
+            let candidate = displayed[i]
+            let lockedByOther = lockedEntries[candidate.id] != nil
+                && lockedEntries[candidate.id] != lockManager.currentEditorIdentifier
+            if !lockedByOther {
+                startEditingImageNumber(candidate)
+                scrollTargetId = candidate.id
+                return
+            }
+        }
+        for i in (idx + 1..<displayed.count).reversed() {
+            let candidate = displayed[i]
+            let lockedByOther = lockedEntries[candidate.id] != nil
+                && lockedEntries[candidate.id] != lockManager.currentEditorIdentifier
+            if !lockedByOther {
+                startEditingImageNumber(candidate)
+                scrollTargetId = candidate.id
+                return
+            }
+        }
+        endEditingImageNumber()
+    }
+
     // MARK: - Groups (sports)
 
     /// Schedule a per-group debounced save for capture-driven imageNumbers
@@ -1780,6 +1994,16 @@ struct PoserStationView: View {
                             entry.updatedAt = Date()
                             subjects[idx] = entry
                             scheduleCaptureSave(for: entry.id)
+                            // If this row is being inline-edited right now,
+                            // mirror the new image-numbers value into the
+                            // edit buffer + originalImageNumber so the user
+                            // sees the live append in the field they're
+                            // typing in, and the next save guard doesn't
+                            // think they changed something they didn't.
+                            if currentlyEditingEntry == entry.id {
+                                editingImageNumber = entry.imageNumbers
+                                originalImageNumber = entry.imageNumbers
+                            }
                         }
                     }
                 }
