@@ -85,7 +85,12 @@ let powerSyncSchema = Schema(
             .text("locked_by_name"),
             .text("locked_at"),
             .text("created_at"),
-            .text("photographer_id")
+            .text("photographer_id"),
+            // Membership tracking — when set, group members are computed
+            // live as subjects where subject[member_field] == member_value
+            // (case-insensitive). Auto-Generate sets these at create time.
+            .text("member_field"),
+            .text("member_value")
         ]
     ),
 

@@ -2215,7 +2215,9 @@ struct PoserStationView: View {
                     lockedByName: row.lockedByName,
                     lockedAt: lockedDate,
                     createdAt: createdDate,
-                    photographerId: row.photographerId
+                    photographerId: row.photographerId,
+                    memberField: row.memberField,
+                    memberValue: row.memberValue
                 )
                 do {
                     try await powerSync.saveGroupImage(group)

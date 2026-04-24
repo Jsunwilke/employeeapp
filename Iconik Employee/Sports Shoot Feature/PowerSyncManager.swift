@@ -431,8 +431,9 @@ class PowerSyncManager: ObservableObject {
                 INSERT OR REPLACE INTO group_images
                 (id, gallery_id, sports_job_id, organization_id, description, image_numbers, notes, sport, gender,
                  team_level, sort_order, version, updated_at, updated_by,
-                 locked_by, locked_by_name, locked_at, created_at, photographer_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 locked_by, locked_by_name, locked_at, created_at, photographer_id,
+                 member_field, member_value)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             parameters: [
                 idString,
@@ -453,7 +454,9 @@ class PowerSyncManager: ObservableObject {
                 group.lockedByName,
                 lockedAtISO,
                 createdAtISO,
-                group.photographerId
+                group.photographerId,
+                group.memberField,
+                group.memberValue
             ]
         )
 
@@ -744,7 +747,9 @@ class PowerSyncManager: ObservableObject {
             lockedByName: try? cursor.getString(name: "locked_by_name"),
             lockedAt: parseDate((try? cursor.getString(name: "locked_at"))),
             createdAt: parseDate((try? cursor.getString(name: "created_at"))) ?? Date(),
-            photographerId: try? cursor.getString(name: "photographer_id")
+            photographerId: try? cursor.getString(name: "photographer_id"),
+            memberField: try? cursor.getString(name: "member_field"),
+            memberValue: try? cursor.getString(name: "member_value")
         )
     }
 

@@ -237,6 +237,13 @@ struct GroupImage: Identifiable, Codable, Hashable {
     // Photographer who shot this group photo
     var photographerId: String?
 
+    // Membership tracking — when set, group members are computed live as
+    // subjects where subject[memberField] == memberValue (case-insensitive).
+    // Auto-Generate sets these when bucketing a roster by homeroom /
+    // teacher / grade / sport. Manual groups leave them nil.
+    var memberField: String?
+    var memberValue: String?
+
     // CodingKeys to map snake_case database fields to camelCase Swift properties
     enum CodingKeys: String, CodingKey {
         case id, description, notes, sport, gender, version
@@ -255,6 +262,8 @@ struct GroupImage: Identifiable, Codable, Hashable {
         case lockedAt = "locked_at"
         case createdAt = "created_at"
         case photographerId = "photographer_id"
+        case memberField = "member_field"
+        case memberValue = "member_value"
     }
 
     // Custom decoder to handle missing fields with defaults
@@ -278,6 +287,8 @@ struct GroupImage: Identifiable, Codable, Hashable {
         lockedAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .lockedAt))
         createdAt = parseISO8601Date(try container.decodeIfPresent(String.self, forKey: .createdAt)) ?? Date()
         photographerId = try container.decodeIfPresent(String.self, forKey: .photographerId)
+        memberField = try container.decodeIfPresent(String.self, forKey: .memberField)
+        memberValue = try container.decodeIfPresent(String.self, forKey: .memberValue)
     }
 
     init(id: UUID = UUID(),
@@ -297,7 +308,9 @@ struct GroupImage: Identifiable, Codable, Hashable {
          lockedByName: String? = nil,
          lockedAt: Date? = nil,
          createdAt: Date = Date(),
-         photographerId: String? = nil) {
+         photographerId: String? = nil,
+         memberField: String? = nil,
+         memberValue: String? = nil) {
         self.id = id
         self.sportsJobId = sportsJobId
         self.organizationId = organizationId
@@ -316,6 +329,8 @@ struct GroupImage: Identifiable, Codable, Hashable {
         self.lockedAt = lockedAt
         self.createdAt = createdAt
         self.photographerId = photographerId
+        self.memberField = memberField
+        self.memberValue = memberValue
     }
 
     // Check if entry is currently locked by someone else

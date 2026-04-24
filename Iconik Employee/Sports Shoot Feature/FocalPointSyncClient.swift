@@ -110,6 +110,8 @@ struct RemoteGroupRow {
     let lockedAt: String?
     let createdAt: String      // ISO 8601
     let photographerId: String?
+    let memberField: String?
+    let memberValue: String?
 }
 
 // MARK: - FocalPointSyncClient
@@ -660,6 +662,8 @@ class FocalPointSyncClient: ObservableObject {
         if let lockedByName = group.lockedByName { msg["locked_by_name"] = lockedByName }
         if let lockedAt = group.lockedAt { msg["locked_at"] = isoFormatter.string(from: lockedAt) }
         if let photographerId = group.photographerId { msg["photographer_id"] = photographerId }
+        if let memberField = group.memberField { msg["member_field"] = memberField }
+        if let memberValue = group.memberValue { msg["member_value"] = memberValue }
         send(msg)
     }
 
@@ -1246,7 +1250,9 @@ class FocalPointSyncClient: ObservableObject {
                     lockedByName: msg["locked_by_name"] as? String,
                     lockedAt: msg["locked_at"] as? String,
                     createdAt: (msg["created_at"] as? String) ?? nowISO,
-                    photographerId: msg["photographer_id"] as? String
+                    photographerId: msg["photographer_id"] as? String,
+                    memberField: msg["member_field"] as? String,
+                    memberValue: msg["member_value"] as? String
                 )
                 onGroupUpdated?(groupId, senderDeviceId, row)
             }
