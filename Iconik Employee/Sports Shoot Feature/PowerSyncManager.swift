@@ -417,16 +417,26 @@ class PowerSyncManager: ObservableObject {
         let createdAtISO = ISO8601DateFormatter().string(from: group.createdAt)
         let lockedAtISO: String? = group.lockedAt.map { ISO8601DateFormatter().string(from: $0) }
 
+        // Write sports_job_id alongside gallery_id during the column-rename
+        // rollout. PowerSync's local SQLite only auto-migrates ADDED columns,
+        // so any client whose local table was created before the rename still
+        // has the old NOT NULL sports_job_id column AND no gallery_id column.
+        // The Supabase trigger keeps both columns in sync server-side; we
+        // write both client-side so the local INSERT succeeds regardless of
+        // which schema generation the local SQLite happens to be on. Drop
+        // sports_job_id from this statement when the next migration removes
+        // the column server-side.
         _ = try await db.execute(
             sql: """
                 INSERT OR REPLACE INTO group_images
-                (id, gallery_id, organization_id, description, image_numbers, notes, sport, gender,
+                (id, gallery_id, sports_job_id, organization_id, description, image_numbers, notes, sport, gender,
                  team_level, sort_order, version, updated_at, updated_by,
                  locked_by, locked_by_name, locked_at, created_at, photographer_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             parameters: [
                 idString,
+                jobIdString,
                 jobIdString,
                 group.organizationId,
                 group.description,

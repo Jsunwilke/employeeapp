@@ -59,11 +59,17 @@ let powerSyncSchema = Schema(
         name: "group_images",
         columns: [
             // Renamed from sports_job_id to gallery_id in the 20260423
-            // Supabase migration. The Swift property on GroupImage stays
-            // sportsJobId for backward compatibility with Captura (which
-            // we don't touch); CodingKeys maps the property to this
-            // column name.
+            // Supabase migration. PowerSync's local SQLite only
+            // auto-migrates ADDED columns; if we drop sports_job_id
+            // here, any client whose local SQLite was set up before
+            // the rename keeps the orphaned NOT NULL column AND
+            // doesn't get gallery_id, so INSERTs targeting gallery_id
+            // fail. Declaring BOTH during the rollout means the
+            // existing local table stays valid AND the new column
+            // gets added. Drop sports_job_id from this list when the
+            // server-side drop migration ships.
             .text("gallery_id"),
+            .text("sports_job_id"),
             .text("organization_id"),
             .text("description"),
             .text("image_numbers"),
