@@ -56,6 +56,12 @@ struct PoserStationView: View {
     // one save per group after 500ms of quiet.
     @State private var pendingGroupCaptureSaves: [UUID: Task<Void, Never>] = [:]
 
+    // Image-state filter (chips next to Filter / Sort in the toolbar).
+    // Matches FP Sports' ImageFilterType — lets the operator triage who
+    // they have not shot yet, late in a shoot. .all is the default and
+    // means "no filter."
+    @State private var imageFilterType: ImageFilterType = .all
+
     // Photo viewer
     @State private var showPhotoViewer = false
     @State private var photoViewerSubjectName = ""
@@ -209,8 +215,18 @@ struct PoserStationView: View {
         }
     }
 
+    /// Three-way image-state filter shown as chips in the toolbar.
+    /// `all` means no filter; `hasImages` and `noImages` apply on top
+    /// of the existing filter and search. Same enum shape as FP Sports'
+    /// ImageFilterType so behavior parity is exact.
+    enum ImageFilterType {
+        case all
+        case hasImages
+        case noImages
+    }
+
     var hasActiveFilters: Bool {
-        !activeFilters.isEmpty || !searchText.isEmpty
+        !activeFilters.isEmpty || !searchText.isEmpty || imageFilterType != .all
     }
 
     var filteredSubjects: [FPSubject] {
@@ -229,6 +245,24 @@ struct PoserStationView: View {
                 $0.studentId.lowercased().contains(q) ||
                 $0.rosterId.lowercased().contains(q) ||
                 $0.organizationName.lowercased().contains(q)
+            }
+        }
+        // Image-state filter — applied AFTER the field/search filters so
+        // chip toggles compose with whatever else is active. Uses the
+        // same shot-test as `shotCount` (line 282-ish) so a row counted
+        // as "shot" for the filmstrip is also "shot" for this filter.
+        switch imageFilterType {
+        case .all:
+            break
+        case .hasImages:
+            list = list.filter { subject in
+                let sid = subject.id.uuidString.lowercased()
+                return subject.isPhotographed || (photoCountMap[sid] ?? 0) > 0
+            }
+        case .noImages:
+            list = list.filter { subject in
+                let sid = subject.id.uuidString.lowercased()
+                return !subject.isPhotographed && (photoCountMap[sid] ?? 0) == 0
             }
         }
         return list.sorted {
@@ -739,6 +773,23 @@ struct PoserStationView: View {
 
     // MARK: - Filter Bar
 
+    /// Toolbar chip for an image-state filter. Active state uses the
+    /// same blue tint as the Filter button so the toolbar treats them
+    /// as part of the same filter family.
+    @ViewBuilder
+    private func imageStateChip(label: String, systemImage: String, isActive: Bool, onTap: @escaping () -> Void) -> some View {
+        Button(action: onTap) {
+            HStack(spacing: 4) {
+                Image(systemName: systemImage).font(.caption)
+                Text(label).font(.subheadline)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(isActive ? Color.blue.opacity(0.12) : Color(.systemGray6))
+            .foregroundColor(isActive ? .blue : .primary)
+            .cornerRadius(8)
+        }
+    }
+
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -794,9 +845,30 @@ struct PoserStationView: View {
                     .cornerRadius(8)
                 }
 
+                // Image-state chips: tap once to filter to that state,
+                // tap again to clear. Mutually exclusive — picking one
+                // resets the other to .all. Mirrors FP Sports'
+                // ImageFilterButton behavior in the FilterPanelView.
+                imageStateChip(
+                    label: "Has Photos",
+                    systemImage: "photo.fill",
+                    isActive: imageFilterType == .hasImages,
+                    onTap: { imageFilterType = imageFilterType == .hasImages ? .all : .hasImages }
+                )
+                imageStateChip(
+                    label: "No Photos",
+                    systemImage: "photo",
+                    isActive: imageFilterType == .noImages,
+                    onTap: { imageFilterType = imageFilterType == .noImages ? .all : .noImages }
+                )
+
                 if hasActiveFilters {
-                    Button("Clear") { activeFilters.removeAll(); searchText = "" }
-                        .font(.subheadline).foregroundColor(.red)
+                    Button("Clear") {
+                        activeFilters.removeAll()
+                        searchText = ""
+                        imageFilterType = .all
+                    }
+                    .font(.subheadline).foregroundColor(.red)
                 }
 
                 Spacer()
