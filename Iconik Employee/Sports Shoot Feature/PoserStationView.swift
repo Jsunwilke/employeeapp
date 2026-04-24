@@ -14,6 +14,7 @@ struct PoserStationView: View {
 
     private let powerSync = PowerSyncManager.shared
     @StateObject private var fpSync = FocalPointSyncClient.shared
+    @ObservedObject private var lockManager = LockManager.shared
 
     // Subjects
     @State private var subjects: [FPSubject] = []
@@ -61,6 +62,13 @@ struct PoserStationView: View {
     // they have not shot yet, late in a shoot. .all is the default and
     // means "no filter."
     @State private var imageFilterType: ImageFilterType = .all
+
+    // Lock state — [subject.id : editor name] for any subject in the
+    // roster that's currently locked by another device. Populated from
+    // the subjects watch stream (each tick scans subject.lockedByName)
+    // so it reflects the same source of truth the lock RPC writes to.
+    // Empty entry means not locked.
+    @State private var lockedEntries: [UUID: String] = [:]
 
     // Photo viewer
     @State private var showPhotoViewer = false
@@ -118,6 +126,8 @@ struct PoserStationView: View {
     @State private var showingSyncSheet = false
 
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
+    @AppStorage("userFirstName") private var storedUserFirstName: String = ""
+    @AppStorage("userLastName") private var storedUserLastName: String = ""
     @Environment(\.scenePhase) private var scenePhase
 
     // MARK: - Computed
@@ -366,12 +376,16 @@ struct PoserStationView: View {
                     }
 
                     if detailPanelVisible, let subject = selectedSubject {
+                        let lockerName = lockedEntries[subject.id]
+                        let isLockedByOther = lockerName != nil && lockerName != lockManager.currentEditorIdentifier
                         SubjectDetailPanel(
                             subject: subject,
                             thumbnails: subjectThumbnails[subject.id.uuidString.lowercased()] ?? [],
                             photoCount: photoCountMap[subject.id.uuidString.lowercased()] ?? 0,
                             galleryId: galleryId,
                             isSports: gallery.shootType == "sports",
+                            isLockedByOther: isLockedByOther,
+                            lockedByName: lockerName,
                             onSave: { updated in saveSubject(updated) },
                             onSelect: { selectOnCamera(subject) },
                             onViewPhotos: { name, thumbs in
@@ -473,12 +487,24 @@ struct PoserStationView: View {
             // Matches the pattern used by FPSportsRosterView_iPad and the Production
             // app's sync_gallery. Without this, users who haven't previously opened
             // this gallery (via Production or FP Sports) get an empty roster.
-            if let userId = UserManager.shared.getCurrentUserIDUnified() {
+            if let userIdString = UserManager.shared.getCurrentUserIDUnified() {
                 try? await powerSync.pinGallery(
-                    userId: userId,
+                    userId: userIdString,
                     galleryId: galleryId,
                     organizationId: storedUserOrganizationID
                 )
+                // Initialize the lock manager so any acquire/release call
+                // from the SubjectDetailPanel's focus handler has a user
+                // identity to attach. Mirrors FPSportsRosterView_iPad's
+                // setup at line 1364 — UUID from Supabase auth, name
+                // from the @AppStorage first/last name pair.
+                if let authUUID = SupabaseManager.shared.client.auth.currentUser?.id {
+                    let fullName = "\(storedUserFirstName) \(storedUserLastName)".trimmingCharacters(in: .whitespaces)
+                    LockManager.shared.setCurrentUser(
+                        userId: authUUID,
+                        userName: fullName.isEmpty ? userIdString : fullName
+                    )
+                }
             }
             await loadSubjects()
             await loadCachedThumbnails()
@@ -1220,6 +1246,19 @@ struct PoserStationView: View {
                     .foregroundColor(.white).padding(.horizontal, 6).padding(.vertical, 2)
                     .background(Color.orange).cornerRadius(4)
             }
+            // Lock badge — visible when another device holds the
+            // subject's lock. Lets the operator see at a glance which
+            // rows are being edited elsewhere without opening the panel.
+            if let locker = lockedEntries[subject.id], locker != lockManager.currentEditorIdentifier {
+                HStack(spacing: 3) {
+                    Image(systemName: "lock.fill").font(.system(size: 9))
+                    Text(locker).font(.system(size: 9, weight: .semibold)).lineLimit(1)
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Color.orange)
+                .cornerRadius(4)
+            }
 
             Spacer()
 
@@ -1675,6 +1714,18 @@ struct PoserStationView: View {
                 for try await updated in stream {
                     if !Task.isCancelled {
                         subjects = updated
+                        // Rebuild the lock map from each watch tick so the
+                        // row-level lock badge reflects the current source
+                        // of truth (subject.lockedByName, written by the
+                        // acquire_lock RPC). Mirrors the FP Sports
+                        // pattern at FPSportsRosterView_iPad line 4819.
+                        var nextLocks: [UUID: String] = [:]
+                        for entry in updated {
+                            if let name = entry.lockedByName, !name.isEmpty {
+                                nextLocks[entry.id] = name
+                            }
+                        }
+                        lockedEntries = nextLocks
                         if isLoading { isLoading = false }
                     }
                 }
@@ -2170,11 +2221,27 @@ struct SubjectDetailPanel: View {
     let photoCount: Int
     let galleryId: String
     let isSports: Bool
+    /// True when another device currently holds the lock on this
+    /// subject. Render-only flag — the panel reads this to surface a
+    /// "locked by …" banner and disable inputs. Lock acquisition for
+    /// THIS device is owned by the panel itself via lockManager.
+    let isLockedByOther: Bool
+    /// Display name of the user holding the lock (when isLockedByOther).
+    let lockedByName: String?
     let onSave: (FPSubject) -> Void
     let onSelect: () -> Void
     let onViewPhotos: (String, [CaptureThumb]) -> Void
 
     @State private var draft: FPSubject?
+    /// Tracks whether THIS panel currently holds a lock on the visible
+    /// subject. Acquired on first focus, released on focus-out / panel
+    /// close / subject change. We track it so we don't re-acquire on
+    /// every focus toggle within the same edit session.
+    @State private var lockAcquired: Bool = false
+    /// Subject id whose lock we hold (or null). Used to release the
+    /// correct lock when the visible subject changes between panel
+    /// opens without an explicit close.
+    @State private var lockedSubjectId: UUID?
     // Debounce: 10-second fallback after the last keystroke. Real commit
     // triggers (focus-loss, subject-change, scene-phase, disappear) cover
     // every case where the user signals "done." The timer is just a last-
@@ -2195,6 +2262,28 @@ struct SubjectDetailPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                // Locked-by-other banner. Surfaces above everything else
+                // when another device holds the lock so the operator
+                // sees it before they start typing. Inputs below stay
+                // disabled while the lock is held by someone else.
+                if isLockedByOther {
+                    HStack(spacing: 8) {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.orange)
+                        Text("Being edited by \(lockedByName ?? "another user")")
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.orange.opacity(0.4), lineWidth: 1)
+                    )
+                    .cornerRadius(6)
+                }
+
                 // Header + select button
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -2302,33 +2391,89 @@ struct SubjectDetailPanel: View {
                 Spacer(minLength: 40)
             }
             .padding(20)
+            // Disable interactive controls when another device holds the
+            // lock. Inputs reject focus, save buttons reject taps. Banner
+            // above stays visible (text/icon, no interactivity to disable)
+            // so the user knows why the panel feels frozen.
+            .disabled(isLockedByOther)
         }
         .background(Color(.secondarySystemBackground))
-        .onChange(of: subject.id) { _ in
+        .onChange(of: subject.id) { newId in
             // Switching to a different subject: flush any pending edit on the
             // outgoing subject FIRST so the keystrokes don't get lost, then
-            // reset draft for the incoming subject.
+            // reset draft for the incoming subject. Also release any lock
+            // we hold on the prior subject — the new subject will acquire
+            // its own when the user touches a field there.
             flushPendingSave()
             draft = nil
+            if let prior = lockedSubjectId, prior != newId {
+                Task { await LockManager.shared.releaseSubjectLock(subjectId: prior) }
+                lockedSubjectId = nil
+                lockAcquired = false
+            }
         }
-        .onChange(of: focusedField) { _ in
+        .onChange(of: focusedField) { newValue in
             // Primary commit trigger: the user clicked out of a field (or
             // into a different one). Flush whatever's in the draft now —
             // no waiting on the debounce timer.
             flushPendingSave()
+            // Lock lifecycle. Acquire on first focus per subject (gated
+            // by lockAcquired so we don't re-RPC on every Tab between
+            // fields). Release when focus leaves the panel entirely
+            // (focusedField == nil) so other devices can pick up the
+            // subject as soon as we look away.
+            if newValue != nil {
+                if !lockAcquired || lockedSubjectId != subject.id {
+                    let target = subject.id
+                    Task {
+                        let acquired = await LockManager.shared.acquireSubjectLock(subjectId: target)
+                        await MainActor.run {
+                            if acquired {
+                                lockAcquired = true
+                                lockedSubjectId = target
+                            } else {
+                                // Couldn't acquire (held by another). Drop
+                                // focus so the user isn't typing into a
+                                // field that won't save, and surface the
+                                // banner via the parent's lockedEntries
+                                // refresh on the next watch tick.
+                                focusedField = nil
+                            }
+                        }
+                    }
+                }
+            } else if lockAcquired, let held = lockedSubjectId {
+                Task { await LockManager.shared.releaseSubjectLock(subjectId: held) }
+                lockedSubjectId = nil
+                lockAcquired = false
+            }
         }
         .onDisappear {
             // Panel closed: flush any pending edit so partial keystrokes
             // don't sit in a cancelled debounce.
             flushPendingSave()
+            // Release any lock we still hold so other devices aren't
+            // blocked waiting for the TTL to expire.
+            if let held = lockedSubjectId {
+                Task { await LockManager.shared.releaseSubjectLock(subjectId: held) }
+                lockedSubjectId = nil
+                lockAcquired = false
+            }
         }
         .onChange(of: scenePhase) { newPhase in
             // App backgrounded / inactive (home button, app switcher, lock
             // screen, incoming call). Flush before iOS suspends the
             // debounce task — otherwise the edit can be lost if the app
             // gets killed for memory pressure while in the background.
+            // Also release the lock — iOS will give us a small window to
+            // finish the RPC; if we miss it the lock TTL takes over.
             if newPhase != .active {
                 flushPendingSave()
+                if let held = lockedSubjectId {
+                    Task { await LockManager.shared.releaseSubjectLock(subjectId: held) }
+                    lockedSubjectId = nil
+                    lockAcquired = false
+                }
             }
         }
     }
