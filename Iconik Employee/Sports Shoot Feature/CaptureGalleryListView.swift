@@ -15,6 +15,7 @@ struct CaptureGalleryListView: View {
     @State private var isLoading = true
     @State private var watchTask: Task<Void, Never>?
     @State private var searchText = ""
+    @State private var expandedSections: Set<String> = []
 
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
 
@@ -82,10 +83,14 @@ struct CaptureGalleryListView: View {
                 } else {
                     List {
                         ForEach(groupedGalleries, id: \.type) { group in
-                            Section(header: Text(group.label)) {
-                                ForEach(group.galleries) { gallery in
-                                    galleryNavigationLink(gallery)
+                            Section {
+                                if isExpanded(group.type) {
+                                    ForEach(group.galleries) { gallery in
+                                        galleryNavigationLink(gallery)
+                                    }
                                 }
+                            } header: {
+                                sectionHeader(for: group)
                             }
                         }
                     }
@@ -103,6 +108,48 @@ struct CaptureGalleryListView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    /// Sections start collapsed so the user lands on a short list of
+    /// shoot-type headers and only expands the type they're shooting
+    /// today. While a search is active, every section auto-expands so
+    /// matches in any group are visible without manual toggling.
+    private func isExpanded(_ type: String) -> Bool {
+        if !searchText.isEmpty { return true }
+        return expandedSections.contains(type)
+    }
+
+    private func toggleSection(_ type: String) {
+        if expandedSections.contains(type) {
+            expandedSections.remove(type)
+        } else {
+            expandedSections.insert(type)
+        }
+    }
+
+    @ViewBuilder
+    private func sectionHeader(for group: (type: String, label: String, galleries: [SportsShoot])) -> some View {
+        let expanded = isExpanded(group.type)
+        let searching = !searchText.isEmpty
+        Button(action: {
+            guard !searching else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { toggleSection(group.type) }
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                Text(group.label)
+                Spacer()
+                Text("\(group.galleries.count)")
+                    .foregroundColor(.secondary)
+            }
+            .contentShape(Rectangle())
+            .frame(minHeight: 44)
+        }
+        .buttonStyle(.plain)
+        .disabled(searching)
     }
 
     @ViewBuilder

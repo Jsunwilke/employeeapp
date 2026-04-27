@@ -143,6 +143,7 @@ struct PoserStationView: View {
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     @AppStorage("userLastName") private var storedUserLastName: String = ""
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dismiss) private var dismiss
 
     // MARK: - Computed
 
@@ -496,6 +497,17 @@ struct PoserStationView: View {
         } // GeometryReader
         .navigationTitle("")
         .navigationBarHidden(true)
+        .onAppear {
+            // Swap the global "Home" button for a "Galleries" back button so
+            // tapping the top-left chevron pops back to the gallery picker
+            // (CaptureGalleryListView) instead of jumping straight to the
+            // dashboard. From there the operator can hit Home themselves.
+            // Cleared in onDisappear so the override doesn't leak after the
+            // view goes away.
+            TabBarManager.shared.topBarBackOverride = TopBarBackOverride(label: "Galleries") {
+                dismiss()
+            }
+        }
         .task {
             // Pin the gallery so PowerSync syncs its subjects to this user's device.
             // Matches the pattern used by FPSportsRosterView_iPad and the Production
@@ -532,6 +544,9 @@ struct PoserStationView: View {
             try? await GroupImageService.shared.releaseExpiredLocks(forJob: gallery.id)
         }
         .onDisappear {
+            // Drop the back-override so the top toolbar reverts to the
+            // global "Home" button on the parent (gallery picker) view.
+            TabBarManager.shared.topBarBackOverride = nil
             subjectWatchTask?.cancel()
             groupWatchTask?.cancel()
             // Null the group-photo fpSync callbacks we installed in
@@ -1306,51 +1321,6 @@ struct PoserStationView: View {
                 Text("+\(count)").font(.caption).fontWeight(.bold)
                     .foregroundColor(.green).padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Color.green.opacity(0.12)).cornerRadius(99)
-            }
-
-            // Sports: inline image-number cell next to the count chip.
-            // Either a tap-to-edit display of the current imageNumbers
-            // value, or an AutosaveTextField when this row is in edit
-            // mode. Shape mirrors FP Sports: 120pt wide, blue 0.25
-            // background, 16pt medium so the operator recognizes it as
-            // the same control they use in FP Sports.
-            if isSports {
-                let isCurrentlyEditing = currentlyEditingEntry == subject.id
-                let lockedByOther = lockedEntries[subject.id] != nil
-                    && lockedEntries[subject.id] != lockManager.currentEditorIdentifier
-                if isCurrentlyEditing {
-                    AutosaveTextField(
-                        text: $editingImageNumber,
-                        placeholder: "Image #",
-                        context: "\(subject.firstName) - \(subject.lastName)",
-                        onTapOutside: { endEditingImageNumber() },
-                        onEnterOrDown: {
-                            saveCurrentEditingEntry()
-                            moveToNextEditableEntry(currentID: subject.id)
-                        },
-                        onEnterOrUp: {
-                            saveCurrentEditingEntry()
-                            moveToPreviousEditableEntry(currentID: subject.id)
-                        }
-                    )
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(width: 120, height: 36)
-                    .multilineTextAlignment(.center)
-                    .background(Color.blue.opacity(0.25))
-                    .cornerRadius(8)
-                } else {
-                    Button(action: { startEditingImageNumber(subject) }) {
-                        Text(subject.imageNumbers.isEmpty ? "Image #" : subject.imageNumbers)
-                            .font(.system(size: 14, weight: .medium))
-                            .frame(width: 120, height: 32)
-                            .multilineTextAlignment(.center)
-                            .background(Color.blue.opacity(lockedByOther ? 0.08 : 0.15))
-                            .foregroundColor(subject.imageNumbers.isEmpty ? Color(.systemGray2) : .primary)
-                            .cornerRadius(8)
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(lockedByOther)
-                }
             }
 
             if hasPhotos {

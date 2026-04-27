@@ -930,9 +930,21 @@ struct MainEmployeeView: View {
     
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // Left toolbar: back to home button (only shown when not on home)
+        // Left toolbar:
+        //  - If a nested feature view registered a back-override (e.g. the
+        //    capture view sitting inside CaptureGalleryListView's nav stack),
+        //    show that label + run its handler so the operator pops one
+        //    level instead of jumping all the way to home mid-shoot.
+        //  - Otherwise: show the global "Home" button when not already home.
         ToolbarItem(placement: .navigationBarLeading) {
-            if tabBarManager.selectedTab == "home" || tabBarManager.selectedTab == "" {
+            if let override = tabBarManager.topBarBackOverride {
+                Button(action: override.action) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text(override.label)
+                    }
+                }
+            } else if tabBarManager.selectedTab == "home" || tabBarManager.selectedTab == "" {
                 EmptyView()
             } else {
                 Button(action: {
