@@ -2434,7 +2434,7 @@ struct PoserStationView: View {
     // MARK: - Add Subject Sheet
 
     private var addSubjectSheet: some View {
-        AddSubjectSheet(galleryId: galleryId, organizationId: storedUserOrganizationID, subjects: subjects) { newSubject in
+        AddSubjectSheet(galleryId: galleryId, organizationId: storedUserOrganizationID, subjects: subjects, shootType: gallery.shootType) { newSubject in
             Task {
                 do {
                     try await powerSync.saveSubject(newSubject)
@@ -2826,6 +2826,7 @@ struct AddSubjectSheet: View {
     let galleryId: String
     let organizationId: String
     let subjects: [FPSubject]
+    let shootType: String?
     let onAdd: (FPSubject) -> Void
 
     @State private var firstName = ""
@@ -2834,15 +2835,42 @@ struct AddSubjectSheet: View {
     @State private var teacher = ""
     @State private var homeroom = ""
     @State private var studentId = ""
+    @State private var rosterId = ""
+    @State private var organizationName = ""
+    @State private var sport = ""
+    @State private var jerseyNumber = ""
+    @State private var position = ""
+    @State private var email = ""
+    @State private var phone = ""
+    @State private var notes = ""
     @State private var showingCardScan = false
     @State private var scanProcessing = false
     @State private var ocrWarning: String?
+    @State private var showAllFields = false
     @Environment(\.dismiss) private var dismiss
 
-    private var showGrade: Bool { subjects.contains { !$0.grade.isEmpty } }
-    private var showTeacher: Bool { subjects.contains { !$0.teacher.isEmpty } }
-    private var showHomeroom: Bool { subjects.contains { !$0.homeroom.isEmpty } }
-    private var showStudentId: Bool { subjects.contains { !$0.studentId.isEmpty } }
+    private var isEvents: Bool {
+        let st = shootType?.lowercased() ?? ""
+        return st == "events" || st == "event"
+    }
+    private var isSports: Bool { (shootType?.lowercased() ?? "") == "sports" }
+
+    private func anyHas(_ keyPath: KeyPath<FPSubject, String>) -> Bool {
+        subjects.contains { !$0[keyPath: keyPath].isEmpty }
+    }
+
+    private var showGrade: Bool { showAllFields || anyHas(\.grade) }
+    private var showTeacher: Bool { showAllFields || anyHas(\.teacher) }
+    private var showHomeroom: Bool { showAllFields || anyHas(\.homeroom) }
+    private var showStudentId: Bool { showAllFields || anyHas(\.studentId) }
+    private var showRosterId: Bool { showAllFields || anyHas(\.rosterId) }
+    private var showOrganization: Bool { showAllFields || isEvents || anyHas(\.organizationName) }
+    private var showSport: Bool { showAllFields || isSports || anyHas(\.sport) }
+    private var showJerseyNumber: Bool { showAllFields || isSports || anyHas(\.jerseyNumber) }
+    private var showPosition: Bool { showAllFields || isSports || anyHas(\.position) }
+    private var showEmail: Bool { showAllFields || anyHas(\.email) }
+    private var showPhone: Bool { showAllFields || anyHas(\.phone) }
+    private var showNotes: Bool { showAllFields || anyHas(\.notes) }
 
     var body: some View {
         NavigationView {
@@ -2873,12 +2901,54 @@ struct AddSubjectSheet: View {
                     TextField("First Name", text: $firstName)
                     TextField("Last Name", text: $lastName)
                 }
-                if showGrade || showTeacher || showHomeroom || showStudentId {
-                    Section("Info") {
+
+                if isEvents && showOrganization {
+                    Section("Organization") {
+                        TextField("Organization", text: $organizationName)
+                    }
+                }
+
+                if showGrade || showTeacher || showHomeroom || showStudentId || showRosterId {
+                    Section("School") {
                         if showGrade { TextField("Grade", text: $grade) }
                         if showTeacher { TextField("Teacher", text: $teacher) }
                         if showHomeroom { TextField("Homeroom", text: $homeroom) }
                         if showStudentId { TextField("Student ID", text: $studentId) }
+                        if showRosterId { TextField("Roster ID", text: $rosterId) }
+                    }
+                }
+
+                if showSport || showJerseyNumber || showPosition {
+                    Section("Sports") {
+                        if showSport { TextField("Sport", text: $sport) }
+                        if showJerseyNumber { TextField("Jersey #", text: $jerseyNumber) }
+                        if showPosition { TextField("Position", text: $position) }
+                    }
+                }
+
+                if !isEvents && showOrganization {
+                    Section("Organization") {
+                        TextField("Organization", text: $organizationName)
+                    }
+                }
+
+                if showEmail || showPhone {
+                    Section("Contact") {
+                        if showEmail { TextField("Email", text: $email).keyboardType(.emailAddress).autocapitalization(.none) }
+                        if showPhone { TextField("Phone", text: $phone).keyboardType(.phonePad) }
+                    }
+                }
+
+                if showNotes {
+                    Section("Notes") {
+                        TextField("Notes", text: $notes, axis: .vertical).lineLimit(2...4)
+                    }
+                }
+
+                Section {
+                    Button(action: { showAllFields.toggle() }) {
+                        Label(showAllFields ? "Hide empty fields" : "Show all fields",
+                              systemImage: showAllFields ? "eye.slash" : "eye")
                     }
                 }
             }
@@ -2887,7 +2957,24 @@ struct AddSubjectSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
-                        let subject = FPSubject(galleryId: galleryId, organizationId: organizationId, firstName: firstName.trimmingCharacters(in: .whitespaces), lastName: lastName.trimmingCharacters(in: .whitespaces), grade: grade, teacher: teacher, homeroom: homeroom, studentId: studentId)
+                        let subject = FPSubject(
+                            galleryId: galleryId,
+                            organizationId: organizationId,
+                            firstName: firstName.trimmingCharacters(in: .whitespaces),
+                            lastName: lastName.trimmingCharacters(in: .whitespaces),
+                            grade: grade,
+                            teacher: teacher,
+                            homeroom: homeroom,
+                            studentId: studentId,
+                            rosterId: rosterId,
+                            jerseyNumber: jerseyNumber,
+                            sport: sport,
+                            position: position,
+                            organizationName: organizationName,
+                            email: email,
+                            phone: phone,
+                            notes: notes
+                        )
                         onAdd(subject)
                     }
                     .disabled(firstName.trimmingCharacters(in: .whitespaces).isEmpty || lastName.trimmingCharacters(in: .whitespaces).isEmpty)
