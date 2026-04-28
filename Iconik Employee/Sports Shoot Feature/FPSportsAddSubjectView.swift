@@ -13,6 +13,7 @@ struct FPSportsAddSubjectView: View {
     let galleryId: String
     let organizationId: String
     let existingSubject: FPSubject?
+    let shootType: String?
     /// Called on save complete. Second arg is the optimistic subject the
     /// caller can splice into its in-memory list so the UI shows the edit
     /// immediately (without waiting for Surface→Supabase→PowerSync round-trip).
@@ -34,6 +35,33 @@ struct FPSportsAddSubjectView: View {
     @State private var imageNumbers: String = ""
     @State private var notes: String = ""
 
+    // Extended fields (Production parity)
+    @State private var homeroom: String = ""
+    @State private var studentId: String = ""
+    @State private var onlineCode: String = ""
+    @State private var organizationName: String = ""
+    @State private var year: String = ""
+    @State private var subjectType: String = ""
+    @State private var title: String = ""
+    @State private var referenceNumber: String = ""
+    @State private var photographer: String = ""
+    @State private var photoSessionDate: String = ""
+    @State private var expirationDate: String = ""
+    @State private var phone2: String = ""
+    @State private var address1: String = ""
+    @State private var address2: String = ""
+    @State private var city: String = ""
+    @State private var state: String = ""
+    @State private var zip: String = ""
+    @State private var country: String = ""
+    @State private var mother: String = ""
+    @State private var father: String = ""
+    @State private var personalization: String = ""
+    @State private var discountCode: String = ""
+    @State private var customValues: [String] = Array(repeating: "", count: 20)
+
+    @State private var showAllFields = false
+
     @State private var isLoading = false
     @State private var errorMessage = ""
     @State private var showingErrorAlert = false
@@ -53,6 +81,61 @@ struct FPSportsAddSubjectView: View {
     @Environment(\.presentationMode) var presentationMode
 
     var isEditing: Bool { existingSubject != nil }
+
+    // MARK: - Per-field visibility
+
+    private var isEvents: Bool {
+        let st = shootType?.lowercased() ?? ""
+        return st == "events" || st == "event"
+    }
+
+    private func anyHas(_ keyPath: KeyPath<FPSubject, String>) -> Bool {
+        existingSubjects.contains { !$0[keyPath: keyPath].isEmpty }
+    }
+
+    private var showHomeroom: Bool { showAllFields || anyHas(\.homeroom) }
+    private var showStudentId: Bool { showAllFields || anyHas(\.studentId) }
+    private var showOnlineCode: Bool { showAllFields || anyHas(\.onlineCode) }
+    private var showOrganization: Bool { showAllFields || isEvents || anyHas(\.organizationName) }
+    private var showYear: Bool { showAllFields || anyHas(\.year) }
+    private var showSubjectType: Bool { showAllFields || anyHas(\.subjectType) }
+    private var showTitle: Bool { showAllFields || anyHas(\.title) }
+    private var showReferenceNumber: Bool { showAllFields || anyHas(\.referenceNumber) }
+    private var showPhotographer: Bool { showAllFields || anyHas(\.photographer) }
+    private var showPhotoSessionDate: Bool { showAllFields || anyHas(\.photoSessionDate) }
+    private var showExpirationDate: Bool { showAllFields || anyHas(\.expirationDate) }
+    private var showPhone2: Bool { showAllFields || anyHas(\.phone2) }
+    private var showAddress1: Bool { showAllFields || anyHas(\.address1) }
+    private var showAddress2: Bool { showAllFields || anyHas(\.address2) }
+    private var showCity: Bool { showAllFields || anyHas(\.city) }
+    private var showState: Bool { showAllFields || anyHas(\.state) }
+    private var showZip: Bool { showAllFields || anyHas(\.zip) }
+    private var showCountry: Bool { showAllFields || anyHas(\.country) }
+    private var showMother: Bool { showAllFields || anyHas(\.mother) }
+    private var showFather: Bool { showAllFields || anyHas(\.father) }
+    private var showPersonalization: Bool { showAllFields || anyHas(\.personalization) }
+    private var showDiscountCode: Bool { showAllFields || anyHas(\.discountCode) }
+
+    private static let customKeyPaths: [KeyPath<FPSubject, String>] = [
+        \.custom1, \.custom2, \.custom3, \.custom4, \.custom5,
+        \.custom6, \.custom7, \.custom8, \.custom9, \.custom10,
+        \.custom11, \.custom12, \.custom13, \.custom14, \.custom15,
+        \.custom16, \.custom17, \.custom18, \.custom19, \.custom20
+    ]
+    private func showCustom(_ index: Int) -> Bool {
+        showAllFields || existingSubjects.contains { !$0[keyPath: FPSportsAddSubjectView.customKeyPaths[index]].isEmpty }
+    }
+    private var anySchoolExtraVisible: Bool { showHomeroom || showStudentId || showOnlineCode }
+    private var anyEventInfoVisible: Bool {
+        showYear || showSubjectType || showTitle || showReferenceNumber ||
+        showPhotographer || showPhotoSessionDate || showExpirationDate
+    }
+    private var anyAddressVisible: Bool {
+        showPhone2 || showAddress1 || showAddress2 || showCity || showState || showZip || showCountry
+    }
+    private var anyFamilyVisible: Bool { showMother || showFather }
+    private var anyAdditionalVisible: Bool { showPersonalization || showDiscountCode }
+    private var anyCustomVisible: Bool { (0..<20).contains { showCustom($0) } }
 
     var body: some View {
         NavigationView {
@@ -146,6 +229,32 @@ struct FPSportsAddSubjectView: View {
                     .onSubmit { focusedField = "email" }
             }
 
+            if showOrganization {
+                Section(header: Text("Organization")) {
+                    TextField("Organization", text: $organizationName)
+                }
+            }
+
+            if anySchoolExtraVisible {
+                Section(header: Text("School")) {
+                    if showHomeroom { TextField("Homeroom", text: $homeroom) }
+                    if showStudentId { TextField("Student ID", text: $studentId) }
+                    if showOnlineCode { TextField("Online Code", text: $onlineCode) }
+                }
+            }
+
+            if anyEventInfoVisible {
+                Section(header: Text("Event Info")) {
+                    if showYear { TextField("Year", text: $year) }
+                    if showSubjectType { TextField("Subject Type", text: $subjectType) }
+                    if showTitle { TextField("Title", text: $title) }
+                    if showReferenceNumber { TextField("Reference #", text: $referenceNumber) }
+                    if showPhotographer { TextField("Photographer", text: $photographer) }
+                    if showPhotoSessionDate { TextField("Session Date (YYYY-MM-DD)", text: $photoSessionDate) }
+                    if showExpirationDate { TextField("Expiration Date (YYYY-MM-DD)", text: $expirationDate) }
+                }
+            }
+
             Section(header: Text("Contact Information")) {
                 TextField("Email", text: $email)
                     .keyboardType(.emailAddress)
@@ -158,6 +267,28 @@ struct FPSportsAddSubjectView: View {
                 TextField("Phone", text: $phone)
                     .keyboardType(.phonePad)
                     .focused($focusedField, equals: "phone")
+
+                if showPhone2 { TextField("Phone 2", text: $phone2).keyboardType(.phonePad) }
+                if showAddress1 { TextField("Address", text: $address1) }
+                if showAddress2 { TextField("Address 2", text: $address2) }
+                if showCity { TextField("City", text: $city) }
+                if showState { TextField("State", text: $state) }
+                if showZip { TextField("Zip", text: $zip).keyboardType(.numbersAndPunctuation) }
+                if showCountry { TextField("Country", text: $country) }
+            }
+
+            if anyFamilyVisible {
+                Section(header: Text("Family")) {
+                    if showMother { TextField("Mother / Guardian", text: $mother) }
+                    if showFather { TextField("Father / Guardian", text: $father) }
+                }
+            }
+
+            if anyAdditionalVisible {
+                Section(header: Text("Additional")) {
+                    if showPersonalization { TextField("Personalization", text: $personalization) }
+                    if showDiscountCode { TextField("Discount Code", text: $discountCode) }
+                }
             }
 
             Section(header: Text("Image Information")) {
@@ -166,6 +297,23 @@ struct FPSportsAddSubjectView: View {
 
                 TextView(text: $notes, placeholder: "Notes (optional)")
                     .frame(minHeight: 100)
+            }
+
+            if anyCustomVisible {
+                Section(header: Text("Custom Fields")) {
+                    ForEach(0..<20, id: \.self) { i in
+                        if showCustom(i) {
+                            TextField("Custom \(i + 1)", text: $customValues[i])
+                        }
+                    }
+                }
+            }
+
+            Section {
+                Button(action: { showAllFields.toggle() }) {
+                    Label(showAllFields ? "Hide empty fields" : "Show all fields",
+                          systemImage: showAllFields ? "eye.slash" : "eye")
+                }
             }
 
             if isLoading {
@@ -209,6 +357,41 @@ struct FPSportsAddSubjectView: View {
                 phone = s.phone
                 imageNumbers = s.imageNumbers
                 notes = s.notes
+                // Extended fields
+                homeroom = s.homeroom
+                studentId = s.studentId
+                onlineCode = s.onlineCode
+                organizationName = s.organizationName
+                year = s.year
+                subjectType = s.subjectType
+                title = s.title
+                referenceNumber = s.referenceNumber
+                photographer = s.photographer
+                photoSessionDate = s.photoSessionDate
+                expirationDate = s.expirationDate
+                phone2 = s.phone2
+                address1 = s.address1
+                address2 = s.address2
+                city = s.city
+                state = s.state
+                zip = s.zip
+                country = s.country
+                mother = s.mother
+                father = s.father
+                personalization = s.personalization
+                discountCode = s.discountCode
+                customValues = [
+                    s.custom1, s.custom2, s.custom3, s.custom4, s.custom5,
+                    s.custom6, s.custom7, s.custom8, s.custom9, s.custom10,
+                    s.custom11, s.custom12, s.custom13, s.custom14, s.custom15,
+                    s.custom16, s.custom17, s.custom18, s.custom19, s.custom20
+                ]
+                // Load roster so per-field visibility can detect what other subjects have
+                Task {
+                    if let loaded = try? await powerSync.getSubjects(forGalleryId: galleryId) {
+                        await MainActor.run { existingSubjects = loaded }
+                    }
+                }
             } else {
                 loadNextRosterId()
             }
@@ -285,6 +468,7 @@ struct FPSportsAddSubjectView: View {
     }
 
     private func executeSave() {
+        let trimmedCustoms = customValues.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         let subject = FPSubject(
             id: existingSubject?.id ?? UUID(),
             galleryId: galleryId,
@@ -293,14 +477,54 @@ struct FPSportsAddSubjectView: View {
             lastName: cap(lastName.trimmingCharacters(in: .whitespacesAndNewlines), 200),
             grade: cap(grade.trimmingCharacters(in: .whitespacesAndNewlines), 50),
             teacher: cap(teacher.trimmingCharacters(in: .whitespacesAndNewlines), 50),
-            homeroom: "",
-            studentId: "",
+            homeroom: cap(homeroom.trimmingCharacters(in: .whitespacesAndNewlines), 100),
+            studentId: cap(studentId.trimmingCharacters(in: .whitespacesAndNewlines), 100),
             rosterId: cap(rosterId.trimmingCharacters(in: .whitespacesAndNewlines), 50),
             jerseyNumber: cap(jerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines), 50),
             sport: cap(sport.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), 100),
             position: cap(position.trimmingCharacters(in: .whitespacesAndNewlines), 100),
+            organizationName: cap(organizationName.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            year: cap(year.trimmingCharacters(in: .whitespacesAndNewlines), 50),
+            subjectType: cap(subjectType.trimmingCharacters(in: .whitespacesAndNewlines), 50),
+            title: cap(title.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            referenceNumber: cap(referenceNumber.trimmingCharacters(in: .whitespacesAndNewlines), 100),
+            photographer: cap(photographer.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            photoSessionDate: photoSessionDate.trimmingCharacters(in: .whitespacesAndNewlines),
+            expirationDate: expirationDate.trimmingCharacters(in: .whitespacesAndNewlines),
             email: cap(email.trimmingCharacters(in: .whitespacesAndNewlines), 254),
             phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
+            phone2: phone2.trimmingCharacters(in: .whitespacesAndNewlines),
+            address1: cap(address1.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            address2: cap(address2.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            city: cap(city.trimmingCharacters(in: .whitespacesAndNewlines), 100),
+            state: cap(state.trimmingCharacters(in: .whitespacesAndNewlines), 100),
+            zip: cap(zip.trimmingCharacters(in: .whitespacesAndNewlines), 50),
+            country: cap(country.trimmingCharacters(in: .whitespacesAndNewlines), 100),
+            mother: cap(mother.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            father: cap(father.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            onlineCode: cap(onlineCode.trimmingCharacters(in: .whitespacesAndNewlines), 100),
+            personalization: cap(personalization.trimmingCharacters(in: .whitespacesAndNewlines), 200),
+            discountCode: cap(discountCode.trimmingCharacters(in: .whitespacesAndNewlines), 100),
+            custom1: trimmedCustoms[0],
+            custom2: trimmedCustoms[1],
+            custom3: trimmedCustoms[2],
+            custom4: trimmedCustoms[3],
+            custom5: trimmedCustoms[4],
+            custom6: trimmedCustoms[5],
+            custom7: trimmedCustoms[6],
+            custom8: trimmedCustoms[7],
+            custom9: trimmedCustoms[8],
+            custom10: trimmedCustoms[9],
+            custom11: trimmedCustoms[10],
+            custom12: trimmedCustoms[11],
+            custom13: trimmedCustoms[12],
+            custom14: trimmedCustoms[13],
+            custom15: trimmedCustoms[14],
+            custom16: trimmedCustoms[15],
+            custom17: trimmedCustoms[16],
+            custom18: trimmedCustoms[17],
+            custom19: trimmedCustoms[18],
+            custom20: trimmedCustoms[19],
             imageNumbers: imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines),
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
             createdAt: existingSubject?.createdAt ?? Date(),

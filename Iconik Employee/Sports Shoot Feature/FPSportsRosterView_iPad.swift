@@ -2622,6 +2622,7 @@ struct FPSportsRosterView_iPad: View {
                     galleryId: shoot.galleryId ?? shoot.id.uuidString.lowercased(),
                     organizationId: shoot.organizationId,
                     existingSubject: viewModel.selectedSubject,
+                    shootType: shoot.shootType,
                     onComplete: { success, optimisticSubject in
                         print("[FP-DEBUG] modal onComplete success=\(success) hasOptimistic=\(optimisticSubject != nil) name=\(optimisticSubject.map { "\($0.firstName) \($0.lastName)" } ?? "nil")")
                         if success {

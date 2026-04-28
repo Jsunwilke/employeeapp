@@ -32,12 +32,59 @@ struct FPSubject: Identifiable, Hashable {
     var sport: String                   // Maps from RosterEntry.groupName
     var position: String
 
-    // Organization/event
+    // Organization / event
     var organizationName: String
+    var year: String
+    var subjectType: String
+    var title: String
+    var referenceNumber: String
+    var photographer: String
+    var photoSessionDate: String
+    var expirationDate: String
 
     // Contact
     var email: String
     var phone: String
+    var phone2: String
+    var address1: String
+    var address2: String
+    var city: String
+    var state: String
+    var zip: String
+    var country: String
+
+    // Family
+    var mother: String
+    var father: String
+
+    // Online ordering
+    var onlineCode: String
+
+    // Additional
+    var personalization: String
+    var discountCode: String
+
+    // Custom fields (custom1 through custom20)
+    var custom1: String
+    var custom2: String
+    var custom3: String
+    var custom4: String
+    var custom5: String
+    var custom6: String
+    var custom7: String
+    var custom8: String
+    var custom9: String
+    var custom10: String
+    var custom11: String
+    var custom12: String
+    var custom13: String
+    var custom14: String
+    var custom15: String
+    var custom16: String
+    var custom17: String
+    var custom18: String
+    var custom19: String
+    var custom20: String
 
     // Status
     var imageCount: Int
@@ -76,8 +123,47 @@ struct FPSubject: Identifiable, Hashable {
         sport: String = "",
         position: String = "",
         organizationName: String = "",
+        year: String = "",
+        subjectType: String = "",
+        title: String = "",
+        referenceNumber: String = "",
+        photographer: String = "",
+        photoSessionDate: String = "",
+        expirationDate: String = "",
         email: String = "",
         phone: String = "",
+        phone2: String = "",
+        address1: String = "",
+        address2: String = "",
+        city: String = "",
+        state: String = "",
+        zip: String = "",
+        country: String = "",
+        mother: String = "",
+        father: String = "",
+        onlineCode: String = "",
+        personalization: String = "",
+        discountCode: String = "",
+        custom1: String = "",
+        custom2: String = "",
+        custom3: String = "",
+        custom4: String = "",
+        custom5: String = "",
+        custom6: String = "",
+        custom7: String = "",
+        custom8: String = "",
+        custom9: String = "",
+        custom10: String = "",
+        custom11: String = "",
+        custom12: String = "",
+        custom13: String = "",
+        custom14: String = "",
+        custom15: String = "",
+        custom16: String = "",
+        custom17: String = "",
+        custom18: String = "",
+        custom19: String = "",
+        custom20: String = "",
         imageCount: Int = 0,
         isAbsent: Bool = false,
         isPhotographed: Bool = false,
@@ -105,8 +191,47 @@ struct FPSubject: Identifiable, Hashable {
         self.sport = sport
         self.position = position
         self.organizationName = organizationName
+        self.year = year
+        self.subjectType = subjectType
+        self.title = title
+        self.referenceNumber = referenceNumber
+        self.photographer = photographer
+        self.photoSessionDate = photoSessionDate
+        self.expirationDate = expirationDate
         self.email = email
         self.phone = phone
+        self.phone2 = phone2
+        self.address1 = address1
+        self.address2 = address2
+        self.city = city
+        self.state = state
+        self.zip = zip
+        self.country = country
+        self.mother = mother
+        self.father = father
+        self.onlineCode = onlineCode
+        self.personalization = personalization
+        self.discountCode = discountCode
+        self.custom1 = custom1
+        self.custom2 = custom2
+        self.custom3 = custom3
+        self.custom4 = custom4
+        self.custom5 = custom5
+        self.custom6 = custom6
+        self.custom7 = custom7
+        self.custom8 = custom8
+        self.custom9 = custom9
+        self.custom10 = custom10
+        self.custom11 = custom11
+        self.custom12 = custom12
+        self.custom13 = custom13
+        self.custom14 = custom14
+        self.custom15 = custom15
+        self.custom16 = custom16
+        self.custom17 = custom17
+        self.custom18 = custom18
+        self.custom19 = custom19
+        self.custom20 = custom20
         self.imageCount = imageCount
         self.isAbsent = isAbsent
         self.isPhotographed = isPhotographed

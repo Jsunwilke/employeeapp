@@ -2836,13 +2836,33 @@ struct AddSubjectSheet: View {
     @State private var homeroom = ""
     @State private var studentId = ""
     @State private var rosterId = ""
+    @State private var onlineCode = ""
     @State private var organizationName = ""
+    @State private var year = ""
+    @State private var subjectType = ""
+    @State private var title = ""
+    @State private var referenceNumber = ""
+    @State private var photographer = ""
+    @State private var photoSessionDate = ""
+    @State private var expirationDate = ""
     @State private var sport = ""
     @State private var jerseyNumber = ""
     @State private var position = ""
     @State private var email = ""
     @State private var phone = ""
+    @State private var phone2 = ""
+    @State private var address1 = ""
+    @State private var address2 = ""
+    @State private var city = ""
+    @State private var state = ""
+    @State private var zip = ""
+    @State private var country = ""
+    @State private var mother = ""
+    @State private var father = ""
+    @State private var personalization = ""
+    @State private var discountCode = ""
     @State private var notes = ""
+    @State private var customValues: [String] = Array(repeating: "", count: 20)
     @State private var showingCardScan = false
     @State private var scanProcessing = false
     @State private var ocrWarning: String?
@@ -2864,13 +2884,52 @@ struct AddSubjectSheet: View {
     private var showHomeroom: Bool { showAllFields || anyHas(\.homeroom) }
     private var showStudentId: Bool { showAllFields || anyHas(\.studentId) }
     private var showRosterId: Bool { showAllFields || anyHas(\.rosterId) }
+    private var showOnlineCode: Bool { showAllFields || anyHas(\.onlineCode) }
     private var showOrganization: Bool { showAllFields || isEvents || anyHas(\.organizationName) }
+    private var showYear: Bool { showAllFields || anyHas(\.year) }
+    private var showSubjectType: Bool { showAllFields || anyHas(\.subjectType) }
+    private var showTitle: Bool { showAllFields || anyHas(\.title) }
+    private var showReferenceNumber: Bool { showAllFields || anyHas(\.referenceNumber) }
+    private var showPhotographer: Bool { showAllFields || anyHas(\.photographer) }
+    private var showPhotoSessionDate: Bool { showAllFields || anyHas(\.photoSessionDate) }
+    private var showExpirationDate: Bool { showAllFields || anyHas(\.expirationDate) }
     private var showSport: Bool { showAllFields || isSports || anyHas(\.sport) }
     private var showJerseyNumber: Bool { showAllFields || isSports || anyHas(\.jerseyNumber) }
     private var showPosition: Bool { showAllFields || isSports || anyHas(\.position) }
     private var showEmail: Bool { showAllFields || anyHas(\.email) }
     private var showPhone: Bool { showAllFields || anyHas(\.phone) }
+    private var showPhone2: Bool { showAllFields || anyHas(\.phone2) }
+    private var showAddress1: Bool { showAllFields || anyHas(\.address1) }
+    private var showAddress2: Bool { showAllFields || anyHas(\.address2) }
+    private var showCity: Bool { showAllFields || anyHas(\.city) }
+    private var showState: Bool { showAllFields || anyHas(\.state) }
+    private var showZip: Bool { showAllFields || anyHas(\.zip) }
+    private var showCountry: Bool { showAllFields || anyHas(\.country) }
+    private var showMother: Bool { showAllFields || anyHas(\.mother) }
+    private var showFather: Bool { showAllFields || anyHas(\.father) }
+    private var showPersonalization: Bool { showAllFields || anyHas(\.personalization) }
+    private var showDiscountCode: Bool { showAllFields || anyHas(\.discountCode) }
     private var showNotes: Bool { showAllFields || anyHas(\.notes) }
+
+    private static let customKeyPaths: [KeyPath<FPSubject, String>] = [
+        \.custom1, \.custom2, \.custom3, \.custom4, \.custom5,
+        \.custom6, \.custom7, \.custom8, \.custom9, \.custom10,
+        \.custom11, \.custom12, \.custom13, \.custom14, \.custom15,
+        \.custom16, \.custom17, \.custom18, \.custom19, \.custom20
+    ]
+    private func showCustom(_ index: Int) -> Bool {
+        showAllFields || subjects.contains { !$0[keyPath: AddSubjectSheet.customKeyPaths[index]].isEmpty }
+    }
+    private var anyContactVisible: Bool {
+        showEmail || showPhone || showPhone2 || showAddress1 || showAddress2 ||
+        showCity || showState || showZip || showCountry
+    }
+    private var anyEventInfoVisible: Bool {
+        showYear || showSubjectType || showTitle || showReferenceNumber ||
+        showPhotographer || showPhotoSessionDate || showExpirationDate
+    }
+    private var anyAdditionalVisible: Bool { showPersonalization || showDiscountCode || showNotes }
+    private var anyCustomVisible: Bool { (0..<20).contains { showCustom($0) } }
 
     var body: some View {
         NavigationView {
@@ -2908,13 +2967,14 @@ struct AddSubjectSheet: View {
                     }
                 }
 
-                if showGrade || showTeacher || showHomeroom || showStudentId || showRosterId {
+                if showGrade || showTeacher || showHomeroom || showStudentId || showRosterId || showOnlineCode {
                     Section("School") {
                         if showGrade { TextField("Grade", text: $grade) }
                         if showTeacher { TextField("Teacher", text: $teacher) }
                         if showHomeroom { TextField("Homeroom", text: $homeroom) }
                         if showStudentId { TextField("Student ID", text: $studentId) }
                         if showRosterId { TextField("Roster ID", text: $rosterId) }
+                        if showOnlineCode { TextField("Online Code", text: $onlineCode) }
                     }
                 }
 
@@ -2932,16 +2992,54 @@ struct AddSubjectSheet: View {
                     }
                 }
 
-                if showEmail || showPhone {
-                    Section("Contact") {
-                        if showEmail { TextField("Email", text: $email).keyboardType(.emailAddress).autocapitalization(.none) }
-                        if showPhone { TextField("Phone", text: $phone).keyboardType(.phonePad) }
+                if anyEventInfoVisible {
+                    Section("Event Info") {
+                        if showYear { TextField("Year", text: $year) }
+                        if showSubjectType { TextField("Subject Type", text: $subjectType) }
+                        if showTitle { TextField("Title", text: $title) }
+                        if showReferenceNumber { TextField("Reference #", text: $referenceNumber) }
+                        if showPhotographer { TextField("Photographer", text: $photographer) }
+                        if showPhotoSessionDate { TextField("Session Date (YYYY-MM-DD)", text: $photoSessionDate) }
+                        if showExpirationDate { TextField("Expiration Date (YYYY-MM-DD)", text: $expirationDate) }
                     }
                 }
 
-                if showNotes {
-                    Section("Notes") {
-                        TextField("Notes", text: $notes, axis: .vertical).lineLimit(2...4)
+                if anyContactVisible {
+                    Section("Contact") {
+                        if showEmail { TextField("Email", text: $email).keyboardType(.emailAddress).autocapitalization(.none) }
+                        if showPhone { TextField("Phone", text: $phone).keyboardType(.phonePad) }
+                        if showPhone2 { TextField("Phone 2", text: $phone2).keyboardType(.phonePad) }
+                        if showAddress1 { TextField("Address", text: $address1) }
+                        if showAddress2 { TextField("Address 2", text: $address2) }
+                        if showCity { TextField("City", text: $city) }
+                        if showState { TextField("State", text: $state) }
+                        if showZip { TextField("Zip", text: $zip).keyboardType(.numbersAndPunctuation) }
+                        if showCountry { TextField("Country", text: $country) }
+                    }
+                }
+
+                if showMother || showFather {
+                    Section("Family") {
+                        if showMother { TextField("Mother / Guardian", text: $mother) }
+                        if showFather { TextField("Father / Guardian", text: $father) }
+                    }
+                }
+
+                if anyAdditionalVisible {
+                    Section("Additional") {
+                        if showPersonalization { TextField("Personalization", text: $personalization) }
+                        if showDiscountCode { TextField("Discount Code", text: $discountCode) }
+                        if showNotes { TextField("Notes", text: $notes, axis: .vertical).lineLimit(2...4) }
+                    }
+                }
+
+                if anyCustomVisible {
+                    Section("Custom Fields") {
+                        ForEach(0..<20, id: \.self) { i in
+                            if showCustom(i) {
+                                TextField("Custom \(i + 1)", text: $customValues[i])
+                            }
+                        }
                     }
                 }
 
@@ -2971,8 +3069,47 @@ struct AddSubjectSheet: View {
                             sport: sport,
                             position: position,
                             organizationName: organizationName,
+                            year: year,
+                            subjectType: subjectType,
+                            title: title,
+                            referenceNumber: referenceNumber,
+                            photographer: photographer,
+                            photoSessionDate: photoSessionDate,
+                            expirationDate: expirationDate,
                             email: email,
                             phone: phone,
+                            phone2: phone2,
+                            address1: address1,
+                            address2: address2,
+                            city: city,
+                            state: state,
+                            zip: zip,
+                            country: country,
+                            mother: mother,
+                            father: father,
+                            onlineCode: onlineCode,
+                            personalization: personalization,
+                            discountCode: discountCode,
+                            custom1: customValues[0],
+                            custom2: customValues[1],
+                            custom3: customValues[2],
+                            custom4: customValues[3],
+                            custom5: customValues[4],
+                            custom6: customValues[5],
+                            custom7: customValues[6],
+                            custom8: customValues[7],
+                            custom9: customValues[8],
+                            custom10: customValues[9],
+                            custom11: customValues[10],
+                            custom12: customValues[11],
+                            custom13: customValues[12],
+                            custom14: customValues[13],
+                            custom15: customValues[14],
+                            custom16: customValues[15],
+                            custom17: customValues[16],
+                            custom18: customValues[17],
+                            custom19: customValues[18],
+                            custom20: customValues[19],
                             notes: notes
                         )
                         onAdd(subject)
