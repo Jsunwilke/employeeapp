@@ -44,11 +44,51 @@ struct SubjectSyncFields: Codable, Equatable {
     var homeroom: String?
     var studentId: String?
     var rosterId: String?
+    var onlineCode: String?
     var jerseyNumber: String?
     var sport: String?
     var position: String?
+    var organizationName: String?
+    var year: String?
+    var subjectType: String?
+    var title: String?
+    var referenceNumber: String?
+    var photographer: String?
+    var photoSessionDate: String?
+    var expirationDate: String?
     var email: String?
     var phone: String?
+    var phone2: String?
+    var address1: String?
+    var address2: String?
+    var city: String?
+    var state: String?
+    var zip: String?
+    var country: String?
+    var mother: String?
+    var father: String?
+    var personalization: String?
+    var discountCode: String?
+    var custom1: String?
+    var custom2: String?
+    var custom3: String?
+    var custom4: String?
+    var custom5: String?
+    var custom6: String?
+    var custom7: String?
+    var custom8: String?
+    var custom9: String?
+    var custom10: String?
+    var custom11: String?
+    var custom12: String?
+    var custom13: String?
+    var custom14: String?
+    var custom15: String?
+    var custom16: String?
+    var custom17: String?
+    var custom18: String?
+    var custom19: String?
+    var custom20: String?
     var notes: String?
     var imageNumbers: String?
     var isAbsent: Bool?
@@ -70,11 +110,35 @@ struct SubjectSyncFields: Codable, Equatable {
         case homeroom
         case studentId       = "student_id"
         case rosterId        = "roster_id"
+        case onlineCode      = "online_code"
         case jerseyNumber    = "jersey_number"
         case sport
         case position
+        case organizationName = "organization_name"
+        case year
+        case subjectType     = "subject_type"
+        case title
+        case referenceNumber = "reference_number"
+        case photographer
+        case photoSessionDate = "photo_session_date"
+        case expirationDate  = "expiration_date"
         case email
         case phone
+        case phone2
+        case address1
+        case address2
+        case city
+        case state
+        case zip
+        case country
+        case mother
+        case father
+        case personalization
+        case discountCode    = "discount_code"
+        case custom1, custom2, custom3, custom4, custom5
+        case custom6, custom7, custom8, custom9, custom10
+        case custom11, custom12, custom13, custom14, custom15
+        case custom16, custom17, custom18, custom19, custom20
         case notes
         case imageNumbers    = "image_numbers"
         case isAbsent        = "is_absent"
@@ -91,18 +155,63 @@ struct SubjectSyncFields: Codable, Equatable {
     /// log so we can attribute "what changed" without dumping values.
     var fieldsTouched: [String] {
         var names: [String] = []
-        if firstName       != nil { names.append("first_name") }
-        if lastName        != nil { names.append("last_name") }
-        if grade           != nil { names.append("grade") }
-        if teacher         != nil { names.append("teacher") }
-        if homeroom        != nil { names.append("homeroom") }
-        if studentId       != nil { names.append("student_id") }
-        if rosterId        != nil { names.append("roster_id") }
-        if jerseyNumber    != nil { names.append("jersey_number") }
-        if sport           != nil { names.append("sport") }
-        if position        != nil { names.append("position") }
-        if email           != nil { names.append("email") }
-        if phone           != nil { names.append("phone") }
+        if firstName        != nil { names.append("first_name") }
+        if lastName         != nil { names.append("last_name") }
+        if grade            != nil { names.append("grade") }
+        if teacher          != nil { names.append("teacher") }
+        if homeroom         != nil { names.append("homeroom") }
+        if studentId        != nil { names.append("student_id") }
+        if rosterId         != nil { names.append("roster_id") }
+        if onlineCode       != nil { names.append("online_code") }
+        if jerseyNumber     != nil { names.append("jersey_number") }
+        if sport            != nil { names.append("sport") }
+        if position         != nil { names.append("position") }
+        if organizationName != nil { names.append("organization_name") }
+        if year             != nil { names.append("year") }
+        if subjectType      != nil { names.append("subject_type") }
+        if title            != nil { names.append("title") }
+        if referenceNumber  != nil { names.append("reference_number") }
+        if photographer     != nil { names.append("photographer") }
+        if photoSessionDate != nil { names.append("photo_session_date") }
+        if expirationDate   != nil { names.append("expiration_date") }
+        if email            != nil { names.append("email") }
+        if phone            != nil { names.append("phone") }
+        if phone2           != nil { names.append("phone2") }
+        if address1         != nil { names.append("address1") }
+        if address2         != nil { names.append("address2") }
+        if city             != nil { names.append("city") }
+        if state            != nil { names.append("state") }
+        if zip              != nil { names.append("zip") }
+        if country          != nil { names.append("country") }
+        if mother           != nil { names.append("mother") }
+        if father           != nil { names.append("father") }
+        if personalization  != nil { names.append("personalization") }
+        if discountCode     != nil { names.append("discount_code") }
+        for i in 1...20 {
+            switch i {
+            case 1:  if custom1  != nil { names.append("custom1") }
+            case 2:  if custom2  != nil { names.append("custom2") }
+            case 3:  if custom3  != nil { names.append("custom3") }
+            case 4:  if custom4  != nil { names.append("custom4") }
+            case 5:  if custom5  != nil { names.append("custom5") }
+            case 6:  if custom6  != nil { names.append("custom6") }
+            case 7:  if custom7  != nil { names.append("custom7") }
+            case 8:  if custom8  != nil { names.append("custom8") }
+            case 9:  if custom9  != nil { names.append("custom9") }
+            case 10: if custom10 != nil { names.append("custom10") }
+            case 11: if custom11 != nil { names.append("custom11") }
+            case 12: if custom12 != nil { names.append("custom12") }
+            case 13: if custom13 != nil { names.append("custom13") }
+            case 14: if custom14 != nil { names.append("custom14") }
+            case 15: if custom15 != nil { names.append("custom15") }
+            case 16: if custom16 != nil { names.append("custom16") }
+            case 17: if custom17 != nil { names.append("custom17") }
+            case 18: if custom18 != nil { names.append("custom18") }
+            case 19: if custom19 != nil { names.append("custom19") }
+            case 20: if custom20 != nil { names.append("custom20") }
+            default: break
+            }
+        }
         if notes           != nil { names.append("notes") }
         if imageNumbers    != nil { names.append("image_numbers") }
         if isAbsent        != nil { names.append("is_absent") }

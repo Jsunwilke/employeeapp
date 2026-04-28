@@ -133,6 +133,16 @@ class FocalPointSyncClient: ObservableObject {
     var onSubjectAbsentChanged: ((String, Bool) -> Void)?          // subjectId, isAbsent
     var onNotesChanged: ((String, String?, String) -> Void)?       // subjectId, rosterEntryId, notes
     var onSubjectUpdated: ((String, String?, String, String, String, String) -> Void)?  // rosterEntryId, subjectId?, firstName, lastName, rosterId, senderDeviceId
+    /// Same event, but carries every field present on the wire. Receivers
+    /// that want to apply non-name edits (organization, custom1-20, etc.)
+    /// instantly should bind this callback. Fired alongside onSubjectUpdated.
+    /// Args: (rosterEntryId, subjectId?, fields, senderDeviceId)
+    var onSubjectUpdatedFields: ((String, String?, SubjectSyncFields, String) -> Void)?
+    /// Mirror of onSubjectCreated that carries every field on the wire so a
+    /// remote add includes organization / custom / address / etc. without
+    /// waiting for cloud round-trip. Fired alongside onSubjectCreated.
+    /// Args: (rosterEntryId, fields, senderDeviceId)
+    var onSubjectCreatedFields: ((String, SubjectSyncFields, String) -> Void)?
     var onQueueReorder: (([String]) -> Void)?                      // ordered subject_ids
     var onGroupPhotoReady: ((String, [String], Int) -> Void)?      // groupName, presentSubjectIds, total
     var onGroupCaptureCompleted: ((String, Int, String) -> Void)?  // groupId, imageNumber, filename — auto-fill image_numbers on group
@@ -609,11 +619,51 @@ class FocalPointSyncClient: ObservableObject {
             "homeroom": String(subject.homeroom.prefix(200)),
             "student_id": String(subject.studentId.prefix(50)),
             "roster_id": String(subject.rosterId.prefix(50)),
+            "online_code": String(subject.onlineCode.prefix(100)),
             "jersey_number": String(subject.jerseyNumber.prefix(50)),
             "sport": String(subject.sport.prefix(100)),
             "position": String(subject.position.prefix(100)),
+            "organization_name": String(subject.organizationName.prefix(200)),
+            "year": String(subject.year.prefix(50)),
+            "subject_type": String(subject.subjectType.prefix(50)),
+            "title": String(subject.title.prefix(200)),
+            "reference_number": String(subject.referenceNumber.prefix(100)),
+            "photographer": String(subject.photographer.prefix(200)),
+            "photo_session_date": subject.photoSessionDate,
+            "expiration_date": subject.expirationDate,
             "email": String(subject.email.prefix(200)),
             "phone": String(subject.phone.prefix(50)),
+            "phone2": String(subject.phone2.prefix(50)),
+            "address1": String(subject.address1.prefix(200)),
+            "address2": String(subject.address2.prefix(200)),
+            "city": String(subject.city.prefix(100)),
+            "state": String(subject.state.prefix(100)),
+            "zip": String(subject.zip.prefix(50)),
+            "country": String(subject.country.prefix(100)),
+            "mother": String(subject.mother.prefix(200)),
+            "father": String(subject.father.prefix(200)),
+            "personalization": String(subject.personalization.prefix(200)),
+            "discount_code": String(subject.discountCode.prefix(100)),
+            "custom1": String(subject.custom1.prefix(500)),
+            "custom2": String(subject.custom2.prefix(500)),
+            "custom3": String(subject.custom3.prefix(500)),
+            "custom4": String(subject.custom4.prefix(500)),
+            "custom5": String(subject.custom5.prefix(500)),
+            "custom6": String(subject.custom6.prefix(500)),
+            "custom7": String(subject.custom7.prefix(500)),
+            "custom8": String(subject.custom8.prefix(500)),
+            "custom9": String(subject.custom9.prefix(500)),
+            "custom10": String(subject.custom10.prefix(500)),
+            "custom11": String(subject.custom11.prefix(500)),
+            "custom12": String(subject.custom12.prefix(500)),
+            "custom13": String(subject.custom13.prefix(500)),
+            "custom14": String(subject.custom14.prefix(500)),
+            "custom15": String(subject.custom15.prefix(500)),
+            "custom16": String(subject.custom16.prefix(500)),
+            "custom17": String(subject.custom17.prefix(500)),
+            "custom18": String(subject.custom18.prefix(500)),
+            "custom19": String(subject.custom19.prefix(500)),
+            "custom20": String(subject.custom20.prefix(500)),
             "notes": String(subject.notes.prefix(1000)),
             "image_numbers": String(subject.imageNumbers.prefix(500)),
             "is_absent": subject.isAbsent,
@@ -1156,15 +1206,75 @@ class FocalPointSyncClient: ObservableObject {
             let firstName = String((msg["first_name"] as? String ?? "").prefix(200))
             let lastName = String((msg["last_name"] as? String ?? "").prefix(200))
             let rosterId = String((msg["roster_id"] as? String ?? "").prefix(50))
-            // Sync rewrite — emit a structured 'received' event for every
-            // inbound subject_updated. Pure observability; the existing
-            // onSubjectUpdated dispatch below is unchanged.
             let senderId = (msg["device_id"] as? String) ?? "unknown"
             let galleryId = msg["gallery_id"] as? String
-            var fieldsTouched: [String] = []
-            if msg["first_name"] != nil { fieldsTouched.append("first_name") }
-            if msg["last_name"] != nil  { fieldsTouched.append("last_name") }
-            if msg["roster_id"] != nil  { fieldsTouched.append("roster_id") }
+
+            // Build a SubjectSyncFields from every field present on the wire
+            // so receivers can apply non-name edits (organization, custom1-20,
+            // address, etc.) instantly without waiting for the cloud round-trip.
+            var fields = SubjectSyncFields()
+            func _str(_ key: String, _ cap: Int) -> String? {
+                guard let raw = msg[key] as? String else { return nil }
+                return String(raw.prefix(cap))
+            }
+            if let v = _str("first_name", 200)         { fields.firstName = v }
+            if let v = _str("last_name", 200)          { fields.lastName = v }
+            if let v = _str("grade", 50)               { fields.grade = v }
+            if let v = _str("teacher", 200)            { fields.teacher = v }
+            if let v = _str("homeroom", 200)           { fields.homeroom = v }
+            if let v = _str("student_id", 50)          { fields.studentId = v }
+            if let v = _str("roster_id", 50)           { fields.rosterId = v }
+            if let v = _str("online_code", 100)        { fields.onlineCode = v }
+            if let v = _str("jersey_number", 50)       { fields.jerseyNumber = v }
+            if let v = _str("sport", 100)              { fields.sport = v }
+            if let v = _str("position", 100)           { fields.position = v }
+            if let v = _str("organization_name", 200)  { fields.organizationName = v }
+            if let v = _str("year", 50)                { fields.year = v }
+            if let v = _str("subject_type", 50)        { fields.subjectType = v }
+            if let v = _str("title", 200)              { fields.title = v }
+            if let v = _str("reference_number", 100)   { fields.referenceNumber = v }
+            if let v = _str("photographer", 200)       { fields.photographer = v }
+            if let v = _str("photo_session_date", 50)  { fields.photoSessionDate = v }
+            if let v = _str("expiration_date", 50)     { fields.expirationDate = v }
+            if let v = _str("email", 200)              { fields.email = v }
+            if let v = _str("phone", 50)               { fields.phone = v }
+            if let v = _str("phone2", 50)              { fields.phone2 = v }
+            if let v = _str("address1", 200)           { fields.address1 = v }
+            if let v = _str("address2", 200)           { fields.address2 = v }
+            if let v = _str("city", 100)               { fields.city = v }
+            if let v = _str("state", 100)              { fields.state = v }
+            if let v = _str("zip", 50)                 { fields.zip = v }
+            if let v = _str("country", 100)            { fields.country = v }
+            if let v = _str("mother", 200)             { fields.mother = v }
+            if let v = _str("father", 200)             { fields.father = v }
+            if let v = _str("personalization", 200)    { fields.personalization = v }
+            if let v = _str("discount_code", 100)      { fields.discountCode = v }
+            if let v = _str("custom1", 500)            { fields.custom1 = v }
+            if let v = _str("custom2", 500)            { fields.custom2 = v }
+            if let v = _str("custom3", 500)            { fields.custom3 = v }
+            if let v = _str("custom4", 500)            { fields.custom4 = v }
+            if let v = _str("custom5", 500)            { fields.custom5 = v }
+            if let v = _str("custom6", 500)            { fields.custom6 = v }
+            if let v = _str("custom7", 500)            { fields.custom7 = v }
+            if let v = _str("custom8", 500)            { fields.custom8 = v }
+            if let v = _str("custom9", 500)            { fields.custom9 = v }
+            if let v = _str("custom10", 500)           { fields.custom10 = v }
+            if let v = _str("custom11", 500)           { fields.custom11 = v }
+            if let v = _str("custom12", 500)           { fields.custom12 = v }
+            if let v = _str("custom13", 500)           { fields.custom13 = v }
+            if let v = _str("custom14", 500)           { fields.custom14 = v }
+            if let v = _str("custom15", 500)           { fields.custom15 = v }
+            if let v = _str("custom16", 500)           { fields.custom16 = v }
+            if let v = _str("custom17", 500)           { fields.custom17 = v }
+            if let v = _str("custom18", 500)           { fields.custom18 = v }
+            if let v = _str("custom19", 500)           { fields.custom19 = v }
+            if let v = _str("custom20", 500)           { fields.custom20 = v }
+            if let v = _str("notes", 1000)             { fields.notes = v }
+            if let v = _str("image_numbers", 500)      { fields.imageNumbers = v }
+            if let v = _str("checked_in_at", 50)       { fields.checkedInAt = v }
+            if let v = msg["is_absent"] as? Bool       { fields.isAbsent = v }
+            if let v = msg["needs_retake"] as? Bool    { fields.needsRetake = v }
+
             SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                 deviceId: senderId,
                 deviceRole: "Surface",
@@ -1173,9 +1283,10 @@ class FocalPointSyncClient: ObservableObject {
                 sourcePath: "FocalPointSyncClient.subject_updated",
                 subjectId: subjectId,
                 galleryId: galleryId,
-                fieldsTouched: fieldsTouched
+                fieldsTouched: fields.fieldsTouched
             ))
             onSubjectUpdated?(rosterEntryId, subjectId, firstName, lastName, rosterId, senderId)
+            onSubjectUpdatedFields?(rosterEntryId, subjectId, fields, senderId)
 
         case "subject_state_summary":
             // Reconciliation snapshot from Surface — compare to local view to
@@ -1196,6 +1307,71 @@ class FocalPointSyncClient: ObservableObject {
             let grade = String((msg["grade"] as? String ?? "").prefix(50))
             let groupName = String((msg["group_name"] as? String ?? "").prefix(200))
             onSubjectCreated?(rosterEntryId, firstName, lastName, rosterId, grade, groupName)
+
+            // Build a fields payload from every column on the wire so remote
+            // adds carry organization / custom / address / etc. instantly.
+            var createFields = SubjectSyncFields()
+            func _cstr(_ key: String, _ cap: Int) -> String? {
+                guard let raw = msg[key] as? String else { return nil }
+                return String(raw.prefix(cap))
+            }
+            if let v = _cstr("first_name", 200)         { createFields.firstName = v }
+            if let v = _cstr("last_name", 200)          { createFields.lastName = v }
+            if let v = _cstr("grade", 50)               { createFields.grade = v }
+            if let v = _cstr("teacher", 200)            { createFields.teacher = v }
+            if let v = _cstr("homeroom", 200)           { createFields.homeroom = v }
+            if let v = _cstr("student_id", 50)          { createFields.studentId = v }
+            if let v = _cstr("roster_id", 50)           { createFields.rosterId = v }
+            if let v = _cstr("online_code", 100)        { createFields.onlineCode = v }
+            if let v = _cstr("jersey_number", 50)       { createFields.jerseyNumber = v }
+            if let v = _cstr("sport", 100)              { createFields.sport = v }
+            if let v = _cstr("position", 100)           { createFields.position = v }
+            if let v = _cstr("organization_name", 200)  { createFields.organizationName = v }
+            if let v = _cstr("year", 50)                { createFields.year = v }
+            if let v = _cstr("subject_type", 50)        { createFields.subjectType = v }
+            if let v = _cstr("title", 200)              { createFields.title = v }
+            if let v = _cstr("reference_number", 100)   { createFields.referenceNumber = v }
+            if let v = _cstr("photographer", 200)       { createFields.photographer = v }
+            if let v = _cstr("photo_session_date", 50)  { createFields.photoSessionDate = v }
+            if let v = _cstr("expiration_date", 50)     { createFields.expirationDate = v }
+            if let v = _cstr("email", 200)              { createFields.email = v }
+            if let v = _cstr("phone", 50)               { createFields.phone = v }
+            if let v = _cstr("phone2", 50)              { createFields.phone2 = v }
+            if let v = _cstr("address1", 200)           { createFields.address1 = v }
+            if let v = _cstr("address2", 200)           { createFields.address2 = v }
+            if let v = _cstr("city", 100)               { createFields.city = v }
+            if let v = _cstr("state", 100)              { createFields.state = v }
+            if let v = _cstr("zip", 50)                 { createFields.zip = v }
+            if let v = _cstr("country", 100)            { createFields.country = v }
+            if let v = _cstr("mother", 200)             { createFields.mother = v }
+            if let v = _cstr("father", 200)             { createFields.father = v }
+            if let v = _cstr("personalization", 200)    { createFields.personalization = v }
+            if let v = _cstr("discount_code", 100)      { createFields.discountCode = v }
+            if let v = _cstr("custom1", 500)            { createFields.custom1 = v }
+            if let v = _cstr("custom2", 500)            { createFields.custom2 = v }
+            if let v = _cstr("custom3", 500)            { createFields.custom3 = v }
+            if let v = _cstr("custom4", 500)            { createFields.custom4 = v }
+            if let v = _cstr("custom5", 500)            { createFields.custom5 = v }
+            if let v = _cstr("custom6", 500)            { createFields.custom6 = v }
+            if let v = _cstr("custom7", 500)            { createFields.custom7 = v }
+            if let v = _cstr("custom8", 500)            { createFields.custom8 = v }
+            if let v = _cstr("custom9", 500)            { createFields.custom9 = v }
+            if let v = _cstr("custom10", 500)           { createFields.custom10 = v }
+            if let v = _cstr("custom11", 500)           { createFields.custom11 = v }
+            if let v = _cstr("custom12", 500)           { createFields.custom12 = v }
+            if let v = _cstr("custom13", 500)           { createFields.custom13 = v }
+            if let v = _cstr("custom14", 500)           { createFields.custom14 = v }
+            if let v = _cstr("custom15", 500)           { createFields.custom15 = v }
+            if let v = _cstr("custom16", 500)           { createFields.custom16 = v }
+            if let v = _cstr("custom17", 500)           { createFields.custom17 = v }
+            if let v = _cstr("custom18", 500)           { createFields.custom18 = v }
+            if let v = _cstr("custom19", 500)           { createFields.custom19 = v }
+            if let v = _cstr("custom20", 500)           { createFields.custom20 = v }
+            if let v = _cstr("notes", 1000)             { createFields.notes = v }
+            if let v = _cstr("image_numbers", 500)      { createFields.imageNumbers = v }
+            if let v = _cstr("checked_in_at", 50)       { createFields.checkedInAt = v }
+            let createSenderId = (msg["device_id"] as? String) ?? "unknown"
+            onSubjectCreatedFields?(rosterEntryId, createFields, createSenderId)
 
         case "queue_reorder":
             if let orderedIds = msg["ordered_subject_ids"] as? [String],

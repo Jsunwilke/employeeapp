@@ -834,25 +834,24 @@ struct FPSportsRosterView_iPad: View {
         // value with itself (no-op). Trade: if the iPad app restarts during
         // an offline session before cloud has synced, this in-memory edit
         // is lost — re-fetched from cloud once internet returns.
-        fpSync.onSubjectUpdated = { (rosterEntryId: String, subjectId: String?, firstName: String, lastName: String, rosterId: String, senderDeviceId: String) in
+        // Bind only the full-fields callback. It already carries first/last/
+        // roster_id alongside every other column the wire payload includes,
+        // so we get instant overlay application for organization, custom1-20,
+        // address, contact, event-info, etc. — not just name edits.
+        fpSync.onSubjectUpdated = nil
+        fpSync.onSubjectUpdatedFields = { (rosterEntryId: String, subjectId: String?, fields: SubjectSyncFields, senderDeviceId: String) in
             guard let idx = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
             let entry = viewModel.subjects[idx]
             // Apply overlay synchronously FIRST so the next render is correct.
             // Don't splice into viewModel.subjects[idx] — the splice would
             // satisfy clearIfMatches prematurely (overlay matches local in-
             // memory copy → clears → next PowerSync re-fetch reverts to OLD
-            // SQLite value before cloud round-trip catches up). Let the
-            // overlay be the durable display value until reconcileLocalRow
-            // confirms SQLite caught up.
-            var fields = SubjectSyncFields()
-            fields.firstName = firstName
-            fields.lastName = lastName
-            fields.rosterId = rosterId
+            // SQLite value before cloud round-trip catches up).
             let req = SubjectMutationRequest(
                 subjectId: entry.id.uuidString.lowercased(),
                 galleryId: entry.galleryId,
                 fields: fields,
-                sourcePath: "FPSportsRosterView_iPad.onSubjectUpdated"
+                sourcePath: "FPSportsRosterView_iPad.onSubjectUpdatedFields"
             )
             Task {
                 _ = await SubjectSyncService.shared.applyRemoteUpdate(
@@ -919,20 +918,20 @@ struct FPSportsRosterView_iPad: View {
         // Supabase for subjects. iPad's PowerSync would otherwise duplicate
         // the upload. Cloud round-trip via PowerSync watch will materialize
         // this row in iPad's local SQLite once Supabase has it.
-        fpSync.onSubjectCreated = { (rosterEntryId: String, firstName: String, lastName: String, rosterId: String, grade: String, groupName: String) in
+        // Bind only the full-fields callback so a remote add carries every
+        // wire field (organization, custom1-20, address, etc.) into the
+        // in-memory subject. The legacy onSubjectCreated callback is left
+        // unbound to avoid duplicate inserts.
+        fpSync.onSubjectCreated = nil
+        fpSync.onSubjectCreatedFields = { (rosterEntryId: String, fields: SubjectSyncFields, _: String) in
             DispatchQueue.main.async {
                 guard !viewModel.subjects.contains(where: { $0.id.uuidString.lowercased() == rosterEntryId.lowercased() }) else { return }
-                if let uuid = UUID(uuidString: rosterEntryId) {
-                    var newSubject = FPSubject(id: uuid, galleryId: viewModel.selectedShoot?.id.uuidString.lowercased() ?? "")
-                    newSubject.organizationId = storedUserOrganizationID
-                    newSubject.firstName = firstName
-                    newSubject.lastName = lastName
-                    newSubject.rosterId = rosterId
-                    newSubject.grade = grade
-                    newSubject.sport = groupName
-                    viewModel.subjects.append(newSubject)
-                    viewModel.subjects.sort { $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending }
-                }
+                guard let uuid = UUID(uuidString: rosterEntryId) else { return }
+                var base = FPSubject(id: uuid, galleryId: viewModel.selectedShoot?.id.uuidString.lowercased() ?? "")
+                base.organizationId = storedUserOrganizationID
+                let merged = SubjectSyncService.applyFieldsToSubject(fields, base: base)
+                viewModel.subjects.append(merged)
+                viewModel.subjects.sort { $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending }
             }
         }
 
@@ -2539,12 +2538,14 @@ struct FPSportsRosterView_iPad: View {
                     fpSync.onSubjectAbsentChanged = nil
                     fpSync.onNotesChanged = nil
                     fpSync.onSubjectUpdated = nil
+                    fpSync.onSubjectUpdatedFields = nil
                     fpSync.onQueueReorder = nil
                     fpSync.onGroupPhotoReady = nil
                     fpSync.onSubjectLinked = nil
                     fpSync.onSubjectsDeleted = nil
                     fpSync.onCaptureReassigned = nil
                     fpSync.onSubjectCreated = nil
+                    fpSync.onSubjectCreatedFields = nil
                     fpSync.onVerificationWarning = nil
                     // Reset sync state
                     subjectCaptureCounts = [:]
