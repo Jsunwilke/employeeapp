@@ -167,6 +167,11 @@ class FocalPointSyncClient: ObservableObject {
     /// its current view of the gallery's subjects so we can detect drift
     /// without waiting for cloud sync. Args: (galleryId, subjectCount, nameHash).
     var onSubjectStateSummary: ((String, Int, String) -> Void)?
+    /// Fires when any other device on the same WebSocket bus drops its
+    /// connection. UI can show a blocking alert so the photographer
+    /// notices a kiosk/iPad going offline during a live shoot. Args:
+    /// (deviceId, deviceName-at-time-of-disconnect).
+    var onDeviceDisconnected: ((String, String) -> Void)?
 
     // Internal state
     private var webSocket: URLSessionWebSocketTask?
@@ -733,16 +738,33 @@ class FocalPointSyncClient: ObservableObject {
     }
 
     /// Broadcast that a new subject/athlete was created on iPad
+    /// Optional `email` and `custom10`–`custom20` carry extended fields
+    /// for the dance kiosk (couple/group entry). Receiver (FP Production
+    /// CapturePage subject_created handler) forwards every present extra
+    /// into the subject row, so callers can pass empty strings when they
+    /// don't apply (existing sports-kiosk callers are unaffected).
     func broadcastSubjectCreated(
         rosterEntryId: String,
         firstName: String,
         lastName: String,
         rosterId: String,
         grade: String,
-        groupName: String
+        groupName: String,
+        email: String = "",
+        custom10: String = "",
+        custom11: String = "",
+        custom12: String = "",
+        custom13: String = "",
+        custom14: String = "",
+        custom15: String = "",
+        custom16: String = "",
+        custom17: String = "",
+        custom18: String = "",
+        custom19: String = "",
+        custom20: String = ""
     ) {
         guard let galleryId = galleryId else { return }
-        let msg: [String: Any] = [
+        var msg: [String: Any] = [
             "type": "subject_created",
             "device_id": deviceId,
             "gallery_id": galleryId,
@@ -754,6 +776,20 @@ class FocalPointSyncClient: ObservableObject {
             "group_name": String(groupName.prefix(200)),
             "station_name": "iPad - \(deviceName)",
         ]
+        // Email cap matches customN (500). Joined dance emails can run
+        // 250–400+ chars (10 emails with ", " separators); 200 truncates.
+        if !email.isEmpty { msg["email"] = String(email.prefix(500)) }
+        if !custom10.isEmpty { msg["custom10"] = String(custom10.prefix(500)) }
+        if !custom11.isEmpty { msg["custom11"] = String(custom11.prefix(500)) }
+        if !custom12.isEmpty { msg["custom12"] = String(custom12.prefix(500)) }
+        if !custom13.isEmpty { msg["custom13"] = String(custom13.prefix(500)) }
+        if !custom14.isEmpty { msg["custom14"] = String(custom14.prefix(500)) }
+        if !custom15.isEmpty { msg["custom15"] = String(custom15.prefix(500)) }
+        if !custom16.isEmpty { msg["custom16"] = String(custom16.prefix(500)) }
+        if !custom17.isEmpty { msg["custom17"] = String(custom17.prefix(500)) }
+        if !custom18.isEmpty { msg["custom18"] = String(custom18.prefix(500)) }
+        if !custom19.isEmpty { msg["custom19"] = String(custom19.prefix(500)) }
+        if !custom20.isEmpty { msg["custom20"] = String(custom20.prefix(500)) }
         send(msg)
     }
 
@@ -1444,11 +1480,15 @@ class FocalPointSyncClient: ObservableObject {
 
         case "device_disconnected":
             if let disconnectedId = msg["device_id"] as? String {
+                // Capture the device's friendly name BEFORE removing it
+                // so the UI alert can identify which iPad/Surface dropped.
+                let disconnectedName = devices.first { $0.id == disconnectedId }?.name ?? "Device"
                 devices.removeAll { $0.id == disconnectedId }
                 // Warn if paired camera disconnected
                 if disconnectedId == pairedCameraId {
                     pairedCameraId = nil
                 }
+                onDeviceDisconnected?(disconnectedId, disconnectedName)
             }
 
         case "image_header":

@@ -8,6 +8,7 @@
 
 import Foundation
 import PowerSync
+import Supabase
 import Combine
 import Network
 
@@ -52,6 +53,14 @@ class PowerSyncManager: ObservableObject {
     }
     @Published var isDownloading = false
 
+    /// Last time the SDK successfully applied a checkpoint (downloaded data).
+    /// Sourced from PowerSync's own `SyncStatus.lastSyncedAt`, not local connect time.
+    @Published var lastSyncedAt: Date?
+
+    /// Most recent sync error surfaced by the SDK (download or upload). Cleared
+    /// when the next status update reports nil. Used by the diagnostics UI.
+    @Published var lastSyncError: String?
+
     /// Whether the PowerSync database is initialized and ready for operations
     var isReady: Bool { database != nil }
 
@@ -65,6 +74,9 @@ class PowerSyncManager: ObservableObject {
     private let monitorQueue = DispatchQueue(label: "PowerSyncNetworkMonitor")
     private var isConnecting = false
     private var syncStatusWatchTask: Task<Void, Never>?
+    private var authStateWatchTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectPending = false
 
     // MARK: - Initialization
 
@@ -93,6 +105,11 @@ class PowerSyncManager: ObservableObject {
 
         // Start network monitoring for airplane mode detection
         startNetworkMonitoring()
+
+        // Watch Supabase auth state so a token refresh re-binds the sync stream
+        // to the new JWT. Without this, the sync socket can keep using a stale
+        // token until the next reconnect.
+        startAuthStateWatch()
 
         // Connect to PowerSync service
         try await connect()
@@ -168,7 +185,9 @@ class PowerSyncManager: ObservableObject {
         }
     }
 
-    /// Watch PowerSync's sync status stream for upload/download state changes
+    /// Watch PowerSync's sync status stream for upload/download/error state changes.
+    /// Surfaces `lastSyncedAt` and `anyError` so the diagnostics UI can show the
+    /// real reason a sync is stalled instead of silently appearing "Synced".
     private func startSyncStatusWatch(db: PowerSyncDatabaseProtocol) {
         syncStatusWatchTask?.cancel()
         syncStatusWatchTask = Task { [weak self] in
@@ -183,23 +202,113 @@ class PowerSyncManager: ObservableObject {
                 if self.isDownloading != newDownloading {
                     self.isDownloading = newDownloading
                 }
+                if self.lastSyncedAt != status.lastSyncedAt {
+                    self.lastSyncedAt = status.lastSyncedAt
+                }
+                let newError = status.anyError.map { Self.sanitizeErrorMessage(String(describing: $0)) }
+                if self.lastSyncError != newError {
+                    self.lastSyncError = newError
+                }
             }
         }
     }
 
+    /// Subscribe to Supabase auth events.
+    /// - `.tokenRefreshed` → schedule a reconnect (coalesced) so the new JWT is
+    ///   bound to the sync stream instead of waiting for the SDK's next retry.
+    /// - `.signedOut` → tear down the sync stream so we stop using the old session.
+    /// Reconnects are dispatched via `scheduleReconnect()` (fire-and-forget) so a
+    /// burst of auth events doesn't block this consumer loop and lose later events.
+    private func startAuthStateWatch() {
+        authStateWatchTask?.cancel()
+        authStateWatchTask = Task { [weak self] in
+            let supabase = SupabaseManager.shared.client
+            for await state in await supabase.auth.authStateChanges {
+                guard !Task.isCancelled else { break }
+                guard let self = self else { break }
+                switch state.event {
+                case .tokenRefreshed:
+                    print("PowerSyncManager: Token refreshed, scheduling reconnect")
+                    self.scheduleReconnect()
+                case .signedOut:
+                    print("PowerSyncManager: User signed out, disconnecting sync stream")
+                    Task { @MainActor [weak self] in
+                        await self?.disconnect()
+                    }
+                default:
+                    break
+                }
+            }
+        }
+    }
+
+    /// Coalescing reconnect. Multiple calls while a reconnect is in flight collapse
+    /// to one follow-up reconnect — guarantees the latest credentials are applied
+    /// without dropping events the way an inline `await connect()` would.
+    private func scheduleReconnect() {
+        reconnectPending = true
+        guard reconnectTask == nil else { return }
+        reconnectTask = Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            while self.reconnectPending {
+                self.reconnectPending = false
+                await self.performReconnect()
+            }
+            self.reconnectTask = nil
+        }
+    }
+
+    /// Force a fresh sync stream by disconnecting then reconnecting. Waits for any
+    /// in-flight `connect()` to finish (to avoid two concurrent `db.connect` calls)
+    /// then claims the `isConnecting` slot for itself.
+    private func performReconnect() async {
+        guard let db = database else { return }
+        while isConnecting {
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        }
+        isConnecting = true
+        defer { isConnecting = false }
+        do {
+            try await db.disconnect()
+            try await db.connect(connector: connector)
+            isConnected = true
+            print("PowerSyncManager: Reconnected with fresh credentials")
+        } catch {
+            print("PowerSyncManager: Reconnect failed: \(error)")
+        }
+    }
+
+    /// Strip JWT tokens and Bearer headers from error strings before they reach
+    /// the UI. PowerSync errors can embed credential fragments in their debug
+    /// descriptions; the iPad is sometimes handed to non-employees on-site.
+    private static func sanitizeErrorMessage(_ raw: String) -> String {
+        var s = raw
+        s = s.replacingOccurrences(
+            of: "eyJ[A-Za-z0-9_\\-]+\\.[A-Za-z0-9_\\-]+\\.[A-Za-z0-9_\\-]+",
+            with: "[token]",
+            options: .regularExpression
+        )
+        s = s.replacingOccurrences(
+            of: "Bearer\\s+\\S+",
+            with: "Bearer [token]",
+            options: .regularExpression
+        )
+        return s
+    }
+
     /// Clear local database and re-sync from server.
     /// Use when the CRUD queue is stuck and preventing downloads.
-    func clearAndReSync() async {
-        guard let db = database else { return }
-        do {
-            try await db.disconnectAndClear()
-            hasSynced = false
-            isConnected = false
-            try await connect()
-            print("PowerSyncManager: Cleared local data and reconnected")
-        } catch {
-            print("PowerSyncManager: clearAndReSync failed: \(error)")
+    /// Throws if the wipe or reconnect fails so the caller can surface the error;
+    /// on a reconnect failure the local DB is already empty and the user must retry.
+    func clearAndReSync() async throws {
+        guard let db = database else {
+            throw PowerSyncManagerError.notInitialized
         }
+        try await db.disconnectAndClear()
+        hasSynced = false
+        isConnected = false
+        try await connect()
+        print("PowerSyncManager: Cleared local data and reconnected")
     }
 
     /// Wait for first sync to complete using the SDK's built-in method.

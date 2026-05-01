@@ -139,6 +139,26 @@ struct PoserStationView: View {
     // Sync
     @State private var showingSyncSheet = false
 
+    // Dance kiosk — self-service couple/group entry. Only shown for
+    // dance-type galleries. Photographer sets a 4-digit exit PIN before
+    // the full-screen kiosk launches; while in kiosk mode the PIN is the
+    // only way back to PoserStationView.
+    @State private var showingDanceKioskSetup = false
+    @State private var showingDanceKiosk = false
+    @State private var danceKioskPinInput = ""
+    @State private var danceKioskActivePin = ""
+    @State private var danceKioskSetupError = ""
+
+    // Blocking alert when any other device on this gallery's WebSocket
+    // bus drops its connection. Photographer must explicitly dismiss —
+    // toast was rejected as too easy to miss during a live event.
+    @State private var disconnectAlertDeviceName: String? = nil
+    // Same-shape alert when THIS iPad loses its own WS connection
+    // unexpectedly (router/WiFi died, server crashed). Tracks the
+    // previous status so onReceive only fires on a real transition.
+    @State private var showSelfDisconnectAlert = false
+    @State private var lastConnectionStatus: FPSyncConnectionStatus = .disconnected
+
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     @AppStorage("userLastName") private var storedUserLastName: String = ""
@@ -497,6 +517,55 @@ struct PoserStationView: View {
         } // GeometryReader
         .navigationTitle("")
         .navigationBarHidden(true)
+        .sheet(isPresented: $showingDanceKioskSetup) {
+            danceKioskSetupSheet
+        }
+        .fullScreenCover(isPresented: $showingDanceKiosk) {
+            DanceCoupleKioskView(
+                galleryId: galleryId,
+                organizationId: storedUserOrganizationID,
+                schoolName: gallery.schoolName,
+                kioskPasscode: danceKioskActivePin
+            )
+        }
+        .alert(
+            "Device Disconnected",
+            isPresented: Binding(
+                get: { disconnectAlertDeviceName != nil },
+                set: { if !$0 { disconnectAlertDeviceName = nil } }
+            ),
+            presenting: disconnectAlertDeviceName
+        ) { _ in
+            Button("I Understand", role: .cancel) {
+                disconnectAlertDeviceName = nil
+            }
+        } message: { name in
+            Text("\(name) lost connection. New entries from this device may not be syncing in real time. Verify the device reconnects before continuing.")
+        }
+        .alert(
+            "Connection Lost",
+            isPresented: $showSelfDisconnectAlert
+        ) {
+            Button("I Understand", role: .cancel) {
+                showSelfDisconnectAlert = false
+            }
+        } message: {
+            Text("This iPad lost its network connection. New entries from other devices may not be reaching this iPad. Check WiFi or the router and confirm reconnection before continuing.")
+        }
+        .onReceive(fpSync.$connectionStatus) { newStatus in
+            // Trip the self-disconnect alert only on a real transition
+            // FROM connected — reconnect attempts that bounce through
+            // disconnected/discovering shouldn't keep re-firing. Skip
+            // if the user intentionally closed the session.
+            if lastConnectionStatus == .connected
+                && newStatus == .disconnected
+                && !fpSync.intentionalClose {
+                showSelfDisconnectAlert = true
+                let generator = UINotificationFeedbackGenerator()
+                generator.notificationOccurred(.warning)
+            }
+            lastConnectionStatus = newStatus
+        }
         .onAppear {
             // Swap the global "Home" button for a "Galleries" back button so
             // tapping the top-left chevron pops back to the gallery picker
@@ -796,6 +865,18 @@ struct PoserStationView: View {
                 }
                 .buttonStyle(.bordered).tint(.blue)
 
+                if gallery.shootType == "dance" {
+                    Button(action: {
+                        danceKioskPinInput = ""
+                        danceKioskSetupError = ""
+                        showingDanceKioskSetup = true
+                    }) {
+                        Label("Dance Kiosk", systemImage: "music.mic")
+                            .font(.subheadline).fontWeight(.medium)
+                    }
+                    .buttonStyle(.bordered).tint(.purple)
+                }
+
                 // Toggle detail panel
                 Button(action: { withAnimation(.easeInOut(duration: 0.2)) { detailPanelVisible.toggle() } }) {
                     Image(systemName: detailPanelVisible ? "sidebar.trailing" : "sidebar.leading")
@@ -845,6 +926,78 @@ struct PoserStationView: View {
             .frame(height: 4)
         }
         .background(Color(.systemBackground))
+    }
+
+    // MARK: - Dance Kiosk Setup Sheet
+
+    /// Pre-launch sheet for the dance kiosk: photographer enters a
+    /// 4-digit PIN that the kiosk requires to exit. Locks dancers into
+    /// the registration form so they can't accidentally back out into
+    /// the rest of the app while entering names.
+    private var danceKioskSetupSheet: some View {
+        NavigationView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Set a 4-digit PIN")
+                    .font(.title3).fontWeight(.semibold)
+                Text("Dancers will not be able to exit the kiosk without this PIN. Write it down — you'll need it to leave kiosk mode.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                SecureField("PIN", text: $danceKioskPinInput)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .font(.title2)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .onChange(of: danceKioskPinInput) { newValue in
+                        // Strip non-digits and cap at 4 chars
+                        let digits = newValue.filter { $0.isNumber }
+                        let trimmed = String(digits.prefix(4))
+                        if trimmed != newValue {
+                            danceKioskPinInput = trimmed
+                        }
+                    }
+
+                Text("4 digits, numbers only")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                if !danceKioskSetupError.isEmpty {
+                    Text(danceKioskSetupError)
+                        .font(.subheadline)
+                        .foregroundColor(.red)
+                }
+
+                Spacer()
+            }
+            .padding(24)
+            .navigationTitle("Dance Kiosk")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        showingDanceKioskSetup = false
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Start Kiosk") {
+                        guard danceKioskPinInput.count == 4 else {
+                            danceKioskSetupError = "PIN must be exactly 4 digits"
+                            return
+                        }
+                        danceKioskActivePin = danceKioskPinInput
+                        showingDanceKioskSetup = false
+                        // Defer fullScreenCover until the setup sheet has
+                        // dismissed; presenting both back-to-back races
+                        // SwiftUI's transition and one of them swallows.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            showingDanceKiosk = true
+                        }
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(danceKioskPinInput.count != 4)
+                }
+            }
+        }
     }
 
     // MARK: - Filter Bar
@@ -2080,6 +2233,18 @@ struct PoserStationView: View {
                     subjects.append(newSubject)
                     subjects.sort { $0.lastName.localizedCaseInsensitiveCompare($1.lastName) == .orderedAscending }
                 }
+            }
+        }
+
+        // Another device on the gallery's WS bus dropped — show a
+        // blocking alert so the photographer can verify the device
+        // (typically the dance kiosk iPad) reconnects before more
+        // entries land.
+        fpSync.onDeviceDisconnected = { (_: String, name: String) in
+            DispatchQueue.main.async {
+                disconnectAlertDeviceName = name
+                let generator = UINotificationFeedbackGenerator()
+                generator.notificationOccurred(.warning)
             }
         }
 

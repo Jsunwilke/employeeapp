@@ -21,29 +21,21 @@ final class SupabasePowerSyncConnector: PowerSyncBackendConnectorProtocol {
 
     // MARK: - PowerSyncBackendConnectorProtocol
 
-    /// Fetch credentials for PowerSync using Supabase JWT
+    /// Fetch credentials for PowerSync using Supabase JWT.
+    /// Uses `supabase.auth.session` (async) which auto-refreshes the token if needed.
+    /// Returns nil on auth failure so PowerSync waits and retries instead of opening
+    /// a sync stream with a known-stale token.
     func fetchCredentials() async throws -> PowerSyncCredentials? {
-        // First, try to refresh the session to get a fresh token
-        // This prevents "JWT has expired" errors in PowerSync
         do {
-            _ = try await supabase.auth.refreshSession()
-            print("SupabasePowerSyncConnector: Session refreshed successfully")
+            let session = try await supabase.auth.session
+            return PowerSyncCredentials(
+                endpoint: powerSyncURL,
+                token: session.accessToken
+            )
         } catch {
-            print("SupabasePowerSyncConnector: Could not refresh session: \(error)")
-            // Continue - maybe the current token is still valid
-        }
-
-        // Get the current Supabase session (now with refreshed token)
-        guard let session = supabase.auth.currentSession else {
-            print("SupabasePowerSyncConnector: No active session")
+            print("SupabasePowerSyncConnector: Failed to obtain session: \(error)")
             return nil
         }
-
-        // Use the Supabase JWT access token for PowerSync authentication
-        return PowerSyncCredentials(
-            endpoint: powerSyncURL,
-            token: session.accessToken
-        )
     }
 
     /// Upload local changes to Supabase
