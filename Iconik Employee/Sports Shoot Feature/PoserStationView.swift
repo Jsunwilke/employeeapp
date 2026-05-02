@@ -2603,12 +2603,16 @@ struct PoserStationView: View {
                         }
                         .frame(minHeight: 44)
                     } else {
+                        Button(action: { analyzeSubjectsForUpload() }) {
+                            Label("Preview what will be uploaded", systemImage: "doc.text.magnifyingglass")
+                        }
+                        .frame(minHeight: 44)
                         Button(action: { showReuploadConfirm = true }) {
                             Label("Re-upload all subjects in this gallery", systemImage: "arrow.up.doc.on.clipboard")
                         }
                         .frame(minHeight: 44)
                     }
-                    Text("Bumps every subject's updated_at so the iPad's copy wins on the next cloud sync. Use this when fields entered on iPad (e.g. dance kiosk emails) didn't make it to Surface Pro.")
+                    Text("Bumps every subject's updated_at so the iPad's copy wins on the next cloud sync. Use this when fields entered on iPad (e.g. dance kiosk emails) didn't make it to Surface Pro. Tap Preview first to confirm the data is actually there before uploading.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     if let result = reuploadResultMessage {
@@ -2634,6 +2638,38 @@ struct PoserStationView: View {
                 Text("This will mark every subject in this gallery as locally edited so PowerSync pushes the iPad's copy back to Supabase. Safe to run — only changes updated_at. \(subjects.count) subjects will be re-uploaded.")
             }
         }
+    }
+
+    /// Diagnostic: scan the in-memory subjects array WITHOUT writing
+    /// anything. Reports how many subjects carry an email or custom10
+    /// in the snapshot the recovery would upload. If this returns
+    /// "0 with email" but you can see emails in the subject detail
+    /// view, the @State array and the detail view are reading from
+    /// different sources (overlay vs SQLite, stale watch stream, etc).
+    private func analyzeSubjectsForUpload() {
+        let snapshot = subjects
+        if snapshot.isEmpty {
+            reuploadResultMessage = "Snapshot is empty — gallery hasn't loaded subjects yet."
+            return
+        }
+        var withEmail: [String] = []
+        var withCustom10: [String] = []
+        for s in snapshot {
+            let displayId = s.rosterId.isEmpty ? s.lastName : s.rosterId
+            if !s.email.trimmingCharacters(in: .whitespaces).isEmpty {
+                withEmail.append(displayId)
+            }
+            if !s.custom10.trimmingCharacters(in: .whitespaces).isEmpty {
+                withCustom10.append(displayId)
+            }
+        }
+        let sampleEmail = withEmail.prefix(5).joined(separator: ", ")
+        let sampleCustom = withCustom10.prefix(5).joined(separator: ", ")
+        reuploadResultMessage = """
+        Snapshot: \(snapshot.count) subject(s).
+        With email: \(withEmail.count)\(withEmail.isEmpty ? "" : " (e.g. \(sampleEmail))").
+        With custom10: \(withCustom10.count)\(withCustom10.isEmpty ? "" : " (e.g. \(sampleCustom))").
+        """
     }
 
     /// Force every subject in this gallery to re-upload to Supabase.
