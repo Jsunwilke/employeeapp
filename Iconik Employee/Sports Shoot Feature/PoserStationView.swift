@@ -2598,17 +2598,17 @@ struct PoserStationView: View {
                     if isReuploading {
                         HStack {
                             ProgressView()
-                            Text("Sending \(reuploadProgress) of \(reuploadTotal) to Surface...")
+                            Text("Re-uploading \(reuploadProgress) of \(reuploadTotal)...")
                                 .foregroundColor(.secondary)
                         }
                         .frame(minHeight: 44)
                     } else {
                         Button(action: { showReuploadConfirm = true }) {
-                            Label("Push all subjects to Surface Pro", systemImage: "arrow.up.doc.on.clipboard")
+                            Label("Re-upload all subjects in this gallery", systemImage: "arrow.up.doc.on.clipboard")
                         }
                         .frame(minHeight: 44)
                     }
-                    Text("Sends each subject's full field set to Surface Pro over WebSocket — Surface writes them to Supabase. Use this when fields entered on iPad (e.g. dance kiosk emails) didn't make it to Surface. Surface must be paired and online.")
+                    Text("Bumps every subject's updated_at so the iPad's copy wins on the next cloud sync. Use this when fields entered on iPad (e.g. dance kiosk emails) didn't make it to Surface Pro.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     if let result = reuploadResultMessage {
@@ -2627,23 +2627,23 @@ struct PoserStationView: View {
                         .fontWeight(.semibold)
                 }
             }
-            .alert("Push all subjects to Surface?", isPresented: $showReuploadConfirm) {
+            .alert("Re-upload all subjects?", isPresented: $showReuploadConfirm) {
                 Button("Cancel", role: .cancel) { }
-                Button("Push") { reuploadAllSubjects() }
+                Button("Re-upload") { reuploadAllSubjects() }
             } message: {
-                Text("Sends each of \(subjects.count) subject(s) to Surface Pro over WebSocket. Surface writes them to Supabase — the iPad never uploads directly. Surface must be paired and online. Safe to run; existing rows are upserted by id.")
+                Text("This will mark every subject in this gallery as locally edited so PowerSync pushes the iPad's copy back to Supabase. Safe to run — only changes updated_at. \(subjects.count) subjects will be re-uploaded.")
             }
         }
     }
 
-    /// Push every subject in this gallery to Supabase via Surface Pro.
-    /// Per architecture rule (iPad never writes subjects to Supabase),
-    /// this iterates the in-memory roster and sends each row as a
-    /// `subject_updated` WebSocket message. Surface Pro receives the
-    /// broadcast, writes through its own PowerSync, and is the sole
-    /// uploader to Supabase. Recovers lost data on Surface (e.g. dance
-    /// kiosk emails wiped by a stripped safety-net write) without ever
-    /// using the iPad's own upload path.
+    /// Force every subject in this gallery to re-upload to Supabase.
+    /// Walks the in-memory roster, bumps each FPSubject's updatedAt,
+    /// and calls saveSubject — PowerSync detects the local write and
+    /// queues an upload that carries the iPad's full row, including
+    /// any columns that were lost on Surface Pro (e.g. dance kiosk
+    /// emails after a stripped safety-net upload last-write-wins).
+    /// Internet must be reachable for the upload to actually flush;
+    /// PowerSync queues until it is.
     private func reuploadAllSubjects() {
         guard !isReuploading else { return }
         let snapshot = subjects
@@ -2651,30 +2651,34 @@ struct PoserStationView: View {
             reuploadResultMessage = "No subjects to re-upload."
             return
         }
-        guard fpSync.isConnected else {
-            reuploadResultMessage = "Not connected to Surface Pro. Open Sync, pair with Surface, then try again."
-            return
-        }
         isReuploading = true
         reuploadProgress = 0
         reuploadTotal = snapshot.count
         reuploadResultMessage = nil
         Task {
-            var sent = 0
+            var ok = 0
+            var failed = 0
             for subject in snapshot {
-                fpSync.sendSubjectFullUpdate(subject)
-                sent += 1
-                // Yield + throttle so the WebSocket receiver doesn't
-                // choke on a single-burst flush of N subjects, and so
-                // the progress indicator updates visibly.
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                await MainActor.run { reuploadProgress = sent }
+                var bumped = subject
+                bumped.updatedAt = Date()
+                do {
+                    try await powerSync.saveSubject(bumped)
+                    ok += 1
+                } catch {
+                    failed += 1
+                }
+                let progressNow = ok + failed
+                await MainActor.run { reuploadProgress = progressNow }
             }
             await MainActor.run {
                 isReuploading = false
-                reuploadResultMessage = "Sent \(sent) subject(s) to Surface Pro. Surface will write them to Supabase as soon as it's online."
+                if failed == 0 {
+                    reuploadResultMessage = "Re-uploaded \(ok) subject(s). Sync to Supabase will run as soon as the iPad is online."
+                } else {
+                    reuploadResultMessage = "Re-uploaded \(ok), \(failed) failed. Try again or check the connection."
+                }
                 let generator = UINotificationFeedbackGenerator()
-                generator.notificationOccurred(.success)
+                generator.notificationOccurred(failed == 0 ? .success : .warning)
             }
         }
     }
