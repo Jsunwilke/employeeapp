@@ -10,6 +10,13 @@ struct SettingsView: View {
     @State private var isResyncing = false
     @State private var resyncErrorMessage: String?
 
+    /// User-set name for THIS iPad on the local sync bus. Surfaced in
+    /// disconnect alerts on other devices and in the network status
+    /// bar's device list. Falls back to UIDevice.current.name (often
+    /// just "iPad") when blank — that default is unhelpful on a
+    /// multi-iPad shoot.
+    @AppStorage("fp_sync_custom_device_name") private var customDeviceName: String = ""
+
     var body: some View {
         List {
             Section("Account") {
@@ -37,6 +44,18 @@ struct SettingsView: View {
                 )) {
                     Label("Quick Access Tab Bar", systemImage: "square.grid.2x2")
                 }
+            }
+
+            Section {
+                TextField("e.g. Kiosk, Poser, Camera 2", text: $customDeviceName)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled(true)
+                    .submitLabel(.done)
+                    .frame(minHeight: 44)
+            } header: {
+                Text("Device Name")
+            } footer: {
+                Text("Shown to other devices on the local network. Use this to tell iPads apart in the disconnect warning and the device list. Leave blank to use the iPad's system name. Reconnect on the Sync sheet (or restart the app) for a name change to take effect.")
             }
 
             Section {

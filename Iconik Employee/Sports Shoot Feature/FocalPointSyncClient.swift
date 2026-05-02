@@ -237,8 +237,18 @@ class FocalPointSyncClient: ObservableObject {
         return id
     }
 
+    /// Friendly name advertised to other devices in `device_hello` and
+    /// `station_name` fields. Reads a user-set override from
+    /// UserDefaults first (set in SettingsView → Sync), falling back
+    /// to `UIDevice.current.name`. The default is usually a generic
+    /// "iPad" on modern iOS, which is useless on a multi-iPad shoot —
+    /// the override lets the photographer label each iPad ("Kiosk",
+    /// "Poser", "Camera 2") so the disconnect alert and device list
+    /// can identify which one dropped.
     private var deviceName: String {
-        return UIDevice.current.name
+        let custom = UserDefaults.standard.string(forKey: "fp_sync_custom_device_name") ?? ""
+        let trimmed = custom.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? UIDevice.current.name : trimmed
     }
 
     // Connection info for reconnection
