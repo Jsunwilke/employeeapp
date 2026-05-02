@@ -159,17 +159,6 @@ struct PoserStationView: View {
     @State private var showSelfDisconnectAlert = false
     @State private var lastConnectionStatus: FPSyncConnectionStatus = .disconnected
 
-    // Force re-upload: bumps every subject's updated_at so PowerSync
-    // pushes the iPad's local copy back to Supabase. Recovers data
-    // when Surface Pro's safety-net write last-write-wins overwrote
-    // a column (the dance-kiosk emails-after-sync incident). Stays in
-    // place as a general "make iPad authoritative" recovery tool.
-    @State private var showReuploadConfirm = false
-    @State private var isReuploading = false
-    @State private var reuploadProgress = 0
-    @State private var reuploadTotal = 0
-    @State private var reuploadResultMessage: String? = nil
-
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     @AppStorage("userLastName") private var storedUserLastName: String = ""
@@ -2594,33 +2583,6 @@ struct PoserStationView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                Section(header: Text("Recovery")) {
-                    if isReuploading {
-                        HStack {
-                            ProgressView()
-                            Text("Re-uploading \(reuploadProgress) of \(reuploadTotal)...")
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(minHeight: 44)
-                    } else {
-                        Button(action: { analyzeSubjectsForUpload() }) {
-                            Label("Preview what will be uploaded", systemImage: "doc.text.magnifyingglass")
-                        }
-                        .frame(minHeight: 44)
-                        Button(action: { showReuploadConfirm = true }) {
-                            Label("Re-upload all subjects in this gallery", systemImage: "arrow.up.doc.on.clipboard")
-                        }
-                        .frame(minHeight: 44)
-                    }
-                    Text("Bumps every subject's updated_at so the iPad's copy wins on the next cloud sync. Use this when fields entered on iPad (e.g. dance kiosk emails) didn't make it to Surface Pro. Tap Preview first to confirm the data is actually there before uploading.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    if let result = reuploadResultMessage {
-                        Text(result)
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    }
-                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Capture Settings")
@@ -2630,91 +2592,6 @@ struct PoserStationView: View {
                     Button("Done") { showCaptureSettings = false }
                         .fontWeight(.semibold)
                 }
-            }
-            .alert("Re-upload all subjects?", isPresented: $showReuploadConfirm) {
-                Button("Cancel", role: .cancel) { }
-                Button("Re-upload") { reuploadAllSubjects() }
-            } message: {
-                Text("This will mark every subject in this gallery as locally edited so PowerSync pushes the iPad's copy back to Supabase. Safe to run — only changes updated_at. \(subjects.count) subjects will be re-uploaded.")
-            }
-        }
-    }
-
-    /// Diagnostic: scan the in-memory subjects array WITHOUT writing
-    /// anything. Reports how many subjects carry an email or custom10
-    /// in the snapshot the recovery would upload. If this returns
-    /// "0 with email" but you can see emails in the subject detail
-    /// view, the @State array and the detail view are reading from
-    /// different sources (overlay vs SQLite, stale watch stream, etc).
-    private func analyzeSubjectsForUpload() {
-        let snapshot = subjects
-        if snapshot.isEmpty {
-            reuploadResultMessage = "Snapshot is empty — gallery hasn't loaded subjects yet."
-            return
-        }
-        var withEmail: [String] = []
-        var withCustom10: [String] = []
-        for s in snapshot {
-            let displayId = s.rosterId.isEmpty ? s.lastName : s.rosterId
-            if !s.email.trimmingCharacters(in: .whitespaces).isEmpty {
-                withEmail.append(displayId)
-            }
-            if !s.custom10.trimmingCharacters(in: .whitespaces).isEmpty {
-                withCustom10.append(displayId)
-            }
-        }
-        let sampleEmail = withEmail.prefix(5).joined(separator: ", ")
-        let sampleCustom = withCustom10.prefix(5).joined(separator: ", ")
-        reuploadResultMessage = """
-        Snapshot: \(snapshot.count) subject(s).
-        With email: \(withEmail.count)\(withEmail.isEmpty ? "" : " (e.g. \(sampleEmail))").
-        With custom10: \(withCustom10.count)\(withCustom10.isEmpty ? "" : " (e.g. \(sampleCustom))").
-        """
-    }
-
-    /// Force every subject in this gallery to re-upload to Supabase.
-    /// Walks the in-memory roster, bumps each FPSubject's updatedAt,
-    /// and calls saveSubject — PowerSync detects the local write and
-    /// queues an upload that carries the iPad's full row, including
-    /// any columns that were lost on Surface Pro (e.g. dance kiosk
-    /// emails after a stripped safety-net upload last-write-wins).
-    /// Internet must be reachable for the upload to actually flush;
-    /// PowerSync queues until it is.
-    private func reuploadAllSubjects() {
-        guard !isReuploading else { return }
-        let snapshot = subjects
-        guard !snapshot.isEmpty else {
-            reuploadResultMessage = "No subjects to re-upload."
-            return
-        }
-        isReuploading = true
-        reuploadProgress = 0
-        reuploadTotal = snapshot.count
-        reuploadResultMessage = nil
-        Task {
-            var ok = 0
-            var failed = 0
-            for subject in snapshot {
-                var bumped = subject
-                bumped.updatedAt = Date()
-                do {
-                    try await powerSync.saveSubject(bumped)
-                    ok += 1
-                } catch {
-                    failed += 1
-                }
-                let progressNow = ok + failed
-                await MainActor.run { reuploadProgress = progressNow }
-            }
-            await MainActor.run {
-                isReuploading = false
-                if failed == 0 {
-                    reuploadResultMessage = "Re-uploaded \(ok) subject(s). Sync to Supabase will run as soon as the iPad is online."
-                } else {
-                    reuploadResultMessage = "Re-uploaded \(ok), \(failed) failed. Try again or check the connection."
-                }
-                let generator = UINotificationFeedbackGenerator()
-                generator.notificationOccurred(failed == 0 ? .success : .warning)
             }
         }
     }
