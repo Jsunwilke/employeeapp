@@ -556,10 +556,13 @@ struct PoserStationView: View {
             // Trip the self-disconnect alert only on a real transition
             // FROM connected — reconnect attempts that bounce through
             // disconnected/discovering shouldn't keep re-firing. Skip
-            // if the user intentionally closed the session.
+            // if the user intentionally closed the session, or if the
+            // kiosk fullScreenCover is up (alerts would draw over it
+            // and expose dancers to the dialog).
             if lastConnectionStatus == .connected
                 && newStatus == .disconnected
-                && !fpSync.intentionalClose {
+                && !fpSync.intentionalClose
+                && !showingDanceKiosk {
                 showSelfDisconnectAlert = true
                 let generator = UINotificationFeedbackGenerator()
                 generator.notificationOccurred(.warning)
@@ -2242,6 +2245,12 @@ struct PoserStationView: View {
         // entries land.
         fpSync.onDeviceDisconnected = { (_: String, name: String) in
             DispatchQueue.main.async {
+                // Suppress while the dance kiosk fullScreenCover is up —
+                // the alert would draw on top of the kiosk and expose
+                // dancers to a "Device Disconnected / I Understand"
+                // dialog that has nothing to do with their registration.
+                // The Surface Pro and any non-kiosk station still alert.
+                guard !showingDanceKiosk else { return }
                 disconnectAlertDeviceName = name
                 let generator = UINotificationFeedbackGenerator()
                 generator.notificationOccurred(.warning)
