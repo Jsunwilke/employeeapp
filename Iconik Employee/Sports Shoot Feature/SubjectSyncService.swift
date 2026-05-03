@@ -61,6 +61,91 @@ final class SubjectSyncService {
             source: .localEdit
         )
 
+        // Phase 0 sync rewrite — when the flag is on AND the iPad is in a
+        // capture session connected to a Surface, send a subject_command
+        // and let the Surface be the sole writer per spec §11.1. The
+        // overlay above gives instant UI; the Surface's broadcast back
+        // (subject_updated) refreshes other iPads. PowerSync's cloud sync
+        // eventually delivers the row to this iPad too, at which point
+        // reconcileLocalRow clears the overlay.
+        //
+        // If the command path fails (timeout, rejection, no connection),
+        // fall through to the legacy local-write path — the iPad must
+        // not lose the edit just because the WebSocket wobbled.
+        if Phase0Flags.useRepoPatternSubjects,
+           FocalPointSyncClient.shared.isConnectedAndInGallery(req.galleryId) {
+            do {
+                let cmd = try SubjectCommandBuilder.update(
+                    galleryId: req.galleryId,
+                    subjectId: req.subjectId,
+                    fields: req.fields,
+                    originatingDeviceId: deviceId
+                )
+                let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
+                switch ack.status {
+                case .applied, .dedupe:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .update,
+                        outcome: .committed,
+                        sourcePath: req.sourcePath + ":phase0",
+                        subjectId: req.subjectId,
+                        galleryId: req.galleryId,
+                        idempotencyKey: idempotencyKey,
+                        fieldsTouched: fieldsTouched
+                    ))
+                    // Surface acked; do NOT write PowerSync. The
+                    // subsequent subject_updated broadcast from Surface +
+                    // eventual cloud-sync delivery will land in SQLite.
+                    return idempotencyKey
+                case .rejected:
+                    // Surface rejected the command. Roll back the overlay
+                    // so the UI doesn't show a value that won't persist.
+                    // Then fall through to the legacy path so the edit
+                    // isn't silently lost — local PowerSync remains the
+                    // safety net while the new path is bedding in.
+                    _ = SubjectSyncOverlay.shared.clearIfMatches(
+                        subjectId: req.subjectId,
+                        localSubject: currentSubject
+                    )
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .update,
+                        outcome: .failed,
+                        sourcePath: req.sourcePath + ":phase0_rejected",
+                        subjectId: req.subjectId,
+                        galleryId: req.galleryId,
+                        idempotencyKey: idempotencyKey,
+                        fieldsTouched: fieldsTouched,
+                        errorMessage: ack.reason ?? "rejected"
+                    ))
+                    // Reapply overlay so the legacy path's overlay write
+                    // re-overrides correctly.
+                    SubjectSyncOverlay.shared.apply(
+                        subjectId: req.subjectId,
+                        fields: req.fields,
+                        idempotencyKey: idempotencyKey,
+                        source: .localEdit
+                    )
+                    // intentional fall-through to legacy path below
+                }
+            } catch {
+                // Timeout or transport error — fall through to legacy path.
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: deviceId,
+                    operation: .update,
+                    outcome: .failed,
+                    sourcePath: req.sourcePath + ":phase0_threw",
+                    subjectId: req.subjectId,
+                    galleryId: req.galleryId,
+                    idempotencyKey: idempotencyKey,
+                    fieldsTouched: fieldsTouched,
+                    errorMessage: String(describing: error)
+                ))
+                // Overlay is still in place from step 1 above.
+            }
+        }
+
         let merged = SubjectSyncService.applyFieldsToSubject(req.fields, base: currentSubject)
 
         // 2. Always write to local PowerSync. The audit caught a data-loss

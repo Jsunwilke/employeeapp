@@ -197,6 +197,13 @@ class FocalPointSyncClient: ObservableObject {
     private var pendingImageHeader: [String: Any]? = nil
     private let imageRequestTimeout: TimeInterval = 30.0
 
+    // Phase 0 sync rewrite — subject_command await-ack state. See
+    // SYNC_ARCHITECTURE_SPEC.md §4 + SubjectCommandTypes.swift. Each
+    // pending command_id maps to the continuation that the sender is
+    // awaiting; the inbound `command_ack` handler resolves it.
+    private var pendingCommandAcks: [String: CheckedContinuation<CommandAck, Error>] = [:]
+    private let commandAckTimeout: TimeInterval = 30.0
+
     // Pending message queue (queued while disconnected, flushed on reconnect)
     private var pendingMessages: [[String: Any]] = []
     private let pendingQueueMax = 500
@@ -689,6 +696,70 @@ class FocalPointSyncClient: ObservableObject {
             msg["checked_in_at"] = checkedIn
         }
         send(msg)
+    }
+
+    // MARK: - Phase 0 sync rewrite — in-shoot detection
+    //
+    // Per SYNC_ARCHITECTURE_SPEC.md §11.1, the iPad routes writes through
+    // the SurfaceCommandTransport ONLY when it's in a capture session.
+    // For chunk-B-iPad MVP, "in shoot" = WebSocket connected + this
+    // iPad has joined a specific gallery's session via device_hello.
+    // chunk-B.4 will tighten this to "Surface has an active capture
+    // session for this gallery" once the Surface broadcasts that signal.
+    func isConnectedAndInGallery(_ targetGalleryId: String) -> Bool {
+        guard webSocket != nil,
+              connectionStatus == .connected,
+              let current = self.galleryId,
+              !current.isEmpty,
+              current == targetGalleryId
+        else { return false }
+        return true
+    }
+
+    // MARK: - Phase 0 sync rewrite — subject_command sender (chunk B + B.2)
+    //
+    // Per SYNC_ARCHITECTURE_SPEC.md §4, an iPad in a capture session
+    // sends `subject_command` envelopes to the Surface and awaits a
+    // typed `command_ack`. The Surface is the single ordering authority;
+    // the iPad never writes to its local PowerSync during a shoot when
+    // this path is used.
+    //
+    // Wire shape locked in SubjectCommandTypes.swift on the iPad and
+    // src/data/repositories/transports/surface-command-transport.ts on
+    // the Mac. Changing the shape requires updating both in lockstep.
+    //
+    // Returns the typed CommandAck on success. Throws SubjectCommandError
+    // on timeout, rejection, or transport unavailable. Callers (typically
+    // SubjectSyncService) decide whether to surface the error to the UI
+    // or roll back optimistic state.
+    func sendSubjectCommand(_ cmd: SubjectCommand) async throws -> CommandAck {
+        guard webSocket != nil else {
+            throw SubjectCommandError.notConnected
+        }
+        guard !cmd.galleryId.isEmpty else {
+            throw SubjectCommandError.missingGalleryId
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            // Capture the continuation against this command_id so the
+            // inbound `command_ack` handler can resolve it.
+            self.pendingCommandAcks[cmd.commandId] = continuation
+
+            // Schedule the timeout. If the Surface never acks (e.g. a
+            // crash mid-flow, or the WebSocket drops without a clean
+            // close), the iPad caller can't be left waiting forever.
+            // Timer.scheduledTimer must run on a runloop — schedule on
+            // the main queue to be safe.
+            let commandId = cmd.commandId
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.commandAckTimeout) { [weak self] in
+                guard let self = self else { return }
+                if let pendingContinuation = self.pendingCommandAcks.removeValue(forKey: commandId) {
+                    pendingContinuation.resume(throwing: SubjectCommandError.timeout)
+                }
+            }
+
+            self.send(cmd.toWireDictionary())
+        }
     }
 
     /// Send a full group-row edit — broadcasts after an iPad save so the
@@ -1214,6 +1285,18 @@ class FocalPointSyncClient: ObservableObject {
                 connectionStatus = .authFailed
                 disconnect()
             }
+
+        case "command_ack":
+            // Phase 0 sync rewrite — Surface ack for a previous subject_command.
+            // Resolve the matching pending continuation. If no continuation is
+            // found (timed out, or this iPad never sent the command), drop
+            // silently. Acks are broadcast to all peers in the gallery; this
+            // iPad only cares about acks for its own command_ids.
+            if let ack = CommandAck.fromWire(msg),
+               let pendingContinuation = pendingCommandAcks.removeValue(forKey: ack.commandId) {
+                pendingContinuation.resume(returning: ack)
+            }
+            break
 
         case "active_subject_changed":
             guard let subjectId = msg["subject_id"] as? String, !subjectId.isEmpty,
