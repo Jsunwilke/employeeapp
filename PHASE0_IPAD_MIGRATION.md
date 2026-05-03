@@ -45,6 +45,14 @@ Phase0Flags.setUseRepoPatternSubjects(true)
 
 To revert: pass `false`. The next subject mutation reads the flag fresh, so you can flip mid-session.
 
+## Build setup
+
+The Iconik Employee target uses `PBXFileSystemSynchronizedRootGroup`
+(Xcode 15+) — every file under `Iconik Employee/` is automatically part
+of the build. The two new files (`Phase0Flags.swift`,
+`SubjectCommandTypes.swift`) are picked up on the next Cmd+B without any
+manual project edits.
+
 ## What to test once you build
 
 You'll need:
