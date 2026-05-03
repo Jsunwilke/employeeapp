@@ -27,9 +27,9 @@ struct FlagUserView: View {
     @State private var errorMessage: String = ""
     @State private var successMessage: String = ""
     
-    // Check if user has permission to flag
+    // Phase 7 RBAC — flagging team members is a users-edit operation
     var hasPermission: Bool {
-        return storedUserRole == "admin" || storedUserRole == "manager"
+        return Permissions.has("users", level: .edit)
     }
     
     var body: some View {

@@ -658,9 +658,10 @@ class TimeOffService: ObservableObject {
 
     // MARK: - Permission Checks
 
+    @MainActor
     func canManageRequests() -> Bool {
-        let userRole = UserDefaults.standard.string(forKey: "userRole") ?? ""
-        return userRole == "admin" || userRole == "manager" || userRole == "owner"
+        // Phase 7 RBAC — managers + admins + owners have edit on time-off approvals
+        return Permissions.has("timeOffApprovals", level: .edit)
     }
 
     func canEditRequest(_ request: TimeOffRequest) -> Bool {

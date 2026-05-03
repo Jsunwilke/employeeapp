@@ -119,7 +119,7 @@ struct SlingWeeklyView: View {
 
         let withToolbar = styledStack.toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                if userRole == "admin" || userRole == "manager" {
+                if Permissions.has("schedule", level: .edit) {
                     Button(action: {
                         showCreateSession = true
                     }) {
@@ -150,7 +150,7 @@ struct SlingWeeklyView: View {
                 }
 
                 // Debug: Check for unpublished sessions
-                if userRole == "admin" || userRole == "manager" {
+                if Permissions.has("schedule", level: .edit) {
                     debugCheckUnpublishedSessions()
                 }
 
@@ -462,7 +462,7 @@ struct SlingWeeklyView: View {
         let dayTimeOff = getTimeOffForDay(date)
         let totalEvents = daySessions.count + dayTimeOff.count
         let hasUnpublishedSessions = daySessions.contains { !$0.isPublished }
-        let shouldShowPublishButton = (userRole == "admin" || userRole == "manager") && 
+        let shouldShowPublishButton = (Permissions.has("schedule", level: .edit)) && 
                                      hasUnpublishedSessions && 
                                      organizationService.organizationHasPublishing
         
@@ -1384,7 +1384,7 @@ struct SlingWeeklyView: View {
             // Start listening for sessions
             // Include unpublished sessions for admin/manager users
             // If organization doesn't have publishing enabled, still show all sessions to admin/manager
-            let includeUnpublished = (userRole == "admin" || userRole == "manager")
+            let includeUnpublished = (Permissions.has("schedule", level: .edit))
             print("🔍 SlingWeeklyView: Loading sessions with:")
             print("   - User role: \(userRole)")
             print("   - Organization has publishing: \(organizationService.organizationHasPublishing)")

@@ -16,9 +16,9 @@ struct UnflagUserView: View {
     @AppStorage("userRole") private var storedUserRole: String = "employee"
     @AppStorage("userOrganizationID") var storedUserOrganizationID: String = ""
     
-    // Check if user has permission to unflag
+    // Phase 7 RBAC — unflagging team members is a users-edit operation
     var hasPermission: Bool {
-        return storedUserRole == "admin" || storedUserRole == "manager"
+        return Permissions.has("users", level: .edit)
     }
     
     var body: some View {

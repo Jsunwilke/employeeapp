@@ -130,8 +130,8 @@ struct EquipmentCheckOutView: View {
     // MARK: - Computed Properties
 
     private var canCheckOutForOthers: Bool {
-        guard !storedUserRole.isEmpty else { return false }
-        return ["admin", "manager"].contains(storedUserRole.lowercased())
+        // Phase 7 RBAC — equipment edit covers checking out for other users
+        Permissions.has("equipment", level: .edit)
     }
 
     // MARK: - Methods

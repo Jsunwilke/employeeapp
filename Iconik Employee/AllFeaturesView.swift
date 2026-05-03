@@ -89,8 +89,8 @@ struct AllFeaturesView: View {
                 .onMove(perform: localEditMode == .active ? viewModel.moveEmployeeFeatures : nil)
             }
             
-            // Manager Features Section (fixed order) if user is a manager or admin
-            if userRole == "manager" || userRole == "admin" {
+            // Phase 7 RBAC — manager features visible if user has edit on team management
+            if Permissions.has("users", level: .edit) {
                 Section(header: Text("Management Features")) {
                     ForEach(managerFeatures) { feature in
                         Button(action: {

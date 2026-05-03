@@ -286,7 +286,7 @@ struct ShiftDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarItems(trailing: 
             HStack {
-                if userRole == "admin" || userRole == "manager" {
+                if Permissions.has("schedule", level: .edit) {
                     // Show publish button if organization has publishing enabled and session is unpublished
                     if organizationService.organizationHasPublishing && session.isPublished == false {
                         Button(action: {

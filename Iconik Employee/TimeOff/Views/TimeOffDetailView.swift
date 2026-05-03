@@ -29,10 +29,9 @@ struct TimeOffDetailView: View {
     
     private var canModifyRequest: Bool {
         let currentUserId = UserDefaults.standard.string(forKey: "userID") ?? ""
-        let userRole = UserDefaults.standard.string(forKey: "userRole") ?? ""
         let isOwnRequest = timeOffEntry.photographerId == currentUserId
-        let isAdmin = ["admin", "manager", "owner"].contains(userRole)
-        return isOwnRequest || isAdmin
+        // Phase 7 RBAC — admins/managers/owners have edit on time-off approvals
+        return isOwnRequest || Permissions.has("timeOffApprovals", level: .edit)
     }
     
     private var statusColor: Color {

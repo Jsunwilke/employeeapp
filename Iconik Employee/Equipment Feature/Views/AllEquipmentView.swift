@@ -235,8 +235,8 @@ struct AllEquipmentView: View {
     // MARK: - Computed Properties
 
     private var canCreateEquipment: Bool {
-        guard !storedUserRole.isEmpty else { return false }
-        return ["admin", "manager"].contains(storedUserRole.lowercased())
+        // Phase 7 RBAC — equipment edit covers creating equipment items
+        Permissions.has("equipment", level: .edit)
     }
 
     // MARK: - Data Loading

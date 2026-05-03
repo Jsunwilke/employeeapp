@@ -17,6 +17,7 @@ struct SignInView: View {
   @AppStorage("userHomeAddress") var storedUserHomeAddress: String = ""
   @AppStorage("userCoordinates") var storedUserCoordinates: String = ""
   @AppStorage("userRole") var userRole: String = "employee"
+  @AppStorage("userRoleId") var storedUserRoleId: String = ""
 
   // Supabase services
   @ObservedObject private var authService = SupabaseAuthService.shared
@@ -132,6 +133,7 @@ struct SignInView: View {
         let home_address: String?
         let coordinates: String?
         let role: String?
+        let role_id: String?
         let organization_id: String?
       }
 
@@ -152,9 +154,15 @@ struct SignInView: View {
         storedUserHomeAddress = profile.home_address ?? ""
         storedUserCoordinates = profile.coordinates ?? ""
         userRole = profile.role ?? "employee"
+        storedUserRoleId = profile.role_id ?? ""
 
         isLoading = false
         isSignedIn = true
+      }
+
+      // Phase 7 RBAC — load permissions cache so synchronous gates work.
+      if let roleId = profile.role_id, !roleId.isEmpty {
+        await PermissionsService.shared.load(roleId: roleId)
       }
 
     } catch {

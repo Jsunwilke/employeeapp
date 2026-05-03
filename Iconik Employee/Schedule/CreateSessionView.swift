@@ -16,7 +16,8 @@ struct CreateSessionView: View {
     @AppStorage("userRole") private var userRole: String = "employee"
     
     private var canCreateSessions: Bool {
-        userRole == "admin" || userRole == "manager"
+        // Phase 7 RBAC — managers + admins have schedule edit
+        Permissions.has("schedule", level: .edit)
     }
     
     var body: some View {

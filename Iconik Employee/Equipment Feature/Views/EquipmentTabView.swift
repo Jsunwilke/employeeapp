@@ -100,7 +100,8 @@ struct EquipmentTabView: View {
     // MARK: - Computed Properties
 
     private var canManageKits: Bool {
-        return ["admin", "manager"].contains(storedUserRole.lowercased())
+        // Phase 7 RBAC — equipment edit covers kit template management
+        Permissions.has("equipment", level: .edit)
     }
 
     // MARK: - Methods

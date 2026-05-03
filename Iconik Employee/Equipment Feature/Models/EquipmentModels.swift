@@ -900,49 +900,34 @@ struct UserKitAssignment: Identifiable {
 }
 
 // MARK: - Equipment Permissions Helper
+//
+// Phase 7 RBAC: all checks delegate to PermissionsService. The userRole
+// parameter is retained for back-compat with callers that haven't migrated
+// (it is no longer consulted — the cache is the source of truth).
 
 struct EquipmentPermissions {
     let userRole: String
 
-    var canCreateEquipment: Bool {
-        ["admin", "manager"].contains(userRole.lowercased())
-    }
-
-    var canEditEquipment: Bool {
-        ["admin", "manager"].contains(userRole.lowercased())
-    }
-
-    var canDeleteEquipment: Bool {
-        userRole.lowercased() == "admin"
-    }
-
-    var canCheckOutForOthers: Bool {
-        ["admin", "manager"].contains(userRole.lowercased())
-    }
-
-    var canCheckInAnyItem: Bool {
-        ["admin", "manager"].contains(userRole.lowercased())
-    }
-
-    var canViewAllAssignments: Bool {
-        ["admin", "manager"].contains(userRole.lowercased())
-    }
-
-    var canResolveDamageReport: Bool {
-        ["admin", "manager"].contains(userRole.lowercased())
-    }
-
-    var canApproveRequests: Bool {
-        ["admin", "manager"].contains(userRole.lowercased())
-    }
-
-    var canManageCategories: Bool {
-        ["admin", "manager"].contains(userRole.lowercased())
-    }
-
-    var canManageKitTemplates: Bool {
-        ["admin", "manager"].contains(userRole.lowercased())
-    }
+    @MainActor
+    var canCreateEquipment: Bool       { Permissions.has("equipment", level: .edit) }
+    @MainActor
+    var canEditEquipment: Bool         { Permissions.has("equipment", level: .edit) }
+    @MainActor
+    var canDeleteEquipment: Bool       { Permissions.has("equipment", level: .admin) }
+    @MainActor
+    var canCheckOutForOthers: Bool     { Permissions.has("equipment", level: .edit) }
+    @MainActor
+    var canCheckInAnyItem: Bool        { Permissions.has("equipment", level: .edit) }
+    @MainActor
+    var canViewAllAssignments: Bool    { Permissions.has("equipmentAssignments", level: .view) }
+    @MainActor
+    var canResolveDamageReport: Bool   { Permissions.has("equipment", level: .edit) }
+    @MainActor
+    var canApproveRequests: Bool       { Permissions.has("equipment", level: .edit) }
+    @MainActor
+    var canManageCategories: Bool      { Permissions.has("equipment", level: .edit) }
+    @MainActor
+    var canManageKitTemplates: Bool    { Permissions.has("equipment", level: .edit) }
 }
 
 // MARK: - Equipment Error Types

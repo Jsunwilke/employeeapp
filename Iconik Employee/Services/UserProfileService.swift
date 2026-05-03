@@ -19,6 +19,7 @@ struct UserProfile: Codable {
     var country: String?
     var organization_id: String?
     var role: String?
+    var role_id: String?  // Phase 7 RBAC — uuid pointing at roles table
     var bio: String?
     var position: String?
     var amount_per_mile: Double?
@@ -224,6 +225,10 @@ class UserProfileService: ObservableObject {
             // Update current profile if it's the current user
             if uid == supabase.auth.currentUser?.id.uuidString.lowercased() {
                 self.currentUserProfile = profile
+                // Phase 7 RBAC — load permission cache for sync gating in views.
+                if let roleId = profile.role_id, !roleId.isEmpty {
+                    Task { await PermissionsService.shared.load(roleId: roleId) }
+                }
             }
 
             return profile
@@ -382,6 +387,7 @@ class UserProfileService: ObservableObject {
         @AppStorage("userCountry") var storedUserCountry: String = ""
         @AppStorage("userOrganizationID") var storedUserOrganizationID: String = ""
         @AppStorage("userRole") var storedUserRole: String = ""
+        @AppStorage("userRoleId") var storedUserRoleId: String = ""
         @AppStorage("userBio") var storedUserBio: String = ""
         @AppStorage("userPosition") var storedUserPosition: String = ""
         @AppStorage("userPhotoURL") var storedUserPhotoURL: String = ""
@@ -399,6 +405,7 @@ class UserProfileService: ObservableObject {
         storedUserCountry = profile.country ?? ""
         storedUserOrganizationID = profile.organization_id ?? ""
         storedUserRole = profile.role ?? ""
+        storedUserRoleId = profile.role_id ?? ""
         storedUserBio = profile.bio ?? ""
         storedUserPosition = profile.position ?? ""
         storedUserPhotoURL = profile.photo_url ?? ""

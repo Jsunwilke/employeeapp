@@ -770,9 +770,10 @@ class SessionService: ObservableObject {
         return await persistentCache.hasCachedData(organizationId: organizationID)
     }
 
+    @MainActor
     func userCanManageSessions() -> Bool {
-        let userRole = UserDefaults.standard.string(forKey: "userRole") ?? "employee"
-        return userRole == "admin" || userRole == "manager"
+        // Phase 7 RBAC — managers + admins have schedule edit
+        Permissions.has("schedule", level: .edit)
     }
 
     func getConnectionStatus() -> (isConnected: Bool, lastError: String?, isRetrying: Bool) {
