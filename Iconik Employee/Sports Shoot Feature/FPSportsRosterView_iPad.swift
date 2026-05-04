@@ -4492,27 +4492,36 @@ struct FPSportsRosterView_iPad: View {
                                 let ids = selectedEntryIds
                                 guard !ids.isEmpty else { return }
 
-                                // Save entries for restore on failure
+                                // Phase G G.6 (Phase C tail): route through SubjectSyncService
+                                // — connected branch sends bulk_delete_subjects (Surface
+                                // cascades each id to capture_images and subject_images,
+                                // emits subjects_deleted broadcasts per
+                                // surface-command-receiver.ts:332-336); fallback enqueues
+                                // the batch as one logical command per Phase D's per-batch
+                                // enqueue pattern (drain replays as a unit so receiver
+                                // bulk dedupe semantics still hold). The legacy
+                                // fpSync.broadcastEntriesDeleted (roster_entries_deleted
+                                // wire type) is NOT emitted — it's a Captura-coexistence
+                                // broadcast (§17.10) that FP-aware peer iPads do not need;
+                                // they see the delete via the receiver's subjects_deleted
+                                // broadcast on the connected path or via the drained
+                                // command's broadcast on the queued path. The previous
+                                // restore-on-failure path drops because the new method
+                                // swallows transient errors (logged via SubjectSyncEvents).
                                 let entriesToDelete = viewModel.subjects.filter { ids.contains($0.id) }
+                                guard let galleryId = entriesToDelete.first?.galleryId else { return }
+                                let uuids = entriesToDelete.map { $0.id }
 
-                                // DB delete FIRST, then update local state, then broadcast
+                                viewModel.subjects.removeAll { ids.contains($0.id) }
+                                selectedEntryIds.removeAll()
+                                withAnimation { isEditMode = false }
+
                                 Task {
-                                    do {
-                                        try await powerSync.deleteBatchSubjects(ids: Array(ids))
-
-                                        await MainActor.run {
-                                            viewModel.subjects.removeAll { ids.contains($0.id) }
-                                            selectedEntryIds.removeAll()
-                                            withAnimation { isEditMode = false }
-                                        }
-
-                                        let idStrings = entriesToDelete.map { $0.id.uuidString.lowercased() }
-                                        fpSync.broadcastEntriesDeleted(rosterEntryIds: idStrings)
-                                        print("[FPSportsRosterView_iPad] Batch deleted \(ids.count) entries")
-                                    } catch {
-                                        print("[FPSportsRosterView_iPad] Batch delete failed: \(error)")
-                                        // Don't modify local state since DB delete failed
-                                    }
+                                    _ = await SubjectSyncService.shared.batchDeleteSubjects(
+                                        subjectIds: uuids,
+                                        galleryId: galleryId,
+                                        sourcePath: "FPSportsRosterView_iPad.batchDeleteRosterEntries"
+                                    )
                                 }
                             }
 
