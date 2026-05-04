@@ -617,81 +617,14 @@ class FocalPointSyncClient: ObservableObject {
         send(msg)
     }
 
-    /// Send a full subject field update — carries every iPad-editable field.
-    /// Used when the iPad skips its own PowerSync write (Surface is connected)
-    /// so the Surface can write all the edits to Supabase authoritatively.
-    func sendSubjectFullUpdate(_ subject: FPSubject) {
-        guard let galleryId = galleryId else { return }
-        let sid = subject.id.uuidString.lowercased()
-        var msg: [String: Any] = [
-            "type": "subject_updated",
-            "device_id": deviceId,
-            "gallery_id": galleryId,
-            "subject_id": sid,
-            "roster_entry_id": sid,
-            "first_name": String(subject.firstName.prefix(200)),
-            "last_name": String(subject.lastName.prefix(200)),
-            "grade": String(subject.grade.prefix(50)),
-            "teacher": String(subject.teacher.prefix(200)),
-            "homeroom": String(subject.homeroom.prefix(200)),
-            "student_id": String(subject.studentId.prefix(50)),
-            "roster_id": String(subject.rosterId.prefix(50)),
-            "online_code": String(subject.onlineCode.prefix(100)),
-            "jersey_number": String(subject.jerseyNumber.prefix(50)),
-            "sport": String(subject.sport.prefix(100)),
-            "position": String(subject.position.prefix(100)),
-            "organization_name": String(subject.organizationName.prefix(200)),
-            "year": String(subject.year.prefix(50)),
-            "subject_type": String(subject.subjectType.prefix(50)),
-            "title": String(subject.title.prefix(200)),
-            "reference_number": String(subject.referenceNumber.prefix(100)),
-            "photographer": String(subject.photographer.prefix(200)),
-            "photo_session_date": subject.photoSessionDate,
-            "expiration_date": subject.expirationDate,
-            "email": String(subject.email.prefix(200)),
-            "phone": String(subject.phone.prefix(50)),
-            "phone2": String(subject.phone2.prefix(50)),
-            "address1": String(subject.address1.prefix(200)),
-            "address2": String(subject.address2.prefix(200)),
-            "city": String(subject.city.prefix(100)),
-            "state": String(subject.state.prefix(100)),
-            "zip": String(subject.zip.prefix(50)),
-            "country": String(subject.country.prefix(100)),
-            "mother": String(subject.mother.prefix(200)),
-            "father": String(subject.father.prefix(200)),
-            "personalization": String(subject.personalization.prefix(200)),
-            "discount_code": String(subject.discountCode.prefix(100)),
-            "custom1": String(subject.custom1.prefix(500)),
-            "custom2": String(subject.custom2.prefix(500)),
-            "custom3": String(subject.custom3.prefix(500)),
-            "custom4": String(subject.custom4.prefix(500)),
-            "custom5": String(subject.custom5.prefix(500)),
-            "custom6": String(subject.custom6.prefix(500)),
-            "custom7": String(subject.custom7.prefix(500)),
-            "custom8": String(subject.custom8.prefix(500)),
-            "custom9": String(subject.custom9.prefix(500)),
-            "custom10": String(subject.custom10.prefix(500)),
-            "custom11": String(subject.custom11.prefix(500)),
-            "custom12": String(subject.custom12.prefix(500)),
-            "custom13": String(subject.custom13.prefix(500)),
-            "custom14": String(subject.custom14.prefix(500)),
-            "custom15": String(subject.custom15.prefix(500)),
-            "custom16": String(subject.custom16.prefix(500)),
-            "custom17": String(subject.custom17.prefix(500)),
-            "custom18": String(subject.custom18.prefix(500)),
-            "custom19": String(subject.custom19.prefix(500)),
-            "custom20": String(subject.custom20.prefix(500)),
-            "notes": String(subject.notes.prefix(1000)),
-            "image_numbers": String(subject.imageNumbers.prefix(500)),
-            "is_absent": subject.isAbsent,
-            "needs_retake": subject.needsRetake,
-            "station_name": "iPad - \(deviceName)",
-        ]
-        if let checkedIn = subject.checkedInAt {
-            msg["checked_in_at"] = checkedIn
-        }
-        send(msg)
-    }
+    // sendSubjectFullUpdate DELETED in Phase D (2026-05-04, commit batch
+    // closing FROM_SCRATCH_ARCHITECTURE.md §13 Phase D). Last call sites
+    // were SubjectSyncService.swift's two legacy fallback paths
+    // (updateSubject:166 and createSubject:451), both of which were
+    // replaced by CommandQueue.shared.enqueue in the same commit. Per
+    // §17.10 verified at Phase D kickoff: zero Captura callers — the
+    // function had no retention obligation and dies cleanly. Final grep
+    // proof in §20.D.
 
     // MARK: - Phase 0 sync rewrite — in-shoot detection
     //
@@ -1286,6 +1219,21 @@ class FocalPointSyncClient: ObservableObject {
                 ? serverV.map { [$0] } : Optional.some(serverSupportedProtocolVersions),
                !supported.contains(Self.clientProtocolVersion) {
                 print("[FPSync] WARNING: protocol_version mismatch — iPad speaks \(Self.clientProtocolVersion), Surface supports \(supported). Phase A is advisory; Phase F will refuse.")
+            }
+            // FROM_SCRATCH_ARCHITECTURE.md §13 Phase D — drain the
+            // persistent CommandQueue on every successful handshake. Any
+            // SubjectSyncService writes that enqueued during a previous
+            // disconnect (or that landed while this iPad wasn't paired
+            // with a Surface) replay through the canonical
+            // subject_command path now. The Surface receiver dedupes
+            // replays via §11.3 idempotency_cache so commands that
+            // already applied during a flaky reconnect cycle return
+            // dedupe instead of double-writing.
+            Task { [weak self] in
+                guard let self = self else { return }
+                await CommandQueue.shared.tickDrain { cmd in
+                    try await self.sendSubjectCommand(cmd)
+                }
             }
 
         case "device_list":

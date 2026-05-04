@@ -112,12 +112,17 @@ enum SubjectCommandBuilder {
     /// Build an `update_subject` command. The fields dictionary should
     /// match the snake_case keys used by SubjectSyncFields.CodingKeys —
     /// we encode the SubjectSyncFields struct via JSONEncoder to produce
-    /// the right wire shape.
+    /// the right wire shape. `idempotencyKey` is caller-supplied so the
+    /// SubjectSyncService can correlate the command's outcome with the
+    /// originating UI action and so the persistent CommandQueue's drain
+    /// replays carry the same key the Surface receiver already saw
+    /// (Phase D — §11.3 dedupe relies on stable keys across replays).
     static func update(
         galleryId: String,
         subjectId: String,
         fields: SubjectSyncFields,
-        originatingDeviceId: String
+        originatingDeviceId: String,
+        idempotencyKey: String? = nil
     ) throws -> SubjectCommand {
         let encoder = JSONEncoder()
         let data = try encoder.encode(fields)
@@ -128,7 +133,7 @@ enum SubjectCommandBuilder {
             commandId: UUID().uuidString.lowercased(),
             commandType: .updateSubject,
             galleryId: galleryId,
-            idempotencyKey: UUID().uuidString.lowercased(),
+            idempotencyKey: idempotencyKey ?? UUID().uuidString.lowercased(),
             originatingDeviceId: originatingDeviceId,
             payload: ["subject_id": subjectId, "fields": fieldDict],
             sentAt: ISO8601DateFormatter().string(from: Date())

@@ -42,17 +42,20 @@ final class SubjectSyncService {
 
     /// Apply a subject update.
     ///
-    /// Per SYNC_ARCHITECTURE_SPEC.md §11.1, when the iPad is connected to a
-    /// Surface in this gallery, the subject_command path runs: send a
-    /// command, await ack, let the Surface be the sole writer. The overlay
-    /// gives instant UI; Surface's subject_updated broadcast back refreshes
-    /// other iPads; PowerSync eventually delivers the row to this iPad too
-    /// (reconcileLocalRow clears the overlay then).
+    /// Per SYNC_ARCHITECTURE_SPEC.md §11.1 + FROM_SCRATCH_ARCHITECTURE.md
+    /// §13 Phase D: when the iPad is connected to a Surface in this
+    /// gallery, the subject_command path runs (send command, await typed
+    /// ack, Surface owns the cloud write). On transport failure (timeout,
+    /// throw) or when the iPad isn't in a Surface-connected shoot, the
+    /// command enqueues into the persistent CommandQueue and drains on
+    /// the next reconnect — replacing the Phase 0 / Phase C dual-write
+    /// PowerSync fallback that this method previously held at lines
+    /// 147-191. Surface's idempotency_cache (§11.3) dedupes replayed
+    /// commands so the queue's at-least-once semantics don't double-apply.
     ///
-    /// If the command path fails (timeout, rejection, no connection) — or
-    /// if the iPad simply isn't in a Surface-connected shoot — the legacy
-    /// local-write path runs. The iPad never loses an edit because the
-    /// WebSocket wobbled.
+    /// On `rejected` ack the overlay is rolled back and no enqueue
+    /// happens — replaying a rejection won't make it acceptable. The
+    /// caller learns about rejection via SubjectSyncEvents.
     @discardableResult
     func updateSubject(
         _ req: SubjectMutationRequest,
@@ -63,7 +66,7 @@ final class SubjectSyncService {
         let deviceId = SubjectSyncService.deviceIdOrUnknown()
 
         // 1. Apply optimistic overlay so the UI sees the new values immediately,
-        //    independent of whether we write locally or only broadcast.
+        //    independent of whether we send now or enqueue for later drain.
         SubjectSyncOverlay.shared.apply(
             subjectId: req.subjectId,
             fields: req.fields,
@@ -71,14 +74,40 @@ final class SubjectSyncService {
             source: .localEdit
         )
 
+        let cmd: SubjectCommand
+        do {
+            cmd = try SubjectCommandBuilder.update(
+                galleryId: req.galleryId,
+                subjectId: req.subjectId,
+                fields: req.fields,
+                originatingDeviceId: deviceId,
+                idempotencyKey: idempotencyKey
+            )
+        } catch {
+            // Field encoding failed before we ever sent — log and bail.
+            // No enqueue: a malformed field dict won't get healthier with
+            // a replay. Overlay clears so the UI doesn't keep promising
+            // an edit that was never well-formed.
+            _ = SubjectSyncOverlay.shared.clearIfMatches(
+                subjectId: req.subjectId,
+                localSubject: currentSubject
+            )
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .update,
+                outcome: .failed,
+                sourcePath: req.sourcePath + ":build_failed",
+                subjectId: req.subjectId,
+                galleryId: req.galleryId,
+                idempotencyKey: idempotencyKey,
+                fieldsTouched: fieldsTouched,
+                errorMessage: String(describing: error)
+            ))
+            return idempotencyKey
+        }
+
         if FocalPointSyncClient.shared.isConnectedAndInGallery(req.galleryId) {
             do {
-                let cmd = try SubjectCommandBuilder.update(
-                    galleryId: req.galleryId,
-                    subjectId: req.subjectId,
-                    fields: req.fields,
-                    originatingDeviceId: deviceId
-                )
                 let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
                 switch ack.status {
                 case .applied, .dedupe:
@@ -92,16 +121,14 @@ final class SubjectSyncService {
                         idempotencyKey: idempotencyKey,
                         fieldsTouched: fieldsTouched
                     ))
-                    // Surface acked; do NOT write PowerSync. The
-                    // subsequent subject_updated broadcast from Surface +
-                    // eventual cloud-sync delivery will land in SQLite.
+                    // Surface acked. Surface's subject_updated broadcast
+                    // (or eventual cloud-sync delivery) will land in
+                    // SQLite for this iPad too.
                     return idempotencyKey
                 case .rejected:
-                    // Surface rejected the command. Roll back the overlay
-                    // so the UI doesn't show a value that won't persist.
-                    // Then fall through to the legacy path so the edit
-                    // isn't silently lost — local PowerSync remains the
-                    // safety net.
+                    // Surface refused on its merits (validation, allowlist,
+                    // etc). Roll the overlay back; no enqueue (replay
+                    // won't help — same input, same rejection).
                     _ = SubjectSyncOverlay.shared.clearIfMatches(
                         subjectId: req.subjectId,
                         localSubject: currentSubject
@@ -109,7 +136,7 @@ final class SubjectSyncService {
                     SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                         deviceId: deviceId,
                         operation: .update,
-                        outcome: .failed,
+                        outcome: .rejected,
                         sourcePath: req.sourcePath + ":cmd_rejected",
                         subjectId: req.subjectId,
                         galleryId: req.galleryId,
@@ -117,18 +144,12 @@ final class SubjectSyncService {
                         fieldsTouched: fieldsTouched,
                         errorMessage: ack.reason ?? "rejected"
                     ))
-                    // Reapply overlay so the legacy path's overlay write
-                    // re-overrides correctly.
-                    SubjectSyncOverlay.shared.apply(
-                        subjectId: req.subjectId,
-                        fields: req.fields,
-                        idempotencyKey: idempotencyKey,
-                        source: .localEdit
-                    )
-                    // intentional fall-through to legacy path below
+                    return idempotencyKey
                 }
             } catch {
-                // Timeout or transport error — fall through to legacy path.
+                // Transport error or ack timeout. Fall through to the
+                // enqueue path below so the edit is preserved across the
+                // reconnect.
                 SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                     deviceId: deviceId,
                     operation: .update,
@@ -140,48 +161,36 @@ final class SubjectSyncService {
                     fieldsTouched: fieldsTouched,
                     errorMessage: String(describing: error)
                 ))
-                // Overlay is still in place from step 1 above.
             }
         }
 
-        let merged = SubjectSyncService.applyFieldsToSubject(req.fields, base: currentSubject)
-
-        // 2. Always write to local PowerSync. The audit caught a data-loss
-        //    case in the WS-only routing: if Surface receives the broadcast
-        //    but crashes before its Supabase write commits, AND the iPad
-        //    goes offline before reconnecting, the edit is permanently lost
-        //    (overlay expires after 5 min, no PowerSync row was written).
-        //
-        //    PowerSync's eventual-consistency model handles the dual-write
-        //    case fine: both sides upload the same row keyed by id, and
-        //    last-write-wins on updated_at. Worst case is one extra cloud
-        //    write per edit. Original "Serenity Braun" bug was iPad writing
-        //    a STALE value (because of the splice-then-update race in the
-        //    WebSocket receive handler), not the local write itself —
-        //    that's fixed by FPSportsRosterView_iPad's overlay-only receive
-        //    path.
+        // Enqueue for drain on next reconnect. Overlay stays in place
+        // until drain succeeds — reconcileLocalRow / clearIfMatches
+        // clears it once the eventual subject_updated broadcast
+        // (Surface-emitted after applying the queued command) lands.
         do {
-            try await PowerSyncManager.shared.saveSubject(merged)
-            // Best-effort broadcast — may queue if the socket is mid-reconnect.
-            FocalPointSyncClient.shared.sendSubjectFullUpdate(merged)
+            _ = try await CommandQueue.shared.enqueue(cmd)
             SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                 deviceId: deviceId,
                 operation: .update,
-                outcome: .committed,
-                sourcePath: req.sourcePath,
+                outcome: .queued,
+                sourcePath: req.sourcePath + ":enqueued",
                 subjectId: req.subjectId,
                 galleryId: req.galleryId,
                 idempotencyKey: idempotencyKey,
                 fieldsTouched: fieldsTouched
             ))
-            // Local SQLite now matches the promised value — clear overlay.
-            _ = SubjectSyncOverlay.shared.clearIfMatches(subjectId: req.subjectId, localSubject: merged)
         } catch {
+            // Enqueue is the last line of defense; if it fails the edit
+            // is genuinely lost. The overlay still shows the user's
+            // intent for 5 minutes so the UI doesn't snap back instantly,
+            // but durability is gone. SubjectSyncEvents records the
+            // forensic trail.
             SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                 deviceId: deviceId,
                 operation: .update,
-                outcome: .failed,
-                sourcePath: req.sourcePath,
+                outcome: .abandoned,
+                sourcePath: req.sourcePath + ":enqueue_failed",
                 subjectId: req.subjectId,
                 galleryId: req.galleryId,
                 idempotencyKey: idempotencyKey,
@@ -189,7 +198,6 @@ final class SubjectSyncService {
                 errorMessage: String(describing: error)
             ))
         }
-
         return idempotencyKey
     }
 
@@ -324,35 +332,35 @@ final class SubjectSyncService {
         return "unknown"
     }
 
-    // MARK: - Phase C — create / delete / batch entry points
+    // MARK: - Phase D — create / delete / batch entry points
     //
-    // Per FROM_SCRATCH_ARCHITECTURE.md §13 Phase C C.1: every iPad save
-    // site for new/deleted subjects routes through SubjectSyncService
-    // (no UI directly calls PowerSyncManager). Each method follows the
-    // existing updateSubject pattern: when connected to Surface in the
-    // gallery, send the canonical command and await the typed ack;
-    // otherwise (or on rejection / transport throw) fall through to the
-    // legacy local-write path so an offline edit isn't lost.
+    // Per FROM_SCRATCH_ARCHITECTURE.md §13 Phase D: every iPad save
+    // site for new/deleted/batch-affected subjects routes through
+    // SubjectSyncService. When connected to Surface in the gallery, the
+    // canonical command is sent and the typed ack determines outcome
+    // (applied/dedupe → committed; rejected → failed, no replay because
+    // a rejection on its merits won't get healthier with retry).
     //
-    // The legacy fallback paths below mirror updateSubject lines 147-191
-    // and die in Phase D when the persistent command queue replaces them
-    // as the offline-resilience mechanism. The Phase D scope is one
-    // unified deletion across update + create + delete + batch — this
-    // service's structure is what makes that one-place deletion possible.
+    // On transport failure (timeout, throw) or when the iPad isn't in a
+    // Surface-connected shoot, the command is enqueued into the
+    // persistent CommandQueue (CommandQueue.swift) and drains on the
+    // next reconnect via FocalPointSyncClient's connection-state hook.
+    // This REPLACES the Phase 0 / Phase C dual-write PowerSync fallback
+    // that previously lived in this file — per §17.10 and rule 19.1,
+    // the legacy substrate (sendSubjectFullUpdate, the in-fallback
+    // PowerSyncManager.saveSubject calls) is deleted in this commit.
     //
-    // Captura coexistence per §17.10: this service is FP-aware UI only.
-    // Captura roster files (AddRosterEntryView, SportsShoot{List,Detail}View)
-    // continue to call FocalPointSyncClient.shared.broadcast* directly —
-    // their broadcast functions are retention symbols on §17.10 and stay
-    // alive. The in-fallback broadcasts below intentionally use the same
-    // Captura-shared functions (broadcastSubjectCreated, sendSubjectFullUpdate)
-    // because the wire-side substrate is shared during coexistence; once
-    // the Phase D queue lands the fallbacks go away and the broadcasts
-    // remain only on the Captura-owned call sites.
+    // Captura coexistence per §17.10 (Phase D kickoff re-grep verified):
+    //   - broadcastSubjectCreated retains: AddRosterEntryView.swift:387
+    //   - sendSubjectUpdated retains: AddRosterEntryView.swift:396
+    //   - broadcastEntriesDeleted retains: SportsShoot{List,Detail}View
+    //     and the independently-scheduled FPSportsRosterView_iPad caller.
+    //   - sendSubjectFullUpdate has zero retained callers and is deleted
+    //     from FocalPointSyncClient.swift in this commit.
 
-    /// Insert a single new subject. Connected → command path; otherwise
-    /// legacy local-write + broadcast. Returns the command's idempotency
-    /// key so the caller can correlate ack-side telemetry.
+    /// Insert a single new subject. Connected → `insert_subjects`
+    /// command (Surface owns the cloud write); otherwise enqueue for
+    /// drain on next reconnect.
     @discardableResult
     func createSubject(
         _ subject: FPSubject,
@@ -363,15 +371,15 @@ final class SubjectSyncService {
         let deviceId = SubjectSyncService.deviceIdOrUnknown()
         let galleryId = subject.galleryId
         let subjectId = subject.id.uuidString.lowercased()
+        let row = SubjectSyncService.insertRowDictionary(from: subject)
+        let cmd = SubjectCommandBuilder.create(
+            galleryId: galleryId,
+            row: row,
+            originatingDeviceId: deviceId,
+            idempotencyKey: key
+        )
 
         if FocalPointSyncClient.shared.isConnectedAndInGallery(galleryId) {
-            let row = SubjectSyncService.insertRowDictionary(from: subject)
-            let cmd = SubjectCommandBuilder.create(
-                galleryId: galleryId,
-                row: row,
-                originatingDeviceId: deviceId,
-                idempotencyKey: key
-            )
             do {
                 let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
                 switch ack.status {
@@ -385,23 +393,19 @@ final class SubjectSyncService {
                         galleryId: galleryId,
                         idempotencyKey: key
                     ))
-                    // Surface acked the insert. The row is owned by Surface;
-                    // peer iPads pick it up via cloud-sync round-trip (the
-                    // insert_subjects broadcast is the Phase B chunk-B.3
-                    // deferral noted at surface-command-receiver.ts:396-401).
                     return key
                 case .rejected:
                     SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                         deviceId: deviceId,
                         operation: .create,
-                        outcome: .failed,
+                        outcome: .rejected,
                         sourcePath: sourcePath + ":cmd_rejected",
                         subjectId: subjectId,
                         galleryId: galleryId,
                         idempotencyKey: key,
                         errorMessage: ack.reason ?? "rejected"
                     ))
-                    // intentional fall-through to legacy path
+                    return key
                 }
             } catch {
                 SubjectSyncEvents.shared.emit(SubjectSyncEvent(
@@ -417,43 +421,13 @@ final class SubjectSyncService {
             }
         }
 
-        // Legacy fallback — write the row locally so an offline create
-        // isn't lost, then best-effort broadcast so any connected peers
-        // see it without waiting for cloud round-trip. Phase D removes
-        // this branch when the persistent command queue takes over.
         do {
-            try await PowerSyncManager.shared.saveSubject(subject)
-            FocalPointSyncClient.shared.broadcastSubjectCreated(
-                rosterEntryId: subjectId,
-                firstName: subject.firstName,
-                lastName: subject.lastName,
-                rosterId: subject.rosterId,
-                grade: subject.grade,
-                groupName: subject.sport.isEmpty ? subject.homeroom : subject.sport,
-                email: subject.email,
-                custom10: subject.custom10,
-                custom11: subject.custom11,
-                custom12: subject.custom12,
-                custom13: subject.custom13,
-                custom14: subject.custom14,
-                custom15: subject.custom15,
-                custom16: subject.custom16,
-                custom17: subject.custom17,
-                custom18: subject.custom18,
-                custom19: subject.custom19,
-                custom20: subject.custom20
-            )
-            // Some peer-side handlers reconcile "extra" fields (the dance
-            // kiosk's contact + custom fields beyond what the broadcast
-            // carries) via a follow-up sendSubjectFullUpdate. Mirror the
-            // existing kiosk pattern so the fallback path gives peers the
-            // same view the connected path's eventual cloud-sync would.
-            FocalPointSyncClient.shared.sendSubjectFullUpdate(subject)
+            _ = try await CommandQueue.shared.enqueue(cmd)
             SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                 deviceId: deviceId,
                 operation: .create,
-                outcome: .committed,
-                sourcePath: sourcePath,
+                outcome: .queued,
+                sourcePath: sourcePath + ":enqueued",
                 subjectId: subjectId,
                 galleryId: galleryId,
                 idempotencyKey: key
@@ -462,22 +436,22 @@ final class SubjectSyncService {
             SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                 deviceId: deviceId,
                 operation: .create,
-                outcome: .failed,
-                sourcePath: sourcePath,
+                outcome: .abandoned,
+                sourcePath: sourcePath + ":enqueue_failed",
                 subjectId: subjectId,
                 galleryId: galleryId,
                 idempotencyKey: key,
                 errorMessage: String(describing: error)
             ))
         }
-
         return key
     }
 
     /// Insert many new subjects in one batch. Connected → single
-    /// `insert_subjects` command with all rows; otherwise per-row legacy
-    /// fallback (writes are independent so a partial-failure batch still
-    /// makes progress on the rows that succeeded).
+    /// `insert_subjects` command with all rows; otherwise enqueue once
+    /// (the batch is one logical unit — we don't fragment it into per-row
+    /// queue rows because that would multiply the wire round-trips on
+    /// drain and lose the receiver's per-batch idempotency dedupe).
     @discardableResult
     func batchCreateSubjects(
         _ subjects: [FPSubject],
@@ -488,15 +462,15 @@ final class SubjectSyncService {
         let deviceId = SubjectSyncService.deviceIdOrUnknown()
         guard let first = subjects.first else { return key }
         let galleryId = first.galleryId
+        let rows = subjects.map { SubjectSyncService.insertRowDictionary(from: $0) }
+        let cmd = SubjectCommandBuilder.batchCreate(
+            galleryId: galleryId,
+            rows: rows,
+            originatingDeviceId: deviceId,
+            idempotencyKey: key
+        )
 
         if FocalPointSyncClient.shared.isConnectedAndInGallery(galleryId) {
-            let rows = subjects.map { SubjectSyncService.insertRowDictionary(from: $0) }
-            let cmd = SubjectCommandBuilder.batchCreate(
-                galleryId: galleryId,
-                rows: rows,
-                originatingDeviceId: deviceId,
-                idempotencyKey: key
-            )
             do {
                 let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
                 switch ack.status {
@@ -515,13 +489,14 @@ final class SubjectSyncService {
                     SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                         deviceId: deviceId,
                         operation: .create,
-                        outcome: .failed,
+                        outcome: .rejected,
                         sourcePath: sourcePath + ":cmd_rejected",
                         subjectId: nil,
                         galleryId: galleryId,
                         idempotencyKey: key,
                         errorMessage: ack.reason ?? "rejected"
                     ))
+                    return key
                 }
             } catch {
                 SubjectSyncEvents.shared.emit(SubjectSyncEvent(
@@ -537,23 +512,40 @@ final class SubjectSyncService {
             }
         }
 
-        // Legacy fallback — per-row write + broadcast. Reuses createSubject
-        // so the single-row fallback semantics stay in one place.
-        for subject in subjects {
-            _ = await createSubject(subject, sourcePath: sourcePath + ":batch_fallback")
+        do {
+            _ = try await CommandQueue.shared.enqueue(cmd)
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .create,
+                outcome: .queued,
+                sourcePath: sourcePath + ":enqueued",
+                subjectId: nil,
+                galleryId: galleryId,
+                idempotencyKey: key
+            ))
+        } catch {
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .create,
+                outcome: .abandoned,
+                sourcePath: sourcePath + ":enqueue_failed",
+                subjectId: nil,
+                galleryId: galleryId,
+                idempotencyKey: key,
+                errorMessage: String(describing: error)
+            ))
         }
         return key
     }
 
     /// Soft-delete a subject. Connected → `soft_delete_subject` command
-    /// (the receiver cascades the delete to capture_images and
-    /// subject_images per surface-local-transport.ts:178-207); otherwise
-    /// legacy `PowerSyncManager.deleteSubject`. Captura's batch-delete
-    /// broadcast (`broadcastEntriesDeleted` in §17.10) is intentionally
-    /// NOT emitted here — it's a Captura-only producer; FP-aware peer
-    /// iPads see the delete via the receiver's `subjects_deleted`
-    /// broadcast (line 373-377) on the connected path or via cloud-sync
-    /// on the fallback path.
+    /// (receiver cascades to capture_images and subject_images per
+    /// surface-local-transport.ts:178-207); otherwise enqueue for drain.
+    /// Captura's batch-delete broadcast (`broadcastEntriesDeleted` in
+    /// §17.10) is intentionally NOT emitted here — it's a Captura-only
+    /// producer; FP-aware peer iPads see the delete via the receiver's
+    /// `subjects_deleted` broadcast on the connected path or via the
+    /// drained command's broadcast on the queued path.
     @discardableResult
     func deleteSubject(
         subjectId: UUID,
@@ -564,14 +556,14 @@ final class SubjectSyncService {
         let key = idempotencyKey ?? UUID().uuidString.lowercased()
         let deviceId = SubjectSyncService.deviceIdOrUnknown()
         let sid = subjectId.uuidString.lowercased()
+        let cmd = SubjectCommandBuilder.delete(
+            galleryId: galleryId,
+            subjectId: sid,
+            originatingDeviceId: deviceId,
+            idempotencyKey: key
+        )
 
         if FocalPointSyncClient.shared.isConnectedAndInGallery(galleryId) {
-            let cmd = SubjectCommandBuilder.delete(
-                galleryId: galleryId,
-                subjectId: sid,
-                originatingDeviceId: deviceId,
-                idempotencyKey: key
-            )
             do {
                 let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
                 switch ack.status {
@@ -590,13 +582,14 @@ final class SubjectSyncService {
                     SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                         deviceId: deviceId,
                         operation: .delete,
-                        outcome: .failed,
+                        outcome: .rejected,
                         sourcePath: sourcePath + ":cmd_rejected",
                         subjectId: sid,
                         galleryId: galleryId,
                         idempotencyKey: key,
                         errorMessage: ack.reason ?? "rejected"
                     ))
+                    return key
                 }
             } catch {
                 SubjectSyncEvents.shared.emit(SubjectSyncEvent(
@@ -613,12 +606,12 @@ final class SubjectSyncService {
         }
 
         do {
-            try await PowerSyncManager.shared.deleteSubject(id: subjectId)
+            _ = try await CommandQueue.shared.enqueue(cmd)
             SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                 deviceId: deviceId,
                 operation: .delete,
-                outcome: .committed,
-                sourcePath: sourcePath,
+                outcome: .queued,
+                sourcePath: sourcePath + ":enqueued",
                 subjectId: sid,
                 galleryId: galleryId,
                 idempotencyKey: key
@@ -627,8 +620,8 @@ final class SubjectSyncService {
             SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                 deviceId: deviceId,
                 operation: .delete,
-                outcome: .failed,
-                sourcePath: sourcePath,
+                outcome: .abandoned,
+                sourcePath: sourcePath + ":enqueue_failed",
                 subjectId: sid,
                 galleryId: galleryId,
                 idempotencyKey: key,
@@ -641,30 +634,55 @@ final class SubjectSyncService {
     /// Apply the same field set to many subjects in one batch. Connected
     /// → single `bulk_update_subjects` command (receiver re-broadcasts
     /// one `subject_updated` per id sharing one gallery version, per
-    /// surface-command-receiver.ts:360-371); otherwise per-id legacy
-    /// fallback through updateSubject.
+    /// surface-command-receiver.ts:360-371); otherwise enqueue the
+    /// batch as one logical command — the drain replays it as a unit
+    /// so the receiver's bulk dedupe semantics still hold.
+    ///
+    /// `currentSubjects` is retained on the signature for caller
+    /// compatibility (the Phase C signature took it as a per-id
+    /// fallback prerequisite). It is no longer consulted because the
+    /// batch is now one command, not N — kept as a parameter so the
+    /// callers' sites don't churn during this commit. A subsequent
+    /// signature-cleanup commit can drop it.
     @discardableResult
     func batchUpdateSubjects(
         subjectIds: [UUID],
         galleryId: String,
         fields: SubjectSyncFields,
-        currentSubjects: [UUID: FPSubject],
+        currentSubjects: [UUID: FPSubject] = [:],
         sourcePath: String,
         idempotencyKey: String? = nil
     ) async -> String {
+        _ = currentSubjects // unused after Phase D; retained for signature compatibility
         let key = idempotencyKey ?? UUID().uuidString.lowercased()
         let deviceId = SubjectSyncService.deviceIdOrUnknown()
         let stringIds = subjectIds.map { $0.uuidString.lowercased() }
+        let cmd: SubjectCommand
+        do {
+            cmd = try SubjectCommandBuilder.batchUpdate(
+                galleryId: galleryId,
+                subjectIds: stringIds,
+                fields: fields,
+                originatingDeviceId: deviceId,
+                idempotencyKey: key
+            )
+        } catch {
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .update,
+                outcome: .failed,
+                sourcePath: sourcePath + ":build_failed",
+                subjectId: nil,
+                galleryId: galleryId,
+                idempotencyKey: key,
+                fieldsTouched: fields.fieldsTouched,
+                errorMessage: String(describing: error)
+            ))
+            return key
+        }
 
         if FocalPointSyncClient.shared.isConnectedAndInGallery(galleryId) {
             do {
-                let cmd = try SubjectCommandBuilder.batchUpdate(
-                    galleryId: galleryId,
-                    subjectIds: stringIds,
-                    fields: fields,
-                    originatingDeviceId: deviceId,
-                    idempotencyKey: key
-                )
                 let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
                 switch ack.status {
                 case .applied, .dedupe:
@@ -683,7 +701,7 @@ final class SubjectSyncService {
                     SubjectSyncEvents.shared.emit(SubjectSyncEvent(
                         deviceId: deviceId,
                         operation: .update,
-                        outcome: .failed,
+                        outcome: .rejected,
                         sourcePath: sourcePath + ":cmd_rejected",
                         subjectId: nil,
                         galleryId: galleryId,
@@ -691,6 +709,7 @@ final class SubjectSyncService {
                         fieldsTouched: fields.fieldsTouched,
                         errorMessage: ack.reason ?? "rejected"
                     ))
+                    return key
                 }
             } catch {
                 SubjectSyncEvents.shared.emit(SubjectSyncEvent(
@@ -707,17 +726,30 @@ final class SubjectSyncService {
             }
         }
 
-        // Legacy fallback — per-id updateSubject so each row's overlay
-        // and write semantics match the single-update path.
-        for sid in subjectIds {
-            guard let current = currentSubjects[sid] else { continue }
-            let req = SubjectMutationRequest(
-                subjectId: sid.uuidString.lowercased(),
+        do {
+            _ = try await CommandQueue.shared.enqueue(cmd)
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .update,
+                outcome: .queued,
+                sourcePath: sourcePath + ":enqueued",
+                subjectId: nil,
                 galleryId: galleryId,
-                fields: fields,
-                sourcePath: sourcePath + ":batch_fallback"
-            )
-            _ = await updateSubject(req, currentSubject: current)
+                idempotencyKey: key,
+                fieldsTouched: fields.fieldsTouched
+            ))
+        } catch {
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .update,
+                outcome: .abandoned,
+                sourcePath: sourcePath + ":enqueue_failed",
+                subjectId: nil,
+                galleryId: galleryId,
+                idempotencyKey: key,
+                fieldsTouched: fields.fieldsTouched,
+                errorMessage: String(describing: error)
+            ))
         }
         return key
     }
