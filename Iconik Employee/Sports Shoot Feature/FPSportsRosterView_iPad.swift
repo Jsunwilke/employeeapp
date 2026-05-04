@@ -238,7 +238,6 @@ struct FPSportsRosterView_iPad: View {
     @StateObject private var fpSync = FocalPointSyncClient.shared
     @State private var showingFPSyncSheet = false
     @State private var manualSyncIP = ""
-    @State private var manualSyncPIN = ""
 
     // Selection confirmation from Surface Pro
     @State private var confirmedSubjectId: String?
@@ -439,13 +438,11 @@ struct FPSportsRosterView_iPad: View {
                             Label("Disconnect", systemImage: "wifi.slash")
                         }
                     } else {
-                        // Auto-discover: finds server via mDNS, connects automatically
+                        // Auto-discover: finds server via mDNS, connects automatically.
+                        // Phase A — bearer-token auth issued on the WS handshake;
+                        // no PIN entry on this side anymore.
                         Button {
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                            let pin = manualSyncPIN.trimmingCharacters(in: .whitespaces)
-                            if !pin.isEmpty {
-                                fpSync.setAuthToken(pin)
-                            }
                             if let galleryId = viewModel.selectedShoot?.galleryId {
                                 fpSync.setGalleryId(galleryId)
                             }
@@ -464,26 +461,6 @@ struct FPSportsRosterView_iPad: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(viewModel.selectedShoot?.galleryId == nil || fpSync.connectionStatus == .discovering)
-
-                        if fpSync.connectionStatus == .authFailed {
-                            Label("Authentication failed — check PIN", systemImage: "exclamationmark.triangle")
-                                .foregroundColor(.red)
-                        }
-
-                        // Optional PIN entry (only needed if server has PIN enabled)
-                        DisclosureGroup("PIN (optional)") {
-                            TextField("4-digit PIN", text: $manualSyncPIN)
-                                .textFieldStyle(.roundedBorder)
-                                .keyboardType(.asciiCapableNumberPad)
-                                .onChange(of: manualSyncPIN) { newValue in
-                                    if newValue.count >= 4 {
-                                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                                    }
-                                }
-                            Text("Only needed if Production has 'Require PIN' enabled")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
                     }
                 }
 
@@ -498,10 +475,6 @@ struct FPSportsRosterView_iPad: View {
                                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                                 let ip = manualSyncIP.trimmingCharacters(in: .whitespaces)
                                 guard !ip.isEmpty else { return }
-                                let pin = manualSyncPIN.trimmingCharacters(in: .whitespaces)
-                                if !pin.isEmpty {
-                                    fpSync.setAuthToken(pin)
-                                }
                                 if let galleryId = viewModel.selectedShoot?.galleryId {
                                     fpSync.setGalleryId(galleryId)
                                 }

@@ -2402,7 +2402,7 @@ struct PoserStationView: View {
                     Text("Make sure the Surface Pro has networking started and both devices are on the same WiFi.")
                         .font(.subheadline).foregroundColor(.secondary)
                         .multilineTextAlignment(.center).padding(.horizontal, 40)
-                    Button("Connect") { fpSync.startDiscovery(galleryId: galleryId, authToken: nil) }
+                    Button("Connect") { fpSync.startDiscovery(galleryId: galleryId) }
                         .buttonStyle(.borderedProminent)
                 } else {
                     Button("Disconnect") { fpSync.disconnect() }

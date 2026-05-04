@@ -190,6 +190,21 @@ class FocalPointSyncClient: ObservableObject {
     private var galleryId: String?
     private var authToken: String = ""
 
+    // Phase A (FROM_SCRATCH_ARCHITECTURE.md §13 A.6) — per-WebSocket-session
+    // bearer token issued by Surface in `device_hello_ack`. Used as the
+    // Authorization Bearer header on photo HTTP requests to port 8766. Empty
+    // until the ack arrives; cleared on disconnect/reconnect since each
+    // session gets a fresh token.
+    private var bearerToken: String = ""
+    /// Phase A — Surface's reported protocol version range, parsed from
+    /// `device_hello_ack`. Stored for observability; Phase F flips this from
+    /// advisory to hard refusal on mismatch.
+    private var serverProtocolVersion: UInt32?
+    private var serverSupportedProtocolVersions: [UInt32] = []
+    /// Phase A — fixed wire-protocol version this iPad speaks. Bump when the
+    /// Surface side bumps SUPPORTED_PROTOCOL_VERSIONS in local_sync.rs.
+    private static let clientProtocolVersion: UInt32 = 1
+
     // Image request state
     private var requestIdCounter = 0
     private var pendingImageRequests: [String: CheckedContinuation<FPFullImage, Error>] = [:]
@@ -213,7 +228,15 @@ class FocalPointSyncClient: ObservableObject {
     private var seenCaptureIds: Set<String> = []
     private let maxSeenCaptures = 1000
 
-    /// Set the auth token (PIN) for manual connection
+    /// Set the legacy PIN auth token. Phase A retired the PIN as a real
+    /// credential — Surface no longer issues PINs in mDNS TXT records,
+    /// never validates `auth_token` on `device_hello`, and never sends
+    /// `auth_error`/`auth_failed`. This setter remains because Captura
+    /// roster files (SportsShootListView.swift, SportsShootDetailView.swift)
+    /// still call it; those files are protected per CLAUDE.md and must
+    /// continue to compile. Whatever PIN a Captura user types is stored
+    /// here, sent on the wire, and silently ignored by Surface.
+    /// FROM_SCRATCH_ARCHITECTURE.md §17.7 (Captura coexistence) covers this.
     func setAuthToken(_ token: String) {
         authToken = token
     }
@@ -266,17 +289,13 @@ class FocalPointSyncClient: ObservableObject {
     private var reconnectAttempts: Int = 0
     private let maxReconnectAttempts: Int = 10
 
-    // Auth retry (re-discover mDNS to get fresh token when server restarts)
-    private var authRetryCount: Int = 0
-    private let maxAuthRetries: Int = 3
-
     var isConnected: Bool {
         connectionStatus == .connected
     }
 
     // MARK: - Discovery
 
-    func startDiscovery(galleryId: String, authToken: String? = nil) {
+    func startDiscovery(galleryId: String) {
         if self.galleryId != galleryId {
             seenCaptureIds.removeAll()
             if !pendingMessages.isEmpty {
@@ -285,10 +304,6 @@ class FocalPointSyncClient: ObservableObject {
             }
         }
         self.galleryId = galleryId
-        // Only override authToken if explicitly provided (preserve token set via setAuthToken)
-        if let token = authToken {
-            self.authToken = token
-        }
         connectionStatus = .discovering
         discoveredServers = []
 
@@ -353,24 +368,9 @@ class FocalPointSyncClient: ObservableObject {
     }
 
     private nonisolated func resolveService(result: NWBrowser.Result) {
-        // Extract auth token from mDNS TXT record
-        var discoveredToken: String?
-        if case .bonjour(let txtRecord) = result.metadata {
-            if let entry = txtRecord.getEntry(for: "token") {
-                switch entry {
-                case .string(let token):
-                    discoveredToken = token
-                    print("[FPSync] Found token in TXT record")
-                default:
-                    print("[FPSync] TXT 'token' entry exists but not a string")
-                }
-            } else {
-                print("[FPSync] No 'token' key in TXT record")
-            }
-        } else {
-            print("[FPSync] No Bonjour metadata in mDNS result")
-        }
-
+        // Phase A — TXT record carries no auth credential. Per-session bearer
+        // tokens are issued at WS handshake (device_hello_ack) instead. The
+        // mDNS metadata is now used only for service discovery.
         let connection = NWConnection(to: result.endpoint, using: .tcp)
         connection.stateUpdateHandler = { [weak self] state in
             guard let self = self else { return }
@@ -383,10 +383,6 @@ class FocalPointSyncClient: ObservableObject {
                     connection.cancel()
                     Task { @MainActor in
                         if self.connectionStatus != .connected {
-                            // Set auth token from TXT record before connecting
-                            if let token = discoveredToken {
-                                self.authToken = token
-                            }
                             self.connect(host: hostStr, port: portInt)
                         }
                     }
@@ -464,7 +460,6 @@ class FocalPointSyncClient: ObservableObject {
                 }
                 self.reconnectDelay = 2.0
                 self.reconnectAttempts = 0
-                self.authRetryCount = 0
                 self.stopDiscovery()
                 self.startHeartbeat()
 
@@ -979,6 +974,70 @@ class FocalPointSyncClient: ObservableObject {
         }
     }
 
+    /// Phase A (FROM_SCRATCH_ARCHITECTURE.md §13 A.6) — request a full-resolution
+    /// image over Surface's photo HTTP server (port 8766) using the per-session
+    /// bearer token issued in device_hello_ack.
+    ///
+    /// In Phase A this method runs ALONGSIDE the WebSocket-based requestImage
+    /// (above). Production photo-fetch callers continue to use requestImage;
+    /// Phase I migrates them to this method and deletes the WebSocket image
+    /// path in the same commit per delete-first migration (rule 19.1).
+    ///
+    /// The HTTP port is fixed at 8766 to match Surface's PHOTO_HTTP_PORT
+    /// constant. Surface's try_bind walks 8766..8770; Phase A leaves dynamic
+    /// port advertisement out of scope (no Phase A exit criterion requires
+    /// it). If Surface had to fall back to a higher port, this method's
+    /// requests will get connection-refused and surface a typed error.
+    func requestImageOverHTTP(filename: String) async throws -> FPFullImage {
+        guard isConnected else { throw FPSyncError.notConnected }
+        guard let host = lastHost, !host.isEmpty else { throw FPSyncError.notConnected }
+        guard !bearerToken.isEmpty else {
+            // device_hello_ack hasn't arrived yet, or this is an old Surface
+            // build pre-Phase-A. Either way, no auth credential to present.
+            throw FPSyncError.serverError("No bearer token — Surface has not issued one for this session")
+        }
+
+        // Path component must be percent-encoded for filenames containing
+        // special chars (spaces, etc.). Surface's filename validator
+        // (extract_capture_filename) rejects path-traversal and disallowed
+        // extensions server-side — we don't replicate that whitelist here.
+        let encoded = filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? filename
+        guard let url = URL(string: "http://\(host):8766/capture/\(encoded)") else {
+            throw FPSyncError.serverError("Could not construct photo HTTP URL")
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = imageRequestTimeout
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: req)
+        } catch {
+            throw FPSyncError.serverError("HTTP photo request failed: \(error.localizedDescription)")
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw FPSyncError.serverError("Photo HTTP response was not HTTP")
+        }
+        switch http.statusCode {
+        case 200:
+            guard let image = UIImage(data: data) else {
+                throw FPSyncError.invalidImageData
+            }
+            return FPFullImage(image: image, filename: filename, size: data.count)
+        case 401:
+            throw FPSyncError.serverError("Unauthorized — bearer token rejected by Surface")
+        case 404:
+            throw FPSyncError.serverError("Photo not found on Surface: \(filename)")
+        case 413:
+            throw FPSyncError.serverError("Photo exceeded server size cap")
+        default:
+            throw FPSyncError.serverError("Photo HTTP returned status \(http.statusCode)")
+        }
+    }
+
     /// Request the list of captures for a subject from Production.
     func requestSubjectCaptures(subjectId: String) async throws -> [FPCaptureInfo] {
         guard isConnected else {
@@ -1047,6 +1106,13 @@ class FocalPointSyncClient: ObservableObject {
     }
 
     private func sendHello() {
+        // Phase A — clear any stale bearer from a previous session before the
+        // new device_hello_ack arrives. Old tokens are invalidated server-side
+        // at WS close, but clearing locally too prevents accidental reuse if
+        // a request races the new ack.
+        bearerToken = ""
+        serverProtocolVersion = nil
+        serverSupportedProtocolVersions = []
         let msg: [String: Any] = [
             "type": "device_hello",
             "device_id": deviceId,
@@ -1054,6 +1120,11 @@ class FocalPointSyncClient: ObservableObject {
             "station_mode": "ios_roster",
             "gallery_id": galleryId ?? "",
             "auth_token": authToken,
+            // Phase A (FROM_SCRATCH_ARCHITECTURE.md §13 A.5) — wire-protocol
+            // version field. Surface compares against its supported range and
+            // logs a structured warning on mismatch (advisory, not refusal).
+            // Phase F flips to hard refusal on mismatch.
+            "protocol_version": Int(Self.clientProtocolVersion),
         ]
         send(msg)
     }
@@ -1186,6 +1257,37 @@ class FocalPointSyncClient: ObservableObject {
         }
 
         switch type {
+        case "device_hello_ack":
+            // Phase A (FROM_SCRATCH_ARCHITECTURE.md §13 A.6) — Surface
+            // confirms our connection and issues a per-session bearer token
+            // for HTTP photo requests on port 8766. The token has no
+            // lifetime past this WebSocket connection; on disconnect it
+            // becomes invalid server-side and a new one will arrive in the
+            // next ack. Surface also reports its protocol_version + supported
+            // range; Phase A logs a warning on mismatch but does not refuse
+            // (Phase F flips that to hard refusal).
+            if let token = msg["bearer_token"] as? String, !token.isEmpty {
+                bearerToken = token
+                print("[FPSync] device_hello_ack received: bearer token issued (len=\(token.count))")
+            } else {
+                print("[FPSync] device_hello_ack missing bearer_token field — HTTP photo requests will fail")
+            }
+            // Parse protocol_version and supported list. Defensively accept
+            // both Int (JSON number) and String forms.
+            let serverV: UInt32? = (msg["protocol_version"] as? Int).map { UInt32($0) }
+                ?? (msg["protocol_version"] as? UInt32)
+            self.serverProtocolVersion = serverV
+            if let supportedAny = msg["supported_protocol_versions"] as? [Any] {
+                self.serverSupportedProtocolVersions = supportedAny.compactMap {
+                    ($0 as? Int).map(UInt32.init) ?? ($0 as? UInt32)
+                }
+            }
+            if let supported = serverSupportedProtocolVersions.isEmpty
+                ? serverV.map { [$0] } : Optional.some(serverSupportedProtocolVersions),
+               !supported.contains(Self.clientProtocolVersion) {
+                print("[FPSync] WARNING: protocol_version mismatch — iPad speaks \(Self.clientProtocolVersion), Surface supports \(supported). Phase A is advisory; Phase F will refuse.")
+            }
+
         case "device_list":
             if let deviceList = msg["devices"] as? [[String: Any]] {
                 devices = deviceList.compactMap { d in
@@ -1265,25 +1367,6 @@ class FocalPointSyncClient: ObservableObject {
             if let fromDevice = msg["device_id"] as? String,
                pairedCameraId == nil || fromDevice == pairedCameraId {
                 onSubjectPhotographed?(subjectId, thumbnail, poseNumber)
-            }
-
-        case "auth_error":
-            authRetryCount += 1
-            if authRetryCount <= maxAuthRetries, let gid = galleryId {
-                print("[FPSync] Auth failed, re-discovering to get fresh token (attempt \(authRetryCount)/\(maxAuthRetries))")
-                // Close current socket without clearing last server (intentional != full disconnect)
-                stopHeartbeat()
-                webSocket?.cancel(with: .normalClosure, reason: nil)
-                webSocket = nil
-                urlSession = nil
-                connectionStatus = .discovering
-                // Clear stale cached server so mDNS discovers fresh TXT record
-                UserDefaults.standard.removeObject(forKey: "fp_last_server")
-                startDiscovery(galleryId: gid)
-            } else {
-                print("[FPSync] Auth failed, max retries reached — giving up")
-                connectionStatus = .authFailed
-                disconnect()
             }
 
         case "command_ack":
