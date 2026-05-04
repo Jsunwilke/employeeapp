@@ -86,6 +86,51 @@ final class SupabasePowerSyncConnector: PowerSyncBackendConnectorProtocol {
 
     // MARK: - Supabase Operations
 
+    /// Nullable date / timestamp columns whose values must NOT be sent
+    /// as empty strings to Postgres. Same root cause as the Mac receiver
+    /// fix at FocalPointProduction commit b64ac5d: Postgres rejects ""
+    /// for date / timestamptz types ("invalid input syntax for type
+    /// date: \"\""), so any iPad-originated PATCH/upsert that includes
+    /// an empty-string value for these columns fails three retries and
+    /// the op gets stuck in PowerSync's CRUD queue forever.
+    ///
+    /// Sources of stuck ops in the wild (pre-fix):
+    ///   - Phase 0 / Phase C iPads' SubjectSyncService legacy fallback
+    ///     wrote PowerSyncManager.shared.saveSubject(merged) on every
+    ///     transport-failed edit, with merged.photoSessionDate / etc.
+    ///     defaulting to "". Phase D removed that fallback, but queue
+    ///     entries created BEFORE the rebuild persist in the iPad's
+    ///     PowerSync local SQLite and retry forever.
+    ///   - Any future code path that writes subjects to iPad PowerSync
+    ///     before Phase G blocks gallery-scoped writes during a shoot.
+    ///
+    /// Skipping these fields from the PATCH body leaves the cloud row's
+    /// existing date value intact (no-op for that column). If the user
+    /// genuinely cleared the date, the user-facing intent is preserved
+    /// at the new SubjectSyncService.updateSubject path, which sends
+    /// "" via the wire and the Mac receiver coerces to NULL there.
+    /// The iPad-PowerSync upload path is the legacy escape hatch; it
+    /// should not stamp NULL over a previously-set date because the
+    /// queued op may be stale (the user's actual intent already shipped
+    /// via subject_command long ago).
+    private static let nullableTemporalColumns: Set<String> = [
+        "photo_session_date",
+        "expiration_date",
+        "checked_in_at",
+    ]
+
+    private static func sanitizeTemporalEmpties(
+        table: String,
+        record: inout [String: String]
+    ) {
+        guard table == "subjects" else { return }
+        for col in nullableTemporalColumns {
+            if record[col] == "" {
+                record.removeValue(forKey: col)
+            }
+        }
+    }
+
     private func upsertRecord(table: String, id: String, data: [String: String?]?) async throws {
         guard let data = data else { return }
 
@@ -96,6 +141,8 @@ final class SupabasePowerSyncConnector: PowerSyncBackendConnectorProtocol {
                 record[key] = value
             }
         }
+
+        Self.sanitizeTemporalEmpties(table: table, record: &record)
 
         try await supabase
             .from(table)
@@ -114,6 +161,18 @@ final class SupabasePowerSyncConnector: PowerSyncBackendConnectorProtocol {
             if let value = value {
                 record[key] = value
             }
+        }
+
+        Self.sanitizeTemporalEmpties(table: table, record: &record)
+
+        // After sanitize, the PATCH body might be empty (every field
+        // was an empty-string temporal). In that case skip the upload
+        // entirely — Postgres-update with empty body is a no-op anyway,
+        // but PostgrestClient rejects it with a malformed-query error
+        // that would re-stick the op in the queue.
+        guard !record.isEmpty else {
+            print("SupabasePowerSyncConnector: Skipping no-op update for \(table)/\(id) (only empty-string temporals)")
+            return
         }
 
         try await supabase
