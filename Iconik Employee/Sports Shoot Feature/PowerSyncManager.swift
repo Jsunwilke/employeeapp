@@ -17,6 +17,18 @@ enum PowerSyncManagerError: Error {
     case notInitialized
     case notConnected
     case invalidData
+    /// Phase G G.5 (Layer 2 wrapper). The iPad attempted a direct write
+    /// to subjects / subject_images / capture_images for a gallery that
+    /// is currently in an active FP capture session. Surface owns
+    /// gallery-scoped writes during a shoot per FROM_SCRATCH_ARCHITECTURE.md
+    /// §3 and §13 Phase G; iPad must route through SubjectSyncService
+    /// (which sends a wire command to Surface and Surface owns the
+    /// cloud write). The wrapper fires fast in iPad code with this typed
+    /// error before the network round-trip; Layer 1 (Postgres trigger)
+    /// is the survives-buggy-build backstop. Lock-column-only writes
+    /// (releaseExpiredSubjectLocks) are exempt — they don't go through
+    /// the wrapped methods.
+    case writeBlockedDuringActiveCaptureSession(galleryId: String)
 }
 
 /// Main manager for PowerSync - handles offline-first data sync
@@ -68,6 +80,64 @@ class PowerSyncManager: ObservableObject {
 
     private var database: PowerSyncDatabaseProtocol?
     private let connector = SupabasePowerSyncConnector()
+
+    // MARK: - Phase G G.5 Layer 2 — Active capture session tracker
+    //
+    // Set of gallery IDs (lowercased UUID strings) currently in an active
+    // FP capture session on this iPad. FP-aware on-shoot views
+    // (PoserStationView, FPSportsRosterView_iPad) register on appear and
+    // deregister on disappear via beginActiveCaptureSession /
+    // endActiveCaptureSession. The signal survives WebSocket flaps because
+    // view lifecycle is independent of WS state.
+    //
+    // saveSubject, deleteSubject, deleteBatchSubjects all check this set
+    // before writing — if the subject's gallery_id is registered, throw
+    // PowerSyncManagerError.writeBlockedDuringActiveCaptureSession. The
+    // wrapper is the typed-error contract; Layer 1 (Postgres trigger) is
+    // the survives-buggy-build backstop.
+    //
+    // releaseExpiredSubjectLocks is NOT guarded — lock-column-only writes
+    // are exempt per Amendment 3 (lock columns are control-plane state
+    // for multi-device coordination; restricting them during a shoot
+    // would break the coordination Phase G is enabling).
+    private var _activeCaptureSessions: Set<String> = []
+
+    /// Whether any active capture session is registered (used by
+    /// deleteSubject/deleteBatchSubjects which only have ids, not the
+    /// gallery context — conservative refusal when any session is
+    /// active so callers can't bypass via id-only paths).
+    var hasAnyActiveCaptureSession: Bool { !_activeCaptureSessions.isEmpty }
+
+    /// First registered gallery id, used for diagnostic messages on
+    /// id-only delete paths.
+    private var firstActiveCaptureSessionGalleryId: String? { _activeCaptureSessions.first }
+
+    /// Mark a gallery as in an active FP capture session on this iPad.
+    /// Called from FP-aware on-shoot view lifecycle (.onAppear).
+    /// Idempotent — repeated calls for the same gallery are no-ops.
+    func beginActiveCaptureSession(galleryId: String) {
+        let lowered = galleryId.lowercased()
+        if _activeCaptureSessions.insert(lowered).inserted {
+            print("PowerSyncManager: beginActiveCaptureSession(\(lowered))")
+        }
+    }
+
+    /// Mark a gallery as no longer in an active FP capture session on
+    /// this iPad. Called from FP-aware on-shoot view lifecycle
+    /// (.onDisappear). Idempotent — repeated calls are no-ops.
+    func endActiveCaptureSession(galleryId: String) {
+        let lowered = galleryId.lowercased()
+        if _activeCaptureSessions.remove(lowered) != nil {
+            print("PowerSyncManager: endActiveCaptureSession(\(lowered))")
+        }
+    }
+
+    /// Returns whether the given gallery is in an active capture session
+    /// on this iPad. Public for tests; also used internally by the
+    /// wrapper guards.
+    func isGalleryInActiveCaptureSession(_ galleryId: String) -> Bool {
+        return _activeCaptureSessions.contains(galleryId.lowercased())
+    }
 
     // Network monitoring for airplane mode detection
     private var networkMonitor: NWPathMonitor?
@@ -961,7 +1031,19 @@ class PowerSyncManager: ObservableObject {
 
     /// Save a subject — UPDATE for existing, INSERT only for new.
     /// This prevents NULLing out Production-managed fields (school_id, qr_code, custom1-20, etc.)
+    ///
+    /// Phase G G.5 (Layer 2 wrapper): refuses with
+    /// PowerSyncManagerError.writeBlockedDuringActiveCaptureSession when
+    /// the subject's gallery_id is in an active FP capture session on
+    /// this iPad. UI sites must route through SubjectSyncService instead;
+    /// this method's only legitimate post-Phase-C/D callers are
+    /// SubjectSyncService's internal paths (none of which are inside
+    /// the Phase D fallback anymore — that fallback was deleted in
+    /// commit 6d8776e).
     func saveSubject(_ subject: FPSubject) async throws {
+        if isGalleryInActiveCaptureSession(subject.galleryId) {
+            throw PowerSyncManagerError.writeBlockedDuringActiveCaptureSession(galleryId: subject.galleryId)
+        }
         guard let db = database else {
             throw PowerSyncManagerError.notInitialized
         }
@@ -1084,7 +1166,20 @@ class PowerSyncManager: ObservableObject {
     }
 
     /// Soft-delete a subject (matches Production's soft-delete pattern)
+    ///
+    /// Phase G G.5 (Layer 2 wrapper): refuses with
+    /// PowerSyncManagerError.writeBlockedDuringActiveCaptureSession when
+    /// any active FP capture session is registered on this iPad. The
+    /// signature only carries the subject id, not the gallery — so the
+    /// guard refuses conservatively when ANY session is active rather
+    /// than doing a SQL round-trip to discover the row's gallery_id.
+    /// All legitimate post-Phase-C/D callers route through
+    /// SubjectSyncService (which has the gallery_id).
     func deleteSubject(id: UUID) async throws {
+        if hasAnyActiveCaptureSession {
+            let gid = firstActiveCaptureSessionGalleryId ?? "unknown"
+            throw PowerSyncManagerError.writeBlockedDuringActiveCaptureSession(galleryId: gid)
+        }
         guard let db = database else {
             throw PowerSyncManagerError.notInitialized
         }
@@ -1101,7 +1196,18 @@ class PowerSyncManager: ObservableObject {
     }
 
     /// Batch soft-delete multiple subjects using a single SQL statement
+    ///
+    /// Phase G G.5 (Layer 2 wrapper): same conservative refusal as
+    /// deleteSubject — the signature lacks gallery context, so any
+    /// registered active session blocks the call. Phase G G.6 migrated
+    /// the sole caller (FPSportsRosterView_iPad batchDeleteRosterEntries)
+    /// to route through SubjectSyncService.batchDeleteSubjects, so this
+    /// method should never be called from UI code post-Phase-G.
     func deleteBatchSubjects(ids: [UUID]) async throws {
+        if hasAnyActiveCaptureSession {
+            let gid = firstActiveCaptureSessionGalleryId ?? "unknown"
+            throw PowerSyncManagerError.writeBlockedDuringActiveCaptureSession(galleryId: gid)
+        }
         guard let db = database else { throw PowerSyncManagerError.notInitialized }
         guard !ids.isEmpty else { return }
         let now = ISO8601DateFormatter().string(from: Date())

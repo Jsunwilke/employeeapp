@@ -597,6 +597,15 @@ struct PoserStationView: View {
             TabBarManager.shared.topBarBackOverride = TopBarBackOverride(label: "Galleries") {
                 dismiss()
             }
+            // Phase G G.5 — register this gallery as in an active FP
+            // capture session so PowerSyncManager's Layer 2 wrapper
+            // refuses any direct PowerSync write on subjects /
+            // subject_images / capture_images for this gallery. Routes
+            // must use SubjectSyncService instead. Paired with
+            // endActiveCaptureSession in .onDisappear below. View
+            // lifecycle is independent of WebSocket state, so the
+            // signal survives WS reconnects.
+            powerSync.beginActiveCaptureSession(galleryId: galleryId)
         }
         .task {
             // Pin the gallery so PowerSync syncs its subjects to this user's device.
@@ -637,6 +646,11 @@ struct PoserStationView: View {
             // Drop the back-override so the top toolbar reverts to the
             // global "Home" button on the parent (gallery picker) view.
             TabBarManager.shared.topBarBackOverride = nil
+            // Phase G G.5 — paired with beginActiveCaptureSession in
+            // .onAppear above. Once the operator leaves this view the
+            // gallery is no longer "in a shoot" on this iPad and direct
+            // PowerSync writes resume.
+            powerSync.endActiveCaptureSession(galleryId: galleryId)
             subjectWatchTask?.cancel()
             groupWatchTask?.cancel()
             // Null the group-photo fpSync callbacks we installed in

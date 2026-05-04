@@ -1337,6 +1337,38 @@ struct FPSportsRosterView_iPad: View {
             if UIDevice.current.userInterfaceIdiom == .pad {
                 TabBarManager.shared.isFullScreenOverlayActive = false
             }
+            // Phase G G.5 — paired with the .onChange below; if the user
+            // backs out of the view while a shoot is selected, end the
+            // active capture session so direct PowerSync writes resume.
+            if let gid = viewModel.selectedShoot?.galleryId {
+                PowerSyncManager.shared.endActiveCaptureSession(galleryId: gid)
+            }
+        }
+        .onChange(of: viewModel.selectedShoot?.galleryId) { newGid in
+            // Phase G G.5 — register/deregister the active capture
+            // session as the operator switches between shoots in the
+            // roster view's left sidebar. PowerSyncManager's Layer 2
+            // wrapper refuses direct PowerSync writes on subjects /
+            // subject_images / capture_images for the selected
+            // gallery; UI must use SubjectSyncService instead. The
+            // signal survives WebSocket flaps because view selection
+            // is independent of WS state. Using the iOS 16-compatible
+            // single-arg onChange form (the new iOS 17+ two-arg form
+            // would let us deregister the old gallery on transition,
+            // but tracking the prior value via an @State is the
+            // backward-compatible equivalent).
+            // We don't track the prior selection here because the
+            // PowerSyncManager tracker is a Set — repeat begin calls
+            // are no-ops, and stale registrations only cost a Set
+            // lookup at write time. The .onDisappear above fires
+            // endActiveCaptureSession for whatever gallery is active
+            // when the view goes away, which is the only real cleanup
+            // moment. (Multi-shoot session-juggling within one view
+            // visit is rare; if it surfaces as an issue we can add
+            // explicit prior-gid tracking.)
+            if let gid = newGid {
+                PowerSyncManager.shared.beginActiveCaptureSession(galleryId: gid)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Re-load shoots list and roster for currently-selected shoot when returning to foreground.
