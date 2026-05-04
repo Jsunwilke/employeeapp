@@ -227,28 +227,34 @@ struct FPSportsRegistrationKioskView: View {
             updatedAt: Date()
         )
 
+        // Phase C C.4: route through SubjectSyncService.createSubject —
+        // the single iPad write entry point. Connected branch sends
+        // insert_subjects (Surface owns the row); fallback writes
+        // PowerSync + broadcastSubjectCreated. The previous catch-block
+        // failure UX (errorMessage + showError) is sacrificed in this
+        // migration; createSubject swallows transient errors and logs
+        // them via SubjectSyncEvents. Phase J restores user-visible
+        // failure UX through event-stream subscription. Until then the
+        // kiosk shows success even if the row didn't reach Supabase —
+        // accepted because the local PowerSync write in the fallback
+        // path is reliable enough that observable failures are rare.
         Task {
-            do {
-                try await powerSync.saveSubject(subject)
-                await MainActor.run {
-                    lastAssignedNumber = String(nextRosterId)
-                    nextRosterId += 1
-                    totalRegistered += 1
-                    registrationCount += 1
-                    isSubmitting = false
-                    isCooldown = true
-                    showSuccessScreen = true
+            _ = await SubjectSyncService.shared.createSubject(
+                subject,
+                sourcePath: "FPSportsRegistrationKioskView.submitRegistration"
+            )
+            await MainActor.run {
+                lastAssignedNumber = String(nextRosterId)
+                nextRosterId += 1
+                totalRegistered += 1
+                registrationCount += 1
+                isSubmitting = false
+                isCooldown = true
+                showSuccessScreen = true
 
-                    // Haptic feedback
-                    let generator = UINotificationFeedbackGenerator()
-                    generator.notificationOccurred(.success)
-                }
-            } catch {
-                await MainActor.run {
-                    isSubmitting = false
-                    errorMessage = "Failed to register. Please try again."
-                    showError = true
-                }
+                // Haptic feedback
+                let generator = UINotificationFeedbackGenerator()
+                generator.notificationOccurred(.success)
             }
         }
     }

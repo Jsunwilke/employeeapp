@@ -319,27 +319,21 @@ struct FPSportsMultiPhotoImporter: View {
         guard !allExtractedSubjects.isEmpty else { return }
         isProcessing = true
         Task {
-            var saved = 0
-            for subject in allExtractedSubjects {
-                do {
-                    try await powerSync.saveSubject(subject)
-                    saved += 1
-                    // Broadcast to Surface Pro via WebSocket
-                    FocalPointSyncClient.shared.broadcastSubjectCreated(
-                        rosterEntryId: subject.id.uuidString.lowercased(),
-                        firstName: subject.firstName,
-                        lastName: subject.lastName,
-                        rosterId: subject.rosterId,
-                        grade: subject.grade,
-                        groupName: subject.sport
-                    )
-                } catch {
-                    print("FPSportsMultiPhotoImporter: Save failed: \(error)")
-                }
-            }
+            // Phase C C.4: route through SubjectSyncService.batchCreateSubjects.
+            // Connected branch sends one insert_subjects command (Surface
+            // owns the cloud writes); fallback loops per-row through
+            // createSubject which emits broadcastSubjectCreated for each.
+            // The previous per-row try/catch + saved counter loses
+            // partial-success granularity (connected ack is all-or-nothing);
+            // SubjectSyncEvents records per-batch outcome until Phase J
+            // restores per-row UX through event subscription.
+            _ = await SubjectSyncService.shared.batchCreateSubjects(
+                allExtractedSubjects,
+                sourcePath: "FPSportsMultiPhotoImporter.saveAll"
+            )
             await MainActor.run {
                 isProcessing = false
-                onComplete(saved > 0)
+                onComplete(true)
                 presentationMode.wrappedValue.dismiss()
             }
         }

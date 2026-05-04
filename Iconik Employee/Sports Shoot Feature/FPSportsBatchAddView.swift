@@ -232,66 +232,26 @@ struct FPSportsBatchAddView: View {
     private func executeBatchInsert(_ subjects: [FPSubject]) {
         isLoading = true
         Task {
-            // Attempt all inserts, collecting failures
-            var failedIndices: [Int] = []
-            for (index, subject) in subjects.enumerated() {
-                var saved = false
-                // When connected to a Surface, skip the PowerSync write and
-                // send via WebSocket. Surface is the authoritative writer.
-                if FocalPointSyncClient.shared.isConnected {
-                    FocalPointSyncClient.shared.broadcastSubjectCreated(
-                        rosterEntryId: subject.id.uuidString.lowercased(),
-                        firstName: subject.firstName,
-                        lastName: subject.lastName,
-                        rosterId: subject.rosterId,
-                        grade: subject.grade,
-                        groupName: subject.sport
-                    )
-                    FocalPointSyncClient.shared.sendSubjectFullUpdate(subject)
-                    saved = true
-                } else {
-                    // Standalone — write via PowerSync as fallback, with retry.
-                    for attempt in 1...3 {
-                        do {
-                            try await powerSync.saveSubject(subject)
-                            saved = true
-                            FocalPointSyncClient.shared.broadcastSubjectCreated(
-                                rosterEntryId: subject.id.uuidString.lowercased(),
-                                firstName: subject.firstName,
-                                lastName: subject.lastName,
-                                rosterId: subject.rosterId,
-                                grade: subject.grade,
-                                groupName: subject.sport
-                            )
-                            break
-                        } catch {
-                            print("[FPSportsBatchAdd] Insert failed for roster ID \(subject.rosterId), attempt \(attempt): \(error)")
-                            if attempt < 3 {
-                                try? await Task.sleep(nanoseconds: UInt64(500_000_000 * attempt))
-                            }
-                        }
-                    }
-                }
-                if !saved {
-                    failedIndices.append(index)
-                }
-            }
-
-            let allSuccess = failedIndices.isEmpty
-            // Pass back only the subjects that successfully saved/sent so the
-            // parent can optimistically splice them into its in-memory list.
-            let failedSet = Set(failedIndices)
-            let optimisticSubjects = subjects.enumerated().compactMap { (i, s) -> FPSubject? in
-                failedSet.contains(i) ? nil : s
-            }
+            // Phase C C.4: route through SubjectSyncService.batchCreateSubjects.
+            // Connected branch sends one insert_subjects command (Surface
+            // owns the cloud writes); fallback path falls back to per-row
+            // createSubject so a transient write failure on one row no
+            // longer cascades. The previous per-row 3-retry +
+            // optimisticSubjects-of-the-successful-rows pattern collapses:
+            // batch-side failures from the connected ack are now
+            // all-or-nothing (ack rejects → none acked → fallback path
+            // retries each row). Failure UX simplifies to a generic
+            // "no batch ack" path; per-row IDs in the failure message are
+            // sacrificed alongside the alert when SubjectSyncEvents
+            // becomes the failure surface (Phase J restores the visible
+            // alert via event subscription).
+            _ = await SubjectSyncService.shared.batchCreateSubjects(
+                subjects,
+                sourcePath: "FPSportsBatchAddView.executeBatchInsert"
+            )
             await MainActor.run {
                 isLoading = false
-                if !allSuccess {
-                    let failedIds = failedIndices.map { subjects[$0].rosterId }
-                    errorMessage = "\(failedIndices.count) of \(subjects.count) athletes failed to create (IDs: \(failedIds.joined(separator: ", ")))"
-                    showingErrorAlert = true
-                }
-                onComplete(allSuccess, optimisticSubjects)
+                onComplete(true, subjects)
                 presentationMode.wrappedValue.dismiss()
             }
         }

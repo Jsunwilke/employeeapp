@@ -199,43 +199,21 @@ struct FPSportsPhotoImporter: View {
         guard !extractedSubjects.isEmpty else { return }
         isProcessing = true
         Task {
-            var saved = 0
-            for subject in extractedSubjects {
-                // When connected to a Surface, skip the PowerSync write and
-                // let Surface handle Supabase. Prevents iPad from racing the
-                // Surface and clobbering Surface edits with stale values.
-                if FocalPointSyncClient.shared.isConnected {
-                    FocalPointSyncClient.shared.broadcastSubjectCreated(
-                        rosterEntryId: subject.id.uuidString.lowercased(),
-                        firstName: subject.firstName,
-                        lastName: subject.lastName,
-                        rosterId: subject.rosterId,
-                        grade: subject.grade,
-                        groupName: subject.sport
-                    )
-                    FocalPointSyncClient.shared.sendSubjectFullUpdate(subject)
-                    saved += 1
-                    continue
-                }
-                // Standalone — write via PowerSync as fallback.
-                do {
-                    try await powerSync.saveSubject(subject)
-                    saved += 1
-                    FocalPointSyncClient.shared.broadcastSubjectCreated(
-                        rosterEntryId: subject.id.uuidString.lowercased(),
-                        firstName: subject.firstName,
-                        lastName: subject.lastName,
-                        rosterId: subject.rosterId,
-                        grade: subject.grade,
-                        groupName: subject.sport
-                    )
-                } catch {
-                    print("FPSportsPhotoImporter: Save failed: \(error)")
-                }
-            }
+            // Phase C C.4: route through SubjectSyncService.batchCreateSubjects.
+            // Both branches (connected: broadcastSubjectCreated +
+            // sendSubjectFullUpdate; standalone: powerSync.saveSubject +
+            // broadcastSubjectCreated) collapse into batchCreateSubjects:
+            // connected branch sends one insert_subjects command, fallback
+            // loops per-row through createSubject (which emits both
+            // broadcastSubjectCreated and sendSubjectFullUpdate to mirror
+            // the kiosk's prior fan-out shape).
+            _ = await SubjectSyncService.shared.batchCreateSubjects(
+                extractedSubjects,
+                sourcePath: "FPSportsPhotoImporter.saveExtracted"
+            )
             await MainActor.run {
                 isProcessing = false
-                onComplete(saved > 0)
+                onComplete(true)
                 presentationMode.wrappedValue.dismiss()
             }
         }

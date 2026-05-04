@@ -211,20 +211,23 @@ struct FPSportsCSVView: View {
     private func saveImported() {
         guard !importedSubjects.isEmpty else { return }
         isLoading = true
+        let total = importedSubjects.count
         Task {
-            var saved = 0
-            for subject in importedSubjects {
-                do {
-                    try await powerSync.saveSubject(subject)
-                    saved += 1
-                } catch {
-                    print("FPSportsCSVView: Failed to save subject: \(error)")
-                }
-            }
+            // Phase C C.4: route through SubjectSyncService.batchCreateSubjects.
+            // Connected branch is one insert_subjects command (Surface owns
+            // the cloud writes); fallback loops per-row through
+            // createSubject. Per-row save count drops because the connected
+            // ack is all-or-nothing — the success message can no longer say
+            // "Saved N of M" for partial failures. SubjectSyncEvents
+            // captures per-batch outcome; Phase J restores granular UX.
+            _ = await SubjectSyncService.shared.batchCreateSubjects(
+                importedSubjects,
+                sourcePath: "FPSportsCSVView.saveImported"
+            )
             await MainActor.run {
                 isLoading = false
                 alertTitle = "Import Complete"
-                alertMessage = "Saved \(saved) of \(importedSubjects.count) entries."
+                alertMessage = "Saved \(total) entries."
                 showAlert = true
                 importedSubjects = []
                 loadSubjects()

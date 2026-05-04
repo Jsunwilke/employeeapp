@@ -328,28 +328,17 @@ struct DanceCoupleKioskView: View {
                     custom20: extraName(10),
                     updatedAt: Date()
                 )
-                try await powerSync.saveSubject(subject)
-                // Broadcast over LAN so PoserStation and CameraStation see
-                // this dancer instantly with no internet round-trip.
-                fpSync.broadcastSubjectCreated(
-                    rosterEntryId: subject.id.uuidString.lowercased(),
-                    firstName: subject.firstName,
-                    lastName: subject.lastName,
-                    rosterId: subject.rosterId,
-                    grade: "",
-                    groupName: "",
-                    email: subject.email,
-                    custom10: subject.custom10,
-                    custom11: subject.custom11,
-                    custom12: subject.custom12,
-                    custom13: subject.custom13,
-                    custom14: subject.custom14,
-                    custom15: subject.custom15,
-                    custom16: subject.custom16,
-                    custom17: subject.custom17,
-                    custom18: subject.custom18,
-                    custom19: subject.custom19,
-                    custom20: subject.custom20
+                // Phase C C.4: route through SubjectSyncService.createSubject.
+                // Connected branch sends insert_subjects (Surface owns the
+                // row); fallback writes PowerSync and emits
+                // broadcastSubjectCreated (with the dance kiosk's
+                // contact + custom10-20 fan-out preserved by createSubject's
+                // fallback signature) plus sendSubjectFullUpdate so the
+                // peer iPad receivers reconcile the extra fields the
+                // broadcastSubjectCreated message doesn't carry.
+                _ = await SubjectSyncService.shared.createSubject(
+                    subject,
+                    sourcePath: "DanceCoupleKioskView.submit"
                 )
                 await MainActor.run {
                     lastAssignedNumber = String(assignedRosterId)
