@@ -1407,6 +1407,24 @@ struct FPSportsRosterView_iPad: View {
                 Text("Your edit lock on \(lockLostSubjectName) was lost. Another device may be editing.")
             }
         }
+        // Phase F (FROM_SCRATCH_ARCHITECTURE.md §13 F.3) — Surface refused
+        // the WebSocket handshake over a wire-protocol version mismatch.
+        // Tapping OK clears the published refusal context; the operator
+        // must update the iPad app and reconnect manually.
+        .alert(
+            "Update Required",
+            isPresented: Binding(
+                get: { fpSync.versionMismatchInfo != nil },
+                set: { if !$0 { fpSync.versionMismatchInfo = nil } }
+            ),
+            presenting: fpSync.versionMismatchInfo
+        ) { _ in
+            Button("OK", role: .cancel) {
+                fpSync.versionMismatchInfo = nil
+            }
+        } message: { info in
+            Text(info.serverMessage)
+        }
         .onChange(of: lockManager.lockLostEvent?.id) { _ in
             guard let event = lockManager.lockLostEvent,
                   event.type == .subject else { return }

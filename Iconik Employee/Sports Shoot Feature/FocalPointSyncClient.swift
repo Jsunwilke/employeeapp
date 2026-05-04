@@ -22,6 +22,27 @@ enum FPSyncConnectionStatus: Equatable {
     case connecting
     case connected
     case authFailed
+    /// Phase F (FROM_SCRATCH_ARCHITECTURE.md §13 F.3) — Surface refused the
+    /// connection because of a wire-protocol version mismatch (or because
+    /// this iPad's build pre-dates Phase A and didn't send protocol_version
+    /// at all). Reconnect is suppressed; the iPad needs an app update before
+    /// it can pair with this Surface again. UI surfaces both versions via
+    /// `versionMismatchInfo` so the operator sees what to update.
+    case versionMismatch
+}
+
+/// Phase F (FROM_SCRATCH_ARCHITECTURE.md §13 F.2 / F.4) — context for the
+/// version-refusal UI surface. Carries Surface's protocol version + supported
+/// range and the iPad's reported version so the connect-attempt screen can
+/// render the full mismatch (e.g. "Surface app version 1 cannot connect to
+/// iPad app version 2; update required"). `iPadProtocolVersion` is `nil` when
+/// Surface refused because this iPad omitted the field (pre-Phase-A build).
+struct FPSyncVersionMismatchInfo: Equatable {
+    let surfaceProtocolVersion: UInt32
+    let surfaceSupportedProtocolVersions: [UInt32]
+    let iPadProtocolVersion: UInt32?
+    let serverMessage: String
+    let code: String
 }
 
 // MARK: - Device Info
@@ -124,6 +145,12 @@ class FocalPointSyncClient: ObservableObject {
     @Published var connectionStatus: FPSyncConnectionStatus = .disconnected
     @Published var devices: [FPSyncDevice] = []
     @Published var pairedCameraId: String? = nil
+    /// Phase F (FROM_SCRATCH_ARCHITECTURE.md §13 F.3) — populated when Surface
+    /// refused the connection over a wire-protocol version mismatch. Cleared
+    /// on the next successful handshake or on intentional disconnect. The UI
+    /// reads this alongside `connectionStatus == .versionMismatch` to render
+    /// the update-required affordance.
+    @Published var versionMismatchInfo: FPSyncVersionMismatchInfo? = nil
 
     // Callbacks
     var onCaptureCompleted: ((FPCaptureEvent) -> Void)?
@@ -201,8 +228,9 @@ class FocalPointSyncClient: ObservableObject {
     /// advisory to hard refusal on mismatch.
     private var serverProtocolVersion: UInt32?
     private var serverSupportedProtocolVersions: [UInt32] = []
-    /// Phase A — fixed wire-protocol version this iPad speaks. Bump when the
-    /// Surface side bumps SUPPORTED_PROTOCOL_VERSIONS in local_sync.rs.
+    /// Phase A — fixed wire-protocol version this iPad speaks. Bump per the
+    /// procedure in FROM_SCRATCH_ARCHITECTURE.md §6.1 (four constants in
+    /// lockstep, overlap-window rollout for the App Store gate).
     private static let clientProtocolVersion: UInt32 = 1
 
     // Image request state
@@ -1055,8 +1083,8 @@ class FocalPointSyncClient: ObservableObject {
             "auth_token": authToken,
             // Phase A (FROM_SCRATCH_ARCHITECTURE.md §13 A.5) — wire-protocol
             // version field. Surface compares against its supported range and
-            // logs a structured warning on mismatch (advisory, not refusal).
-            // Phase F flips to hard refusal on mismatch.
+            // refuses the connection on mismatch (Phase F flipped Phase A's
+            // advisory warning to hard refusal).
             "protocol_version": Int(Self.clientProtocolVersion),
         ]
         send(msg)
@@ -1196,9 +1224,14 @@ class FocalPointSyncClient: ObservableObject {
             // for HTTP photo requests on port 8766. The token has no
             // lifetime past this WebSocket connection; on disconnect it
             // becomes invalid server-side and a new one will arrive in the
-            // next ack. Surface also reports its protocol_version + supported
-            // range; Phase A logs a warning on mismatch but does not refuse
-            // (Phase F flips that to hard refusal).
+            // next ack.
+            //
+            // Phase F (§13 F.1) — version mismatches are refused server-side
+            // before this ack ever arrives, via the `version_refused` wire
+            // type handled below. By the time we receive device_hello_ack,
+            // versions are known to match. The Phase A advisory iPad-side
+            // log line is gone per delete-first migration; the parsed
+            // server-version fields stay for observability.
             if let token = msg["bearer_token"] as? String, !token.isEmpty {
                 bearerToken = token
                 print("[FPSync] device_hello_ack received: bearer token issued (len=\(token.count))")
@@ -1215,11 +1248,9 @@ class FocalPointSyncClient: ObservableObject {
                     ($0 as? Int).map(UInt32.init) ?? ($0 as? UInt32)
                 }
             }
-            if let supported = serverSupportedProtocolVersions.isEmpty
-                ? serverV.map { [$0] } : Optional.some(serverSupportedProtocolVersions),
-               !supported.contains(Self.clientProtocolVersion) {
-                print("[FPSync] WARNING: protocol_version mismatch — iPad speaks \(Self.clientProtocolVersion), Surface supports \(supported). Phase A is advisory; Phase F will refuse.")
-            }
+            // Successful handshake — clear any previous refusal context so a
+            // post-update reconnect renders cleanly.
+            self.versionMismatchInfo = nil
             // FROM_SCRATCH_ARCHITECTURE.md §13 Phase D — drain the
             // persistent CommandQueue on every successful handshake. Any
             // SubjectSyncService writes that enqueued during a previous
@@ -1235,6 +1266,51 @@ class FocalPointSyncClient: ObservableObject {
                     try await self.sendSubjectCommand(cmd)
                 }
             }
+
+        case "version_refused":
+            // Phase F (FROM_SCRATCH_ARCHITECTURE.md §13 F.1–F.4) — Surface
+            // refused this connection over a wire-protocol version mismatch
+            // (or because this iPad omitted the protocol_version field, i.e.
+            // pre-Phase-A build). The structured payload carries Surface's
+            // protocol_version + supported range and our reported version so
+            // the UI can render the full mismatch. We:
+            //   1. Capture the refusal context for the UI surface.
+            //   2. Set connectionStatus = .versionMismatch (mirrors the
+            //      .authFailed pattern for the Captura PIN substrate).
+            //   3. Call disconnect() — that sets intentionalClose = true so
+            //      handleDisconnect() does NOT schedule a reconnect. A user
+            //      app update is required before this iPad can pair with
+            //      this Surface again.
+            let surfaceV: UInt32 = (msg["surface_protocol_version"] as? Int).map { UInt32($0) }
+                ?? (msg["surface_protocol_version"] as? UInt32)
+                ?? 0
+            let surfaceSupported: [UInt32] = (msg["surface_supported_protocol_versions"] as? [Any])?
+                .compactMap { ($0 as? Int).map(UInt32.init) ?? ($0 as? UInt32) } ?? []
+            // ipad_protocol_version arrives as JSON null (mismatch+missing)
+            // or an integer (mismatch). NSNull bridges via `as? Int` ->
+            // nil, so the optional-chain naturally handles both.
+            let iPadV: UInt32? = (msg["ipad_protocol_version"] as? Int).map { UInt32($0) }
+                ?? (msg["ipad_protocol_version"] as? UInt32)
+            let serverMessage = msg["message"] as? String ?? "Surface refused this connection over a protocol version mismatch."
+            let code = msg["code"] as? String ?? "protocol_version_refused"
+            let info = FPSyncVersionMismatchInfo(
+                surfaceProtocolVersion: surfaceV,
+                surfaceSupportedProtocolVersions: surfaceSupported,
+                iPadProtocolVersion: iPadV,
+                serverMessage: serverMessage,
+                code: code
+            )
+            print("[FPSync] version_refused (\(code)): \(serverMessage)")
+            // disconnect() sets intentionalClose=true, stops heartbeat/reconnect,
+            // clears webSocket, and assigns connectionStatus = .disconnected.
+            // We then overwrite to .versionMismatch and publish the refusal
+            // context so the UI surfaces "Surface app version X cannot connect
+            // to iPad app version Y; update required" per §13 F.3. A
+            // subsequent user-driven connect() (after an app update) clears
+            // versionMismatchInfo on the next successful device_hello_ack.
+            self.disconnect()
+            self.versionMismatchInfo = info
+            self.connectionStatus = .versionMismatch
 
         case "device_list":
             if let deviceList = msg["devices"] as? [[String: Any]] {
@@ -1722,6 +1798,18 @@ class FocalPointSyncClient: ObservableObject {
     // MARK: - Reconnection
 
     private func handleDisconnect() {
+        // Phase F (FROM_SCRATCH_ARCHITECTURE.md §13 F.3) — when this fires
+        // as the tail of a "version_refused" refusal (the handleMessage
+        // handler already called disconnect() which cancelled the WebSocket
+        // task and set intentionalClose=true), preserve the .versionMismatch
+        // terminal state instead of clobbering it back to .disconnected.
+        // disconnect() already performed the connection teardown; any
+        // in-flight pending requests are empty by construction at handshake
+        // time (the bearer token isn't issued until device_hello_ack, and
+        // version_refused fires INSTEAD of that ack).
+        if connectionStatus == .versionMismatch {
+            return
+        }
         connectionStatus = .disconnected
         // Sync rewrite — this is the unintentional-disconnect path. The
         // intentional close path goes through disconnect() which already

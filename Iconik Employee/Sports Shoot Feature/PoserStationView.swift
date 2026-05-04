@@ -552,6 +552,24 @@ struct PoserStationView: View {
         } message: {
             Text("This iPad lost its network connection. New entries from other devices may not be reaching this iPad. Check WiFi or the router and confirm reconnection before continuing.")
         }
+        // Phase F (FROM_SCRATCH_ARCHITECTURE.md §13 F.3) — Surface refused
+        // the WebSocket handshake over a wire-protocol version mismatch.
+        // Tapping OK clears the published refusal context; the operator
+        // must update the iPad app and reconnect manually.
+        .alert(
+            "Update Required",
+            isPresented: Binding(
+                get: { fpSync.versionMismatchInfo != nil },
+                set: { if !$0 { fpSync.versionMismatchInfo = nil } }
+            ),
+            presenting: fpSync.versionMismatchInfo
+        ) { _ in
+            Button("OK", role: .cancel) {
+                fpSync.versionMismatchInfo = nil
+            }
+        } message: { info in
+            Text(info.serverMessage)
+        }
         .onReceive(fpSync.$connectionStatus) { newStatus in
             // Trip the self-disconnect alert only on a real transition
             // FROM connected — reconnect attempts that bounce through
