@@ -1732,13 +1732,12 @@ struct PoserStationView: View {
         var updated = subject
         updated.isAbsent = !subject.isAbsent
         updated.updatedAt = Date()
-        Task {
-            do {
-                try await powerSync.saveSubject(updated)
-                let sid = subject.id.uuidString.lowercased()
-                fpSync.markSubjectAbsent(subjectId: sid, rosterEntryId: nil, isAbsent: updated.isAbsent)
-            } catch { print("Toggle absent failed: \(error)") }
-        }
+        // Phase C: route the persistence side through SubjectSyncService;
+        // the markSubjectAbsent broadcast is a separate live-presence
+        // signal (NOT a write) and stays as-is.
+        saveSubject(updated)
+        let sid = subject.id.uuidString.lowercased()
+        fpSync.markSubjectAbsent(subjectId: sid, rosterEntryId: nil, isAbsent: updated.isAbsent)
     }
 
     /// Inline teacher-code update from the per-row dropdown. Writes the
@@ -1790,21 +1789,21 @@ struct PoserStationView: View {
         if let idx = subjects.firstIndex(where: { $0.id == updated.id }) {
             subjects[idx] = updated
         }
-        // Always write to local PowerSync for durability — even when Surface
-        // is connected. Previously skipped to avoid "dual-write race", but the
-        // audit caught a data-loss case: if Surface receives the broadcast but
-        // crashes before its Supabase write commits AND the iPad subsequently
-        // goes offline, the edit is permanently lost. PowerSync handles the
-        // dual-upload via last-write-wins on updated_at.
+        // Phase C: every persistence write routes through SubjectSyncService
+        // — single iPad write entry point per FROM_SCRATCH_ARCHITECTURE.md
+        // §13 Phase C C.4. updateSubject's connected branch sends a
+        // subject_command and lets Surface own the cloud write; the legacy
+        // fallback (still in place until Phase D's persistent queue lands)
+        // does the local PowerSync write + sendSubjectFullUpdate broadcast
+        // on its own, so this wrapper carries no PowerSync calls of its own.
+        let req = SubjectMutationRequest(
+            subjectId: updated.id.uuidString.lowercased(),
+            galleryId: updated.galleryId,
+            fields: SubjectSyncService.fieldsFromFullSubject(updated),
+            sourcePath: "PoserStationView.saveSubject"
+        )
         Task {
-            do {
-                try await powerSync.saveSubject(updated)
-            } catch {
-                print("Save subject failed: \(error)")
-            }
-            // Best-effort broadcast — fast UI sync to Surface independent of
-            // the cloud round-trip.
-            await MainActor.run { fpSync.sendSubjectFullUpdate(updated) }
+            _ = await SubjectSyncService.shared.updateSubject(req, currentSubject: updated)
         }
     }
 
@@ -2610,12 +2609,11 @@ struct PoserStationView: View {
     private var addSubjectSheet: some View {
         AddSubjectSheet(galleryId: galleryId, organizationId: storedUserOrganizationID, subjects: subjects, shootType: gallery.shootType) { newSubject in
             Task {
-                do {
-                    try await powerSync.saveSubject(newSubject)
-                    let sid = newSubject.id.uuidString.lowercased()
-                    fpSync.broadcastSubjectCreated(rosterEntryId: sid, firstName: newSubject.firstName, lastName: newSubject.lastName, rosterId: newSubject.rosterId, grade: newSubject.grade, groupName: newSubject.sport.isEmpty ? newSubject.homeroom : newSubject.sport)
-                    showingAddSubject = false
-                } catch { print("Add subject failed: \(error)") }
+                _ = await SubjectSyncService.shared.createSubject(
+                    newSubject,
+                    sourcePath: "PoserStationView.addSubjectSheet"
+                )
+                showingAddSubject = false
             }
         }
     }
