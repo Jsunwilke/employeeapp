@@ -775,12 +775,15 @@ struct FPSportsRosterView_iPad: View {
                 reordered.append(entry)
             }
             viewModel.subjects = reordered
-            // Persist new sort order
+            // Persist new sort order — touches updated_at on every entry,
+            // routed through SubjectSyncService.updateSubject per
+            // FROM_SCRATCH_ARCHITECTURE.md §13 Phase C C.4 so writes
+            // share the single iPad entry point.
             Task {
-                for (index, entry) in reordered.enumerated() {
+                for (_, entry) in reordered.enumerated() {
                     var updated = entry
                     updated.updatedAt = Date()
-                    try? await powerSync.saveSubject(updated)
+                    saveEntryWithRetry(updated)
                 }
             }
         }
@@ -916,27 +919,22 @@ struct FPSportsRosterView_iPad: View {
             var oldSubjectId: String?
             var newSubjectId: String?
 
-            // Find and update old entry — remove the image number
+            // Find and update old entry — remove the image number.
+            // Route persistence through SubjectSyncService per Phase C C.4.
             if let oldIdx = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == oldId }) {
                 var entry = viewModel.subjects[oldIdx]
                 oldSubjectId = entry.id.uuidString.lowercased()
-                var numbers = entry.imageNumbers
+                let numbers = entry.imageNumbers
                     .split(separator: ";")
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { $0 != String(imageNumber) }
                 entry.imageNumbers = numbers.joined(separator: ";")
                 viewModel.subjects[oldIdx] = entry
-                Task {
-                    do {
-                        try await powerSync.saveSubject(entry)
-                        print("[FPSync] Removed image #\(imageNumber) from roster entry \(oldId)")
-                    } catch {
-                        print("[FPSync] Failed to update old roster entry: \(error)")
-                    }
-                }
+                saveEntryWithRetry(entry)
+                print("[FPSync] Removed image #\(imageNumber) from roster entry \(oldId)")
             }
 
-            // Find and update new entry — add the image number
+            // Find and update new entry — add the image number.
             if let newIdx = viewModel.subjects.firstIndex(where: { $0.id.uuidString.lowercased() == newId }) {
                 var entry = viewModel.subjects[newIdx]
                 newSubjectId = entry.id.uuidString.lowercased()
@@ -947,14 +945,8 @@ struct FPSportsRosterView_iPad: View {
                 numbers.append(String(imageNumber))
                 entry.imageNumbers = numbers.joined(separator: ";")
                 viewModel.subjects[newIdx] = entry
-                Task {
-                    do {
-                        try await powerSync.saveSubject(entry)
-                        print("[FPSync] Added image #\(imageNumber) to roster entry \(newId)")
-                    } catch {
-                        print("[FPSync] Failed to update new roster entry: \(error)")
-                    }
-                }
+                saveEntryWithRetry(entry)
+                print("[FPSync] Added image #\(imageNumber) to roster entry \(newId)")
             }
 
             // Move the thumbnail between subjects so the image visually moves too
@@ -1081,31 +1073,27 @@ struct FPSportsRosterView_iPad: View {
         .frame(minWidth: 44, minHeight: 44)
     }
 
-    /// Save a roster entry with retry logic. Shows error alert on final failure.
+    /// Save a roster entry by routing through SubjectSyncService — the
+    /// single iPad write entry point per FROM_SCRATCH_ARCHITECTURE.md
+    /// §13 Phase C C.4. updateSubject's connected branch sends a
+    /// subject_command and lets Surface own the cloud write; the legacy
+    /// fallback (alive until Phase D's persistent queue) handles the
+    /// transient PowerSync failures the prior 3-retry block was insuring
+    /// against. The user-visible "Failed to save changes" alert is
+    /// sacrificed in this migration: the new path's failures are surfaced
+    /// via SubjectSyncEvents (debug panel) rather than a UI alert. The
+    /// cleanest restoration of the alert path is event-stream
+    /// subscription, which is out of Phase C scope and tracked for the
+    /// observability work in Phase J.
     private func saveEntryWithRetry(_ entry: FPSubject) {
+        let req = SubjectMutationRequest(
+            subjectId: entry.id.uuidString.lowercased(),
+            galleryId: entry.galleryId,
+            fields: SubjectSyncService.fieldsFromFullSubject(entry),
+            sourcePath: "FPSportsRosterView_iPad.saveEntryWithRetry"
+        )
         Task {
-            // Wait for PowerSync to be ready if it hasn't initialized yet
-            if !PowerSyncManager.shared.isReady {
-                await PowerSyncManager.shared.waitForFirstSync()
-            }
-            var retries = 0
-            while retries < 3 {
-                do {
-                    try await PowerSyncManager.shared.saveSubject(entry)
-                    return
-                } catch {
-                    retries += 1
-                    if retries < 3 {
-                        try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries))
-                    } else {
-                        print("saveEntryWithRetry: Failed after 3 attempts: \(error)")
-                        await MainActor.run {
-                            viewModel.errorMessage = "Failed to save changes. Please try again."
-                            viewModel.showingErrorAlert = true
-                        }
-                    }
-                }
-            }
+            _ = await SubjectSyncService.shared.updateSubject(req, currentSubject: entry)
         }
     }
 
@@ -4516,17 +4504,21 @@ struct FPSportsRosterView_iPad: View {
                                 // Remove from local state immediately
                                 viewModel.subjects.removeAll { $0.id == entryID }
 
-                                // Delete from PowerSync (auto-syncs when online)
+                                // Phase C C.4: route through SubjectSyncService
+                                // — connected branch sends soft_delete_subject
+                                // (Surface cascades to capture_images and
+                                // subject_images per surface-local-transport.ts
+                                // :178-207); fallback uses
+                                // PowerSyncManager.deleteSubject internally.
+                                // The previous restore-on-failure path drops
+                                // because the new method swallows transient
+                                // errors (logged via SubjectSyncEvents).
                                 Task {
-                                    do {
-                                        try await powerSync.deleteSubject(id: entry.id)
-                                    } catch {
-                                        print("FPSportsRosterView_iPad: Failed to delete entry: \(error)")
-                                        // Restore on failure
-                                        await MainActor.run {
-                                            viewModel.subjects.append(entry)
-                                        }
-                                    }
+                                    _ = await SubjectSyncService.shared.deleteSubject(
+                                        subjectId: entry.id,
+                                        galleryId: entry.galleryId,
+                                        sourcePath: "FPSportsRosterView_iPad.deleteSubjectEntry"
+                                    )
                                 }
                             }
                             
@@ -5041,33 +5033,15 @@ struct FPSportsRosterView_iPad: View {
                                 // Haptic feedback on save
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
-                                // When connected to Surface, send via WebSocket and skip PowerSync write.
-                                // Surface writes to Supabase — avoids CRUD queue buildup on iPad.
-                                if fpSync.isConnected {
-                                    fpSync.sendSubjectFullUpdate(updatedEntry)
-                                    return
-                                }
-
-                                // Standalone (no Surface connected) — write through PowerSync as normal
-                                Task {
-                                    var retries = 0
-                                    while retries < 3 {
-                                        do {
-                                            try await powerSync.saveSubject(updatedEntry)
-                                            return
-                                        } catch {
-                                            retries += 1
-                                            print("FPSportsRosterView_iPad: Save retry \(retries)/3: \(error)")
-                                            if retries < 3 {
-                                                try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries))
-                                            }
-                                        }
-                                    }
-                                    print("FPSportsRosterView_iPad: Failed to save entry after 3 retries")
-                                    await MainActor.run {
-                                        UINotificationFeedbackGenerator().notificationOccurred(.error)
-                                    }
-                                }
+                                // Phase C C.4: persistence routes through
+                                // SubjectSyncService — connected branch sends a
+                                // subject_command (was: sendSubjectFullUpdate);
+                                // disconnected branch falls through to local
+                                // PowerSync (was: 3-retry powerSync.saveSubject).
+                                // The legacy fallback inside updateSubject is
+                                // what Phase D removes; in Phase C both former
+                                // branches collapse into one updateSubject call.
+                                saveEntryWithRetry(updatedEntry)
                             }
                             
                             private func startEditing(shootID: UUID, entry: FPSubject) {
