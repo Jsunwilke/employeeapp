@@ -55,6 +55,18 @@ class SupabaseManager {
         // Initialize Supabase client with session persistence enabled
         // Note: Session persistence is enabled by default in Supabase Swift SDK 2.x
         // emitLocalSessionAsInitialSession ensures locally stored session is always emitted
+        //
+        // Phase G G.4 — x-application-name header identifies this client as
+        // iPad to Postgres RLS. The companion RLS predicate on subjects /
+        // subject_images / capture_images (migration
+        // 20260504_phase_g_active_capture_sessions_rls.sql in the FP
+        // Production repo) refuses iPad-attributed writes to galleries with
+        // an active capture session via:
+        //   current_setting('request.headers', true)::json->>'x-application-name'
+        //     = 'iconik-employee'
+        // Surface sends "focal-point-production" (src/supabase/config.js:19);
+        // the two values together form Layer 1's writer-identity differentiator
+        // per FROM_SCRATCH_ARCHITECTURE.md §13 Phase G + Amendment 1.
         self.client = SupabaseClient(
             supabaseURL: url,
             supabaseKey: validatedKey,
@@ -62,6 +74,9 @@ class SupabaseManager {
                 auth: .init(
                     autoRefreshToken: true,
                     emitLocalSessionAsInitialSession: true
+                ),
+                global: .init(
+                    headers: ["x-application-name": "iconik-employee"]
                 )
             )
         )
