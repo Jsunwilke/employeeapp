@@ -754,6 +754,105 @@ final class SubjectSyncService {
         return key
     }
 
+    /// Soft-delete many subjects in one batch. Connected → single
+    /// `bulk_delete_subjects` command (receiver routes through
+    /// SurfaceLocalTransport.bulk_delete_subjects which cascades each
+    /// id to capture_images and subject_images, then emits one
+    /// subjects_deleted broadcast for the full id set per
+    /// surface-command-receiver.ts:332-336); otherwise enqueue the
+    /// batch as one logical command — the drain replays it as a unit
+    /// so the receiver's bulk semantics still hold (no per-row split
+    /// that would multiply wire round-trips and break batch dedupe).
+    ///
+    /// Phase G G.6 — adds the iPad sender pair for the bulk_delete
+    /// receiver handler that Phase B already deployed. The sole UI
+    /// caller is FPSportsRosterView_iPad.swift's batchDeleteRosterEntries
+    /// (Phase C tail per Amendment 4 / G.6).
+    @discardableResult
+    func batchDeleteSubjects(
+        subjectIds: [UUID],
+        galleryId: String,
+        sourcePath: String,
+        idempotencyKey: String? = nil
+    ) async -> String {
+        let key = idempotencyKey ?? UUID().uuidString.lowercased()
+        let deviceId = SubjectSyncService.deviceIdOrUnknown()
+        let stringIds = subjectIds.map { $0.uuidString.lowercased() }
+        let cmd = SubjectCommandBuilder.batchDelete(
+            galleryId: galleryId,
+            subjectIds: stringIds,
+            originatingDeviceId: deviceId,
+            idempotencyKey: key
+        )
+
+        if FocalPointSyncClient.shared.isConnectedAndInGallery(galleryId) {
+            do {
+                let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
+                switch ack.status {
+                case .applied, .dedupe:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .delete,
+                        outcome: .committed,
+                        sourcePath: sourcePath + ":cmd",
+                        subjectId: nil,
+                        galleryId: galleryId,
+                        idempotencyKey: key
+                    ))
+                    return key
+                case .rejected:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .delete,
+                        outcome: .rejected,
+                        sourcePath: sourcePath + ":cmd_rejected",
+                        subjectId: nil,
+                        galleryId: galleryId,
+                        idempotencyKey: key,
+                        errorMessage: ack.reason ?? "rejected"
+                    ))
+                    return key
+                }
+            } catch {
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: deviceId,
+                    operation: .delete,
+                    outcome: .failed,
+                    sourcePath: sourcePath + ":cmd_threw",
+                    subjectId: nil,
+                    galleryId: galleryId,
+                    idempotencyKey: key,
+                    errorMessage: String(describing: error)
+                ))
+            }
+        }
+
+        do {
+            _ = try await CommandQueue.shared.enqueue(cmd)
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .delete,
+                outcome: .queued,
+                sourcePath: sourcePath + ":enqueued",
+                subjectId: nil,
+                galleryId: galleryId,
+                idempotencyKey: key
+            ))
+        } catch {
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .delete,
+                outcome: .abandoned,
+                sourcePath: sourcePath + ":enqueue_failed",
+                subjectId: nil,
+                galleryId: galleryId,
+                idempotencyKey: key,
+                errorMessage: String(describing: error)
+            ))
+        }
+        return key
+    }
+
     /// Build a SubjectSyncFields delta carrying every iPad-editable
     /// field on `subject`. Used by Phase C migration sites that
     /// previously called PowerSyncManager.saveSubject(updated) with a

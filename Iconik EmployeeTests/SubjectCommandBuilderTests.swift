@@ -164,6 +164,62 @@ struct SubjectCommandBuilderTests {
         #expect(outFields?.keys.contains("notes") == false)
     }
 
+    // MARK: - .batchDelete (Phase G G.6 — Phase C tail substrate)
+
+    @Test func batchDelete_producesBulkDeleteSubjectsWireShape() throws {
+        let cmd = SubjectCommandBuilder.batchDelete(
+            galleryId: "g1",
+            subjectIds: ["s1", "s2", "s3"],
+            originatingDeviceId: "ipad-1"
+        )
+
+        #expect(cmd.commandType == .bulkDeleteSubjects)
+        #expect(cmd.galleryId == "g1")
+        #expect(cmd.originatingDeviceId == "ipad-1")
+        #expect(!cmd.commandId.isEmpty)
+        #expect(!cmd.idempotencyKey.isEmpty)
+
+        let wire = cmd.toWireDictionary()
+        #expect(wire["type"] as? String == "subject_command")
+        #expect(wire["command_type"] as? String == "bulk_delete_subjects")
+        #expect(wire["gallery_id"] as? String == "g1")
+
+        let payload = wire["payload"] as? [String: Any]
+        let ids = payload?["subject_ids"] as? [String]
+        #expect(ids == ["s1", "s2", "s3"])
+        // No `fields` on the delete payload — the receiver schema only
+        // accepts subject_ids for bulk_delete_subjects (see
+        // surface-command-receiver.ts:332-336).
+        #expect(payload?.keys.contains("fields") == false)
+    }
+
+    @Test func batchDelete_acceptsCallerIdempotencyKey() throws {
+        let cmd = SubjectCommandBuilder.batchDelete(
+            galleryId: "g1",
+            subjectIds: ["s1"],
+            originatingDeviceId: "ipad-1",
+            idempotencyKey: "fixed-batch-delete-key"
+        )
+        #expect(cmd.idempotencyKey == "fixed-batch-delete-key")
+    }
+
+    @Test func batchDelete_emptyIdsStillProducesValidCommand() throws {
+        // Mirrors batchCreate_emptyRowsStillProducesValidCommand —
+        // empty input is the caller's contract violation, not the
+        // builder's. The receiver will reject ([] fails the
+        // validate_uuid_array shape check in
+        // surface-command-receiver.ts:333).
+        let cmd = SubjectCommandBuilder.batchDelete(
+            galleryId: "g1",
+            subjectIds: [],
+            originatingDeviceId: "ipad-1"
+        )
+        let wire = cmd.toWireDictionary()
+        let payload = wire["payload"] as? [String: Any]
+        let ids = payload?["subject_ids"] as? [String]
+        #expect(ids?.isEmpty == true)
+    }
+
     // MARK: - SubjectSyncService.insertRowDictionary
 
     @Test func insertRowDictionary_carriesEditableFieldsInSnakeCase() throws {

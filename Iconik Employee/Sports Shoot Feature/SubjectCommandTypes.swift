@@ -242,4 +242,29 @@ enum SubjectCommandBuilder {
             sentAt: ISO8601DateFormatter().string(from: Date())
         )
     }
+
+    /// Build a `bulk_delete_subjects` command — soft-deletes every
+    /// subject in `subjectIds` in one wire round-trip. Receiver handler
+    /// at surface-command-receiver.ts:332-336 validates the id list as
+    /// UUIDs and routes to SurfaceLocalTransport.bulk_delete_subjects;
+    /// the receiver cascades each delete to capture_images and
+    /// subject_images (per surface-local-transport's per-id soft-delete
+    /// implementation) and emits one subjects_deleted broadcast for
+    /// the full id set so peer iPads see one event per logical batch.
+    static func batchDelete(
+        galleryId: String,
+        subjectIds: [String],
+        originatingDeviceId: String,
+        idempotencyKey: String? = nil
+    ) -> SubjectCommand {
+        return SubjectCommand(
+            commandId: UUID().uuidString.lowercased(),
+            commandType: .bulkDeleteSubjects,
+            galleryId: galleryId,
+            idempotencyKey: idempotencyKey ?? UUID().uuidString.lowercased(),
+            originatingDeviceId: originatingDeviceId,
+            payload: ["subject_ids": subjectIds],
+            sentAt: ISO8601DateFormatter().string(from: Date())
+        )
+    }
 }
