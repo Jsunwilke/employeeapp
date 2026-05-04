@@ -624,73 +624,25 @@ struct FPSportsAddSubjectView: View {
             return
         }
 
-        // When connected to a Surface, skip the PowerSync write and send the
-        // edit via WebSocket. Surface is the authoritative writer — iPad
-        // writing directly creates races that have clobbered Surface-typed
-        // names with stale iPad values (see 2026-04-21 "Serenity Braun" bug).
-        if FocalPointSyncClient.shared.isConnected {
-            if !isEditing {
-                FocalPointSyncClient.shared.broadcastSubjectCreated(
-                    rosterEntryId: subject.id.uuidString.lowercased(),
-                    firstName: subject.firstName,
-                    lastName: subject.lastName,
-                    rosterId: subject.rosterId,
-                    grade: subject.grade,
-                    groupName: subject.sport
-                )
-            }
-            // Always follow with a full-field update so fields the
-            // broadcastSubjectCreated message doesn't include (teacher,
-            // jersey, sport, position, email, phone, notes, image_numbers)
-            // land on the Surface too.
-            FocalPointSyncClient.shared.sendSubjectFullUpdate(subject)
-            // Pass the freshly-built subject back so the parent can splice it
-            // into its in-memory list — without this, the iPad UI shows the
-            // pre-edit (blank) value until the cloud round-trip completes.
-            onComplete(true, subject)
-            presentationMode.wrappedValue.dismiss()
-            return
-        }
-
-        // Standalone (no Surface reachable) — write via PowerSync as fallback.
+        // Phase C C.4: route CREATE through SubjectSyncService.createSubject.
+        // The previous code had two parallel branches — one for connected
+        // (broadcastSubjectCreated + sendSubjectFullUpdate) and one for
+        // standalone (3-retry PowerSync write + broadcast). Both collapse
+        // here: createSubject's connected branch sends an insert_subjects
+        // command (Surface owns the cloud write); its fallback path emits
+        // broadcastSubjectCreated + sendSubjectFullUpdate after the local
+        // PowerSync write so peer iPads still see the new subject when
+        // offline. The 3-retry loop and the failure alert disappear with
+        // the migration; failures now flow through SubjectSyncEvents
+        // (Phase J restores user-visible failure UX).
         Task {
-            var lastError: Error?
-            for attempt in 1...3 {
-                do {
-                    try await powerSync.saveSubject(subject)
-                    if !isEditing {
-                        FocalPointSyncClient.shared.broadcastSubjectCreated(
-                            rosterEntryId: subject.id.uuidString.lowercased(),
-                            firstName: subject.firstName,
-                            lastName: subject.lastName,
-                            rosterId: subject.rosterId,
-                            grade: subject.grade,
-                            groupName: subject.sport
-                        )
-                    } else {
-                        FocalPointSyncClient.shared.sendSubjectUpdated(
-                            subjectId: subject.id.uuidString.lowercased(),
-                            rosterEntryId: subject.id.uuidString.lowercased(),
-                            firstName: subject.firstName,
-                            lastName: subject.lastName,
-                            rosterId: subject.rosterId
-                        )
-                    }
-                    await MainActor.run {
-                        onComplete(true, subject)
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                    return
-                } catch {
-                    lastError = error
-                    if attempt < 3 {
-                        try? await Task.sleep(nanoseconds: UInt64(500_000_000 * attempt))
-                    }
-                }
-            }
+            _ = await SubjectSyncService.shared.createSubject(
+                subject,
+                sourcePath: "FPSportsAddSubjectView.executeSave"
+            )
             await MainActor.run {
-                errorMessage = "Failed to save: \(lastError?.localizedDescription ?? "Unknown")"
-                showingErrorAlert = true
+                onComplete(true, subject)
+                presentationMode.wrappedValue.dismiss()
             }
         }
     }
