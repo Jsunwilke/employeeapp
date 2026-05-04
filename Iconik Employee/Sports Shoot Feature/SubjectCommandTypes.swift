@@ -134,4 +134,107 @@ enum SubjectCommandBuilder {
             sentAt: ISO8601DateFormatter().string(from: Date())
         )
     }
+
+    /// Build an `insert_subjects` command for a single new subject.
+    ///
+    /// Per FROM_SCRATCH_ARCHITECTURE.md §13 Phase C C.2: the wire
+    /// command_type is the canonical Section 7 verb `insert_subjects` (not
+    /// a new "create" verb), matching the receiver handler shipped in
+    /// Phase B at surface-command-receiver.ts:265-281. The Swift method
+    /// name `.create` is an iPad-side ergonomic affordance only.
+    ///
+    /// `row` keys must use snake_case to match INSERTABLE_SUBJECT_FIELDS
+    /// in subject-repository.ts — the receiver re-validates the allowlist
+    /// before writing. Forbidden keys (id, gallery_id, is_deleted,
+    /// last_originating_device_id, identity_id, created_at, updated_at,
+    /// idempotency_key, locked_*) are stripped on the Mac side. Surface
+    /// generates the row id; the iPad's optimistic state is the legacy
+    /// fallback's local PowerSync write (gone in Phase D).
+    static func create(
+        galleryId: String,
+        row: [String: Any],
+        originatingDeviceId: String,
+        idempotencyKey: String? = nil
+    ) -> SubjectCommand {
+        return SubjectCommand(
+            commandId: UUID().uuidString.lowercased(),
+            commandType: .insertSubjects,
+            galleryId: galleryId,
+            idempotencyKey: idempotencyKey ?? UUID().uuidString.lowercased(),
+            originatingDeviceId: originatingDeviceId,
+            payload: ["rows": [row]],
+            sentAt: ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    /// Build an `insert_subjects` command for many new subjects in one
+    /// batch. Mirrors `.create` but with multiple rows in the payload —
+    /// one Surface command_log row, one wire round-trip, instead of N.
+    static func batchCreate(
+        galleryId: String,
+        rows: [[String: Any]],
+        originatingDeviceId: String,
+        idempotencyKey: String? = nil
+    ) -> SubjectCommand {
+        return SubjectCommand(
+            commandId: UUID().uuidString.lowercased(),
+            commandType: .insertSubjects,
+            galleryId: galleryId,
+            idempotencyKey: idempotencyKey ?? UUID().uuidString.lowercased(),
+            originatingDeviceId: originatingDeviceId,
+            payload: ["rows": rows],
+            sentAt: ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    /// Build a `soft_delete_subject` command. Wire command_type matches
+    /// Section 7's canonical verb. Receiver handler at
+    /// surface-command-receiver.ts:282-286 cascades the delete to
+    /// capture_images and subject_images for the same subject.
+    static func delete(
+        galleryId: String,
+        subjectId: String,
+        originatingDeviceId: String,
+        idempotencyKey: String? = nil
+    ) -> SubjectCommand {
+        return SubjectCommand(
+            commandId: UUID().uuidString.lowercased(),
+            commandType: .softDeleteSubject,
+            galleryId: galleryId,
+            idempotencyKey: idempotencyKey ?? UUID().uuidString.lowercased(),
+            originatingDeviceId: originatingDeviceId,
+            payload: ["subject_id": subjectId],
+            sentAt: ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    /// Build a `bulk_update_subjects` command — applies the same
+    /// SubjectSyncFields to every subject in `subjectIds`. Receiver
+    /// handler at surface-command-receiver.ts:292-298 re-validates the
+    /// id list as UUIDs and the fields against UPDATABLE_SUBJECT_FIELDS.
+    /// Receiver also broadcasts one `subject_updated` per id (line
+    /// 360-371) so peer iPads see each row update with one shared
+    /// gallery version.
+    static func batchUpdate(
+        galleryId: String,
+        subjectIds: [String],
+        fields: SubjectSyncFields,
+        originatingDeviceId: String,
+        idempotencyKey: String? = nil
+    ) throws -> SubjectCommand {
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(fields)
+        guard let fieldDict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SubjectCommandError.rejected(reason: "fields_encoding_failed")
+        }
+        return SubjectCommand(
+            commandId: UUID().uuidString.lowercased(),
+            commandType: .bulkUpdateSubjects,
+            galleryId: galleryId,
+            idempotencyKey: idempotencyKey ?? UUID().uuidString.lowercased(),
+            originatingDeviceId: originatingDeviceId,
+            payload: ["subject_ids": subjectIds, "fields": fieldDict],
+            sentAt: ISO8601DateFormatter().string(from: Date())
+        )
+    }
 }

@@ -323,4 +323,534 @@ final class SubjectSyncService {
         }
         return "unknown"
     }
+
+    // MARK: - Phase C — create / delete / batch entry points
+    //
+    // Per FROM_SCRATCH_ARCHITECTURE.md §13 Phase C C.1: every iPad save
+    // site for new/deleted subjects routes through SubjectSyncService
+    // (no UI directly calls PowerSyncManager). Each method follows the
+    // existing updateSubject pattern: when connected to Surface in the
+    // gallery, send the canonical command and await the typed ack;
+    // otherwise (or on rejection / transport throw) fall through to the
+    // legacy local-write path so an offline edit isn't lost.
+    //
+    // The legacy fallback paths below mirror updateSubject lines 147-191
+    // and die in Phase D when the persistent command queue replaces them
+    // as the offline-resilience mechanism. The Phase D scope is one
+    // unified deletion across update + create + delete + batch — this
+    // service's structure is what makes that one-place deletion possible.
+    //
+    // Captura coexistence per §17.10: this service is FP-aware UI only.
+    // Captura roster files (AddRosterEntryView, SportsShoot{List,Detail}View)
+    // continue to call FocalPointSyncClient.shared.broadcast* directly —
+    // their broadcast functions are retention symbols on §17.10 and stay
+    // alive. The in-fallback broadcasts below intentionally use the same
+    // Captura-shared functions (broadcastSubjectCreated, sendSubjectFullUpdate)
+    // because the wire-side substrate is shared during coexistence; once
+    // the Phase D queue lands the fallbacks go away and the broadcasts
+    // remain only on the Captura-owned call sites.
+
+    /// Insert a single new subject. Connected → command path; otherwise
+    /// legacy local-write + broadcast. Returns the command's idempotency
+    /// key so the caller can correlate ack-side telemetry.
+    @discardableResult
+    func createSubject(
+        _ subject: FPSubject,
+        sourcePath: String,
+        idempotencyKey: String? = nil
+    ) async -> String {
+        let key = idempotencyKey ?? UUID().uuidString.lowercased()
+        let deviceId = SubjectSyncService.deviceIdOrUnknown()
+        let galleryId = subject.galleryId
+        let subjectId = subject.id.uuidString.lowercased()
+
+        if FocalPointSyncClient.shared.isConnectedAndInGallery(galleryId) {
+            let row = SubjectSyncService.insertRowDictionary(from: subject)
+            let cmd = SubjectCommandBuilder.create(
+                galleryId: galleryId,
+                row: row,
+                originatingDeviceId: deviceId,
+                idempotencyKey: key
+            )
+            do {
+                let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
+                switch ack.status {
+                case .applied, .dedupe:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .create,
+                        outcome: .committed,
+                        sourcePath: sourcePath + ":cmd",
+                        subjectId: subjectId,
+                        galleryId: galleryId,
+                        idempotencyKey: key
+                    ))
+                    // Surface acked the insert. The row is owned by Surface;
+                    // peer iPads pick it up via cloud-sync round-trip (the
+                    // insert_subjects broadcast is the Phase B chunk-B.3
+                    // deferral noted at surface-command-receiver.ts:396-401).
+                    return key
+                case .rejected:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .create,
+                        outcome: .failed,
+                        sourcePath: sourcePath + ":cmd_rejected",
+                        subjectId: subjectId,
+                        galleryId: galleryId,
+                        idempotencyKey: key,
+                        errorMessage: ack.reason ?? "rejected"
+                    ))
+                    // intentional fall-through to legacy path
+                }
+            } catch {
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: deviceId,
+                    operation: .create,
+                    outcome: .failed,
+                    sourcePath: sourcePath + ":cmd_threw",
+                    subjectId: subjectId,
+                    galleryId: galleryId,
+                    idempotencyKey: key,
+                    errorMessage: String(describing: error)
+                ))
+            }
+        }
+
+        // Legacy fallback — write the row locally so an offline create
+        // isn't lost, then best-effort broadcast so any connected peers
+        // see it without waiting for cloud round-trip. Phase D removes
+        // this branch when the persistent command queue takes over.
+        do {
+            try await PowerSyncManager.shared.saveSubject(subject)
+            FocalPointSyncClient.shared.broadcastSubjectCreated(
+                rosterEntryId: subjectId,
+                firstName: subject.firstName,
+                lastName: subject.lastName,
+                rosterId: subject.rosterId,
+                grade: subject.grade,
+                groupName: subject.sport.isEmpty ? subject.homeroom : subject.sport,
+                email: subject.email,
+                custom10: subject.custom10,
+                custom11: subject.custom11,
+                custom12: subject.custom12,
+                custom13: subject.custom13,
+                custom14: subject.custom14,
+                custom15: subject.custom15,
+                custom16: subject.custom16,
+                custom17: subject.custom17,
+                custom18: subject.custom18,
+                custom19: subject.custom19,
+                custom20: subject.custom20
+            )
+            // Some peer-side handlers reconcile "extra" fields (the dance
+            // kiosk's contact + custom fields beyond what the broadcast
+            // carries) via a follow-up sendSubjectFullUpdate. Mirror the
+            // existing kiosk pattern so the fallback path gives peers the
+            // same view the connected path's eventual cloud-sync would.
+            FocalPointSyncClient.shared.sendSubjectFullUpdate(subject)
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .create,
+                outcome: .committed,
+                sourcePath: sourcePath,
+                subjectId: subjectId,
+                galleryId: galleryId,
+                idempotencyKey: key
+            ))
+        } catch {
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .create,
+                outcome: .failed,
+                sourcePath: sourcePath,
+                subjectId: subjectId,
+                galleryId: galleryId,
+                idempotencyKey: key,
+                errorMessage: String(describing: error)
+            ))
+        }
+
+        return key
+    }
+
+    /// Insert many new subjects in one batch. Connected → single
+    /// `insert_subjects` command with all rows; otherwise per-row legacy
+    /// fallback (writes are independent so a partial-failure batch still
+    /// makes progress on the rows that succeeded).
+    @discardableResult
+    func batchCreateSubjects(
+        _ subjects: [FPSubject],
+        sourcePath: String,
+        idempotencyKey: String? = nil
+    ) async -> String {
+        let key = idempotencyKey ?? UUID().uuidString.lowercased()
+        let deviceId = SubjectSyncService.deviceIdOrUnknown()
+        guard let first = subjects.first else { return key }
+        let galleryId = first.galleryId
+
+        if FocalPointSyncClient.shared.isConnectedAndInGallery(galleryId) {
+            let rows = subjects.map { SubjectSyncService.insertRowDictionary(from: $0) }
+            let cmd = SubjectCommandBuilder.batchCreate(
+                galleryId: galleryId,
+                rows: rows,
+                originatingDeviceId: deviceId,
+                idempotencyKey: key
+            )
+            do {
+                let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
+                switch ack.status {
+                case .applied, .dedupe:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .create,
+                        outcome: .committed,
+                        sourcePath: sourcePath + ":cmd",
+                        subjectId: nil,
+                        galleryId: galleryId,
+                        idempotencyKey: key
+                    ))
+                    return key
+                case .rejected:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .create,
+                        outcome: .failed,
+                        sourcePath: sourcePath + ":cmd_rejected",
+                        subjectId: nil,
+                        galleryId: galleryId,
+                        idempotencyKey: key,
+                        errorMessage: ack.reason ?? "rejected"
+                    ))
+                }
+            } catch {
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: deviceId,
+                    operation: .create,
+                    outcome: .failed,
+                    sourcePath: sourcePath + ":cmd_threw",
+                    subjectId: nil,
+                    galleryId: galleryId,
+                    idempotencyKey: key,
+                    errorMessage: String(describing: error)
+                ))
+            }
+        }
+
+        // Legacy fallback — per-row write + broadcast. Reuses createSubject
+        // so the single-row fallback semantics stay in one place.
+        for subject in subjects {
+            _ = await createSubject(subject, sourcePath: sourcePath + ":batch_fallback")
+        }
+        return key
+    }
+
+    /// Soft-delete a subject. Connected → `soft_delete_subject` command
+    /// (the receiver cascades the delete to capture_images and
+    /// subject_images per surface-local-transport.ts:178-207); otherwise
+    /// legacy `PowerSyncManager.deleteSubject`. Captura's batch-delete
+    /// broadcast (`broadcastEntriesDeleted` in §17.10) is intentionally
+    /// NOT emitted here — it's a Captura-only producer; FP-aware peer
+    /// iPads see the delete via the receiver's `subjects_deleted`
+    /// broadcast (line 373-377) on the connected path or via cloud-sync
+    /// on the fallback path.
+    @discardableResult
+    func deleteSubject(
+        subjectId: UUID,
+        galleryId: String,
+        sourcePath: String,
+        idempotencyKey: String? = nil
+    ) async -> String {
+        let key = idempotencyKey ?? UUID().uuidString.lowercased()
+        let deviceId = SubjectSyncService.deviceIdOrUnknown()
+        let sid = subjectId.uuidString.lowercased()
+
+        if FocalPointSyncClient.shared.isConnectedAndInGallery(galleryId) {
+            let cmd = SubjectCommandBuilder.delete(
+                galleryId: galleryId,
+                subjectId: sid,
+                originatingDeviceId: deviceId,
+                idempotencyKey: key
+            )
+            do {
+                let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
+                switch ack.status {
+                case .applied, .dedupe:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .delete,
+                        outcome: .committed,
+                        sourcePath: sourcePath + ":cmd",
+                        subjectId: sid,
+                        galleryId: galleryId,
+                        idempotencyKey: key
+                    ))
+                    return key
+                case .rejected:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .delete,
+                        outcome: .failed,
+                        sourcePath: sourcePath + ":cmd_rejected",
+                        subjectId: sid,
+                        galleryId: galleryId,
+                        idempotencyKey: key,
+                        errorMessage: ack.reason ?? "rejected"
+                    ))
+                }
+            } catch {
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: deviceId,
+                    operation: .delete,
+                    outcome: .failed,
+                    sourcePath: sourcePath + ":cmd_threw",
+                    subjectId: sid,
+                    galleryId: galleryId,
+                    idempotencyKey: key,
+                    errorMessage: String(describing: error)
+                ))
+            }
+        }
+
+        do {
+            try await PowerSyncManager.shared.deleteSubject(id: subjectId)
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .delete,
+                outcome: .committed,
+                sourcePath: sourcePath,
+                subjectId: sid,
+                galleryId: galleryId,
+                idempotencyKey: key
+            ))
+        } catch {
+            SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                deviceId: deviceId,
+                operation: .delete,
+                outcome: .failed,
+                sourcePath: sourcePath,
+                subjectId: sid,
+                galleryId: galleryId,
+                idempotencyKey: key,
+                errorMessage: String(describing: error)
+            ))
+        }
+        return key
+    }
+
+    /// Apply the same field set to many subjects in one batch. Connected
+    /// → single `bulk_update_subjects` command (receiver re-broadcasts
+    /// one `subject_updated` per id sharing one gallery version, per
+    /// surface-command-receiver.ts:360-371); otherwise per-id legacy
+    /// fallback through updateSubject.
+    @discardableResult
+    func batchUpdateSubjects(
+        subjectIds: [UUID],
+        galleryId: String,
+        fields: SubjectSyncFields,
+        currentSubjects: [UUID: FPSubject],
+        sourcePath: String,
+        idempotencyKey: String? = nil
+    ) async -> String {
+        let key = idempotencyKey ?? UUID().uuidString.lowercased()
+        let deviceId = SubjectSyncService.deviceIdOrUnknown()
+        let stringIds = subjectIds.map { $0.uuidString.lowercased() }
+
+        if FocalPointSyncClient.shared.isConnectedAndInGallery(galleryId) {
+            do {
+                let cmd = try SubjectCommandBuilder.batchUpdate(
+                    galleryId: galleryId,
+                    subjectIds: stringIds,
+                    fields: fields,
+                    originatingDeviceId: deviceId,
+                    idempotencyKey: key
+                )
+                let ack = try await FocalPointSyncClient.shared.sendSubjectCommand(cmd)
+                switch ack.status {
+                case .applied, .dedupe:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .update,
+                        outcome: .committed,
+                        sourcePath: sourcePath + ":cmd",
+                        subjectId: nil,
+                        galleryId: galleryId,
+                        idempotencyKey: key,
+                        fieldsTouched: fields.fieldsTouched
+                    ))
+                    return key
+                case .rejected:
+                    SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                        deviceId: deviceId,
+                        operation: .update,
+                        outcome: .failed,
+                        sourcePath: sourcePath + ":cmd_rejected",
+                        subjectId: nil,
+                        galleryId: galleryId,
+                        idempotencyKey: key,
+                        fieldsTouched: fields.fieldsTouched,
+                        errorMessage: ack.reason ?? "rejected"
+                    ))
+                }
+            } catch {
+                SubjectSyncEvents.shared.emit(SubjectSyncEvent(
+                    deviceId: deviceId,
+                    operation: .update,
+                    outcome: .failed,
+                    sourcePath: sourcePath + ":cmd_threw",
+                    subjectId: nil,
+                    galleryId: galleryId,
+                    idempotencyKey: key,
+                    fieldsTouched: fields.fieldsTouched,
+                    errorMessage: String(describing: error)
+                ))
+            }
+        }
+
+        // Legacy fallback — per-id updateSubject so each row's overlay
+        // and write semantics match the single-update path.
+        for sid in subjectIds {
+            guard let current = currentSubjects[sid] else { continue }
+            let req = SubjectMutationRequest(
+                subjectId: sid.uuidString.lowercased(),
+                galleryId: galleryId,
+                fields: fields,
+                sourcePath: sourcePath + ":batch_fallback"
+            )
+            _ = await updateSubject(req, currentSubject: current)
+        }
+        return key
+    }
+
+    /// Build a SubjectSyncFields delta carrying every iPad-editable
+    /// field on `subject`. Used by Phase C migration sites that
+    /// previously called PowerSyncManager.saveSubject(updated) with a
+    /// full row — the equivalent through SubjectSyncService.updateSubject
+    /// is a SubjectMutationRequest whose `fields` describes the entire
+    /// row. The connected path encodes this once on the wire; the
+    /// fallback path's applyFieldsToSubject reconstructs the same row
+    /// for PowerSync. Inverse of applyFieldsToSubject.
+    static func fieldsFromFullSubject(_ s: FPSubject) -> SubjectSyncFields {
+        var f = SubjectSyncFields()
+        f.firstName = s.firstName
+        f.lastName = s.lastName
+        f.grade = s.grade
+        f.teacher = s.teacher
+        f.homeroom = s.homeroom
+        f.studentId = s.studentId
+        f.rosterId = s.rosterId
+        f.onlineCode = s.onlineCode
+        f.jerseyNumber = s.jerseyNumber
+        f.sport = s.sport
+        f.position = s.position
+        f.organizationName = s.organizationName
+        f.year = s.year
+        f.subjectType = s.subjectType
+        f.title = s.title
+        f.referenceNumber = s.referenceNumber
+        f.photographer = s.photographer
+        f.photoSessionDate = s.photoSessionDate
+        f.expirationDate = s.expirationDate
+        f.email = s.email
+        f.phone = s.phone
+        f.phone2 = s.phone2
+        f.address1 = s.address1
+        f.address2 = s.address2
+        f.city = s.city
+        f.state = s.state
+        f.zip = s.zip
+        f.country = s.country
+        f.mother = s.mother
+        f.father = s.father
+        f.personalization = s.personalization
+        f.discountCode = s.discountCode
+        f.custom1 = s.custom1
+        f.custom2 = s.custom2
+        f.custom3 = s.custom3
+        f.custom4 = s.custom4
+        f.custom5 = s.custom5
+        f.custom6 = s.custom6
+        f.custom7 = s.custom7
+        f.custom8 = s.custom8
+        f.custom9 = s.custom9
+        f.custom10 = s.custom10
+        f.custom11 = s.custom11
+        f.custom12 = s.custom12
+        f.custom13 = s.custom13
+        f.custom14 = s.custom14
+        f.custom15 = s.custom15
+        f.custom16 = s.custom16
+        f.custom17 = s.custom17
+        f.custom18 = s.custom18
+        f.custom19 = s.custom19
+        f.custom20 = s.custom20
+        f.notes = s.notes
+        f.imageNumbers = s.imageNumbers
+        f.isAbsent = s.isAbsent
+        f.needsRetake = s.needsRetake
+        f.isPhotographed = s.isPhotographed
+        if let checkedIn = s.checkedInAt { f.checkedInAt = checkedIn }
+        return f
+    }
+
+    /// Build the snake_case insert-row dictionary the Surface receiver
+    /// expects for `insert_subjects.payload.rows[]`. The receiver re-
+    /// validates against INSERTABLE_SUBJECT_FIELDS in
+    /// subject-repository.ts:79-104 and force-overrides gallery_id from
+    /// the command envelope, so any forbidden keys we accidentally
+    /// include are dropped server-side. We omit them up front for wire
+    /// hygiene anyway.
+    static func insertRowDictionary(from subject: FPSubject) -> [String: Any] {
+        var row: [String: Any] = [
+            "organization_id": subject.organizationId,
+            "first_name": subject.firstName,
+            "last_name": subject.lastName,
+            "grade": subject.grade,
+            "teacher": subject.teacher,
+            "homeroom": subject.homeroom,
+            "student_id": subject.studentId,
+            "roster_id": subject.rosterId,
+            "online_code": subject.onlineCode,
+            "jersey_number": subject.jerseyNumber,
+            "sport": subject.sport,
+            "position": subject.position,
+            "organization_name": subject.organizationName,
+            "year": subject.year,
+            "subject_type": subject.subjectType,
+            "title": subject.title,
+            "reference_number": subject.referenceNumber,
+            "photographer": subject.photographer,
+            "photo_session_date": subject.photoSessionDate,
+            "expiration_date": subject.expirationDate,
+            "email": subject.email,
+            "phone": subject.phone,
+            "phone2": subject.phone2,
+            "address1": subject.address1,
+            "address2": subject.address2,
+            "city": subject.city,
+            "state": subject.state,
+            "zip": subject.zip,
+            "country": subject.country,
+            "mother": subject.mother,
+            "father": subject.father,
+            "personalization": subject.personalization,
+            "discount_code": subject.discountCode,
+            "notes": subject.notes,
+            "image_numbers": subject.imageNumbers,
+            "is_absent": subject.isAbsent,
+            "needs_retake": subject.needsRetake,
+            "is_photographed": subject.isPhotographed,
+            "custom1": subject.custom1, "custom2": subject.custom2, "custom3": subject.custom3,
+            "custom4": subject.custom4, "custom5": subject.custom5, "custom6": subject.custom6,
+            "custom7": subject.custom7, "custom8": subject.custom8, "custom9": subject.custom9,
+            "custom10": subject.custom10, "custom11": subject.custom11, "custom12": subject.custom12,
+            "custom13": subject.custom13, "custom14": subject.custom14, "custom15": subject.custom15,
+            "custom16": subject.custom16, "custom17": subject.custom17, "custom18": subject.custom18,
+            "custom19": subject.custom19, "custom20": subject.custom20,
+        ]
+        if let checkedIn = subject.checkedInAt {
+            row["checked_in_at"] = checkedIn
+        }
+        return row
+    }
 }
