@@ -256,7 +256,14 @@ final class SubjectSyncService {
     /// Apply only the non-nil fields from a SubjectSyncFields onto an FPSubject.
     /// Pure — doesn't mutate the input. Used by both local and remote paths so
     /// the field application logic lives in exactly one place.
-    static func applyFieldsToSubject(_ f: SubjectSyncFields, base: FPSubject) -> FPSubject {
+    ///
+    /// `nonisolated` because the function is pure (no shared mutable state,
+    /// no I/O); the MainActor isolation it would otherwise inherit from
+    /// SubjectSyncService is incidental rather than semantic. Callers in
+    /// any isolation context (MainActor views, background dispatch queues,
+    /// the H1 SubscriptionCache's serial queue) reuse the single
+    /// implementation rather than maintaining a parallel apply path.
+    nonisolated static func applyFieldsToSubject(_ f: SubjectSyncFields, base: FPSubject) -> FPSubject {
         var out = base
         if let v = f.firstName        { out.firstName = v }
         if let v = f.lastName         { out.lastName = v }

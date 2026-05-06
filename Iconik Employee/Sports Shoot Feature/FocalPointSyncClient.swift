@@ -139,7 +139,24 @@ struct RemoteGroupRow {
 
 @MainActor
 class FocalPointSyncClient: ObservableObject {
-    static let shared = FocalPointSyncClient()
+    static let shared: FocalPointSyncClient = {
+        let c = FocalPointSyncClient()
+        // Phase H1 — install the drift-recovery sender on the SubscriptionCache
+        // singleton at first access. The cache calls this closure when a
+        // gallery_state_summary heartbeat reveals Surface is ahead of the
+        // cache's last_version_seen; the closure sends a request_state_sync
+        // wire message that Surface JS handles by replying with state_sync.
+        // request_state_sync is a new wire type introduced in H1 — additive
+        // per §6.1 (older Surfaces drop unknown types in the default case),
+        // so NOT a protocol_version bump.
+        SubscriptionCache.shared.setDriftRequestSender { [weak c] galleryId, lastVersionSeen in
+            guard let c = c else { return }
+            Task { @MainActor in
+                c.requestStateSync(galleryId: galleryId, lastVersionSeen: lastVersionSeen)
+            }
+        }
+        return c
+    }()
 
     // Published state
     @Published var connectionStatus: FPSyncConnectionStatus = .disconnected
@@ -332,6 +349,12 @@ class FocalPointSyncClient: ObservableObject {
             }
         }
         self.galleryId = galleryId
+        // Phase H1 — pin the SubscriptionCache to this gallery. setCurrentGallery
+        // drops cached state for any previous gallery so a stale snapshot
+        // doesn't survive across joins. State for the new gallery hydrates
+        // on the next state_sync (delivered by Surface in response to
+        // sendHello carrying last_version_seen).
+        SubscriptionCache.shared.setCurrentGallery(galleryId)
         connectionStatus = .discovering
         discoveredServers = []
 
@@ -1088,6 +1111,60 @@ class FocalPointSyncClient: ObservableObject {
             "protocol_version": Int(Self.clientProtocolVersion),
         ]
         send(msg)
+        // Note (Phase H1): last_version_seen is NOT piggybacked on
+        // device_hello. The Rust auth phase at local_sync.rs:770-924
+        // consumes the first device_hello and does not relay it; the
+        // Surface JS dispatcher's case 'device_hello' (which would call
+        // build_state_sync_response) is therefore unreachable for iPad-
+        // originated hellos. Surface JS's case 'request_state_sync'
+        // (added in H1) IS relayed via the Rust default-case at line 1277,
+        // so connect-time hydration goes through that path instead — see
+        // case "device_hello_ack" handler. Per delete-first migration,
+        // last_version_seen does NOT live on device_hello as dead substrate.
+    }
+
+    /// Phase H1 — drift recovery and connect-time hydration. The
+    /// SubscriptionCache invokes this (via the driftRequestSender closure
+    /// installed at init) when a gallery_state_summary heartbeat reveals
+    /// Surface is ahead of the cache's tracked version, AND the
+    /// device_hello_ack handler invokes it on every successful handshake
+    /// for initial hydration.
+    ///
+    /// Wire-shape note: gallery target lives in `for_gallery_id` on the
+    /// payload, NOT in the envelope `gallery_id` field. Rust's relay at
+    /// src-tauri/src/local_sync.rs:1278 reads `parsed.gallery_id` from
+    /// the envelope and uses it as the relay-scope key; messages with no
+    /// envelope gallery_id default to target `"*"` (broadcast to all
+    /// clients). We need the broadcast scope here because Surface JS's
+    /// own connection to the WS server may have its `my_gallery` set to
+    /// null (when the operator hasn't opened a capture session yet),
+    /// which would gallery-filter the request out before it reaches
+    /// Surface JS's handler. Carrying the gallery in the payload frees
+    /// the request to reach Surface JS regardless of UI focus state.
+    ///
+    /// State_sync response routing is gallery-scoped as usual: Surface
+    /// JS's _send writes a state_sync envelope with gallery_id=<gallery>
+    /// from build_state_sync_response, and the Rust relay forwards only
+    /// to iPads whose connection my_gallery matches.
+    ///
+    /// New wire type, additive per §6.1 ("Adding a new optional broadcast
+    /// type that older receivers can ignore is not a bump"). Older
+    /// Surfaces drop unknown types in the default case at
+    /// src/data/local-sync.ts:1943 — drift recovery silently degrades, no
+    /// connection break.
+    func requestStateSync(galleryId: String, lastVersionSeen: Int) {
+        guard !galleryId.isEmpty else { return }
+        let msg: [String: Any] = [
+            "type": "request_state_sync",
+            "device_id": deviceId,
+            // Intentionally NOT in envelope — keeping gallery_id off the
+            // envelope makes Rust treat target as "*" and broadcast to
+            // all clients including Surface JS regardless of its own
+            // gallery scope. See doc comment above.
+            "for_gallery_id": galleryId,
+            "last_version_seen": lastVersionSeen,
+        ]
+        send(msg)
     }
 
     // MARK: - Heartbeat
@@ -1267,6 +1344,28 @@ class FocalPointSyncClient: ObservableObject {
                 }
             }
 
+            // Phase H1 — request the SubscriptionCache's state_sync
+            // hydration immediately after the handshake completes.
+            //
+            // Why this isn't piggybacked on the existing device_hello's
+            // last_version_seen field (which Surface JS theoretically
+            // honors per src/data/local-sync.ts:1878 case 'device_hello'):
+            // the Rust auth phase at src-tauri/src/local_sync.rs:770-924
+            // consumes the iPad's first device_hello for auth/session-
+            // setup and DOES NOT relay it to other clients (Surface JS
+            // included). The case 'device_hello' handler in Surface JS
+            // is therefore unreachable for iPad-originated hellos —
+            // the same shape as the §20.F.1 self-loopback gap. Phase B
+            // chunk B.3 wired the JS handler but never confirmed the
+            // wire path. H1 routes around it by dispatching the
+            // request_state_sync wire type (which IS relayed via the
+            // Rust default-case at line 1277). Same wire type covers
+            // both connect-time hydration and drift recovery.
+            if let g = galleryId, !g.isEmpty {
+                let lastVersion = SubscriptionCache.shared.lastVersion(forGalleryId: g)
+                requestStateSync(galleryId: g, lastVersionSeen: lastVersion)
+            }
+
         case "version_refused":
             // Phase F (FROM_SCRATCH_ARCHITECTURE.md §13 F.1–F.4) — Surface
             // refused this connection over a wire-protocol version mismatch
@@ -1369,6 +1468,17 @@ class FocalPointSyncClient: ObservableObject {
                 onCaptureCompleted?(event)
             }
 
+            // Phase H1 — feed SubscriptionCache. Capture cache is in-memory
+            // only and rebuilt on each connect (state_sync delivers subjects;
+            // captures only flow via capture_completed). dedupKey doubles as
+            // the cache's capture_id key.
+            if let g = msg["gallery_id"] as? String, !g.isEmpty {
+                let version = msg["version"] as? Int
+                SubscriptionCache.shared.applyBroadcast(
+                    .captureCompleted(galleryId: g, captureId: dedupKey, event: event, version: version)
+                )
+            }
+
             // Send ack back to Production so it knows we received this capture event
             if let captureId = msg["capture_id"] as? String, !captureId.isEmpty {
                 send([
@@ -1420,6 +1530,17 @@ class FocalPointSyncClient: ObservableObject {
             if let fromDevice = msg["device_id"] as? String,
                pairedCameraId == nil || fromDevice == pairedCameraId {
                 onQCFlagChanged?(subjectId, flagged)
+            }
+            // Phase H1 — feed SubscriptionCache. qc_flag is a property of
+            // subject_images / capture_images. The cache currently records
+            // version progression for drift detection but doesn't store
+            // qc_flag itself (FPCaptureEvent has no flagged column).
+            // Recording the flag as cache state is H2+ scope.
+            if let g = msg["gallery_id"] as? String, !g.isEmpty {
+                let captureId = (msg["capture_id"] as? String) ?? ""
+                SubscriptionCache.shared.applyBroadcast(
+                    .qcFlagChanged(galleryId: g, subjectId: subjectId, captureId: captureId, flagged: flagged)
+                )
             }
 
         case "subject_absent_changed":
@@ -1523,14 +1644,80 @@ class FocalPointSyncClient: ObservableObject {
             ))
             onSubjectUpdated?(rosterEntryId, subjectId, firstName, lastName, rosterId, senderId)
             onSubjectUpdatedFields?(rosterEntryId, subjectId, fields, senderId)
+            // Phase H1 — feed the SubscriptionCache parallel to the existing
+            // callback fan-out. The cache has zero consumers in H1; H2-H5
+            // migrate FP views from PowerSync watchSubjects to subjectsStream
+            // and delete the watchSubjects call sites in the same commit per
+            // delete-first migration. The onSubjectUpdated callback property
+            // itself is RETAINED beyond H5 per §17.10 because Captura-protected
+            // views (SportsShootListView, SportsShootDetailView) consume it
+            // until Captura sunset — so this parallel branch is a coexistence
+            // pattern, not a transitional drift.
+            if let g = galleryId, !g.isEmpty,
+               let sid = subjectId, let sidUUID = UUID(uuidString: sid) {
+                let version = msg["version"] as? Int
+                SubscriptionCache.shared.applyBroadcast(
+                    .subjectUpdated(galleryId: g, subjectId: sidUUID, fields: fields, version: version)
+                )
+            }
 
         case "subject_state_summary":
             // Reconciliation snapshot from Surface — compare to local view to
             // detect drift without waiting for cloud sync.
+            //
+            // This is the LEGACY heartbeat fired by GalleriesPage office-view
+            // (broadcast_subject_state_summary in src/data/local-sync.ts:816).
+            // It carries (count, name_hash) without a version. Phase H1 leaves
+            // it alone and consumes the new gallery_state_summary heartbeat
+            // (different wire type, Phase B chunk B.3, with last_change_version)
+            // for cache drift detection.
             guard let galleryId = msg["gallery_id"] as? String,
                   let count = msg["subject_count"] as? Int else { break }
             let nameHash = (msg["name_hash"] as? String) ?? ""
             onSubjectStateSummary?(galleryId, count, nameHash)
+
+        case "gallery_state_summary":
+            // Phase H1 — Phase B chunk B.3 heartbeat (every 30s while a
+            // gallery is open). Carries last_change_version so the
+            // SubscriptionCache can detect when Surface is ahead of its
+            // tracked version and request a fresh state_sync. Surface's
+            // build_gallery_state_summary in src/data/repositories/state-sync.ts
+            // is the producer.
+            guard let galleryId = msg["gallery_id"] as? String,
+                  !galleryId.isEmpty else { break }
+            let surfaceVersion: Int = {
+                if let v = msg["last_change_version"] as? Int { return v }
+                if let v = msg["last_change_version"] as? Int64 { return Int(v) }
+                if let v = msg["last_change_version"] as? Double { return Int(v) }
+                return 0
+            }()
+            let cacheVersion = SubscriptionCache.shared.lastVersion(forGalleryId: galleryId)
+            print("[FPSync] gallery_state_summary: gallery=\(galleryId) surface_version=\(surfaceVersion) cache_version=\(cacheVersion)")
+            SubscriptionCache.shared.checkDrift(galleryId: galleryId, surfaceVersion: surfaceVersion)
+
+        case "state_sync":
+            // Phase H1 — full snapshot of the active gallery's subjects.
+            // Triggered by sendHello's last_version_seen field on connect/
+            // reconnect (Surface's local-sync.ts:1842 device_hello handler)
+            // OR by a request_state_sync sent from the cache when drift is
+            // detected. Chunk B.3 always returns mode: 'full'; delta mode
+            // is chunk B.4 (not yet shipped — when it lands the cache will
+            // need a delta apply path, scheduled per §13).
+            guard let galleryId = msg["gallery_id"] as? String,
+                  !galleryId.isEmpty else { break }
+            let currentVersion: Int = {
+                if let v = msg["current_version"] as? Int { return v }
+                if let v = msg["current_version"] as? Int64 { return Int(v) }
+                if let v = msg["current_version"] as? Double { return Int(v) }
+                return 0
+            }()
+            let subjectsArray = (msg["subjects"] as? [[String: Any]]) ?? []
+            print("[FPSync] state_sync received: gallery=\(galleryId) version=\(currentVersion) subjects=\(subjectsArray.count)")
+            SubscriptionCache.shared.applyStateSync(
+                galleryId: galleryId,
+                currentVersion: currentVersion,
+                subjects: subjectsArray
+            )
 
         case "subject_created":
             guard let rosterEntryId = msg["roster_entry_id"] as? String,
@@ -1608,6 +1795,17 @@ class FocalPointSyncClient: ObservableObject {
             if let v = _cstr("checked_in_at", 50)       { createFields.checkedInAt = v }
             let createSenderId = (msg["device_id"] as? String) ?? "unknown"
             onSubjectCreatedFields?(rosterEntryId, createFields, createSenderId)
+            // Phase H1 — feed SubscriptionCache. Wire row reused as-is so
+            // the cache parses every column the wire carries (organization,
+            // custom1-20, address, etc.). Surface broadcast_subject_created_local
+            // forwards every column on the subject for exactly this reason.
+            if let g = msg["gallery_id"] as? String, !g.isEmpty,
+               let sidUUID = UUID(uuidString: rosterEntryId) {
+                let version = msg["version"] as? Int
+                SubscriptionCache.shared.applyBroadcast(
+                    .subjectCreated(galleryId: g, subjectId: sidUUID, row: msg, version: version)
+                )
+            }
 
         case "queue_reorder":
             if let orderedIds = msg["ordered_subject_ids"] as? [String],
@@ -1735,6 +1933,16 @@ class FocalPointSyncClient: ObservableObject {
             guard !validIds.isEmpty else { break }
             print("[FPSync] Subjects deleted from Production: \(validIds.count) subjects")
             onSubjectsDeleted?(validIds)
+            // Phase H1 — feed SubscriptionCache. broadcast_subjects_deleted on
+            // Surface (local-sync.ts:839) carries `version` per Phase B chunk B.3,
+            // so the cache version-tracks the deletion correctly.
+            if let g = msg["gallery_id"] as? String, !g.isEmpty {
+                let validUUIDs = validIds.compactMap { UUID(uuidString: $0) }
+                let version = msg["version"] as? Int
+                SubscriptionCache.shared.applyBroadcast(
+                    .subjectsDeleted(galleryId: g, subjectIds: validUUIDs, version: version)
+                )
+            }
 
         case "capture_reassigned":
             guard let imageNumber = msg["image_number"] as? Int,
@@ -1742,6 +1950,18 @@ class FocalPointSyncClient: ObservableObject {
                   let newRosterEntryId = msg["new_roster_entry_id"] as? String, !newRosterEntryId.isEmpty else { break }
             print("[FPSync] Capture reassigned: image #\(imageNumber) from \(oldRosterEntryId) to \(newRosterEntryId)")
             onCaptureReassigned?(imageNumber, oldRosterEntryId, newRosterEntryId)
+            // Phase H1 — feed SubscriptionCache. capture_reassigned carries
+            // old_subject_id and new_subject_id (Surface broadcast_capture_reassigned
+            // at local-sync.ts:869). The cache retags the existing capture row.
+            if let g = msg["gallery_id"] as? String, !g.isEmpty,
+               let oldSid = msg["old_subject_id"] as? String,
+               let newSid = msg["new_subject_id"] as? String {
+                let captureId = (msg["capture_id"] as? String) ?? "\(oldSid)_\(imageNumber)"
+                let version = msg["version"] as? Int
+                SubscriptionCache.shared.applyBroadcast(
+                    .captureReassigned(galleryId: g, captureId: captureId, newSubjectId: newSid, oldSubjectId: oldSid, version: version)
+                )
+            }
 
         case "verification_warning":
             if let subjectId = msg["subject_id"] as? String,
