@@ -265,7 +265,17 @@ class FocalPointSyncClient: ObservableObject {
     /// Phase A — fixed wire-protocol version this iPad speaks. Bump per the
     /// procedure in FROM_SCRATCH_ARCHITECTURE.md §6.1 (four constants in
     /// lockstep, overlap-window rollout for the App Store gate).
-    private static let clientProtocolVersion: UInt32 = 1
+    ///
+    /// §20.I-bump (2026-05-07): bumped 1 → 2 in lockstep with Surface
+    /// PROTOCOL_VERSION + SUPPORTED_PROTOCOL_VERSIONS (Rust) and
+    /// PROTOCOL_VERSION (Surface JS). Wire-format change: `subject_photographed`
+    /// no longer carries the base64 `thumbnail` field; iPads fetch the bytes
+    /// from Surface's /thumbnail/<filename> HTTP endpoint (added in Phase I).
+    /// Overlap-window collapsed (SUPPORTED_PROTOCOL_VERSIONS = &[2] on Rust)
+    /// because the operator updates all iPads to v2 before next production
+    /// use; no v1 iPads exist in the field that would need backward-compat.
+    /// See §20.I-bump closeout for the full kickoff trace and drift audit.
+    private static let clientProtocolVersion: UInt32 = 2
 
     // Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) — pendingImageRequests,
     // pendingImageHeader, and handleBinaryFrame deleted with the legacy
