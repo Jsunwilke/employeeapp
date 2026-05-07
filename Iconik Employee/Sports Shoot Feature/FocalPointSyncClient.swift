@@ -171,7 +171,24 @@ class FocalPointSyncClient: ObservableObject {
 
     // Callbacks
     var onCaptureCompleted: ((FPCaptureEvent) -> Void)?
-    var onSubjectPhotographed: ((String, String?, Int?) -> Void)?  // subjectId, thumbnail, poseNumber
+    /// Captura coexistence retention per FROM_SCRATCH_ARCHITECTURE.md §17.10:
+    /// SportsShootListView.swift:611 subscribes to this callback and decodes
+    /// the inline base64 `thumbnail` field. Phase I (FROM_SCRATCH_ARCHITECTURE.md
+    /// §13 I) MUST NOT change this signature — Captura's 3-param closure binds
+    /// against `((String, String?, Int?) -> Void)?`. Non-Captura subscribers
+    /// have migrated to `onCaptureThumbnail` (below) which carries the
+    /// thumbnail filename for HTTP fetch via `requestThumbnailOverHTTP`.
+    var onSubjectPhotographed: ((String, String?, Int?) -> Void)?  // subjectId, thumbnail (base64), poseNumber
+    /// Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) — URL-flavored variant of
+    /// `onSubjectPhotographed`. Fires alongside the legacy callback whenever
+    /// `subject_photographed` carries a `thumbnail_filename` field. FP-aware
+    /// iPad views (PoserStationView, FPSportsRosterView_iPad) subscribe here
+    /// and call `requestThumbnailOverHTTP(filename:)` to fetch the thumbnail
+    /// bytes over Surface's `/thumbnail/<filename>` HTTP endpoint instead of
+    /// decoding the inline base64 field. The two callbacks are §17.10
+    /// retention surface — Captura keeps the legacy one, FP-aware code uses
+    /// this one. Args: (subjectId, thumbnailFilename, poseNumber).
+    var onCaptureThumbnail: ((String, String, Int?) -> Void)?
     var onActiveSubjectChanged: ((String) -> Void)?                // subjectId — Production selected a subject
     var onQCFlagChanged: ((String, Bool) -> Void)?                 // subjectId, flagged
     var onSubjectAbsentChanged: ((String, Bool) -> Void)?          // subjectId, isAbsent
@@ -250,11 +267,14 @@ class FocalPointSyncClient: ObservableObject {
     /// lockstep, overlap-window rollout for the App Store gate).
     private static let clientProtocolVersion: UInt32 = 1
 
-    // Image request state
+    // Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) — pendingImageRequests,
+    // pendingImageHeader, and handleBinaryFrame deleted with the legacy
+    // WebSocket photo-fetch path. requestSubjectCaptures retains its own
+    // pending state below; this section is the residual request/response
+    // bookkeeping. requestIdCounter is shared across pendingCaptureListRequests
+    // and is the only consumer post-Phase-I.
     private var requestIdCounter = 0
-    private var pendingImageRequests: [String: CheckedContinuation<FPFullImage, Error>] = [:]
     private var pendingCaptureListRequests: [String: CheckedContinuation<[FPCaptureInfo], Error>] = [:]
-    private var pendingImageHeader: [String: Any]? = nil
     private let imageRequestTimeout: TimeInterval = 30.0
 
     // Phase 0 sync rewrite — subject_command await-ack state. See
@@ -928,44 +948,18 @@ class FocalPointSyncClient: ObservableObject {
 
     // MARK: - Image Requests
 
-    /// Request a full-resolution image from Production via WebSocket binary frame.
-    func requestImage(filename: String) async throws -> FPFullImage {
-        guard isConnected else { throw FPSyncError.notConnected }
-
-        requestIdCounter += 1
-        let requestId = "r\(requestIdCounter)"
-
-        let msg: [String: Any] = [
-            "type": "request_image",
-            "filename": filename,
-            "request_id": requestId,
-            "device_id": deviceId,
-            "gallery_id": galleryId ?? "",
-        ]
-        send(msg)
-
-        return try await withCheckedThrowingContinuation { continuation in
-            pendingImageRequests[requestId] = continuation
-
-            // Timeout
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(self?.imageRequestTimeout ?? 30) * 1_000_000_000)
-                guard let self = self else { return }
-                if let cont = self.pendingImageRequests.removeValue(forKey: requestId) {
-                    cont.resume(throwing: FPSyncError.timeout)
-                }
-            }
-        }
-    }
-
     /// Phase A (FROM_SCRATCH_ARCHITECTURE.md §13 A.6) — request a full-resolution
     /// image over Surface's photo HTTP server (port 8766) using the per-session
     /// bearer token issued in device_hello_ack.
     ///
-    /// In Phase A this method runs ALONGSIDE the WebSocket-based requestImage
-    /// (above). Production photo-fetch callers continue to use requestImage;
-    /// Phase I migrates them to this method and deletes the WebSocket image
-    /// path in the same commit per delete-first migration (rule 19.1).
+    /// Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) deleted the legacy
+    /// WebSocket-based `requestImage` path that previously sat alongside this
+    /// method. The kickoff cross-repo grep found zero callers of either path
+    /// (full-resolution display has no current iPad UI consumer); the
+    /// vacuous deletion landed in Phase I per delete-first migration rule
+    /// 19.1. This HTTP method is the canonical full-resolution fetch path
+    /// going forward and remains reachable for any future view that needs
+    /// it.
     ///
     /// The HTTP port is fixed at 8766 to match Surface's PHOTO_HTTP_PORT
     /// constant. Surface's try_bind walks 8766..8770; Phase A leaves dynamic
@@ -1019,6 +1013,71 @@ class FocalPointSyncClient: ObservableObject {
             throw FPSyncError.serverError("Photo exceeded server size cap")
         default:
             throw FPSyncError.serverError("Photo HTTP returned status \(http.statusCode)")
+        }
+    }
+
+    /// Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) — request a thumbnail
+    /// (capture-thumbs JPEG, ~150-300KB) over Surface's photo HTTP server.
+    /// Mirrors `requestImageOverHTTP` but hits `/thumbnail/<filename>` which
+    /// reads from `<app_data_dir>/capture-thumbs/` (Phase I scope-gap fold-in
+    /// — Phase A's HTTP server only served `/capture/` from the hot folder).
+    ///
+    /// Migration target for non-Captura `subject_photographed` consumers:
+    /// PoserStationView.swift and FPSportsRosterView_iPad.swift subscribe to
+    /// `onCaptureThumbnail` and call this method to fetch the bytes by
+    /// filename instead of decoding the inline base64 `thumbnail` field on
+    /// the wire. Captura's SportsShootListView keeps consuming the base64
+    /// field per §17.10 retention.
+    ///
+    /// Returns a UIImage decoded from the JPEG bytes. Same bearer-auth and
+    /// error-mapping shape as `requestImageOverHTTP`. Older Surface builds
+    /// (pre-Phase-I) lack the `/thumbnail/` endpoint and return 404; callers
+    /// fall back to the inline base64 thumbnail (which is retained on the
+    /// wire body for Captura coexistence regardless).
+    func requestThumbnailOverHTTP(filename: String) async throws -> UIImage {
+        guard isConnected else { throw FPSyncError.notConnected }
+        guard let host = lastHost, !host.isEmpty else { throw FPSyncError.notConnected }
+        guard !bearerToken.isEmpty else {
+            throw FPSyncError.serverError("No bearer token — Surface has not issued one for this session")
+        }
+
+        let encoded = filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? filename
+        guard let url = URL(string: "http://\(host):8766/thumbnail/\(encoded)") else {
+            throw FPSyncError.serverError("Could not construct thumbnail HTTP URL")
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = imageRequestTimeout
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: req)
+        } catch {
+            throw FPSyncError.serverError("HTTP thumbnail request failed: \(error.localizedDescription)")
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw FPSyncError.serverError("Thumbnail HTTP response was not HTTP")
+        }
+        switch http.statusCode {
+        case 200:
+            guard let image = UIImage(data: data) else {
+                throw FPSyncError.invalidImageData
+            }
+            return image
+        case 401:
+            throw FPSyncError.serverError("Unauthorized — bearer token rejected by Surface")
+        case 404:
+            // Older Surface (pre-Phase-I) doesn't serve /thumbnail/; or the
+            // thumbnail file no longer exists on disk. Either way the caller
+            // can fall back to the inline base64 path on subject_photographed.
+            throw FPSyncError.serverError("Thumbnail not found on Surface: \(filename)")
+        case 413:
+            throw FPSyncError.serverError("Thumbnail exceeded server size cap")
+        default:
+            throw FPSyncError.serverError("Thumbnail HTTP returned status \(http.statusCode)")
         }
     }
 
@@ -1254,7 +1313,12 @@ class FocalPointSyncClient: ObservableObject {
                             self.handleMessage(json)
                         }
                     case .data(let binaryData):
-                        self.handleBinaryFrame(binaryData)
+                        // Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) — the
+                        // legacy `request_image` WebSocket path was deleted
+                        // along with its binary-frame response. No other WS
+                        // API on this transport returns binary; drop with a
+                        // log so a future binary path doesn't silently fail.
+                        print("[FPSync] Received unexpected binary frame post-Phase-I (\(binaryData.count) bytes) — dropping")
                     @unknown default:
                         break
                     }
@@ -1498,9 +1562,24 @@ class FocalPointSyncClient: ObservableObject {
                 thumbnail = nil
             }
             let poseNumber = msg["pose_number"] as? Int
+            // Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) — additive
+            // thumbnail_filename for HTTP-fetch consumers. Older Surface
+            // builds (pre-Phase-I) don't send this; consumers that subscribe
+            // to onCaptureThumbnail simply don't fire on those messages.
+            let thumbnailFilename = msg["thumbnail_filename"] as? String
             if let fromDevice = msg["device_id"] as? String,
                pairedCameraId == nil || fromDevice == pairedCameraId {
+                // Captura coexistence — retained 3-param callback fires with
+                // the inline base64 thumbnail. SportsShootListView subscribes
+                // here per §17.10.
                 onSubjectPhotographed?(subjectId, thumbnail, poseNumber)
+                // Phase I — URL-flavored callback. Fires when the new field
+                // is present so non-Captura subscribers (PoserStationView,
+                // FPSportsRosterView_iPad) can fetch via HTTP. Suppressed on
+                // older Surface builds where thumbnail_filename is nil.
+                if let filename = thumbnailFilename, !filename.isEmpty {
+                    onCaptureThumbnail?(subjectId, filename, poseNumber)
+                }
             }
 
         case "command_ack":
@@ -1889,18 +1968,6 @@ class FocalPointSyncClient: ObservableObject {
                 onDeviceDisconnected?(disconnectedId, disconnectedName)
             }
 
-        case "image_header":
-            // Store header — next binary frame will be the image data
-            pendingImageHeader = msg
-
-        case "image_error":
-            if let requestId = msg["request_id"] as? String {
-                let errorMsg = msg["error"] as? String ?? "Unknown error"
-                if let cont = pendingImageRequests.removeValue(forKey: requestId) {
-                    cont.resume(throwing: FPSyncError.serverError(errorMsg))
-                }
-            }
-
         case "subject_captures":
             print("[FPSync] Received subject_captures response: request_id=\(msg["request_id"] ?? "nil") captures_count=\((msg["captures"] as? [Any])?.count ?? -1)")
             if let requestId = msg["request_id"] as? String,
@@ -1989,32 +2056,6 @@ class FocalPointSyncClient: ObservableObject {
         }
     }
 
-    // MARK: - Binary Frame Handling
-
-    private func handleBinaryFrame(_ data: Data) {
-        guard let header = pendingImageHeader else {
-            print("[FPSync] Received binary frame with no pending header — ignoring")
-            return
-        }
-        pendingImageHeader = nil
-
-        guard let requestId = header["request_id"] as? String else { return }
-
-        guard let image = UIImage(data: data) else {
-            if let cont = pendingImageRequests.removeValue(forKey: requestId) {
-                cont.resume(throwing: FPSyncError.invalidImageData)
-            }
-            return
-        }
-
-        let filename = header["filename"] as? String ?? ""
-        let size = header["size"] as? Int ?? data.count
-
-        if let cont = pendingImageRequests.removeValue(forKey: requestId) {
-            cont.resume(returning: FPFullImage(image: image, filename: filename, size: size))
-        }
-    }
-
     // MARK: - Reconnection
 
     private func handleDisconnect() {
@@ -2039,16 +2080,12 @@ class FocalPointSyncClient: ObservableObject {
         SyncConnection.shared.noteSocketClosed(intentional: false)
         stopHeartbeat()
 
-        // Cancel all pending image/capture requests
-        for (_, cont) in pendingImageRequests {
-            cont.resume(throwing: FPSyncError.notConnected)
-        }
-        pendingImageRequests.removeAll()
+        // Cancel all pending capture-list requests (Phase I removed the
+        // image-fetch pending state; only subject_captures remains).
         for (_, cont) in pendingCaptureListRequests {
             cont.resume(throwing: FPSyncError.notConnected)
         }
         pendingCaptureListRequests.removeAll()
-        pendingImageHeader = nil
         pendingMessages.removeAll()
 
         guard !intentionalClose, let host = lastHost, let port = lastPort else { return }

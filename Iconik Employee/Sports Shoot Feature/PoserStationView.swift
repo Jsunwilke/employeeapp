@@ -2168,47 +2168,59 @@ struct PoserStationView: View {
             }
         }
 
-        // Stage 2: thumbnail arrives — decode base64, pair with queued image number
-        fpSync.onSubjectPhotographed = { (subjectId: String, thumbnail: String?, _: Int?) in
-            DispatchQueue.main.async {
-                guard let thumbStr = thumbnail, !thumbStr.isEmpty else { return }
-
-                // Strip data URI prefix if present
-                let base64 = thumbStr.replacingOccurrences(of: "data:image/jpeg;base64,", with: "")
-                    .replacingOccurrences(of: "data:image/webp;base64,", with: "")
-
-                guard let data = Data(base64Encoded: base64),
-                      let image = UIImage(data: data) else { return }
-
-                // Pop oldest pending image number
-                var imgNum: Int? = nil
-                if var pending = pendingImageNumbers[subjectId], !pending.isEmpty {
-                    imgNum = pending.removeFirst()
-                    pendingImageNumbers[subjectId] = pending.isEmpty ? nil : pending
+        // Stage 2: thumbnail filename arrives — fetch bytes from Surface's
+        // photo HTTP server and pair with queued image number.
+        //
+        // Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) migration: this
+        // subscriber moved from `onSubjectPhotographed` (which carried the
+        // inline base64 thumbnail) to `onCaptureThumbnail` (which carries the
+        // thumbnail filename). The bytes are fetched from Surface's
+        // `/thumbnail/<filename>` HTTP endpoint via `requestThumbnailOverHTTP`
+        // instead of base64-decoding an inline string. The wire body still
+        // carries the base64 field for Captura coexistence per §17.10
+        // (SportsShootListView's onSubjectPhotographed subscriber); FP-aware
+        // views just don't read it.
+        fpSync.onCaptureThumbnail = { [weak fpSync] (subjectId: String, thumbnailFilename: String, _: Int?) in
+            guard let client = fpSync else { return }
+            Task {
+                let image: UIImage
+                do {
+                    image = try await client.requestThumbnailOverHTTP(filename: thumbnailFilename)
+                } catch {
+                    print("[FPSync] Phase I thumbnail HTTP fetch failed: \(error)")
+                    return
                 }
-
-                // Append thumbnail
-                let existingCount = subjectThumbnails[subjectId]?.count ?? 0
-                var thumbs = subjectThumbnails[subjectId] ?? []
-                thumbs.append(CaptureThumb(image: image, imageNumber: imgNum))
-                if thumbs.count > 20 { thumbs = Array(thumbs.suffix(20)) }
-                subjectThumbnails[subjectId] = thumbs
-
-                // Save to disk cache
-                ThumbnailCache.shared.save(shootId: galleryId, subjectId: subjectId, imageNumber: imgNum, image: image)
-
-                // Show capture preview popup for non-card photos.
-                // Card photo = first photo for a subject on a non-sports shoot.
-                let isSports = gallery.shootType == "sports"
-                let isCardPhoto = existingCount == 0 && !isSports
-                if !isCardPhoto && previewEnabled {
-                    previewDismissTimer?.cancel()
-                    withAnimation(.easeInOut(duration: 0.2)) { previewImage = image }
-                    let timer = DispatchWorkItem {
-                        withAnimation(.easeInOut(duration: 0.3)) { previewImage = nil }
+                await MainActor.run {
+                    // Pop oldest pending image number
+                    var imgNum: Int? = nil
+                    if var pending = pendingImageNumbers[subjectId], !pending.isEmpty {
+                        imgNum = pending.removeFirst()
+                        pendingImageNumbers[subjectId] = pending.isEmpty ? nil : pending
                     }
-                    previewDismissTimer = timer
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timer)
+
+                    // Append thumbnail
+                    let existingCount = subjectThumbnails[subjectId]?.count ?? 0
+                    var thumbs = subjectThumbnails[subjectId] ?? []
+                    thumbs.append(CaptureThumb(image: image, imageNumber: imgNum))
+                    if thumbs.count > 20 { thumbs = Array(thumbs.suffix(20)) }
+                    subjectThumbnails[subjectId] = thumbs
+
+                    // Save to disk cache
+                    ThumbnailCache.shared.save(shootId: galleryId, subjectId: subjectId, imageNumber: imgNum, image: image)
+
+                    // Show capture preview popup for non-card photos.
+                    // Card photo = first photo for a subject on a non-sports shoot.
+                    let isSports = gallery.shootType == "sports"
+                    let isCardPhoto = existingCount == 0 && !isSports
+                    if !isCardPhoto && previewEnabled {
+                        previewDismissTimer?.cancel()
+                        withAnimation(.easeInOut(duration: 0.2)) { previewImage = image }
+                        let timer = DispatchWorkItem {
+                            withAnimation(.easeInOut(duration: 0.3)) { previewImage = nil }
+                        }
+                        previewDismissTimer = timer
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timer)
+                    }
                 }
             }
         }

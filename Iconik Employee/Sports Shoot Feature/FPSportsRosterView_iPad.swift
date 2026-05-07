@@ -656,45 +656,63 @@ struct FPSportsRosterView_iPad: View {
             print("[FPSync] Auto-filled image #\(imageNumber) for subject \(entry.id)")
         }
 
-        // Subject photographed — store thumbnail paired with image number
-        fpSync.onSubjectPhotographed = { subjectId, thumbnail, poseNumber in
+        // Subject photographed — fetch thumbnail bytes via HTTP and store
+        // paired with image number.
+        //
+        // Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) — migrated from
+        // `onSubjectPhotographed` (inline base64) to `onCaptureThumbnail`
+        // (HTTP fetch via `requestThumbnailOverHTTP`). The base64 field is
+        // still present on the wire for Captura's SportsShootListView per
+        // §17.10 retention; this FP-Sports view ignores it. The
+        // photographedSubjects set is updated synchronously on the
+        // onCaptureThumbnail closure entry so the "this subject was shot"
+        // status reflects fast even if the HTTP fetch is in flight.
+        fpSync.onCaptureThumbnail = { [weak fpSync] (subjectId: String, thumbnailFilename: String, _: Int?) in
             photographedSubjects.insert(subjectId)
-            if let thumbStr = thumbnail,
-               let data = Data(base64Encoded: thumbStr.replacingOccurrences(of: "data:image/jpeg;base64,", with: "")),
-               let image = UIImage(data: data) {
-                // Pop the oldest pending image number for this subject (FIFO)
-                var imgNum: Int? = nil
-                if var pending = pendingImageNumbers[subjectId], !pending.isEmpty {
-                    imgNum = pending.removeFirst()
-                    pendingImageNumbers[subjectId] = pending.isEmpty ? nil : pending
+            guard let client = fpSync else { return }
+            Task {
+                let image: UIImage
+                do {
+                    image = try await client.requestThumbnailOverHTTP(filename: thumbnailFilename)
+                } catch {
+                    print("[FPSync] Phase I thumbnail HTTP fetch failed: \(error)")
+                    return
                 }
-                var thumbs = subjectThumbnails[subjectId] ?? []
-                thumbs.append(CaptureThumb(image: image, imageNumber: imgNum))
-                // Cap at 20 images per subject to limit memory
-                if thumbs.count > 20 {
-                    thumbs = Array(thumbs.suffix(20))
-                }
-                subjectThumbnails[subjectId] = thumbs
-                // Cap total subjects with thumbnails at 100
-                if subjectThumbnails.count > 100 {
-                    let excess = subjectThumbnails.count - 100
-                    let keysToRemove = Array(subjectThumbnails.keys.prefix(excess))
-                    for key in keysToRemove { subjectThumbnails.removeValue(forKey: key) }
-                }
-                // Persist to disk
-                if let shootId = viewModel.selectedShoot?.id.uuidString {
-                    ThumbnailCache.shared.save(shootId: shootId, subjectId: subjectId, imageNumber: imgNum, image: image)
-                }
-
-                // Show capture preview popup — sports shows every photo
-                if previewEnabled {
-                    previewDismissTimer?.cancel()
-                    withAnimation(.easeInOut(duration: 0.2)) { previewImage = image }
-                    let timer = DispatchWorkItem {
-                        withAnimation(.easeInOut(duration: 0.3)) { previewImage = nil }
+                await MainActor.run {
+                    // Pop the oldest pending image number for this subject (FIFO)
+                    var imgNum: Int? = nil
+                    if var pending = pendingImageNumbers[subjectId], !pending.isEmpty {
+                        imgNum = pending.removeFirst()
+                        pendingImageNumbers[subjectId] = pending.isEmpty ? nil : pending
                     }
-                    previewDismissTimer = timer
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timer)
+                    var thumbs = subjectThumbnails[subjectId] ?? []
+                    thumbs.append(CaptureThumb(image: image, imageNumber: imgNum))
+                    // Cap at 20 images per subject to limit memory
+                    if thumbs.count > 20 {
+                        thumbs = Array(thumbs.suffix(20))
+                    }
+                    subjectThumbnails[subjectId] = thumbs
+                    // Cap total subjects with thumbnails at 100
+                    if subjectThumbnails.count > 100 {
+                        let excess = subjectThumbnails.count - 100
+                        let keysToRemove = Array(subjectThumbnails.keys.prefix(excess))
+                        for key in keysToRemove { subjectThumbnails.removeValue(forKey: key) }
+                    }
+                    // Persist to disk
+                    if let shootId = viewModel.selectedShoot?.id.uuidString {
+                        ThumbnailCache.shared.save(shootId: shootId, subjectId: subjectId, imageNumber: imgNum, image: image)
+                    }
+
+                    // Show capture preview popup — sports shows every photo
+                    if previewEnabled {
+                        previewDismissTimer?.cancel()
+                        withAnimation(.easeInOut(duration: 0.2)) { previewImage = image }
+                        let timer = DispatchWorkItem {
+                            withAnimation(.easeInOut(duration: 0.3)) { previewImage = nil }
+                        }
+                        previewDismissTimer = timer
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timer)
+                    }
                 }
             }
         }
@@ -2543,7 +2561,11 @@ struct FPSportsRosterView_iPad: View {
 
                     // Clear FP sync callbacks
                     fpSync.onCaptureCompleted = nil
-                    fpSync.onSubjectPhotographed = nil
+                    // Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) — view
+                    // subscribes to onCaptureThumbnail (URL-fetch flavor),
+                    // not the legacy onSubjectPhotographed (base64 flavor)
+                    // which Captura retains. Clear the one we set.
+                    fpSync.onCaptureThumbnail = nil
                     fpSync.onActiveSubjectChanged = nil
                     fpSync.onQCFlagChanged = nil
                     fpSync.onSubjectAbsentChanged = nil
