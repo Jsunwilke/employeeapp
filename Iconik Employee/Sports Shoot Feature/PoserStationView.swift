@@ -631,7 +631,6 @@ struct PoserStationView: View {
                     )
                 }
             }
-            await loadSubjects()
             await loadCachedThumbnails()
             startWatching()
             setupSyncCallbacks()
@@ -2061,13 +2060,6 @@ struct PoserStationView: View {
 
     // MARK: - Data Loading
 
-    private func loadSubjects() async {
-        isLoading = true
-        do { subjects = try await powerSync.getSubjects(forGalleryId: galleryId) }
-        catch { print("Failed to load subjects: \(error)") }
-        isLoading = false
-    }
-
     private func loadCachedThumbnails() async {
         let shootId = galleryId
         let cached = await Task.detached(priority: .utility) {
@@ -2083,30 +2075,31 @@ struct PoserStationView: View {
     }
 
     private func startWatching() {
+        // Phase H2 — read source is the SubscriptionCache, hydrated by
+        // Surface state_sync on connect/reconnect and kept current by
+        // Surface broadcasts. The cache emits the current snapshot
+        // synchronously on subscribe, then a fresh snapshot on every
+        // mutation. The PowerSync watch this replaced was deleted in
+        // the same commit per FROM_SCRATCH_ARCHITECTURE.md rule 19.1.
         subjectWatchTask?.cancel()
         subjectWatchTask = Task {
-            let stream = powerSync.watchSubjects(forGalleryId: galleryId)
-            do {
-                for try await updated in stream {
-                    if !Task.isCancelled {
-                        subjects = updated
-                        // Rebuild the lock map from each watch tick so the
-                        // row-level lock badge reflects the current source
-                        // of truth (subject.lockedByName, written by the
-                        // acquire_lock RPC). Mirrors the FP Sports
-                        // pattern at FPSportsRosterView_iPad line 4819.
-                        var nextLocks: [UUID: String] = [:]
-                        for entry in updated {
-                            if let name = entry.lockedByName, !name.isEmpty {
-                                nextLocks[entry.id] = name
-                            }
+            let stream = SubscriptionCache.shared.subjectsStream(forGalleryId: galleryId)
+            for await updated in stream {
+                if !Task.isCancelled {
+                    subjects = updated
+                    // Rebuild the lock map from each cache tick so the
+                    // row-level lock badge reflects the current source
+                    // of truth (subject.lockedByName, propagated through
+                    // Surface state_sync + subject_updated broadcasts).
+                    var nextLocks: [UUID: String] = [:]
+                    for entry in updated {
+                        if let name = entry.lockedByName, !name.isEmpty {
+                            nextLocks[entry.id] = name
                         }
-                        lockedEntries = nextLocks
-                        if isLoading { isLoading = false }
                     }
+                    lockedEntries = nextLocks
+                    if isLoading { isLoading = false }
                 }
-            } catch {
-                if !Task.isCancelled { print("Subject watch error: \(error)") }
             }
         }
     }
