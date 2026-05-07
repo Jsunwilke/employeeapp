@@ -20,7 +20,6 @@ struct FPSportsAddSubjectView: View {
     /// Nil on cancel/failure. See 2026-04-22 walk-in name loss analysis.
     let onComplete: (Bool, FPSubject?) -> Void
 
-    private let powerSync = PowerSyncManager.shared
 
     @State private var lastName: String = ""
     @State private var firstName: String = ""
@@ -386,11 +385,13 @@ struct FPSportsAddSubjectView: View {
                     s.custom11, s.custom12, s.custom13, s.custom14, s.custom15,
                     s.custom16, s.custom17, s.custom18, s.custom19, s.custom20
                 ]
-                // Load roster so per-field visibility can detect what other subjects have
+                // Load roster so per-field visibility can detect what other subjects have.
+                // Phase H4 — subject read source is the SubscriptionCache.
+                // The PowerSync getSubjects call this replaced was deleted in
+                // the same commit per FROM_SCRATCH_ARCHITECTURE.md rule 19.1.
                 Task {
-                    if let loaded = try? await powerSync.getSubjects(forGalleryId: galleryId) {
-                        await MainActor.run { existingSubjects = loaded }
-                    }
+                    let loaded = SubscriptionCache.shared.subjects(forGalleryId: galleryId)
+                    await MainActor.run { existingSubjects = loaded }
                 }
             } else {
                 loadNextRosterId()
@@ -429,19 +430,18 @@ struct FPSportsAddSubjectView: View {
     private func loadNextRosterId() {
         isLoadingSubjectID = true
         Task {
-            do {
-                let subjects = try await powerSync.getSubjects(forGalleryId: galleryId)
-                let highestID = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
-                await MainActor.run {
-                    existingSubjects = subjects
-                    rosterId = "\(highestID + 1)"
-                    isLoadingSubjectID = false
-                }
-            } catch {
-                await MainActor.run {
-                    rosterId = "101"
-                    isLoadingSubjectID = false
-                }
+            // Phase H4 — subject read source is the SubscriptionCache.
+            // The PowerSync getSubjects call this replaced was deleted in
+            // the same commit per FROM_SCRATCH_ARCHITECTURE.md rule 19.1.
+            // Synchronous + non-throwing; the prior do/catch fallback
+            // (rosterId = "101") is now redundant with the existing
+            // `?? 100` default that produces 101 from an empty list.
+            let subjects = SubscriptionCache.shared.subjects(forGalleryId: galleryId)
+            let highestID = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
+            await MainActor.run {
+                existingSubjects = subjects
+                rosterId = "\(highestID + 1)"
+                isLoadingSubjectID = false
             }
         }
     }

@@ -17,7 +17,6 @@ struct FPSportsBatchAddView: View {
     /// round-trip). Empty on cancel/failure.
     let onComplete: (Bool, [FPSubject]) -> Void
 
-    private let powerSync = PowerSyncManager.shared
 
     @State private var sportName: String = ""
     @State private var numberOfAthletes: String = "10"
@@ -168,19 +167,18 @@ struct FPSportsBatchAddView: View {
     private func loadHighestRosterId() {
         isLoadingExisting = true
         Task {
-            do {
-                let subjects = try await powerSync.getSubjects(forGalleryId: galleryId)
-                let highestID = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
-                await MainActor.run {
-                    existingSubjects = subjects
-                    startingRosterId = highestID + 1
-                    isLoadingExisting = false
-                }
-            } catch {
-                await MainActor.run {
-                    startingRosterId = 101
-                    isLoadingExisting = false
-                }
+            // Phase H4 — subject read source is the SubscriptionCache.
+            // The PowerSync getSubjects call this replaced was deleted in
+            // the same commit per FROM_SCRATCH_ARCHITECTURE.md rule 19.1.
+            // Synchronous + non-throwing; the prior do/catch fallback
+            // (startingRosterId = 101) is now redundant with the existing
+            // `?? 100` default that produces 101 from an empty list.
+            let subjects = SubscriptionCache.shared.subjects(forGalleryId: galleryId)
+            let highestID = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
+            await MainActor.run {
+                existingSubjects = subjects
+                startingRosterId = highestID + 1
+                isLoadingExisting = false
             }
         }
     }

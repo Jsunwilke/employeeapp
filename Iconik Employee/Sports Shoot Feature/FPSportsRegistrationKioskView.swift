@@ -16,7 +16,6 @@ struct FPSportsRegistrationKioskView: View {
     let defaultSportTeam: String
     let defaultGrade: String
 
-    private let powerSync = PowerSyncManager.shared
 
     @State private var firstNameInput = ""
     @State private var lastNameInput = ""
@@ -186,14 +185,17 @@ struct FPSportsRegistrationKioskView: View {
 
     private func loadNextId() {
         Task {
-            do {
-                let subjects = try await powerSync.getSubjects(forGalleryId: galleryId)
-                let highest = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
-                await MainActor.run {
-                    nextRosterId = highest + 1
-                    totalRegistered = subjects.filter { !$0.isBlank }.count
-                }
-            } catch { }
+            // Phase H4 — subject read source is the SubscriptionCache.
+            // The PowerSync getSubjects call this replaced was deleted in
+            // the same commit per FROM_SCRATCH_ARCHITECTURE.md rule 19.1.
+            // Synchronous + non-throwing; empty-cache produces nextRosterId
+            // = 101 via the existing `?? 100` default.
+            let subjects = SubscriptionCache.shared.subjects(forGalleryId: galleryId)
+            let highest = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
+            await MainActor.run {
+                nextRosterId = highest + 1
+                totalRegistered = subjects.filter { !$0.isBlank }.count
+            }
         }
     }
 

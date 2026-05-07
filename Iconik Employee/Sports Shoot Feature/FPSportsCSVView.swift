@@ -14,7 +14,6 @@ struct FPSportsCSVView: View {
     let organizationId: String
     let onComplete: (Bool) -> Void
 
-    private let powerSync = PowerSyncManager.shared
     @Environment(\.presentationMode) var presentationMode
 
     @State private var isImporting = false
@@ -117,17 +116,16 @@ struct FPSportsCSVView: View {
     private func loadSubjects() {
         isLoading = true
         Task {
-            do {
-                let subjects = try await powerSync.getSubjects(forGalleryId: galleryId)
-                await MainActor.run { currentSubjects = subjects; isLoading = false }
-            } catch {
-                await MainActor.run {
-                    isLoading = false
-                    alertTitle = "Error"
-                    alertMessage = "Failed to load subjects: \(error.localizedDescription)"
-                    showAlert = true
-                }
-            }
+            // Phase H4 — subject read source is the SubscriptionCache.
+            // The PowerSync getSubjects call this replaced was deleted in
+            // the same commit per FROM_SCRATCH_ARCHITECTURE.md rule 19.1.
+            // Synchronous + non-throwing; the prior do/catch alert path
+            // (PowerSync decode/transport error) does not apply to the
+            // cache reader. The remaining alert state (alertTitle,
+            // alertMessage, showAlert) stays in scope for CSV-import
+            // errors elsewhere in this view.
+            let subjects = SubscriptionCache.shared.subjects(forGalleryId: galleryId)
+            await MainActor.run { currentSubjects = subjects; isLoading = false }
         }
     }
 

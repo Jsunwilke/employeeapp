@@ -26,7 +26,6 @@ struct DanceCoupleKioskView: View {
     /// public-facing iPad.
     let kioskPasscode: String
 
-    private let powerSync = PowerSyncManager.shared
     @StateObject private var fpSync = FocalPointSyncClient.shared
     @Environment(\.presentationMode) var presentationMode
 
@@ -259,14 +258,17 @@ struct DanceCoupleKioskView: View {
 
     private func loadNextId() {
         Task {
-            do {
-                let subjects = try await powerSync.getSubjects(forGalleryId: galleryId)
-                let highest = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
-                await MainActor.run {
-                    nextRosterId = max(highest + 1, 101)
-                    totalRegistered = subjects.filter { !$0.isBlank }.count
-                }
-            } catch { }
+            // Phase H4 — subject read source is the SubscriptionCache.
+            // The PowerSync getSubjects call this replaced was deleted in
+            // the same commit per FROM_SCRATCH_ARCHITECTURE.md rule 19.1.
+            // Synchronous + non-throwing; empty-cache yields nextRosterId
+            // = max(101, 101) via the existing `?? 100` + max-101 floor.
+            let subjects = SubscriptionCache.shared.subjects(forGalleryId: galleryId)
+            let highest = subjects.compactMap { Int($0.rosterId) }.max() ?? 100
+            await MainActor.run {
+                nextRosterId = max(highest + 1, 101)
+                totalRegistered = subjects.filter { !$0.isBlank }.count
+            }
         }
     }
 
@@ -304,7 +306,18 @@ struct DanceCoupleKioskView: View {
                 // can't hand out the same number. The receiver only
                 // toasts on dup; collision corrupts the printed number
                 // we just told the dancer to remember.
-                let freshSubjects = (try? await powerSync.getSubjects(forGalleryId: galleryId)) ?? []
+                // Phase H4 — read source is the SubscriptionCache. The
+                // PowerSync getSubjects call this replaced was deleted in
+                // the same commit per FROM_SCRATCH_ARCHITECTURE.md rule 19.1.
+                // The cross-iPad freshness guarantee is the same as before:
+                // the cache is updated by Surface broadcasts after each
+                // iPad's subject_command is applied (H1c receiver-applied
+                // path), so a second iPad's cache reflects the first
+                // iPad's add as soon as the broadcast lands. PowerSync's
+                // local SQLite at a real shoot is no fresher than the
+                // cache because cloud sync is offline (per
+                // feedback_no_internet_at_shoots).
+                let freshSubjects = SubscriptionCache.shared.subjects(forGalleryId: galleryId)
                 let highest = freshSubjects.compactMap { Int($0.rosterId) }.max() ?? 100
                 let assignedRosterId = max(highest + 1, 101)
 
