@@ -4498,8 +4498,15 @@ struct FPSportsRosterView_iPad: View {
                                 guard let currentShoot = viewModel.selectedShoot else { return }
 
                                 Task {
+                                    // Phase H3 — subject read source is the SubscriptionCache,
+                                    // hydrated by Surface state_sync on connect/reconnect and
+                                    // kept current by subject_updated / subject_created /
+                                    // subjects_deleted broadcasts. Synchronous and non-throwing.
+                                    // The PowerSync getSubjects call this replaced was deleted
+                                    // in the same commit per FROM_SCRATCH_ARCHITECTURE.md rule
+                                    // 19.1. Group_images stays on PowerSync — Phase I scope.
+                                    let entries = SubscriptionCache.shared.subjects(forGalleryId: currentShoot.galleryId ?? "")
                                     do {
-                                        let entries = try await powerSync.getSubjects(forGalleryId: currentShoot.galleryId ?? "")
                                         let groups = try await powerSync.getGroupImages(forJob: currentShoot.id)
 
                                         await MainActor.run {
@@ -4774,9 +4781,15 @@ struct FPSportsRosterView_iPad: View {
                                     if !gid.isEmpty, let userId = UserManager.shared.getCurrentUserIDUnified() {
                                         try? await powerSync.pinGallery(userId: userId, galleryId: gid, organizationId: storedUserOrganizationID)
 
-                                        // Only wait for sync if no subjects are locally cached yet
-                                        let existing = try? await powerSync.getSubjects(forGalleryId: gid)
-                                        if existing?.isEmpty ?? true {
+                                        // Only wait for hydration if the SubscriptionCache has
+                                        // no subjects yet for this gallery. Phase H3: cache is
+                                        // hydrated by Surface state_sync on WebSocket connect;
+                                        // the brief sleep gives that hydration time to land
+                                        // before the primary read below. PowerSync's pinGallery
+                                        // above still runs in parallel so cloud-sync continues
+                                        // for offline durability of writes.
+                                        let existing = SubscriptionCache.shared.subjects(forGalleryId: gid)
+                                        if existing.isEmpty {
                                             try? await Task.sleep(nanoseconds: 2_000_000_000)
                                         }
                                     }
@@ -4785,7 +4798,11 @@ struct FPSportsRosterView_iPad: View {
                                     try? await powerSync.releaseExpiredSubjectLocks(forGalleryId: gid)
                                     try? await GroupImageService.shared.releaseExpiredLocks(forJob: shootID)
 
-                                    let entries = try await powerSync.getSubjects(forGalleryId: gid)
+                                    // Phase H3 — subject read source is the SubscriptionCache.
+                                    // The PowerSync getSubjects call this replaced was deleted
+                                    // in the same commit per rule 19.1. Group_images stays on
+                                    // PowerSync — Phase I scope.
+                                    let entries = SubscriptionCache.shared.subjects(forGalleryId: gid)
                                     let groups = try await powerSync.getGroupImages(forJob: shootID)
 
                                     // Load cached thumbnails from disk
@@ -4832,88 +4849,90 @@ struct FPSportsRosterView_iPad: View {
                                 rosterWatchTask?.cancel()
                                 groupWatchTask?.cancel()
 
+                                // Phase H3 — subject watch reads from the SubscriptionCache,
+                                // hydrated by Surface state_sync on connect/reconnect and kept
+                                // current by Surface broadcasts. The cache emits the current
+                                // snapshot synchronously on subscribe, then a fresh snapshot on
+                                // every applyBroadcast / applyStateSync mutation. The PowerSync
+                                // watch this replaced (with its retry-with-backoff shell needed
+                                // for AsyncThrowingStream's error handling) was deleted in the
+                                // same commit per FROM_SCRATCH_ARCHITECTURE.md rule 19.1; cache
+                                // stream is non-throwing AsyncStream so the do/catch + retry
+                                // backoff are unreachable code in the new design.
                                 rosterWatchTask = Task {
-                                    var retryDelay: UInt64 = 1_000_000_000 // 1s
-                                    while !Task.isCancelled {
-                                        do {
-                                            let watchGid = viewModel.selectedShoot?.galleryId ?? ""
-                                            for try await entries in powerSync.watchSubjects(forGalleryId: watchGid) {
-                                                var merged = entries
+                                    let watchGid = viewModel.selectedShoot?.galleryId ?? ""
+                                    for await entries in SubscriptionCache.shared.subjectsStream(forGalleryId: watchGid) {
+                                        if Task.isCancelled { return }
+                                        var merged = entries
 
-                                                // Extract lock info from entries
-                                                // Expiry handled by releaseExpiredSubjectLocks on load
-                                                var locks: [UUID: String] = [:]
-                                                for entry in entries {
-                                                    if let lockedByName = entry.lockedByName, !lockedByName.isEmpty {
-                                                        locks[entry.id] = lockedByName
-                                                    }
-                                                }
-
-                                                // Protect currently-editing entry with live typed value
-                                                if let editingId = viewModel.currentlyEditingEntry,
-                                                   let index = merged.firstIndex(where: { $0.id == editingId }) {
-                                                    merged[index].imageNumbers = viewModel.editingImageNumber
-                                                }
-
-                                                // Protect recently-saved entries from being overwritten
-                                                // by stale SQLite data (async save may not have completed yet)
-                                                for localEntry in viewModel.subjects {
-                                                    if let index = merged.firstIndex(where: { $0.id == localEntry.id }),
-                                                       localEntry.updatedAt > merged[index].updatedAt {
-                                                        merged[index] = localEntry
-                                                    }
-                                                }
-
-                                                // Don't overwrite populated data with empty
-                                                if merged.isEmpty && !viewModel.subjects.isEmpty {
-                                                    continue
-                                                }
-
-                                                // Diff-merge: only stage if data actually changed (prevents scroll jump)
-                                                let current = viewModel.subjects
-                                                let mergedIds = merged.map { $0.id }
-                                                let currentIds = current.map { $0.id }
-
-                                                if mergedIds == currentIds {
-                                                    // Same entries in same order — check if anything actually changed
-                                                    var anyChanged = false
-                                                    for i in merged.indices {
-                                                        if merged[i] != current[i] {
-                                                            anyChanged = true
-                                                            break
-                                                        }
-                                                    }
-                                                    // If nothing changed, skip entirely
-                                                    if !anyChanged {
-                                                        retryDelay = 1_000_000_000
-                                                        continue
-                                                    }
-                                                    // Stage the merged data through the coalesced update path
-                                                    viewModel.stageSubjectsUpdate(merged, lockedEntries: locks)
-                                                } else {
-                                                    // Count or order changed — full replacement needed
-                                                    // Stage through coalesced update, then restore scroll position
-                                                    let anchor = viewModel.currentlyEditingEntry ?? lastSyncedEntryId
-                                                    viewModel.stageSubjectsUpdate(merged, lockedEntries: locks)
-                                                    // Restore scroll position after SwiftUI re-renders
-                                                    // Use coalesceDelay + small margin so scroll-restore runs after the staged apply
-                                                    if let anchorId = anchor, merged.contains(where: { $0.id == anchorId }) {
-                                                        scrollAnchorEntryId = nil
-                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                                            scrollAnchorEntryId = anchorId
-                                                        }
-                                                    }
-                                                }
-                                                // Replay any pending captures for subjects that just arrived
-                                                replayPendingCaptures()
-                                                retryDelay = 1_000_000_000 // Reset on success
+                                        // Extract lock info from entries
+                                        // Expiry handled by releaseExpiredSubjectLocks on load
+                                        var locks: [UUID: String] = [:]
+                                        for entry in entries {
+                                            if let lockedByName = entry.lockedByName, !lockedByName.isEmpty {
+                                                locks[entry.id] = lockedByName
                                             }
-                                        } catch {
-                                            if Task.isCancelled { return }
-                                            print("FPSportsRosterView_iPad: Roster watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
                                         }
-                                        try? await Task.sleep(nanoseconds: retryDelay)
-                                        retryDelay = min(retryDelay * 2, 30_000_000_000) // Cap at 30s
+
+                                        // Protect currently-editing entry with live typed value
+                                        if let editingId = viewModel.currentlyEditingEntry,
+                                           let index = merged.firstIndex(where: { $0.id == editingId }) {
+                                            merged[index].imageNumbers = viewModel.editingImageNumber
+                                        }
+
+                                        // Protect recently-saved entries from being overwritten
+                                        // by a stale cache snapshot (the iPad's local closures
+                                        // patch viewModel.subjects synchronously; a cache emit
+                                        // can arrive before the closure-applied fields have
+                                        // round-tripped through the Surface broadcast path).
+                                        for localEntry in viewModel.subjects {
+                                            if let index = merged.firstIndex(where: { $0.id == localEntry.id }),
+                                               localEntry.updatedAt > merged[index].updatedAt {
+                                                merged[index] = localEntry
+                                            }
+                                        }
+
+                                        // Don't overwrite populated data with empty
+                                        if merged.isEmpty && !viewModel.subjects.isEmpty {
+                                            continue
+                                        }
+
+                                        // Diff-merge: only stage if data actually changed (prevents scroll jump)
+                                        let current = viewModel.subjects
+                                        let mergedIds = merged.map { $0.id }
+                                        let currentIds = current.map { $0.id }
+
+                                        if mergedIds == currentIds {
+                                            // Same entries in same order — check if anything actually changed
+                                            var anyChanged = false
+                                            for i in merged.indices {
+                                                if merged[i] != current[i] {
+                                                    anyChanged = true
+                                                    break
+                                                }
+                                            }
+                                            // If nothing changed, skip entirely
+                                            if !anyChanged {
+                                                continue
+                                            }
+                                            // Stage the merged data through the coalesced update path
+                                            viewModel.stageSubjectsUpdate(merged, lockedEntries: locks)
+                                        } else {
+                                            // Count or order changed — full replacement needed
+                                            // Stage through coalesced update, then restore scroll position
+                                            let anchor = viewModel.currentlyEditingEntry ?? lastSyncedEntryId
+                                            viewModel.stageSubjectsUpdate(merged, lockedEntries: locks)
+                                            // Restore scroll position after SwiftUI re-renders
+                                            // Use coalesceDelay + small margin so scroll-restore runs after the staged apply
+                                            if let anchorId = anchor, merged.contains(where: { $0.id == anchorId }) {
+                                                scrollAnchorEntryId = nil
+                                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                                    scrollAnchorEntryId = anchorId
+                                                }
+                                            }
+                                        }
+                                        // Replay any pending captures for subjects that just arrived
+                                        replayPendingCaptures()
                                     }
                                 }
 
