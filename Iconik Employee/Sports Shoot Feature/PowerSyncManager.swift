@@ -1012,23 +1012,6 @@ class PowerSyncManager: ObservableObject {
 
     // MARK: - FP Sports Subjects (Production subjects table via PowerSync)
 
-    /// Fetch all subjects for a gallery
-    func getSubjects(forGalleryId galleryId: String) async throws -> [FPSubject] {
-        guard let db = database else {
-            throw PowerSyncManagerError.notInitialized
-        }
-
-        let results: [FPSubject] = try await db.getAll(
-            sql: "SELECT * FROM subjects WHERE gallery_id = ? AND (is_deleted IS NULL OR is_deleted != 'true') ORDER BY last_name ASC, first_name ASC",
-            parameters: [galleryId],
-            mapper: { cursor in
-                try Self.parseSubject(from: cursor)
-            }
-        )
-
-        return results
-    }
-
     /// Save a subject — UPDATE for existing, INSERT only for new.
     /// This prevents NULLing out Production-managed fields (school_id, qr_code, custom1-20, etc.)
     ///
@@ -1226,25 +1209,6 @@ class PowerSyncManager: ObservableObject {
             sql: "UPDATE subjects SET locked_by = NULL, locked_by_name = NULL, locked_at = NULL WHERE gallery_id = ? AND locked_at IS NOT NULL AND locked_at < ?",
             parameters: [galleryId, twoMinutesAgo]
         )
-    }
-
-    /// Watch subjects for real-time updates (PowerSync reactive query)
-    func watchSubjects(forGalleryId galleryId: String) -> AsyncThrowingStream<[FPSubject], Error> {
-        guard let db = database else {
-            return AsyncThrowingStream { $0.finish() }
-        }
-
-        do {
-            return try db.watch(
-                sql: "SELECT * FROM subjects WHERE gallery_id = ? AND (is_deleted IS NULL OR is_deleted != 'true') ORDER BY last_name ASC, first_name ASC",
-                parameters: [galleryId],
-                mapper: { cursor in
-                    try Self.parseSubject(from: cursor)
-                }
-            )
-        } catch {
-            return AsyncThrowingStream { $0.finish(throwing: error) }
-        }
     }
 
     // MARK: - Gallery Pinning (selective sync)
