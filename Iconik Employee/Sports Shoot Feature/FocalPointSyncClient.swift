@@ -292,6 +292,13 @@ class FocalPointSyncClient: ObservableObject {
     // pending command_id maps to the continuation that the sender is
     // awaiting; the inbound `command_ack` handler resolves it.
     private var pendingCommandAcks: [String: CheckedContinuation<CommandAck, Error>] = [:]
+    // Phase J — parallel dict keyed by command_id, captures (send_time,
+    // command_type) so the inbound command_ack handler can emit
+    // command_latency_ms histogram with the elapsed span and the
+    // commands_acked_total counter labeled by ack status. Cleared in the
+    // same lifecycle as pendingCommandAcks (resolved on ack, removed on
+    // timeout).
+    private var pendingCommandSendTimes: [String: (Date, String)] = [:]
     private let commandAckTimeout: TimeInterval = 30.0
 
     // Pending message queue (queued while disconnected, flushed on reconnect)
@@ -753,6 +760,19 @@ class FocalPointSyncClient: ObservableObject {
             // Capture the continuation against this command_id so the
             // inbound `command_ack` handler can resolve it.
             self.pendingCommandAcks[cmd.commandId] = continuation
+            // Phase J — record send time + command type for the latency
+            // histogram emitted at ack receipt.
+            self.pendingCommandSendTimes[cmd.commandId] = (Date(), cmd.commandType.rawValue)
+            FocalPointMetrics.shared.counter(
+                "commands_sent_total",
+                module: "sync-client",
+                labels: ["command_type": cmd.commandType.rawValue]
+            )
+            FocalPointMetrics.shared.gauge(
+                "command_queue_depth",
+                value: Double(self.pendingCommandAcks.count),
+                module: "sync-client"
+            )
 
             // Schedule the timeout. If the Surface never acks (e.g. a
             // crash mid-flow, or the WebSocket drops without a clean
@@ -763,6 +783,17 @@ class FocalPointSyncClient: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + self.commandAckTimeout) { [weak self] in
                 guard let self = self else { return }
                 if let pendingContinuation = self.pendingCommandAcks.removeValue(forKey: commandId) {
+                    let sendInfo = self.pendingCommandSendTimes.removeValue(forKey: commandId)
+                    FocalPointMetrics.shared.counter(
+                        "commands_acked_total",
+                        module: "sync-client",
+                        labels: ["status": "timeout", "command_type": sendInfo?.1 ?? "unknown"]
+                    )
+                    FocalPointMetrics.shared.gauge(
+                        "command_queue_depth",
+                        value: Double(self.pendingCommandAcks.count),
+                        module: "sync-client"
+                    )
                     pendingContinuation.resume(throwing: SubjectCommandError.timeout)
                 }
             }
@@ -999,12 +1030,27 @@ class FocalPointSyncClient: ObservableObject {
         req.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = imageRequestTimeout
 
+        // Phase J — photo_fetch_latency_ms histogram. Spans the URLSession
+        // round-trip; emitted with kind=capture and status=success/error.
+        let __fetchStart = Date()
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession.shared.data(for: req)
         } catch {
+            FocalPointMetrics.shared.histogram(
+                "photo_fetch_latency_ms",
+                value: Date().timeIntervalSince(__fetchStart) * 1000.0,
+                module: "sync-client",
+                labels: ["kind": "capture", "status": "error"]
+            )
             throw FPSyncError.serverError("HTTP photo request failed: \(error.localizedDescription)")
         }
+        FocalPointMetrics.shared.histogram(
+            "photo_fetch_latency_ms",
+            value: Date().timeIntervalSince(__fetchStart) * 1000.0,
+            module: "sync-client",
+            labels: ["kind": "capture", "status": "success"]
+        )
 
         guard let http = response as? HTTPURLResponse else {
             throw FPSyncError.serverError("Photo HTTP response was not HTTP")
@@ -1061,12 +1107,27 @@ class FocalPointSyncClient: ObservableObject {
         req.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = imageRequestTimeout
 
+        // Phase J — photo_fetch_latency_ms histogram. Spans the URLSession
+        // round-trip; emitted with kind=thumbnail and status=success/error.
+        let __fetchStart = Date()
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession.shared.data(for: req)
         } catch {
+            FocalPointMetrics.shared.histogram(
+                "photo_fetch_latency_ms",
+                value: Date().timeIntervalSince(__fetchStart) * 1000.0,
+                module: "sync-client",
+                labels: ["kind": "thumbnail", "status": "error"]
+            )
             throw FPSyncError.serverError("HTTP thumbnail request failed: \(error.localizedDescription)")
         }
+        FocalPointMetrics.shared.histogram(
+            "photo_fetch_latency_ms",
+            value: Date().timeIntervalSince(__fetchStart) * 1000.0,
+            module: "sync-client",
+            labels: ["kind": "thumbnail", "status": "success"]
+        )
 
         guard let http = response as? HTTPURLResponse else {
             throw FPSyncError.serverError("Thumbnail HTTP response was not HTTP")
@@ -1600,6 +1661,32 @@ class FocalPointSyncClient: ObservableObject {
             // iPad only cares about acks for its own command_ids.
             if let ack = CommandAck.fromWire(msg),
                let pendingContinuation = pendingCommandAcks.removeValue(forKey: ack.commandId) {
+                // Phase J — emit commands_acked_total + command_latency_ms.
+                // The send-time and command_type were stashed in
+                // pendingCommandSendTimes at sendSubjectCommand. If the
+                // entry is missing (cleaned up by timeout path), drop
+                // silently — the timeout already counted as acked.
+                let sendInfo = pendingCommandSendTimes.removeValue(forKey: ack.commandId)
+                let cmdType = sendInfo?.1 ?? "unknown"
+                FocalPointMetrics.shared.counter(
+                    "commands_acked_total",
+                    module: "sync-client",
+                    labels: ["status": ack.status.rawValue, "command_type": cmdType]
+                )
+                if let sendTime = sendInfo?.0 {
+                    let elapsedMs = Date().timeIntervalSince(sendTime) * 1000.0
+                    FocalPointMetrics.shared.histogram(
+                        "command_latency_ms",
+                        value: elapsedMs,
+                        module: "sync-client",
+                        labels: ["status": ack.status.rawValue, "command_type": cmdType]
+                    )
+                }
+                FocalPointMetrics.shared.gauge(
+                    "command_queue_depth",
+                    value: Double(pendingCommandAcks.count),
+                    module: "sync-client"
+                )
                 pendingContinuation.resume(returning: ack)
             }
             break
@@ -2099,6 +2186,12 @@ class FocalPointSyncClient: ObservableObject {
         pendingMessages.removeAll()
 
         guard !intentionalClose, let host = lastHost, let port = lastPort else { return }
+        // Phase J — count one reconnect cycle start per unintentional disconnect
+        // that has a host/port to reach. Subsequent scheduleReconnect retry
+        // attempts within the same cycle are not counted; this keeps the
+        // counter at "how many times did the connection drop and need to
+        // recover," not "how many TCP attempts were made."
+        FocalPointMetrics.shared.counter("websocket_reconnects_total", module: "sync-client")
         scheduleReconnect(host: host, port: port)
     }
 

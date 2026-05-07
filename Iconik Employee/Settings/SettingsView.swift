@@ -119,6 +119,17 @@ struct SettingsView: View {
             }
 
             Section {
+                NavigationLink(destination: MetricsDashboardView()) {
+                    Label("Metrics", systemImage: "chart.bar.xaxis")
+                        .frame(minHeight: 44)
+                }
+            } header: {
+                Text("Diagnostics")
+            } footer: {
+                Text("Live counters, gauges, and latency histograms for this iPad's sync activity. Useful for support to diagnose connection or command issues.")
+            }
+
+            Section {
                 Button("Logout") {
                     Task {
                         do {
