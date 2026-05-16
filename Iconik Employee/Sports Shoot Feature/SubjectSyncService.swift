@@ -868,6 +868,31 @@ final class SubjectSyncService {
     /// row. The connected path encodes this once on the wire; the
     /// fallback path's applyFieldsToSubject reconstructs the same row
     /// for PowerSync. Inverse of applyFieldsToSubject.
+    ///
+    /// FIELD-OWNERSHIP PARTITION (PHASE_Y_PLAN.md §3.4, 2026-05-15):
+    /// Three categories on the subjects row:
+    ///
+    ///   Surface-only (capture-state owned by Surface capture-engine +
+    ///   image-upload pipeline): isPhotographed, imageNumbers,
+    ///   image_count. The iPad has NO editorial authority over these;
+    ///   they are NOT populated here. The Zeigler-Royalton High
+    ///   Graduation regression 2026-05-15 was caused by sending stale
+    ///   isPhotographed=false in every keystroke-save, overwriting
+    ///   the Surface capture-engine's authoritative isPhotographed=true
+    ///   within 3 seconds of every walk-in name edit. Surface receiver
+    ///   strips these even if a buggy or old iPad sends them
+    ///   (defense-in-depth via sanitize_update_fields_from_ipad in
+    ///   src/data/repositories/subject-repository.ts on the Surface
+    ///   side); the iPad's correct behavior is to not send them at all.
+    ///
+    ///   Shared-ownership (legitimately written by either side via
+    ///   documented UI flows): isAbsent (Surface mark-absent + iPad
+    ///   mark-absent), needsRetake (Surface mark-for-retake + iPad
+    ///   mark-for-retake), checkedInAt (kiosk check-in on iPad +
+    ///   Surface manual check-in). These STAY populated below.
+    ///
+    ///   iPad-editorial: everything else (names, contact, sport,
+    ///   custom1..20, etc.). These STAY populated below.
     static func fieldsFromFullSubject(_ s: FPSubject) -> SubjectSyncFields {
         var f = SubjectSyncFields()
         f.firstName = s.firstName
@@ -923,10 +948,11 @@ final class SubjectSyncService {
         f.custom19 = s.custom19
         f.custom20 = s.custom20
         f.notes = s.notes
-        f.imageNumbers = s.imageNumbers
+        // Phase Y §3.4 — imageNumbers + isPhotographed deliberately not
+        // populated. Surface-owned capture-state; iPad has no editorial
+        // authority. See doc block above this function.
         f.isAbsent = s.isAbsent
         f.needsRetake = s.needsRetake
-        f.isPhotographed = s.isPhotographed
         if let checkedIn = s.checkedInAt { f.checkedInAt = checkedIn }
         return f
     }
