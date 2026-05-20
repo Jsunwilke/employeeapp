@@ -201,11 +201,6 @@ final class SubscriptionCacheStore {
         do {
             try ensureOpen()
             try beginTransaction()
-            defer {
-                // If the body throws below, rollback. If body completes,
-                // commit. Tracked via local flag.
-            }
-            var committed = false
             do {
                 try deleteSubjects(galleryId: galleryId)
                 let now = Date().timeIntervalSince1970
@@ -221,11 +216,8 @@ final class SubscriptionCacheStore {
                 }
                 try upsertGalleryMeta(galleryId: galleryId, lastVersion: lastVersion, updatedAt: now)
                 try commitTransaction()
-                committed = true
             } catch {
-                if !committed {
-                    try? rollbackTransaction()
-                }
+                try? rollbackTransaction()
                 throw error
             }
         } catch {

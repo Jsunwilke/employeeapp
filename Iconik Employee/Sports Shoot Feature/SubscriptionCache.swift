@@ -197,6 +197,17 @@ final class SubscriptionCache {
             // already in progress) is a no-op for hydration. The in-memory
             // state stays authoritative because broadcasts may have arrived
             // since the last disk write.
+            //
+            // Per the Phase AC expansion Code Auditor M1 finding: when
+            // loadGallery returns non-nil with empty subjects (an
+            // authoritative-empty persisted state from a prior Surface-
+            // initiated wipe), we MUST still record loaded.lastVersion so
+            // the H1.16 version-gap guard at applyStateSync has the correct
+            // cache_version to compare against. If we only set
+            // lastVersionByGallery when subjects exist, the empty-with-
+            // meta-version persisted state regresses cache_version to 0 on
+            // hydrate, defeating the guard's defense against suspicious
+            // empty payloads at lower wire_versions.
             if let newGallery = galleryId,
                !newGallery.isEmpty,
                (self.subjectsByGallery[newGallery] ?? [:]).isEmpty,
@@ -207,14 +218,20 @@ final class SubscriptionCache {
                         byId[parsed.id] = parsed
                     }
                 }
+                // Version is recorded unconditionally on a successful
+                // loadGallery — even when byId is empty (authoritative-
+                // empty persisted state). Subjects are populated only when
+                // byId is non-empty. Notify subscribers in either case
+                // because the in-memory state did change (lastVersion
+                // advanced, or subjects appeared, or both).
+                self.lastVersionByGallery[newGallery] = loaded.lastVersion
                 if !byId.isEmpty {
                     self.subjectsByGallery[newGallery] = byId
-                    self.lastVersionByGallery[newGallery] = loaded.lastVersion
-                    // Notify WITHOUT persist — we just LOADED from disk;
-                    // re-writing would be wasteful and could race with a
-                    // subsequent state_sync write.
-                    self._notifyGalleryWithoutPersist(newGallery)
                 }
+                // Notify WITHOUT persist — we just LOADED from disk;
+                // re-writing would be wasteful and could race with a
+                // subsequent state_sync write.
+                self._notifyGalleryWithoutPersist(newGallery)
             }
         }
     }
@@ -223,8 +240,16 @@ final class SubscriptionCache {
     /// Called from PowerSyncManager.unpinGallery when the user explicitly
     /// unpins the gallery — the persisted cache is no longer needed and
     /// must not survive the unpin.
+    ///
+    /// SYNCHRONOUS via serial.sync per Phase AC expansion Security Auditor
+    /// M-1 finding: callers (PowerSyncManager.unpinGallery) need to know
+    /// the disk purge completed before returning, so subsequent operations
+    /// on the same gallery do not race a still-pending disk write. The
+    /// only risk of serial.sync is deadlock if called from inside the
+    /// cache's own serial queue — verified at trace time that no caller
+    /// runs on the queue (PowerSyncManager runs on its own async context).
     func purgeGallery(_ galleryId: String) {
-        serial.async {
+        serial.sync {
             self.subjectsByGallery.removeValue(forKey: galleryId)
             self.capturesByGallery.removeValue(forKey: galleryId)
             self.lastVersionByGallery.removeValue(forKey: galleryId)
@@ -238,8 +263,15 @@ final class SubscriptionCache {
     /// from SupabaseAuthService.signOut before the auth context flips to
     /// signed-out, so persisted state from the signed-in user does not
     /// survive into the next sign-in (which may be a different user).
+    ///
+    /// SYNCHRONOUS via serial.sync per Phase AC expansion Security Auditor
+    /// M-1 finding: signOut must know the disk wipe completed before
+    /// proceeding to the network auth.signOut call so a subsequent
+    /// setCurrentGallery from a freshly-signed-in user cannot race a still-
+    /// pending disk purge. Verified at trace time: signOut runs on a Task
+    /// context, not the cache's serial queue — no deadlock risk.
     func purgeAll() {
-        serial.async {
+        serial.sync {
             let galleryIds = Array(self.subjectsByGallery.keys)
             self.subjectsByGallery.removeAll()
             self.capturesByGallery.removeAll()

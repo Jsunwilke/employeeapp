@@ -705,6 +705,91 @@ struct SubscriptionCacheTests {
         #expect(SubscriptionCacheStore.shared.loadGallery(Self.galleryA) == nil)
     }
 
+    @Test func switchBackAfterSwitchHydratesFromDisk() {
+        // Per Phase AC expansion Code Auditor M2 finding: the production-
+        // realistic switch-then-switch-back path. setCurrentGallery(A)
+        // populates A from state_sync (in-memory + disk). setCurrentGallery(B)
+        // drops A from in-memory but disk persists. setCurrentGallery(A)
+        // again triggers the lazy hydrate path — A's in-memory is empty;
+        // disk has rows; hydrate from disk before notify.
+        let temp = setupIsolatedPersistence()
+        defer { teardownIsolatedPersistence(temp) }
+        let cache = freshCache()
+
+        // Populate A via state_sync (writes to disk)
+        let rowA1 = makeSubjectRow(firstName: "Alice", lastName: "Adams", galleryId: Self.galleryA)
+        let rowA2 = makeSubjectRow(firstName: "Bob", lastName: "Brown", galleryId: Self.galleryA)
+        cache.setCurrentGallery(Self.galleryA)
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 8, subjects: [rowA1, rowA2])
+        cache._test_waitForPendingMutations()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).count == 2)
+
+        // Switch to B (drops A from in-memory; disk for A persists)
+        cache.setCurrentGallery(Self.galleryB)
+        cache._test_waitForPendingMutations()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).isEmpty)
+        // Disk for A is intact — verify via direct store read
+        #expect(SubscriptionCacheStore.shared.loadGallery(Self.galleryA) != nil)
+
+        // Switch back to A — lazy hydrate fires
+        cache.setCurrentGallery(Self.galleryA)
+        cache._test_waitForPendingMutations()
+
+        let snapshot = cache.subjects(forGalleryId: Self.galleryA)
+        #expect(snapshot.count == 2)
+        #expect(snapshot[0].lastName == "Adams")
+        #expect(snapshot[1].lastName == "Brown")
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 8)
+    }
+
+    @Test func coldLaunchPreservesAuthoritativeEmptyVersion() {
+        // Per Phase AC expansion Code Auditor M1 finding: when Surface
+        // authoritatively wipes a gallery (subjects deleted; counter
+        // advanced past iPad's cache_version), the iPad persists
+        // (empty_subjects, authoritative_version). On cold launch, the
+        // lazy hydrate MUST restore lastVersionByGallery to the persisted
+        // version even though subjects is empty — otherwise the H1.16
+        // version-gap guard would see cache_version=0 on a subsequent
+        // suspicious empty state_sync and accept it (regressing to
+        // empty-with-version=0).
+        let temp = setupIsolatedPersistence()
+        defer { teardownIsolatedPersistence(temp) }
+        let cache = freshCache()
+
+        // Populate gallery
+        let row = makeSubjectRow(firstName: "Alice", lastName: "Adams")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 5, subjects: [row])
+        cache._test_waitForPendingMutations()
+
+        // Authoritative-empty state_sync (Surface deleted all subjects;
+        // counter advanced to 15). Accept via H1.16 guard (wire_version
+        // 15 > cache_version 5).
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 15, subjects: [])
+        cache._test_waitForPendingMutations()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).isEmpty)
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 15)
+
+        // Simulate app restart: clear in-memory only, disk survives
+        cache._test_clearInMemoryOnly()
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 0)
+
+        // setCurrentGallery triggers lazy hydrate. With M1 fix:
+        // lastVersionByGallery[A] is set to 15 even though subjects is
+        // empty (the persisted state is authoritative).
+        cache.setCurrentGallery(Self.galleryA)
+        cache._test_waitForPendingMutations()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).isEmpty)
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 15)
+
+        // Now a suspicious empty state_sync arrives at wire_version=10
+        // (less than cache_version=15 from authoritative persisted state).
+        // The H1.16 guard refuses it. Without the M1 fix, cache_version
+        // would have been 0 from hydrate and the guard would have accepted.
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 10, subjects: [])
+        cache._test_waitForPendingMutations()
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 15)
+    }
+
     @Test func wholeRoundTripPreservesFields() {
         // FPSubject → wire-dict → SQLite TEXT → wire-dict → FPSubject
         // round-trip preserves every field. Catches future drift between
