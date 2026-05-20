@@ -321,6 +321,75 @@ struct SubscriptionCacheTests {
         #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 0)
     }
 
+    // MARK: - Phase AC: empty-payload-on-populated-cache guard (PHASE_AC_PLAN.md §7.3 + §7.6)
+
+    @Test func applyStateSyncRefusesEmptyPayloadOnPopulatedCache() {
+        // The load-bearing Phase AC scenario: cache is populated, then an
+        // empty state_sync arrives (from a pre-Phase-AC Surface, or a
+        // regression that re-introduced empty emission). The guard MUST
+        // refuse the wholesale-replace so the populated cache stays intact.
+        let cache = freshCache()
+        let aliceRow = makeSubjectRow(firstName: "Alice", lastName: "Adams")
+        let bobRow = makeSubjectRow(firstName: "Bob", lastName: "Brown")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 7, subjects: [aliceRow, bobRow])
+        cache._test_waitForPendingMutations()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).count == 2)
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 7)
+
+        // Empty state_sync arrives claiming a higher version. The guard
+        // refuses: cache stays at 2 subjects, lastVersion stays at 7 (the
+        // claimed version is not authoritative because the payload was
+        // discarded as invalid).
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 99, subjects: [])
+        cache._test_waitForPendingMutations()
+        let snapshot = cache.subjects(forGalleryId: Self.galleryA)
+        #expect(snapshot.count == 2)
+        #expect(snapshot[0].lastName == "Adams")
+        #expect(snapshot[1].lastName == "Brown")
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 7)
+    }
+
+    @Test func applyStateSyncAcceptsEmptyPayloadOnEmptyCache() {
+        // The legitimate initial-hydration no-op: cache is empty for the
+        // gallery, an empty state_sync arrives — the apply is a no-op on
+        // the subjects map but the version DOES advance because empty-on-empty
+        // is a valid Surface-authoritative claim "this gallery has no rows."
+        let cache = freshCache()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).isEmpty)
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 0)
+
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 3, subjects: [])
+        cache._test_waitForPendingMutations()
+
+        #expect(cache.subjects(forGalleryId: Self.galleryA).isEmpty)
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 3)
+    }
+
+    @Test func applyStateSyncAcceptsPopulatedPayloadOnPopulatedCache() {
+        // The existing wholesale-replace path for non-empty payloads is
+        // unchanged by Phase AC. A second populated state_sync (e.g. on
+        // reconnect with subjects added/removed/edited between sessions)
+        // replaces the cache as before. The guard does NOT fire because the
+        // wire payload is non-empty.
+        let cache = freshCache()
+        let aliceRow = makeSubjectRow(firstName: "Alice", lastName: "Adams")
+        let bobRow = makeSubjectRow(firstName: "Bob", lastName: "Brown")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 5, subjects: [aliceRow, bobRow])
+        cache._test_waitForPendingMutations()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).count == 2)
+
+        // Second state_sync with a different set — Bob deleted, Carol added.
+        let carolRow = makeSubjectRow(firstName: "Carol", lastName: "Connor")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 12, subjects: [aliceRow, carolRow])
+        cache._test_waitForPendingMutations()
+
+        let snapshot = cache.subjects(forGalleryId: Self.galleryA)
+        #expect(snapshot.count == 2)
+        #expect(snapshot[0].lastName == "Adams")
+        #expect(snapshot[1].lastName == "Connor")
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 12)
+    }
+
     // MARK: - Subject delete via broadcast
 
     @Test func subjectsDeletedBroadcastRemovesRow() {

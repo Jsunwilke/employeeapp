@@ -188,8 +188,44 @@ final class SubscriptionCache {
     /// wholesale (mode: 'full') and records `currentVersion` as the
     /// cache's tracked version. Captures are NOT in state_sync per
     /// state-sync.ts — they accumulate via capture_completed broadcasts.
+    ///
+    /// Phase AC (PHASE_AC_PLAN.md §4 + §7.3) — defense-in-depth guard
+    /// against an empty wire payload arriving when the cache is already
+    /// populated. The Surface-side fix (state-sync.ts build_state_sync_response
+    /// returns null when the mirror is unloaded; dispatcher skips _send)
+    /// prevents the destructive empty emission at its source. The iPad-side
+    /// guard here is the cross-version safety net: an older Surface
+    /// (pre-Phase-AC) that still emits the empty response cannot wipe a
+    /// populated iPad cache. The guard is targeted at the specific bug
+    /// shape (empty-on-populated), not at restricting legitimate apply:
+    ///   - empty-on-empty cache: legitimate initial-hydration no-op, version still advances.
+    ///   - empty-on-populated cache: contract violation, log + counter + drop the apply.
+    ///   - non-empty wire payload (any size): existing wholesale-replace runs unchanged.
     func applyStateSync(galleryId: String, currentVersion: Int, subjects: [[String: Any]]) {
         serial.async {
+            // Phase AC empty-payload guard. If the incoming subjects array
+            // is empty AND the cache currently holds rows for this gallery,
+            // refuse the wholesale-replace. The Surface is either (a) a
+            // pre-Phase-AC build emitting the destructive empty, or (b) a
+            // regression that re-introduced empty emission. Either way the
+            // populated cache is more authoritative than an empty wire
+            // payload — keep the cache, drop the empty apply, surface for
+            // observability.
+            let existing = self.subjectsByGallery[galleryId] ?? [:]
+            if subjects.isEmpty && !existing.isEmpty {
+                print("[FPSync] state_sync_empty_payload_refused: gallery=\(galleryId) cached_subjects=\(existing.count) wire_version=\(currentVersion) — refusing to wipe populated cache (Phase AC defense-in-depth)")
+                FocalPointMetrics.shared.counter(
+                    "state_sync_empty_payload_refused_total",
+                    module: "subscription-cache"
+                )
+                // Do NOT advance lastVersionByGallery — the empty payload was
+                // discarded as invalid, so the Surface's claimed version is
+                // not authoritative. Do NOT clear pendingDriftRequests — drift
+                // remains unresolved; the next drift heartbeat will retry.
+                // Do NOT notify subscribers — the cache state did not change.
+                return
+            }
+
             var byId: [UUID: FPSubject] = [:]
             for raw in subjects {
                 if let parsed = SubscriptionCache._parseSubjectFromWire(raw) {
