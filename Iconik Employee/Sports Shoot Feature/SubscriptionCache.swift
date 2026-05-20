@@ -168,8 +168,18 @@ final class SubscriptionCache {
     // sync client lives in the same module; access control is convention,
     // not type-system enforcement (matching CommandQueue.swift's pattern).
 
-    /// Switch the active gallery. Drops cached state for the previous
-    /// gallery so a stale snapshot doesn't survive across joins.
+    /// Switch the active gallery. Drops in-memory cached state for the
+    /// previous gallery so a stale snapshot doesn't survive across joins.
+    /// Disk persistence for the previous gallery STAYS (per H1.13) — the
+    /// persistence layer outlives in-memory state so switching between
+    /// pinned galleries does not lose roster data.
+    ///
+    /// Phase AC H1.14 — lazy hydration from disk: when setCurrentGallery
+    /// is called with a new gallery whose in-memory state is empty AND
+    /// disk persistence has rows for it, hydrate in-memory from disk
+    /// BEFORE notifying subscribers. The view's initial snapshot then
+    /// reflects the persisted state, eliminating the cold-launch flash
+    /// of empty before state_sync arrives.
     func setCurrentGallery(_ galleryId: String?) {
         serial.async {
             let previous = self.currentGallery
@@ -179,7 +189,66 @@ final class SubscriptionCache {
                 self.capturesByGallery.removeValue(forKey: previous)
                 self.lastVersionByGallery.removeValue(forKey: previous)
                 self.pendingDriftRequests.remove(previous)
-                self._notifyGallery(previous)
+                self._notifyGalleryWithoutPersist(previous)
+            }
+            // H1.14 lazy hydrate. Only hydrate when in-memory is empty for
+            // the new gallery — a fresh setCurrentGallery into a gallery
+            // that already has in-memory state (e.g. during a session
+            // already in progress) is a no-op for hydration. The in-memory
+            // state stays authoritative because broadcasts may have arrived
+            // since the last disk write.
+            if let newGallery = galleryId,
+               !newGallery.isEmpty,
+               (self.subjectsByGallery[newGallery] ?? [:]).isEmpty,
+               let loaded = SubscriptionCacheStore.shared.loadGallery(newGallery) {
+                var byId: [UUID: FPSubject] = [:]
+                for raw in loaded.subjectWireDicts {
+                    if let parsed = SubscriptionCache._parseSubjectFromWire(raw) {
+                        byId[parsed.id] = parsed
+                    }
+                }
+                if !byId.isEmpty {
+                    self.subjectsByGallery[newGallery] = byId
+                    self.lastVersionByGallery[newGallery] = loaded.lastVersion
+                    // Notify WITHOUT persist — we just LOADED from disk;
+                    // re-writing would be wasteful and could race with a
+                    // subsequent state_sync write.
+                    self._notifyGalleryWithoutPersist(newGallery)
+                }
+            }
+        }
+    }
+
+    /// Purge a single gallery's cache state from in-memory AND disk.
+    /// Called from PowerSyncManager.unpinGallery when the user explicitly
+    /// unpins the gallery — the persisted cache is no longer needed and
+    /// must not survive the unpin.
+    func purgeGallery(_ galleryId: String) {
+        serial.async {
+            self.subjectsByGallery.removeValue(forKey: galleryId)
+            self.capturesByGallery.removeValue(forKey: galleryId)
+            self.lastVersionByGallery.removeValue(forKey: galleryId)
+            self.pendingDriftRequests.remove(galleryId)
+            SubscriptionCacheStore.shared.purgeGallery(galleryId)
+            self._notifyGalleryWithoutPersist(galleryId)
+        }
+    }
+
+    /// Purge ALL galleries' cache state from in-memory AND disk. Called
+    /// from SupabaseAuthService.signOut before the auth context flips to
+    /// signed-out, so persisted state from the signed-in user does not
+    /// survive into the next sign-in (which may be a different user).
+    func purgeAll() {
+        serial.async {
+            let galleryIds = Array(self.subjectsByGallery.keys)
+            self.subjectsByGallery.removeAll()
+            self.capturesByGallery.removeAll()
+            self.lastVersionByGallery.removeAll()
+            self.pendingDriftRequests.removeAll()
+            self.currentGallery = nil
+            SubscriptionCacheStore.shared.purgeAll()
+            for g in galleryIds {
+                self._notifyGalleryWithoutPersist(g)
             }
         }
     }
@@ -189,31 +258,37 @@ final class SubscriptionCache {
     /// cache's tracked version. Captures are NOT in state_sync per
     /// state-sync.ts — they accumulate via capture_completed broadcasts.
     ///
-    /// Phase AC (PHASE_AC_PLAN.md §4 + §7.3) — defense-in-depth guard
-    /// against an empty wire payload arriving when the cache is already
-    /// populated. The Surface-side fix (state-sync.ts build_state_sync_response
-    /// returns null when the mirror is unloaded; dispatcher skips _send)
-    /// prevents the destructive empty emission at its source. The iPad-side
-    /// guard here is the cross-version safety net: an older Surface
-    /// (pre-Phase-AC) that still emits the empty response cannot wipe a
-    /// populated iPad cache. The guard is targeted at the specific bug
-    /// shape (empty-on-populated), not at restricting legitimate apply:
-    ///   - empty-on-empty cache: legitimate initial-hydration no-op, version still advances.
-    ///   - empty-on-populated cache: contract violation, log + counter + drop the apply.
-    ///   - non-empty wire payload (any size): existing wholesale-replace runs unchanged.
+    /// Phase AC empty-payload guard — REVISED per H1.16 (PHASE_AC_PLAN.md
+    /// §13 scope expansion 2026-05-20) to the version-gap heuristic:
+    ///   - empty-on-empty cache: legitimate initial-hydration no-op,
+    ///     version advances to the wire value (Surface's authoritative
+    ///     empty claim recorded).
+    ///   - empty-on-populated cache + wire_version <= cache_version:
+    ///     suspicious empty (pre-Phase-AC Surface emitting destructive
+    ///     empty when mirror unloaded, OR a race / regression). Refuse
+    ///     the wipe; keep the populated cache; emit the metric counter.
+    ///   - empty-on-populated cache + wire_version > cache_version:
+    ///     authoritative empty (Surface deleted all subjects, counter
+    ///     advanced past iPad's cache_version). Accept the wipe.
+    ///   - non-empty wire payload (any size): existing wholesale-replace
+    ///     runs unchanged.
+    ///
+    /// The version-gap heuristic is sound because the Surface counter
+    /// (gallery-version-counter.ts) is persisted to localStorage and
+    /// monotonic per gallery, never resets in production. So
+    /// wire_version > cache_version reliably signals authoritative state
+    /// advancement.
     func applyStateSync(galleryId: String, currentVersion: Int, subjects: [[String: Any]]) {
         serial.async {
-            // Phase AC empty-payload guard. If the incoming subjects array
-            // is empty AND the cache currently holds rows for this gallery,
-            // refuse the wholesale-replace. The Surface is either (a) a
-            // pre-Phase-AC build emitting the destructive empty, or (b) a
-            // regression that re-introduced empty emission. Either way the
-            // populated cache is more authoritative than an empty wire
-            // payload — keep the cache, drop the empty apply, surface for
-            // observability.
             let existing = self.subjectsByGallery[galleryId] ?? [:]
-            if subjects.isEmpty && !existing.isEmpty {
-                print("[FPSync] state_sync_empty_payload_refused: gallery=\(galleryId) cached_subjects=\(existing.count) wire_version=\(currentVersion) — refusing to wipe populated cache (Phase AC defense-in-depth)")
+            let cacheVersion = self.lastVersionByGallery[galleryId] ?? 0
+            // H1.16 version-gap empty-guard. The empty payload could be
+            // authoritative (Surface genuinely has zero subjects, counter
+            // advanced) or destructive (pre-Phase-AC Surface emitting empty
+            // when mirror unloaded). The wire_version vs cache_version
+            // comparison distinguishes them.
+            if subjects.isEmpty && !existing.isEmpty && currentVersion <= cacheVersion {
+                print("[FPSync] state_sync_empty_payload_refused: gallery=\(galleryId) cached_subjects=\(existing.count) wire_version=\(currentVersion) cache_version=\(cacheVersion) — wire_version did not advance past cache_version, refusing to wipe populated cache (Phase AC H1.16 version-gap guard)")
                 FocalPointMetrics.shared.counter(
                     "state_sync_empty_payload_refused_total",
                     module: "subscription-cache"
@@ -222,18 +297,18 @@ final class SubscriptionCache {
                 // discarded as invalid, so the Surface's claimed version is
                 // not authoritative. Do NOT clear pendingDriftRequests — the
                 // pending flag stays set; combined with the checkDrift throttle
-                // at line ~315 (guard against duplicate in-flight requests),
-                // this leaves the drift sender pinned until a non-empty
-                // state_sync clears the flag at the legitimate apply path
-                // below, OR setCurrentGallery is called with a new gallery
-                // (which clears via pendingDriftRequests.remove(previous)).
-                // The pin is intentional: a Surface with an unloaded mirror
-                // has nothing authoritative to share, and re-polling every
-                // 30s would just refire the same refuse. In practice the
-                // cache also re-hydrates via applyBroadcast on the next
-                // Surface-side write (subject_updated, capture_completed,
-                // etc.), which advances lastVersionByGallery normally — so
-                // the pinned-state is benign and self-recovering once the
+                // (guard against duplicate in-flight requests), this leaves
+                // the drift sender pinned until a non-empty state_sync clears
+                // the flag at the legitimate apply path below, OR
+                // setCurrentGallery is called with a new gallery (which clears
+                // via pendingDriftRequests.remove(previous)). The pin is
+                // intentional: a Surface with an unloaded mirror has nothing
+                // authoritative to share, and re-polling every 30s would just
+                // refire the same refuse. In practice the cache also
+                // re-hydrates via applyBroadcast on the next Surface-side
+                // write (subject_updated, capture_completed, etc.), which
+                // advances lastVersionByGallery normally — so the
+                // pinned-state is benign and self-recovering once the
                 // Surface enters a capture session for this gallery. Do NOT
                 // notify subscribers — the cache state did not change.
                 return
@@ -362,7 +437,28 @@ final class SubscriptionCache {
         serial.sync {}
     }
 
+    /// Test-only — clear in-memory state WITHOUT touching disk. Used to
+    /// simulate app process death + relaunch in tests (the lazy hydration
+    /// on setCurrentGallery should then re-populate from disk). Production
+    /// never calls this.
+    func _test_clearInMemoryOnly() {
+        serial.sync {
+            subjectsByGallery.removeAll()
+            capturesByGallery.removeAll()
+            lastVersionByGallery.removeAll()
+            subscriptions.removeAll()
+            pendingDriftRequests.removeAll()
+            currentGallery = nil
+            driftRequestSender = nil
+        }
+    }
+
     /// Reset all internal state. Test-only.
+    ///
+    /// Phase AC H1.12 — also clears any disk persistence so tests start
+    /// from a clean state on BOTH in-memory and disk. Tests that want
+    /// the store fully disabled (no I/O at all) should call
+    /// SubscriptionCacheStore.shared._testDisable() in their setUp.
     func _test_reset() {
         serial.sync {
             subjectsByGallery.removeAll()
@@ -372,6 +468,7 @@ final class SubscriptionCache {
             pendingDriftRequests.removeAll()
             currentGallery = nil
             driftRequestSender = nil
+            SubscriptionCacheStore.shared._testClearAll()
         }
     }
 
@@ -421,11 +518,52 @@ final class SubscriptionCache {
         }
     }
 
+    /// Notify subscribers of the gallery's current state AND persist the
+    /// state to disk. Per Phase AC H1.13, this is the persistence
+    /// chokepoint — every cache mutation that changes subjects routes
+    /// through _notifyGallery, so a single hook here covers all mutation
+    /// paths (applyStateSync wholesale-replace, _applySubjectUpdate,
+    /// _applySubjectCreate, _applySubjectsDelete). The empty-payload-
+    /// refused branch of applyStateSync does NOT call this — preserving
+    /// the cache's pre-refuse contents on disk too.
+    ///
+    /// Disk write happens before subscriber notify so a subscriber
+    /// closure that mutates the cache (rare but possible per
+    /// AsyncStream yield semantics) does not race with the persist.
+    /// Subscriber notify is best-effort if disk write throws — the
+    /// in-memory state already changed; preserving the notify path
+    /// keeps the view in sync even if disk fails.
     private func _notifyGallery(_ galleryId: String) {
+        _persistGalleryStateLocked(galleryId)
+        _notifyGalleryWithoutPersist(galleryId)
+    }
+
+    /// Variant of _notifyGallery that ONLY notifies subscribers without
+    /// touching disk. Used by setCurrentGallery (in-memory-only drop of
+    /// previous gallery; disk persistence survives) and by the lazy
+    /// hydrate-from-disk path (just loaded from disk; re-writing would
+    /// be wasteful and could race with a subsequent state_sync).
+    private func _notifyGalleryWithoutPersist(_ galleryId: String) {
         let snapshot = _sortedSubjects(forGalleryId: galleryId)
         for sub in subscriptions where sub.galleryId == galleryId {
             sub.yield(snapshot)
         }
+    }
+
+    /// Persist the current in-memory state for a gallery to disk via
+    /// SubscriptionCacheStore. Called from _notifyGallery's persistence
+    /// hook. Skips when persistence is disabled (tests). MUST be called
+    /// inside the serial queue (no external locking on the maps).
+    private func _persistGalleryStateLocked(_ galleryId: String) {
+        guard SubscriptionCacheStore.shared.isEnabled else { return }
+        let map = subjectsByGallery[galleryId] ?? [:]
+        let wireDicts: [[String: Any]] = map.values.map { $0.toWireDict() }
+        let lastVersion = lastVersionByGallery[galleryId] ?? 0
+        SubscriptionCacheStore.shared.persistGalleryState(
+            galleryId: galleryId,
+            subjectWireDicts: wireDicts,
+            lastVersion: lastVersion
+        )
     }
 
     // MARK: - Wire parsing

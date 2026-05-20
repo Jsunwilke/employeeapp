@@ -1242,7 +1242,13 @@ class PowerSyncManager: ObservableObject {
         print("PowerSyncManager: Pinned gallery \(galleryId)")
     }
 
-    /// Unpin a gallery — stop syncing its subjects
+    /// Unpin a gallery — stop syncing its subjects.
+    ///
+    /// Phase AC H1.15 — after the synced_galleries DELETE, purge the
+    /// SubscriptionCache's persisted state for the gallery. The user
+    /// explicitly chose to unpin, so the cache must not survive past the
+    /// unpin event. In-memory + disk both cleared via
+    /// SubscriptionCache.purgeGallery.
     func unpinGallery(userId: String, galleryId: String) async throws {
         guard let db = database else { throw PowerSyncManagerError.notInitialized }
 
@@ -1252,6 +1258,8 @@ class PowerSyncManager: ObservableObject {
             sql: "DELETE FROM synced_galleries WHERE id = ?",
             parameters: [id]
         )
+
+        SubscriptionCache.shared.purgeGallery(galleryId)
 
         print("PowerSyncManager: Unpinned gallery \(galleryId)")
     }

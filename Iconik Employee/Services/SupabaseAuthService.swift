@@ -152,12 +152,23 @@ class SupabaseAuthService: ObservableObject {
         }
     }
 
-    /// Sign out current user
+    /// Sign out current user.
+    ///
+    /// Phase AC H1.15 — before the auth state flips to signed-out, purge
+    /// the SubscriptionCache's persisted state across all galleries. The
+    /// cache file may contain PII (subject names, contact info, etc.) and
+    /// must not survive across sign-in transitions to a different user
+    /// account. In-memory + disk both cleared via SubscriptionCache.purgeAll.
+    /// The purge fires BEFORE supabase.auth.signOut so it runs while auth
+    /// context is still valid (in case the cache needs auth context for
+    /// any operation — none today, but defensive ordering).
     func signOut() async throws {
         isLoading = true
         defer { isLoading = false }
 
         do {
+            SubscriptionCache.shared.purgeAll()
+
             try await supabase.auth.signOut()
 
             self.currentUser = nil

@@ -321,13 +321,13 @@ struct SubscriptionCacheTests {
         #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 0)
     }
 
-    // MARK: - Phase AC: empty-payload-on-populated-cache guard (PHASE_AC_PLAN.md §7.3 + §7.6)
+    // MARK: - Phase AC H1.16: empty-payload version-gap heuristic (PHASE_AC_PLAN.md §13-§17 scope expansion)
 
-    @Test func applyStateSyncRefusesEmptyPayloadOnPopulatedCache() {
-        // The load-bearing Phase AC scenario: cache is populated, then an
-        // empty state_sync arrives (from a pre-Phase-AC Surface, or a
-        // regression that re-introduced empty emission). The guard MUST
-        // refuse the wholesale-replace so the populated cache stays intact.
+    @Test func applyStateSyncRefusesEmptyPayloadWhenWireVersionDoesNotAdvance() {
+        // H1.16 version-gap guard: empty payload arriving with wire_version
+        // <= cache_version is suspicious (pre-Phase-AC Surface emitting
+        // destructive empty when mirror unloaded, OR a race / regression).
+        // Refuse the wipe; keep the populated cache; emit the metric.
         let cache = freshCache()
         let aliceRow = makeSubjectRow(firstName: "Alice", lastName: "Adams")
         let bobRow = makeSubjectRow(firstName: "Bob", lastName: "Brown")
@@ -336,17 +336,43 @@ struct SubscriptionCacheTests {
         #expect(cache.subjects(forGalleryId: Self.galleryA).count == 2)
         #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 7)
 
-        // Empty state_sync arrives claiming a higher version. The guard
-        // refuses: cache stays at 2 subjects, lastVersion stays at 7 (the
-        // claimed version is not authoritative because the payload was
-        // discarded as invalid).
-        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 99, subjects: [])
+        // Empty state_sync at wire_version=7 (same as cache_version) — refuse.
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 7, subjects: [])
         cache._test_waitForPendingMutations()
-        let snapshot = cache.subjects(forGalleryId: Self.galleryA)
+        var snapshot = cache.subjects(forGalleryId: Self.galleryA)
+        #expect(snapshot.count == 2)
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 7)
+
+        // Empty state_sync at wire_version=3 (less than cache_version=7) — refuse.
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 3, subjects: [])
+        cache._test_waitForPendingMutations()
+        snapshot = cache.subjects(forGalleryId: Self.galleryA)
         #expect(snapshot.count == 2)
         #expect(snapshot[0].lastName == "Adams")
         #expect(snapshot[1].lastName == "Brown")
         #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 7)
+    }
+
+    @Test func applyStateSyncAcceptsAuthoritativeEmptyWhenWireVersionAdvances() {
+        // H1.16 version-gap guard: empty payload arriving with wire_version
+        // > cache_version represents authoritative state advancement
+        // (Surface deleted all subjects, counter advanced past iPad's
+        // cache_version). Accept the wipe — cache reflects the new
+        // authoritative empty state.
+        let cache = freshCache()
+        let aliceRow = makeSubjectRow(firstName: "Alice", lastName: "Adams")
+        let bobRow = makeSubjectRow(firstName: "Bob", lastName: "Brown")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 7, subjects: [aliceRow, bobRow])
+        cache._test_waitForPendingMutations()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).count == 2)
+
+        // Authoritative empty: wire_version=15 > cache_version=7. Accept.
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 15, subjects: [])
+        cache._test_waitForPendingMutations()
+
+        let snapshot = cache.subjects(forGalleryId: Self.galleryA)
+        #expect(snapshot.isEmpty)
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 15)
     }
 
     @Test func applyStateSyncAcceptsEmptyPayloadOnEmptyCache() {
@@ -504,6 +530,206 @@ struct SubscriptionCacheTests {
         ]
         let parsed = SubscriptionCache._parseSubjectFromWire(row)
         #expect(parsed == nil)
+    }
+
+    // MARK: - Phase AC H1.12 persistence (PHASE_AC_PLAN.md §13-§17 scope expansion)
+    //
+    // These tests exercise the SubscriptionCacheStore disk persistence
+    // layer added 2026-05-20. Each test isolates by setting a unique
+    // temp directory on the store at start. Tests run sequentially per
+    // SubscriptionCache.shared singleton semantics (the existing tests
+    // already rely on this serialization via _test_reset).
+
+    private func setupIsolatedPersistence() -> URL {
+        let temp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("sc-test-\(UUID().uuidString)")
+        SubscriptionCacheStore.shared._testReset()
+        SubscriptionCacheStore.shared._testSetDirectory(temp)
+        SubscriptionCacheStore.shared.enable()
+        return temp
+    }
+
+    private func teardownIsolatedPersistence(_ temp: URL) {
+        SubscriptionCacheStore.shared._testReset()
+        try? FileManager.default.removeItem(at: temp)
+    }
+
+    @Test func persistenceWritesGalleryStateOnApply() {
+        // Wholesale state_sync apply triggers _notifyGallery → persist.
+        // Verify disk has the rows + version after the apply completes.
+        let temp = setupIsolatedPersistence()
+        defer { teardownIsolatedPersistence(temp) }
+        let cache = freshCache()
+
+        let aliceRow = makeSubjectRow(firstName: "Alice", lastName: "Adams")
+        let bobRow = makeSubjectRow(firstName: "Bob", lastName: "Brown")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 11, subjects: [aliceRow, bobRow])
+        cache._test_waitForPendingMutations()
+
+        let loaded = SubscriptionCacheStore.shared.loadGallery(Self.galleryA)
+        #expect(loaded != nil)
+        #expect(loaded?.subjectWireDicts.count == 2)
+        #expect(loaded?.lastVersion == 11)
+    }
+
+    @Test func persistenceWritesAfterBroadcastUpdate() {
+        // Broadcast applyBroadcast(.subjectUpdated) triggers _notifyGallery
+        // → persist. The disk reflects the patched subject.
+        let temp = setupIsolatedPersistence()
+        defer { teardownIsolatedPersistence(temp) }
+        let cache = freshCache()
+
+        let row = makeSubjectRow(firstName: "Alice", lastName: "Adams")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 10, subjects: [row])
+        cache._test_waitForPendingMutations()
+
+        let subjectId = UUID(uuidString: row["id"] as! String)!
+        cache.applyBroadcast(.subjectUpdated(
+            galleryId: Self.galleryA,
+            subjectId: subjectId,
+            fields: makeFields(firstName: "Alicia"),
+            version: 12
+        ))
+        cache._test_waitForPendingMutations()
+
+        let loaded = SubscriptionCacheStore.shared.loadGallery(Self.galleryA)
+        #expect(loaded?.lastVersion == 12)
+        #expect(loaded?.subjectWireDicts.count == 1)
+        let firstName = loaded?.subjectWireDicts.first?["first_name"] as? String
+        #expect(firstName == "Alicia")
+    }
+
+    @Test func coldLaunchHydratesFromDisk() {
+        // The load-bearing Phase AC H1.14 scenario: cache has state on
+        // disk from a prior session. Simulate app process death via
+        // _test_clearInMemoryOnly (disk untouched). On setCurrentGallery
+        // for the same gallery, in-memory hydrates from disk before any
+        // state_sync arrives. The view's initial snapshot reflects the
+        // persisted state — operator-visible win for cold-launch UX.
+        let temp = setupIsolatedPersistence()
+        defer { teardownIsolatedPersistence(temp) }
+        let cache = freshCache()
+
+        // Populate cache (writes to disk via _notifyGallery hook)
+        let row1 = makeSubjectRow(firstName: "Alice", lastName: "Adams")
+        let row2 = makeSubjectRow(firstName: "Bob", lastName: "Brown")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 8, subjects: [row1, row2])
+        cache._test_waitForPendingMutations()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).count == 2)
+
+        // Simulate app restart: clear in-memory only, disk survives
+        cache._test_clearInMemoryOnly()
+        #expect(cache.subjects(forGalleryId: Self.galleryA).isEmpty)
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 0)
+
+        // First setCurrentGallery for the gallery — lazy hydrate from disk
+        cache.setCurrentGallery(Self.galleryA)
+        cache._test_waitForPendingMutations()
+
+        let snapshot = cache.subjects(forGalleryId: Self.galleryA)
+        #expect(snapshot.count == 2)
+        #expect(snapshot[0].lastName == "Adams")
+        #expect(snapshot[1].lastName == "Brown")
+        #expect(cache.lastVersion(forGalleryId: Self.galleryA) == 8)
+    }
+
+    @Test func purgeGalleryClearsDiskAndMemory() {
+        // PowerSyncManager.unpinGallery → SubscriptionCache.purgeGallery
+        // clears BOTH in-memory and disk for the gallery. Other galleries'
+        // persisted state is untouched.
+        let temp = setupIsolatedPersistence()
+        defer { teardownIsolatedPersistence(temp) }
+        let cache = freshCache()
+
+        let rowA = makeSubjectRow(firstName: "Alice", lastName: "Adams", galleryId: Self.galleryA)
+        let rowB = makeSubjectRow(firstName: "Bob", lastName: "Brown", galleryId: Self.galleryB)
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 5, subjects: [rowA])
+        cache.applyStateSync(galleryId: Self.galleryB, currentVersion: 6, subjects: [rowB])
+        cache._test_waitForPendingMutations()
+        #expect(SubscriptionCacheStore.shared.loadGallery(Self.galleryA) != nil)
+        #expect(SubscriptionCacheStore.shared.loadGallery(Self.galleryB) != nil)
+
+        cache.purgeGallery(Self.galleryA)
+        cache._test_waitForPendingMutations()
+
+        #expect(cache.subjects(forGalleryId: Self.galleryA).isEmpty)
+        #expect(SubscriptionCacheStore.shared.loadGallery(Self.galleryA) == nil)
+
+        // Gallery B untouched
+        #expect(cache.subjects(forGalleryId: Self.galleryB).count == 1)
+        #expect(SubscriptionCacheStore.shared.loadGallery(Self.galleryB) != nil)
+    }
+
+    @Test func purgeAllClearsEverything() {
+        // SupabaseAuthService.signOut → SubscriptionCache.purgeAll wipes
+        // all galleries from both in-memory and disk. Used at sign-out
+        // so a different signed-in user does not inherit the prior user's
+        // cached PII.
+        let temp = setupIsolatedPersistence()
+        defer { teardownIsolatedPersistence(temp) }
+        let cache = freshCache()
+
+        let rowA = makeSubjectRow(galleryId: Self.galleryA)
+        let rowB = makeSubjectRow(galleryId: Self.galleryB)
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 3, subjects: [rowA])
+        cache.applyStateSync(galleryId: Self.galleryB, currentVersion: 4, subjects: [rowB])
+        cache._test_waitForPendingMutations()
+
+        cache.purgeAll()
+        cache._test_waitForPendingMutations()
+
+        #expect(cache.subjects(forGalleryId: Self.galleryA).isEmpty)
+        #expect(cache.subjects(forGalleryId: Self.galleryB).isEmpty)
+        #expect(SubscriptionCacheStore.shared.loadGallery(Self.galleryA) == nil)
+        #expect(SubscriptionCacheStore.shared.loadGallery(Self.galleryB) == nil)
+        #expect(SubscriptionCacheStore.shared.loadAll().isEmpty)
+    }
+
+    @Test func disabledStoreIsPureInMemory() {
+        // When the store is disabled (test-only), persistence calls are
+        // no-ops. The cache behaves identically to pre-H1.12 in-memory-only
+        // semantics. Tests that want this mode call _testDisable in their
+        // setUp; production code never disables.
+        let temp = setupIsolatedPersistence()
+        defer { teardownIsolatedPersistence(temp) }
+        SubscriptionCacheStore.shared._testDisable()
+        let cache = freshCache()
+
+        let row = makeSubjectRow(firstName: "Alice", lastName: "Adams")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 5, subjects: [row])
+        cache._test_waitForPendingMutations()
+
+        // In-memory has the subject
+        #expect(cache.subjects(forGalleryId: Self.galleryA).count == 1)
+        // Disk has nothing (disabled store skipped the write)
+        #expect(SubscriptionCacheStore.shared.loadGallery(Self.galleryA) == nil)
+    }
+
+    @Test func wholeRoundTripPreservesFields() {
+        // FPSubject → wire-dict → SQLite TEXT → wire-dict → FPSubject
+        // round-trip preserves every field. Catches future drift between
+        // FPSubject.toWireDict and SubscriptionCache._parseSubjectFromWire.
+        let temp = setupIsolatedPersistence()
+        defer { teardownIsolatedPersistence(temp) }
+        let cache = freshCache()
+
+        let row = makeSubjectRow(firstName: "Alice", lastName: "Adams")
+        cache.applyStateSync(galleryId: Self.galleryA, currentVersion: 7, subjects: [row])
+        cache._test_waitForPendingMutations()
+        let beforeRestart = cache.subjects(forGalleryId: Self.galleryA).first!
+
+        cache._test_clearInMemoryOnly()
+        cache.setCurrentGallery(Self.galleryA)
+        cache._test_waitForPendingMutations()
+
+        let afterRestart = cache.subjects(forGalleryId: Self.galleryA).first!
+        #expect(beforeRestart.id == afterRestart.id)
+        #expect(beforeRestart.galleryId == afterRestart.galleryId)
+        #expect(beforeRestart.firstName == afterRestart.firstName)
+        #expect(beforeRestart.lastName == afterRestart.lastName)
+        #expect(beforeRestart.grade == afterRestart.grade)
+        #expect(beforeRestart.isPhotographed == afterRestart.isPhotographed)
+        #expect(beforeRestart.isAbsent == afterRestart.isAbsent)
     }
 
     @Test func parserAcceptsBoolFieldsAsIntOrBool() {
