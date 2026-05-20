@@ -19,20 +19,23 @@
 //      ahead of the cache's tracked version, the cache requests a fresh
 //      state_sync.
 //
-//  In-memory only. NO PowerSync local SQLite writes. NO disk persistence.
-//  Re-hydrates on every connect; that is intentional per §15.1 (cache
-//  hydration must be correct on first connect and on reconnect, full
-//  stop). Persistence is out of H1 scope.
-//
-//  H1 is substrate-only. NO view consumes the cache yet. PoserStationView,
-//  FPSportsRosterView_iPad, etc. all keep their existing PowerSync
-//  watchSubjects reads. H2 onwards migrates each view and deletes the
-//  PowerSync read path in the same commit per delete-first migration.
+//  In-memory store for runtime, durable on disk for cold-launch survival.
+//  Re-hydrates on every connect via Surface state_sync; that is intentional
+//  per §15.1 (cache hydration must be correct on first connect and on
+//  reconnect, full stop). Disk persistence added 2026-05-20 per the
+//  FROM_SCRATCH_ARCHITECTURE.md §13 H1.11-H1.16 retroactive amendment that
+//  retired the original H1.1 "no disk persistence" deferral — see those
+//  sections + PHASE_AC_PLAN.md §13-§17 for the contract. Subjects round-trip
+//  through SubscriptionCacheStore (SQLite at Application Support / Iconik
+//  Employee / subscription_cache.sqlite). Captures stay in-memory only —
+//  state-sync.ts establishes captures have no state_sync hydration source,
+//  so persisting them would create a partial-cache scenario the contract
+//  does not support.
 //
 //  Pattern mirrors CommandQueue.swift (Phase D): static singleton, internal
 //  serial DispatchQueue for thread safety, idempotent state mutations.
-//  Where CommandQueue uses SQLite for persistence, this cache uses an
-//  in-memory dictionary.
+//  SubscriptionCacheStore extends the precedent to persistence, also matching
+//  CommandQueue's SQLite + Application Support + lazy ensureOpen shape.
 //
 
 import Foundation
