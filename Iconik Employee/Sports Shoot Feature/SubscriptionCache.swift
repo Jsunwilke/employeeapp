@@ -220,9 +220,22 @@ final class SubscriptionCache {
                 )
                 // Do NOT advance lastVersionByGallery — the empty payload was
                 // discarded as invalid, so the Surface's claimed version is
-                // not authoritative. Do NOT clear pendingDriftRequests — drift
-                // remains unresolved; the next drift heartbeat will retry.
-                // Do NOT notify subscribers — the cache state did not change.
+                // not authoritative. Do NOT clear pendingDriftRequests — the
+                // pending flag stays set; combined with the checkDrift throttle
+                // at line ~315 (guard against duplicate in-flight requests),
+                // this leaves the drift sender pinned until a non-empty
+                // state_sync clears the flag at the legitimate apply path
+                // below, OR setCurrentGallery is called with a new gallery
+                // (which clears via pendingDriftRequests.remove(previous)).
+                // The pin is intentional: a Surface with an unloaded mirror
+                // has nothing authoritative to share, and re-polling every
+                // 30s would just refire the same refuse. In practice the
+                // cache also re-hydrates via applyBroadcast on the next
+                // Surface-side write (subject_updated, capture_completed,
+                // etc.), which advances lastVersionByGallery normally — so
+                // the pinned-state is benign and self-recovering once the
+                // Surface enters a capture session for this gallery. Do NOT
+                // notify subscribers — the cache state did not change.
                 return
             }
 
