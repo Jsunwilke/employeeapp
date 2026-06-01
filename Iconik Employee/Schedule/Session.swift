@@ -176,6 +176,22 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
         return position
     }
 
+    /// Disambiguating label for a daily-report session pick — school + start time +
+    /// type, e.g. "Bellvue High — 9:00 AM (Sports)" (D2). Also persisted verbatim as
+    /// daily_job_reports.session_name (D7), so both report-creation paths share this
+    /// single definition to avoid drift.
+    var reportDisplayLabel: String {
+        let timeLabel: String
+        if let start = startDate {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            timeLabel = formatter.string(from: start)
+        } else {
+            timeLabel = start_time
+        }
+        return "\(school_name) — \(timeLabel) (\(getSessionTypeDisplayName()))"
+    }
+
     /// Check if a user ID is assigned as a photographer for this session
     func isUserAssigned(userID: String, userEmail: String? = nil) -> Bool {
         // Primary: Match by Supabase UUID (case-insensitive since UUIDs can vary in case)

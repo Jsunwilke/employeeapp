@@ -163,6 +163,10 @@ struct DailyJobReport: Codable, Identifiable {
     // School/Location
     var school_or_destination: String?
 
+    // Session link (the scheduled session this report was shot for; nil = off-schedule)
+    var session_id: String?
+    var session_name: String?
+
     // Mileage
     var total_mileage: Double
 
@@ -203,6 +207,8 @@ struct DailyJobReport: Codable, Identifiable {
     var userId: String { user_id }
     var yourName: String { your_name }
     var schoolOrDestination: String? { school_or_destination }
+    var sessionId: String? { session_id }
+    var sessionName: String? { session_name }
     var totalMileage: Double { total_mileage }
     var jobDescriptions: [String] { job_descriptions ?? [] }
     var extraItems: [String] { extra_items ?? [] }
@@ -228,7 +234,7 @@ struct DailyJobReport: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, date
         case organization_id, user_id, your_name
-        case school_or_destination, total_mileage
+        case school_or_destination, session_id, session_name, total_mileage
         case job_descriptions, extra_items
         case cards_scanned_choice, job_box_and_camera_cards, sports_background_shot
         case job_description_text
@@ -285,6 +291,8 @@ struct DailyJobReport: Codable, Identifiable {
 
         // Optional fields
         school_or_destination = try container.decodeIfPresent(String.self, forKey: .school_or_destination)
+        session_id = try container.decodeIfPresent(String.self, forKey: .session_id)
+        session_name = try container.decodeIfPresent(String.self, forKey: .session_name)
         total_mileage = try container.decodeIfPresent(Double.self, forKey: .total_mileage) ?? 0.0
         job_descriptions = try container.decodeIfPresent([String].self, forKey: .job_descriptions)
         extra_items = try container.decodeIfPresent([String].self, forKey: .extra_items)
@@ -339,6 +347,8 @@ struct DailyJobReport: Codable, Identifiable {
         date: Date,
         yourName: String,
         schoolOrDestination: String? = nil,
+        sessionId: String? = nil,
+        sessionName: String? = nil,
         totalMileage: Double = 0.0,
         jobDescriptions: [String]? = nil,
         extraItems: [String]? = nil,
@@ -364,6 +374,8 @@ struct DailyJobReport: Codable, Identifiable {
         self.date = date
         self.your_name = yourName
         self.school_or_destination = schoolOrDestination
+        self.session_id = sessionId
+        self.session_name = sessionName
         self.total_mileage = totalMileage
         self.job_descriptions = jobDescriptions
         self.extra_items = extraItems

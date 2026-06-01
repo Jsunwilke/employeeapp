@@ -208,6 +208,14 @@ class DailyJobReportService: ObservableObject {
             reportData["school_or_destination"] = .string(schoolOrDestination)
         }
 
+        // Session link (nil for off-schedule reports)
+        if let sessionId = report.session_id {
+            reportData["session_id"] = .string(sessionId)
+        }
+        if let sessionName = report.session_name {
+            reportData["session_name"] = .string(sessionName)
+        }
+
         // Handle JSONB arrays
         if let jobDescriptions = report.job_descriptions {
             reportData["job_descriptions"] = .array(jobDescriptions.map { .string($0) })
@@ -317,6 +325,15 @@ class DailyJobReportService: ObservableObject {
         // Update optional fields
         if let schoolOrDestination = report.school_or_destination {
             updateData["school_or_destination"] = .string(schoolOrDestination)
+        }
+
+        // Session link — only written when present so an edit preserves the
+        // existing link rather than wiping it (off-schedule reports stay NULL).
+        if let sessionId = report.session_id {
+            updateData["session_id"] = .string(sessionId)
+        }
+        if let sessionName = report.session_name {
+            updateData["session_name"] = .string(sessionName)
         }
 
         // Handle JSONB arrays

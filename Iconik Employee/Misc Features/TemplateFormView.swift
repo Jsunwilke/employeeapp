@@ -20,7 +20,19 @@ struct TemplateFormView: View {
     @State private var tempImage: UIImage?
     @State private var selectedSchools: [SchoolItem] = []
     @State private var availableSchools: [SchoolItem] = []
-    
+
+    // Session capture (SR1): link this template report to today's scheduled session.
+    // nil = off-schedule. Mirrors DailyJobReportView's auto-select; the template form
+    // keeps its own school/mileage smart-field model — we only capture the link here.
+    @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
+    @State private var selectedSession: Session?
+    @State private var availableSessions: [Session] = []
+    // Auto-select once; the session listener re-fires (cache → fresh → realtime),
+    // so this guards against clobbering the photographer's manual pick.
+    @State private var sessionAutoSelected = false
+    private let sessionService = SessionService.shared
+    private let sessionSubscriptionId = UUID()
+
     @Environment(\.presentationMode) var presentationMode
     @Environment(\.colorScheme) var colorScheme
     
@@ -117,6 +129,10 @@ struct TemplateFormView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 16) {
+                            if !availableSessions.isEmpty {
+                                sessionCard
+                            }
+
                             ForEach(Array(groupedFields.keys.sorted()), id: \.self) { sectionName in
                                 if let fields = groupedFields[sectionName] {
                                     sectionCard(sectionName: sectionName, fields: fields)
@@ -136,7 +152,11 @@ struct TemplateFormView: View {
         .onAppear {
             print("🔍 TemplateFormView onAppear called")
             loadInitialData()
+            loadSessionsForToday()
             expandAllSections()
+        }
+        .onDisappear {
+            sessionService.stopListeningToSessions(subscriptionId: sessionSubscriptionId)
         }
         .alert("Report Submitted", isPresented: $showSuccessAlert) {
             Button("OK") {
@@ -616,8 +636,55 @@ struct TemplateFormView: View {
             .foregroundColor(.secondary)
     }
     
+    // MARK: - Session Card
+
+    private var sessionCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "calendar")
+                    .font(.system(size: 20))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.blue))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Session")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text("Link this report to a scheduled session")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+            }
+
+            Picker("", selection: Binding(
+                get: { selectedSession },
+                set: { newValue in
+                    sessionAutoSelected = true  // user pick — don't let re-fires overwrite
+                    selectedSession = newValue
+                }
+            )) {
+                Text("No scheduled session (off-schedule)").tag(nil as Session?)
+                ForEach(availableSessions) { session in
+                    Text(session.reportDisplayLabel).tag(session as Session?)
+                }
+            }
+            .pickerStyle(MenuPickerStyle())
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.systemGray6))
+            .cornerRadius(8)
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 4)
+    }
+
     // MARK: - Submit Button
-    
+
     private var submitButton: some View {
         Button(action: {
             submitReport()
@@ -683,6 +750,70 @@ struct TemplateFormView: View {
         }
     }
     
+    // MARK: - Session Loading (SR1)
+
+    /// Template reports are filed same-day (date = now), so load today's sessions
+    /// for this photographer in schedule order, then auto-select the first un-reported one.
+    private func loadSessionsForToday() {
+        guard !storedUserOrganizationID.isEmpty,
+              let currentUserID = UserManager.shared.getCurrentUserID() else { return }
+        let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail")
+
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date())
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+
+        sessionService.startListeningToSessions(
+            subscriptionId: sessionSubscriptionId,
+            organizationID: storedUserOrganizationID,
+            includeUnpublished: false
+        ) { sessions in
+            DispatchQueue.main.async {
+                let todays = sessions
+                    .filter { session in
+                        guard let d = session.startDate else { return false }
+                        return d >= startOfDay && d < endOfDay
+                            && session.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail)
+                    }
+                    .sorted { ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture) }
+                self.availableSessions = todays
+                self.autoSelectSession()
+            }
+        }
+    }
+
+    /// Auto-select the first session this photographer hasn't reported today (by
+    /// session_id, D3); default to none if all reported (D5).
+    private func autoSelectSession() {
+        // Run once — listener re-fires must not overwrite a manual pick
+        guard !sessionAutoSelected else { return }
+        guard !availableSessions.isEmpty else {
+            selectedSession = nil
+            return
+        }
+        guard let currentUserId = UserManager.shared.getCurrentUserIDUnified() else { return }
+
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date())
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+
+        Task {
+            var reportedSessionIds: [String] = []
+            do {
+                let reports = try await DailyJobReportService.shared.getReports(
+                    userId: currentUserId, startDate: startOfDay, endDate: endOfDay
+                )
+                reportedSessionIds = reports.compactMap { $0.session_id }
+            } catch {
+                print("⚠️ Template session auto-select: failed to load reports: \(error.localizedDescription)")
+            }
+            await MainActor.run {
+                self.selectedSession = self.availableSessions.first(where: { !reportedSessionIds.contains($0.id) })
+                self.sessionAutoSelected = true
+            }
+        }
+    }
+
     private func expandAllSections() {
         expandedSections = Set(groupedFields.keys)
         print("🔍 Expanded sections: \(expandedSections.sorted())")
@@ -754,8 +885,14 @@ struct TemplateFormView: View {
         errorMessage = ""
         
         // Add photo URLs to form data if images are selected
-        let finalFormData = formData
-        
+        var finalFormData = formData
+
+        // Capture the session link so submitTemplateReport persists it (SR1)
+        if let session = selectedSession {
+            finalFormData["session_id"] = session.id
+            finalFormData["session_name"] = session.reportDisplayLabel
+        }
+
         if !selectedImages.isEmpty {
             uploadImagesAndSubmit(formData: finalFormData)
         } else {

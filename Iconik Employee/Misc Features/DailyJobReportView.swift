@@ -103,7 +103,13 @@ struct DailyJobReportView: View {
     // Selected fields
     // ------------------------------------------------------------------
     @State private var selectedPhotographerId: String = ""
-    // Dynamic list for multiple school selections
+    // Session-primary selection: the scheduled session this report is for.
+    // nil = off-schedule (manual location). Location/mileage derive from this (D1, D4, D6).
+    @State private var selectedSession: Session? = nil
+    // Auto-select runs once per date. The session listener re-fires (cache → fresh →
+    // realtime), so this guards against clobbering the photographer's manual pick.
+    @State private var sessionAutoSelected: Bool = false
+    // Dynamic list for multiple school selections (off-schedule manual entry)
     @State private var selectedSchools: [SchoolItem?] = [nil] // Start with one dropdown
     
     // ------------------------------------------------------------------
@@ -583,7 +589,7 @@ struct DailyJobReportView: View {
             }
             .sheet(isPresented: $showDatePicker) {
                 AutoDismissDatePickerSheet(selectedDate: $reportDate, isPresented: $showDatePicker) { newDate in
-                    loadScheduleForDate(newDate)
+                    loadScheduleForDate(newDate, isDateChange: true)
                 }
             }
             
@@ -698,12 +704,93 @@ struct DailyJobReportView: View {
     
     private var schoolsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // Session selector — the photographer picks the session this report is
+            // for; location + mileage derive from it (D1). Only shown when the
+            // photographer has sessions scheduled this day; otherwise off-schedule.
+            if !selectedDateSessions.isEmpty {
+                sessionSelectorView
+            }
+
+            if let session = selectedSession {
+                // Session selected → location is read-only, derived from the session (D4)
+                derivedSchoolView(for: session)
+            } else {
+                // Off-schedule (none scheduled or "no scheduled session") → manual picker (D4)
+                manualSchoolsView
+            }
+
+            mileageView
+        }
+    }
+
+    // Sorted sessions for the picker (earliest first), matching auto-select order (D2)
+    private var sortedSessionsForPicker: [Session] {
+        selectedDateSessions.sorted {
+            ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture)
+        }
+    }
+
+    private var sessionSelectorView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Session")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            Picker("", selection: Binding(
+                get: { selectedSession },
+                set: { newValue in
+                    // User-driven change only; programmatic auto-select calls
+                    // applySessionSelection directly (no double-fire). Mark as
+                    // resolved so listener re-fires don't overwrite this pick.
+                    sessionAutoSelected = true
+                    selectedSession = newValue
+                    applySessionSelection(newValue)
+                }
+            )) {
+                Text("No scheduled session (off-schedule)").tag(nil as Session?)
+                ForEach(sortedSessionsForPicker) { session in
+                    Text(session.reportDisplayLabel).tag(session as Session?)
+                }
+            }
+            .pickerStyle(.menu)
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(inputFieldBackground)
+            .cornerRadius(8)
+        }
+    }
+
+    private func derivedSchoolView(for session: Session) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("School (from schedule)")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            HStack {
+                Image(systemName: "building.2")
+                    .foregroundColor(.secondary)
+                Text(selectedSchools.first.flatMap { $0?.name } ?? session.schoolName)
+                    .foregroundColor(.primary)
+                Spacer()
+                Image(systemName: "lock.fill")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(inputFieldBackground)
+            .cornerRadius(8)
+        }
+    }
+
+    private var manualSchoolsView: some View {
+        VStack(alignment: .leading, spacing: 16) {
             ForEach(0..<selectedSchools.count, id: \.self) { index in
                 VStack(alignment: .leading, spacing: 8) {
                     Text("School \(index + 1)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    
+
                     HStack {
                         if schoolOptions.isEmpty {
                             Text("Loading schools...")
@@ -723,7 +810,7 @@ struct DailyJobReportView: View {
                             )
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        
+
                         if selectedSchools.count > 1 {
                             Button(action: {
                                 selectedSchools.remove(at: index)
@@ -740,7 +827,7 @@ struct DailyJobReportView: View {
                     .cornerRadius(8)
                 }
             }
-            
+
             Button(action: {
                 selectedSchools.append(nil)
             }) {
@@ -755,17 +842,21 @@ struct DailyJobReportView: View {
                 .background(inputFieldBackground)
                 .cornerRadius(8)
             }
-            
+        }
+    }
+
+    private var mileageView: some View {
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Total Mileage")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                
+
                 HStack {
                     TextField("Mileage", text: $totalMileage)
                         .keyboardType(.decimalPad)
                         .padding()
-                    
+
                     Text("miles")
                         .foregroundColor(.secondary)
                         .padding(.trailing)
@@ -773,7 +864,7 @@ struct DailyJobReportView: View {
                 .background(inputFieldBackground)
                 .cornerRadius(8)
             }
-            
+
             if totalMileage == "Calculating..." {
                 HStack {
                     Text("Calculating route distances...")
@@ -1118,8 +1209,15 @@ struct DailyJobReportView: View {
     
     // MARK: - Load Schedule for Default School Selection
     
-    func loadScheduleForDate(_ date: Date) {
+    /// Loads the photographer's sessions for `date`. `isDateChange` resets the
+    /// auto-select so a new date re-picks; foreground re-subscribes (isDateChange
+    /// false) must NOT reset, or they'd clobber a manual pick.
+    func loadScheduleForDate(_ date: Date, isDateChange: Bool = false) {
         print("📋 loadScheduleForDate called for date: \(date)")
+        if isDateChange {
+            sessionAutoSelected = false
+            selectedSession = nil
+        }
         isLoadingSchedule = true
         scheduleError = ""
         selectedDateSessions = []
@@ -1181,16 +1279,16 @@ struct DailyJobReportView: View {
                 print("📋 Filtered to \(sessionsForDay.count) sessions for user on this day")
                 self.selectedDateSessions = sessionsForDay
 
-                // Check if we have completed a report for this date and school already
-                self.checkExistingReports { completedSchools in
-                    // Try to set the default school from schedule
-                    self.setDefaultSchoolFromSchedule(completedSchools: completedSchools)
-                    self.isLoadingSchedule = false
-                }
+                // Auto-select the first session this photographer hasn't reported yet (D2, D3)
+                self.isLoadingSchedule = false
+                self.runAutoSelectIfReady()
             }
         }
     }
     
+    /// Fetch the session IDs this photographer has ALREADY reported for the selected
+    /// date. Keyed on session_id (D3) — precise, fixes same-school-twice-in-a-day.
+    /// Legacy NULL-linked reports contribute nothing.
     func checkExistingReports(completion: @escaping ([String]) -> Void) {
         // Get start and end of the selected day
         let calendar = Calendar.current
@@ -1213,11 +1311,11 @@ struct DailyJobReportView: View {
                     endDate: endOfDay
                 )
 
-                // Extract school names from completed reports
-                let schoolNames = reports.compactMap { $0.school_or_destination }
+                // Extract the session IDs already reported (non-null only)
+                let reportedSessionIds = reports.compactMap { $0.session_id }
 
                 await MainActor.run {
-                    completion(schoolNames)
+                    completion(reportedSessionIds)
                 }
             } catch {
                 print("Error checking existing reports: \(error.localizedDescription)")
@@ -1227,64 +1325,75 @@ struct DailyJobReportView: View {
             }
         }
     }
-    
-    func setDefaultSchoolFromSchedule(completedSchools: [String]) {
-        // No sessions for selected date in schedule
-        if selectedDateSessions.isEmpty {
-            if selectedPhotoshootNote != nil {
-                // Already have a photoshoot note selected, use that
-                if let note = selectedPhotoshootNote,
-                   let matchIndex = schoolOptions.firstIndex(where: { $0.name == note.school }) {
-                    if !selectedSchools.isEmpty {
-                        selectedSchools[0] = schoolOptions[matchIndex]
-                    }
-                }
+
+    /// Runs auto-select exactly once per date, only when the inputs it depends on
+    /// are ready: the photographer is known (so "already reported" is accurate, D3),
+    /// the schedule has finished loading, and schools are loaded (so a session can
+    /// resolve to a SchoolItem for the derived location/mileage). The session
+    /// listener and the three async loaders all call this; the guard flag + the
+    /// inner re-check make repeated calls idempotent and protect a manual pick.
+    func runAutoSelectIfReady() {
+        guard !sessionAutoSelected,
+              !selectedPhotographerId.isEmpty,
+              !isLoadingSchedule,
+              !schoolOptions.isEmpty else { return }
+
+        checkExistingReports { reportedSessionIds in
+            guard !self.sessionAutoSelected else { return }
+            self.autoSelectSession(reportedSessionIds: reportedSessionIds)
+            self.sessionAutoSelected = true
+        }
+    }
+
+    /// Auto-select the first un-reported session in schedule order (D2). If all
+    /// sessions are reported, default to none and let the photographer pick (D5).
+    /// With no sessions for the day, stay off-schedule and keep the existing
+    /// photoshoot-note → manual-school fallback.
+    func autoSelectSession(reportedSessionIds: [String]) {
+        guard !selectedDateSessions.isEmpty else {
+            selectedSession = nil
+            // Off-schedule: keep the photoshoot-note → manual-school convenience
+            if let note = selectedPhotoshootNote,
+               let matchIndex = schoolOptions.firstIndex(where: { $0.name == note.school }),
+               !selectedSchools.isEmpty {
+                selectedSchools[0] = schoolOptions[matchIndex]
             }
             return
         }
-        
-        // Sort sessions by start time, so we get the earliest one first
-        let sortedSessions = selectedDateSessions.sorted { (a, b) -> Bool in
-            guard let aStart = a.startDate, let bStart = b.startDate else { return false }
-            return aStart < bStart
+
+        if let next = sortedSessionsForPicker.first(where: { !reportedSessionIds.contains($0.id) }) {
+            selectedSession = next
+            applySessionSelection(next)
+        } else {
+            // All sessions already reported → default to none (D5)
+            selectedSession = nil
         }
-        
-        // Look for the first session at a school we haven't already completed
-        for session in sortedSessions {
-            let schoolName = session.schoolName
-            
-            // Skip if we've already completed a report for this school today
-            if completedSchools.contains(schoolName) {
-                continue
-            }
-            
-            // Find matching school in our options
-            if let matchIndex = schoolOptions.firstIndex(where: { $0.name == schoolName }) {
-                // Found a match - set it as the selected school
-                if !selectedSchools.isEmpty {
-                    selectedSchools[0] = schoolOptions[matchIndex]
-                    
-                    // Try to find matching photoshoot note
-                    let matchingNote = photoshootNotes.first { note in
-                        note.school == schoolName
-                    }
-                    
-                    if let note = matchingNote {
-                        selectedPhotoshootNote = note
-                        
-                        // Load photos from the selected note
-                        loadPhotosFromNote(note)
-                    }
-                    
-                    // Calculate mileage with the new school selection
-                    calculateMultiStopMileage()
-                    return
-                }
-            }
+    }
+
+    /// Resolve location + mileage from the chosen session (D4, D6). A nil session
+    /// reveals the manual off-schedule picker. The session's school_id resolves to
+    /// the already-loaded SchoolItem (coordinates) → existing mileage calculation.
+    func applySessionSelection(_ session: Session?) {
+        guard let session = session else {
+            // Off-schedule: reset to a single empty manual slot for the picker
+            selectedSchools = [nil]
+            calculateMultiStopMileage()
+            return
         }
-        
-        // If we get here, we either didn't find a valid school, or all schools already have reports
-        // We'll leave the current selection in place
+
+        // Prefer school_id match (robust); fall back to name match
+        let match = schoolOptions.first(where: { $0.id == session.school_id })
+            ?? schoolOptions.first(where: { $0.name == session.schoolName })
+        selectedSchools = [match]
+
+        // Attach a matching photoshoot note if one exists (existing convenience)
+        if let note = photoshootNotes.first(where: { $0.school == session.schoolName }) {
+            selectedPhotoshootNote = note
+            loadPhotosFromNote(note)
+        }
+
+        // Session selection is the mileage trigger (D6)
+        calculateMultiStopMileage()
     }
     
     // MARK: - Load / Save Photoshoot Notes
@@ -1342,6 +1451,10 @@ struct DailyJobReportView: View {
                     } else if let first = photogs.first {
                         self.selectedPhotographerId = first.id
                     }
+
+                    // Photographer just resolved — "already reported" can now be keyed
+                    // correctly, so attempt auto-select (no-op if it already ran).
+                    self.runAutoSelectIfReady()
                 }
             } catch {
                 await MainActor.run {
@@ -1409,12 +1522,8 @@ struct DailyJobReportView: View {
                         }
                     }
 
-                    // Try to set school from schedule
-                    if self.isLoadingSchedule == false && !self.selectedDateSessions.isEmpty {
-                        self.checkExistingReports { completedSchools in
-                            self.setDefaultSchoolFromSchedule(completedSchools: completedSchools)
-                        }
-                    }
+                    // Schools just loaded — a session can now resolve to a SchoolItem
+                    self.runAutoSelectIfReady()
 
                     self.calculateMultiStopMileage()
                 }
@@ -1663,6 +1772,12 @@ struct DailyJobReportView: View {
             let jobDescriptionArray = Array(selectedJobDescriptions)
             let extraItemsArray = Array(selectedExtraItems)
             let combinedSchoolNames = selectedSchools.compactMap { $0?.name }.joined(separator: ", ")
+            // Always store school_or_destination (D7). When a session is selected but
+            // its school didn't resolve to a SchoolItem, fall back to the session's
+            // own school name so the destination is never lost.
+            let schoolOrDestination = combinedSchoolNames.isEmpty
+                ? selectedSession?.schoolName
+                : combinedSchoolNames
 
             // Include photo URLs from the selected photoshoot note if available
             if let note = selectedPhotoshootNote {
@@ -1678,7 +1793,9 @@ struct DailyJobReportView: View {
                 userId: currentUserId,
                 date: reportDate,
                 yourName: yourName,
-                schoolOrDestination: combinedSchoolNames.isEmpty ? nil : combinedSchoolNames,
+                schoolOrDestination: schoolOrDestination,
+                sessionId: selectedSession?.id,
+                sessionName: selectedSession?.reportDisplayLabel,
                 totalMileage: mileage,
                 jobDescriptions: jobDescriptionArray.isEmpty ? nil : jobDescriptionArray,
                 extraItems: extraItemsArray.isEmpty ? nil : extraItemsArray,

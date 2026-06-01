@@ -18,6 +18,10 @@ struct EditDailyJobReportView: View {
     @State private var jobBoxAndCameraCards: String = "NA"
     @State private var sportsBackgroundShot: String = "NA"
     @State private var schoolOrDestination: String = ""
+    // Session link is preserved across edits (not re-selectable here); carried
+    // forward verbatim so editing a report never wipes its session link (SR1.7).
+    @State private var sessionId: String? = nil
+    @State private var sessionName: String? = nil
     @State private var existingPhotoURLs: [String] = []
     @State private var showPhotoDetail: Bool = false
     @State private var selectedPhotoURL: String = ""
@@ -229,6 +233,8 @@ struct EditDailyJobReportView: View {
                         jobBoxAndCameraCards = supabaseReport.job_box_and_camera_cards ?? "NA"
                         sportsBackgroundShot = supabaseReport.sports_background_shot ?? "NA"
                         schoolOrDestination = supabaseReport.school_or_destination ?? ""
+                        sessionId = supabaseReport.session_id
+                        sessionName = supabaseReport.session_name
                         existingPhotoURLs = supabaseReport.photo_urls ?? []
                     }
                 }
@@ -310,6 +316,8 @@ struct EditDailyJobReportView: View {
             date: reportDate,
             yourName: yourName,
             schoolOrDestination: schoolOrDestination.isEmpty ? nil : schoolOrDestination,
+            sessionId: sessionId,
+            sessionName: sessionName,
             totalMileage: mileageValue,
             jobDescriptions: jobDescriptions.isEmpty ? nil : jobDescriptions,
             extraItems: extraItems.isEmpty ? nil : extraItems,

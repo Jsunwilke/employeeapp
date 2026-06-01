@@ -581,6 +581,10 @@ class TemplateService: ObservableObject {
             ?? formData["job_description_text"] as? String
             ?? formData["notes"] as? String
 
+        // Session link captured by TemplateFormView (SR1); nil for off-schedule
+        let sessionId = formData["session_id"] as? String
+        let sessionName = formData["session_name"] as? String
+
         // Convert form data to AnyCodable for storage
         var formDataAnyCodable: [String: AnyCodable] = [:]
         for (key, value) in formData {
@@ -595,6 +599,8 @@ class TemplateService: ObservableObject {
             date: Date(),
             yourName: yourName.isEmpty ? storedUserFirstName : yourName,
             schoolOrDestination: schoolOrDestination,
+            sessionId: sessionId,
+            sessionName: sessionName,
             totalMileage: totalMileage,
             jobDescriptions: jobDescriptions,
             extraItems: extraItems,
