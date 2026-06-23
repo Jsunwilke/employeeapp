@@ -159,6 +159,10 @@ struct EditSessionView: View {
             do {
                 try await SessionService.shared.updateSession(
                     sessionId: session.id,
+                    // `session` is the per-day occurrence the user opened; its `date` is
+                    // the tapped day. Pass that day's row id so a multi-day edit updates
+                    // the correct day instead of overwriting day 1.
+                    dayId: session.day(onDate: session.date ?? "")?.id,
                     formData: formData,
                     teamMembers: teamService.teamMembers,
                     schools: schoolService.schools

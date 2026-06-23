@@ -567,6 +567,7 @@ class SessionService: ObservableObject {
 
     func updateSession(
         sessionId: String,
+        dayId: String? = nil,
         formData: SessionFormData,
         teamMembers: [TeamMember],
         schools: [School]
@@ -640,10 +641,12 @@ class SessionService: ObservableObject {
             .eq("id", value: sessionId)
             .execute()
 
-        // Keep the session_days source of truth in sync. iOS edits a session as a
-        // single day, so update the earliest day row; self-heal by inserting one if a
-        // legacy session somehow has no day rows.
-        if let firstDay = existingSession.firstDay {
+        // Keep the session_days source of truth in sync. iOS edits ONE day of the
+        // session — the day the user opened (`dayId`). Update THAT row, not blindly the
+        // first day, which would overwrite day 1 of a multi-day session. Fall back to the
+        // earliest day, and self-heal by inserting one if a legacy session has no rows.
+        let targetDayId = dayId ?? existingSession.firstDay?.id
+        if let targetDayId = targetDayId {
             let dayUpdate: [String: AnyJSON] = [
                 "date": .string(formData.date),
                 "start_time": .string(formData.startTime),
@@ -653,7 +656,7 @@ class SessionService: ObservableObject {
             try await supabase
                 .from("session_days")
                 .update(dayUpdate)
-                .eq("id", value: firstDay.id)
+                .eq("id", value: targetDayId)
                 .execute()
         } else {
             let dayInsert = SessionDayInsert(
