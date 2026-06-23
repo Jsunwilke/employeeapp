@@ -130,7 +130,12 @@ struct ShiftDetailView: View {
                 VStack(spacing: 16) {
                     // Minimal padding to create slight separation from header
                     Color.clear.frame(height: 10)
-                    
+
+                    // All days of a multi-day session (the tapped day is highlighted)
+                    if session.dayCount > 1 {
+                        multiDaySection
+                    }
+
                     // Action buttons
                     actionButtonsRow
                         .padding(.vertical, 8)
@@ -409,6 +414,65 @@ struct ShiftDetailView: View {
     }
 
     // MARK: - View Components
+
+    /// All days of a multi-day session, with the tapped day highlighted.
+    private var multiDaySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Session Days")
+                .font(.headline)
+            ForEach(Array(session.sortedDays.enumerated()), id: \.element.id) { index, day in
+                let isCurrent = day.date == session.date
+                HStack(spacing: 12) {
+                    Text("Day \(index + 1)")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .frame(width: 56, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let dayDate = Session.parseDateTime(date: day.date, time: "00:00") {
+                            Text(dateFormatter.string(from: dayDate))
+                                .font(.subheadline)
+                        } else {
+                            Text(day.date).font(.subheadline)
+                        }
+                        if let range = dayTimeRange(day) {
+                            Text(range)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        if let notes = day.day_notes, !notes.isEmpty {
+                            Text(notes)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    Spacer()
+                    if isCurrent {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.blue)
+                    }
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isCurrent ? Color.blue.opacity(0.1) : Color(.systemGray6))
+                )
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    /// "9:00 AM - 12:00 PM" for a day, or nil if it has no times.
+    private func dayTimeRange(_ day: SessionDay) -> String? {
+        guard let startStr = day.start_time,
+              let start = Session.parseDateTime(date: day.date, time: startStr) else {
+            return nil
+        }
+        if let endStr = day.end_time,
+           let end = Session.parseDateTime(date: day.date, time: endStr) {
+            return "\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))"
+        }
+        return timeFormatter.string(from: start)
+    }
 
     private var headerView: some View {
         HStack(alignment: .center, spacing: 16) {

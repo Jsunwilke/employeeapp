@@ -136,6 +136,78 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
         }
     }
 
+    /// Days sorted chronologically (earliest date, then sort_order).
+    var sortedDays: [SessionDay] {
+        days.sorted { a, b in
+            if a.date != b.date { return a.date < b.date }
+            return a.sort_order < b.sort_order
+        }
+    }
+
+    // MARK: - Multi-day rendering helpers
+    // A multi-day session must appear on EACH of its days. The schedule views read
+    // `session.date`/`startDate`/`startTime`, so we render one COPY of the session
+    // per day, each copy carrying that day's date/time. Existing card views render
+    // unchanged; they only add the `multiDayLabel` badge.
+
+    /// The day-row of this session that falls on a given YYYY-MM-DD, if any.
+    func day(onDate dateStr: String) -> SessionDay? {
+        days.first { $0.date == dateStr }
+    }
+
+    /// A copy of this session whose representative date/time are set to `day`
+    /// (keeping the same id + all other fields). For rendering one block per day.
+    func with(day: SessionDay) -> Session {
+        Session(
+            id: id,
+            organization_id: organization_id,
+            school_id: school_id,
+            school_name: school_name,
+            date: day.date,
+            start_time: day.start_time ?? "",
+            end_time: day.end_time ?? "",
+            days: days,
+            session_types: session_types,
+            custom_session_type: custom_session_type,
+            photographers: photographers,
+            notes: notes,
+            status: status,
+            session_color: session_color,
+            is_published: is_published,
+            is_time_off: is_time_off,
+            has_class_group_job: has_class_group_job,
+            has_class_candids: has_class_candids,
+            has_sports_job: has_sports_job,
+            photographers_needed: photographers_needed,
+            posers_needed: posers_needed,
+            helpers_needed: helpers_needed,
+            created_at: created_at,
+            updated_at: updated_at,
+            created_by: created_by
+        )
+    }
+
+    /// One render-copy per day (each carrying that day's date/time). A single-day
+    /// session (or one with no day rows) yields exactly `[self]`.
+    func dayOccurrences() -> [Session] {
+        let sorted = sortedDays
+        guard !sorted.isEmpty else { return [self] }
+        return sorted.map { with(day: $0) }
+    }
+
+    /// Stable, unique key for a per-day occurrence when several days of the same
+    /// session appear in one flat list (their `id` would otherwise collide).
+    var dayOccurrenceKey: String { "\(id)#\(date)" }
+
+    /// "Day N of M" when this copy represents one day of a multi-day session; nil
+    /// for a normal single-day session.
+    var multiDayLabel: String? {
+        guard dayCount > 1 else { return nil }
+        let sorted = sortedDays
+        guard let idx = sorted.firstIndex(where: { $0.date == date }) else { return nil }
+        return "Day \(idx + 1) of \(dayCount)"
+    }
+
     // MARK: - Initializers
 
     // Default Codable initializer works automatically for Supabase

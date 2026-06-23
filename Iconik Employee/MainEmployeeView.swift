@@ -276,31 +276,36 @@ class MainEmployeeViewModel: ObservableObject {
                 let startOfToday = calendar.startOfDay(for: now)
                 let endOfDayAfterTomorrow = calendar.date(byAdding: .day, value: 3, to: startOfToday) ?? startOfToday
 
-                let userSessions = sessions.filter { session in
-                    guard let startDate = session.startDate else {
-                        return false
-                    }
-
-                    // Check if session is within the 3-day range
-                    let isInTimeRange = startDate >= startOfToday && startDate < endOfDayAfterTomorrow
-
-                    if !isInTimeRange {
-                        return false
-                    }
-
-                    // For today's sessions, check if they've already ended
-                    if calendar.isDateInToday(startDate) {
-                        // Estimate session end time (assuming 2 hour duration if not specified)
-                        let estimatedDuration: TimeInterval = 2 * 60 * 60 // 2 hours in seconds
-                        let endDate = startDate.addingTimeInterval(estimatedDuration)
-
-                        if endDate < now {
+                // Expand each assigned session into one occurrence per day so a
+                // multi-day session appears once for each of its upcoming days.
+                let userSessions = sessions
+                    .filter { $0.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail) }
+                    .flatMap { $0.dayOccurrences() }
+                    .filter { session in
+                        guard let startDate = session.startDate else {
                             return false
                         }
-                    }
 
-                    return session.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail)
-                }
+                        // Check if this day is within the 3-day range
+                        let isInTimeRange = startDate >= startOfToday && startDate < endOfDayAfterTomorrow
+
+                        if !isInTimeRange {
+                            return false
+                        }
+
+                        // For today's sessions, check if they've already ended
+                        if calendar.isDateInToday(startDate) {
+                            // Estimate session end time (assuming 2 hour duration if not specified)
+                            let estimatedDuration: TimeInterval = 2 * 60 * 60 // 2 hours in seconds
+                            let endDate = startDate.addingTimeInterval(estimatedDuration)
+
+                            if endDate < now {
+                                return false
+                            }
+                        }
+
+                        return true
+                    }
 
                 // Store all sessions for coworker data
                 self?.allSessions = sessions

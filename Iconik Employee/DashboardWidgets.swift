@@ -905,7 +905,9 @@ struct UpcomingShiftsWidget: View {
                 .padding(.vertical, 20)
             } else {
                 VStack(spacing: 8) {
-                    ForEach(sessions.prefix(3)) { session in
+                    // Key by per-day occurrence: a multi-day session yields one row
+                    // per day, all sharing the same session id.
+                    ForEach(sessions.prefix(3), id: \.dayOccurrenceKey) { session in
                         Button(action: { onSessionTap(session) }) {
                             CompactShiftRow(
                                 session: session,
@@ -1041,9 +1043,21 @@ struct CompactShiftRow: View {
                                 .foregroundColor(.secondary)
                         }
                     }
-                    
+
+                    // Multi-day "Day N of M" badge
+                    if let dayLabel = session.multiDayLabel {
+                        Text(dayLabel)
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.55))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                    }
+
                     Spacer()
-                    
+
                     // Weather
                     if let weather = weatherData, let iconName = weather.iconSystemName {
                         HStack(spacing: 2) {

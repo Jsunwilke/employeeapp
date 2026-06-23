@@ -478,8 +478,12 @@ class TimeTrackingService: ObservableObject {
             includeUnpublished: false
         )
 
-        return allSessions.filter { session in
-            session.date == today && session.isUserAssigned(userID: userId, userEmail: currentUserEmail)
+        // A session's days live in session_days; include any session with a day on
+        // today (not just first-day), rendered as that day's occurrence.
+        return allSessions.compactMap { session -> Session? in
+            guard session.isUserAssigned(userID: userId, userEmail: currentUserEmail),
+                  let todayDay = session.day(onDate: today) else { return nil }
+            return session.with(day: todayDay)
         }
     }
 

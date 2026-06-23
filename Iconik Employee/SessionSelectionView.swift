@@ -172,7 +172,18 @@ struct SessionRow: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                
+
+                if let dayLabel = session.multiDayLabel {
+                    Text(dayLabel)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.black.opacity(0.55))
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+
                 if let location = session.location, !location.isEmpty {
                     HStack {
                         Image(systemName: "location")

@@ -971,6 +971,17 @@ struct SlingWeeklyView: View {
                     
                     // Session type badges
                     HStack(spacing: 4) {
+                        // Multi-day "Day N of M" badge (one block per day; legible on any card color)
+                        if let dayLabel = session.multiDayLabel {
+                            Text(dayLabel)
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.black.opacity(0.55))
+                                .foregroundColor(.white)
+                                .cornerRadius(12)
+                        }
                         // Unpublished badge
                         if !session.isPublished {
                             HStack(spacing: 4) {
@@ -1473,9 +1484,14 @@ struct SlingWeeklyView: View {
         var eventDays = Set<Date>()
         let calendar = Calendar.current
 
-        // Add days with sessions
+        // Add days with sessions — every day of a multi-day session, not just the first.
         for session in filteredSessions {
-            if let date = session.startDate {
+            for day in session.days {
+                if let d = startOfDay(forDayString: day.date) {
+                    eventDays.insert(d)
+                }
+            }
+            if session.days.isEmpty, let date = session.startDate {
                 eventDays.insert(calendar.startOfDay(for: date))
             }
         }
@@ -1563,14 +1579,28 @@ struct SlingWeeklyView: View {
         return date
     }
     
+    // Local-time yyyy-MM-dd <-> Date helpers for matching session_days rows.
+    private func dayString(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .current
+        return f.string(from: date)
+    }
+    private func startOfDay(forDayString s: String) -> Date? {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .current
+        guard let d = f.date(from: s) else { return nil }
+        return Calendar.current.startOfDay(for: d)
+    }
+
     private func getSessionsForDay(_ day: Date) -> [Session] {
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: day)
-        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-        
-        return filteredSessions.filter { session in
-            guard let sessionDate = session.startDate else { return false }
-            return sessionDate >= startOfDay && sessionDate < endOfDay
+        // A session's date lives in session_days now; render one copy per day that
+        // falls on `day`, so a multi-day session appears on each of its days.
+        let dayStr = dayString(day)
+        return filteredSessions.compactMap { session -> Session? in
+            guard let match = session.day(onDate: dayStr) else { return nil }
+            return session.with(day: match)
         }.sorted(by: { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) })
     }
 
@@ -1579,15 +1609,11 @@ struct SlingWeeklyView: View {
     /// Calculate staffing totals for a specific day (for heat map display)
     /// Uses ALL sessions (not filtered) to show organization-wide staffing needs
     private func getStaffingForDay(_ date: Date) -> DayStaffingTotals {
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: date)
-        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-
-        // Use ALL sessions (not filteredSessions) to show total staffing needs
-        // Exclude time-off entries from staffing calculation
+        // Use ALL sessions (not filteredSessions) to show total staffing needs.
+        // A multi-day session needs staff on each of its days, so match any day.
+        let dayStr = dayString(date)
         let daySessions = sessions.filter { session in
-            guard let sessionDate = session.startDate else { return false }
-            return sessionDate >= startOfDay && sessionDate < endOfDay && !session.isTimeOff
+            !session.isTimeOff && session.day(onDate: dayStr) != nil
         }
 
         var photographers = 0
