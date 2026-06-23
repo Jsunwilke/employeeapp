@@ -507,11 +507,9 @@ class SessionService: ObservableObject {
             )
         }
 
-        // Create the session row. Note: a session's date/time live in the
-        // `session_days` child table now; the legacy date/start_time/end_time columns
-        // are still written (synced to the single day) so iOS builds still on the
-        // pre-session_days version keep reading them. Those columns + this legacy
-        // write are removed together in the FP Web "MD5" drop migration.
+        // Create the session row. A session's date/time live in the `session_days`
+        // child table (inserted below) — the legacy date/start_time/end_time columns
+        // have been dropped, so the sessions row carries only shared job data.
         let sessionId = UUID().uuidString
         let nowISO = Date().ISO8601Format()
         let sessionInsert = SessionInsert(
@@ -519,9 +517,6 @@ class SessionService: ObservableObject {
             organization_id: organizationID,
             school_id: formData.schoolId,
             school_name: school.value,
-            date: formData.date,
-            start_time: formData.startTime,
-            end_time: formData.endTime,
             session_types: formData.sessionTypes,
             custom_session_type: formData.sessionTypes.contains("other") ? formData.customSessionType : nil,
             photographers: photographers,
@@ -608,13 +603,11 @@ class SessionService: ObservableObject {
             )
         }
 
-        // Prepare update data
+        // Prepare update data. date/start_time/end_time live in session_days (synced
+        // below), not on the sessions row — those legacy columns are dropped.
         var updateData: [String: AnyJSON] = [
             "school_id": .string(formData.schoolId),
             "school_name": .string(school.value),
-            "date": .string(formData.date),
-            "start_time": .string(formData.startTime),
-            "end_time": .string(formData.endTime),
             "session_types": .array(formData.sessionTypes.map { .string($0) }),
             "status": .string(formData.status),
             "updated_at": .string(Date().ISO8601Format())
@@ -639,9 +632,8 @@ class SessionService: ObservableObject {
             updateData["notes"] = .string(formData.notes)
         }
 
-        // Update in Supabase. The date/start_time/end_time in `updateData` are the
-        // legacy columns, kept synced to the single day so pre-session_days iOS builds
-        // keep working until the FP Web "MD5" drop migration removes them.
+        // Update the sessions row (shared job data only). The date/time are
+        // reconciled into session_days below.
         try await supabase
             .from("sessions")
             .update(updateData)
@@ -931,17 +923,13 @@ class SessionService: ObservableObject {
 // model (which carries an embedded `days` array that must NOT be sent to the
 // sessions table) so encoding maps cleanly to real columns.
 
-/// Payload for inserting a row into the `sessions` table.
-/// `date`/`start_time`/`end_time` are the legacy columns, still written (synced to
-/// the single day) for pre-session_days iOS builds; removed in the MD5 drop.
+/// Payload for inserting a row into the `sessions` table. Shared job data only —
+/// a session's date/time live in the `session_days` child table.
 private struct SessionInsert: Encodable {
     let id: String
     let organization_id: String
     let school_id: String
     let school_name: String
-    let date: String
-    let start_time: String
-    let end_time: String
     let session_types: [String]
     let custom_session_type: String?
     let photographers: [SessionPhotographer]
