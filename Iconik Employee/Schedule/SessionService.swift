@@ -53,11 +53,6 @@ class SessionService: ObservableObject {
     // Track active Supabase realtime channels - keyed by subscription ID for per-caller tracking
     private var activeChannels: [UUID: RealtimeChannelV2] = [:]
 
-    // Pagination support
-    private let pageSize = 50
-    private var currentPage = 0
-    private var hasMorePages = true
-
     private init() {
         setupNetworkMonitoring()
     }
@@ -94,7 +89,7 @@ class SessionService: ObservableObject {
 
         var query = supabase
             .from("sessions")
-            .select()
+            .select("*, session_days(*)")
             .eq("organization_id", value: organizationID)
 
         // Filter by published status if needed
@@ -277,11 +272,11 @@ class SessionService: ObservableObject {
         print("📅 SessionService: Unsubscribed all channels")
     }
 
-    /// Fetch a single session by ID
+    /// Fetch a single session by ID (with its embedded day rows)
     func fetchSession(sessionId: String) async throws -> Session? {
         let sessions: [Session] = try await supabase
             .from("sessions")
-            .select()
+            .select("*, session_days(*)")
             .eq("id", value: sessionId)
             .limit(1)
             .execute()
@@ -290,7 +285,9 @@ class SessionService: ObservableObject {
         return sessions.first
     }
 
-    /// Fetch sessions within a date range
+    /// Fetch sessions within a date range.
+    /// A session's date now lives in `session_days`, so we resolve the session ids
+    /// that have a day in range, then fetch those sessions with their full day rows.
     func fetchSessions(from startDate: Date, to endDate: Date, organizationID: String, includeUnpublished: Bool = false) async throws -> [Session] {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
@@ -298,19 +295,55 @@ class SessionService: ObservableObject {
         let startDateStr = dateFormatter.string(from: startDate)
         let endDateStr = dateFormatter.string(from: endDate)
 
+        let ids = try await sessionIds(from: startDateStr, to: endDateStr)
+        return try await fetchSessions(ids: ids, organizationID: organizationID, includeUnpublished: includeUnpublished)
+    }
+
+    // MARK: - session_days resolution helpers
+    // Wherever we used to filter the `sessions` table by its `date` column, we now
+    // resolve the matching session ids from the `session_days` child table (RLS-scoped
+    // to the user's org via the parent session) and fetch those sessions with their
+    // embedded day rows. This keeps the app working after the legacy
+    // sessions.date/start_time/end_time columns are dropped.
+
+    private struct SessionDayIdRow: Decodable { let session_id: String }
+    private struct SessionIdRow: Decodable { let id: String }
+
+    /// Session ids that have a day on a specific date.
+    private func sessionIds(onDate date: String) async throws -> [String] {
+        let rows: [SessionDayIdRow] = try await supabase
+            .from("session_days")
+            .select("session_id")
+            .eq("date", value: date)
+            .execute()
+            .value
+        return Array(Set(rows.map { $0.session_id }))
+    }
+
+    /// Session ids that have a day within a date range (inclusive).
+    private func sessionIds(from startDate: String, to endDate: String) async throws -> [String] {
+        let rows: [SessionDayIdRow] = try await supabase
+            .from("session_days")
+            .select("session_id")
+            .gte("date", value: startDate)
+            .lte("date", value: endDate)
+            .execute()
+            .value
+        return Array(Set(rows.map { $0.session_id }))
+    }
+
+    /// Fetch sessions by id, with their embedded day rows.
+    private func fetchSessions(ids: [String], organizationID: String, includeUnpublished: Bool = false) async throws -> [Session] {
+        guard !ids.isEmpty else { return [] }
         var query = supabase
             .from("sessions")
-            .select()
+            .select("*, session_days(*)")
             .eq("organization_id", value: organizationID)
-            .gte("date", value: startDateStr)
-            .lte("date", value: endDateStr)
-
+            .in("id", values: ids)
         if !includeUnpublished {
             query = query.eq("is_published", value: true)
         }
-
-        let sessions: [Session] = try await query.execute().value
-        return sessions
+        return try await query.execute().value
     }
 
     /// Fetch sessions for a specific week
@@ -408,14 +441,10 @@ class SessionService: ObservableObject {
             "#6b7280"  // gray
         ]
 
-        // Get existing sessions for this date (excluding time-off)
-        let existingSessions: [Session] = try await supabase
-            .from("sessions")
-            .select()
-            .eq("organization_id", value: organizationID)
-            .eq("date", value: date)
-            .execute()
-            .value
+        // Get existing sessions for this date (excluding time-off). The date lives in
+        // session_days, so resolve ids on that date then fetch those sessions.
+        let idsOnDate = try await sessionIds(onDate: date)
+        let existingSessions = try await fetchSessions(ids: idsOnDate, organizationID: organizationID, includeUnpublished: true)
 
         // Filter out time-off sessions and sort
         let regularSessions = existingSessions
@@ -478,9 +507,15 @@ class SessionService: ObservableObject {
             )
         }
 
-        // Create the session
-        let newSession = Session(
-            id: UUID().uuidString,
+        // Create the session row. Note: a session's date/time live in the
+        // `session_days` child table now; the legacy date/start_time/end_time columns
+        // are still written (synced to the single day) so iOS builds still on the
+        // pre-session_days version keep reading them. Those columns + this legacy
+        // write are removed together in the FP Web "MD5" drop migration.
+        let sessionId = UUID().uuidString
+        let nowISO = Date().ISO8601Format()
+        let sessionInsert = SessionInsert(
+            id: sessionId,
             organization_id: organizationID,
             school_id: formData.schoolId,
             school_name: school.value,
@@ -495,7 +530,10 @@ class SessionService: ObservableObject {
             session_color: sessionColor,
             is_published: true,
             is_time_off: formData.isTimeOff ? true : nil,
-            created_at: Date(),
+            photographers_needed: 1,
+            posers_needed: 0,
+            helpers_needed: 0,
+            created_at: nowISO,
             created_by: SessionCreatedBy(
                 id: currentUserID,
                 name: currentUserName,
@@ -503,17 +541,31 @@ class SessionService: ObservableObject {
             )
         )
 
-        // Insert into Supabase
+        // Insert the session row
         try await supabase
             .from("sessions")
-            .insert(newSession)
+            .insert(sessionInsert)
+            .execute()
+
+        // Insert the single day row (the source of truth for when it happens)
+        let dayInsert = SessionDayInsert(
+            id: UUID().uuidString,
+            session_id: sessionId,
+            date: formData.date,
+            start_time: formData.startTime,
+            end_time: formData.endTime,
+            sort_order: 0
+        )
+        try await supabase
+            .from("session_days")
+            .insert(dayInsert)
             .execute()
 
         // Recalculate colors for the date
         try await recalculateSessionColorsForDate(organizationID: organizationID, date: formData.date)
 
-        print("✅ Created session: \(newSession.id)")
-        return newSession.id
+        print("✅ Created session: \(sessionId)")
+        return sessionId
     }
 
     // MARK: - Update Session
@@ -587,12 +639,44 @@ class SessionService: ObservableObject {
             updateData["notes"] = .string(formData.notes)
         }
 
-        // Update in Supabase
+        // Update in Supabase. The date/start_time/end_time in `updateData` are the
+        // legacy columns, kept synced to the single day so pre-session_days iOS builds
+        // keep working until the FP Web "MD5" drop migration removes them.
         try await supabase
             .from("sessions")
             .update(updateData)
             .eq("id", value: sessionId)
             .execute()
+
+        // Keep the session_days source of truth in sync. iOS edits a session as a
+        // single day, so update the earliest day row; self-heal by inserting one if a
+        // legacy session somehow has no day rows.
+        if let firstDay = existingSession.firstDay {
+            let dayUpdate: [String: AnyJSON] = [
+                "date": .string(formData.date),
+                "start_time": .string(formData.startTime),
+                "end_time": .string(formData.endTime),
+                "updated_at": .string(Date().ISO8601Format())
+            ]
+            try await supabase
+                .from("session_days")
+                .update(dayUpdate)
+                .eq("id", value: firstDay.id)
+                .execute()
+        } else {
+            let dayInsert = SessionDayInsert(
+                id: UUID().uuidString,
+                session_id: sessionId,
+                date: formData.date,
+                start_time: formData.startTime,
+                end_time: formData.endTime,
+                sort_order: 0
+            )
+            try await supabase
+                .from("session_days")
+                .insert(dayInsert)
+                .execute()
+        }
 
         // Recalculate colors if date changed
         if existingSession.date != formData.date {
@@ -628,14 +712,9 @@ class SessionService: ObservableObject {
             "#ef4444", "#06b6d4", "#8b5a3c", "#6b7280"
         ]
 
-        // Get all sessions for this date
-        let sessions: [Session] = try await supabase
-            .from("sessions")
-            .select()
-            .eq("organization_id", value: organizationID)
-            .eq("date", value: date)
-            .execute()
-            .value
+        // Get all sessions for this date (date lives in session_days)
+        let idsOnDate = try await sessionIds(onDate: date)
+        let sessions = try await fetchSessions(ids: idsOnDate, organizationID: organizationID, includeUnpublished: true)
 
         // Separate time-off and regular sessions
         let timeOffSessions = sessions.filter { $0.is_time_off ?? false }
@@ -713,6 +792,9 @@ class SessionService: ObservableObject {
     }
 
     func publishSessionsForDate(organizationID: String, date: String) async throws {
+        // Sessions on a date are resolved via session_days now.
+        let ids = try await sessionIds(onDate: date)
+        guard !ids.isEmpty else { return }
         try await supabase
             .from("sessions")
             .update([
@@ -720,24 +802,26 @@ class SessionService: ObservableObject {
                 "updated_at": AnyJSON.string(Date().ISO8601Format())
             ])
             .eq("organization_id", value: organizationID)
-            .eq("date", value: date)
+            .in("id", values: ids)
             .execute()
 
         print("✅ Published all sessions for date: \(date)")
     }
 
     func hasUnpublishedSessionsForDate(organizationID: String, date: String) async throws -> Bool {
-        let sessions: [Session] = try await supabase
+        let ids = try await sessionIds(onDate: date)
+        guard !ids.isEmpty else { return false }
+        let rows: [SessionIdRow] = try await supabase
             .from("sessions")
-            .select()
+            .select("id")
             .eq("organization_id", value: organizationID)
-            .eq("date", value: date)
+            .in("id", values: ids)
             .eq("is_published", value: false)
             .limit(1)
             .execute()
             .value
 
-        return !sessions.isEmpty
+        return !rows.isEmpty
     }
 
     // MARK: - Utility Methods
@@ -811,32 +895,6 @@ class SessionService: ObservableObject {
         return session.getSessionTypeDisplayName()
     }
 
-    // MARK: - Pagination
-
-    func loadSessionsPage(organizationID: String) async throws -> ([Session], Bool) {
-        let offset = currentPage * pageSize
-
-        let sessions: [Session] = try await supabase
-            .from("sessions")
-            .select()
-            .eq("organization_id", value: organizationID)
-            .order("date", ascending: false)
-            .order("start_time", ascending: false)
-            .range(from: offset, to: offset + pageSize - 1)
-            .execute()
-            .value
-
-        hasMorePages = sessions.count == pageSize
-        currentPage += 1
-
-        return (sessions, hasMorePages)
-    }
-
-    func resetPagination() {
-        currentPage = 0
-        hasMorePages = true
-    }
-
     // MARK: - Network Monitoring
 
     private func setupNetworkMonitoring() {
@@ -866,6 +924,47 @@ class SessionService: ObservableObject {
     deinit {
         monitor.cancel()
     }
+}
+
+// MARK: - Insert DTOs
+// Typed payloads for inserting into Supabase. Kept separate from the `Session`
+// model (which carries an embedded `days` array that must NOT be sent to the
+// sessions table) so encoding maps cleanly to real columns.
+
+/// Payload for inserting a row into the `sessions` table.
+/// `date`/`start_time`/`end_time` are the legacy columns, still written (synced to
+/// the single day) for pre-session_days iOS builds; removed in the MD5 drop.
+private struct SessionInsert: Encodable {
+    let id: String
+    let organization_id: String
+    let school_id: String
+    let school_name: String
+    let date: String
+    let start_time: String
+    let end_time: String
+    let session_types: [String]
+    let custom_session_type: String?
+    let photographers: [SessionPhotographer]
+    let notes: String?
+    let status: String
+    let session_color: String
+    let is_published: Bool
+    let is_time_off: Bool?
+    let photographers_needed: Int
+    let posers_needed: Int
+    let helpers_needed: Int
+    let created_at: String
+    let created_by: SessionCreatedBy
+}
+
+/// Payload for inserting a row into the `session_days` table.
+private struct SessionDayInsert: Encodable {
+    let id: String
+    let session_id: String
+    let date: String
+    let start_time: String
+    let end_time: String
+    let sort_order: Int
 }
 
 // MARK: - Session Errors

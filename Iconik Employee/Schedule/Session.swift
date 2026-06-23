@@ -1,5 +1,20 @@
 import Foundation
 
+// MARK: - Session Day Model (child table `session_days`)
+// One row per day of a session. A session's date/time now lives here, not on the
+// `sessions` row. A single-day session has exactly one day-row. The legacy
+// sessions.date/start_time/end_time columns are being dropped (FP Web "MD" arc);
+// this model is the source of truth for when a session happens.
+struct SessionDay: Codable, Equatable, Hashable, Identifiable {
+    let id: String
+    let session_id: String
+    let date: String          // YYYY-MM-DD
+    let start_time: String?    // HH:MM (nullable in DB)
+    let end_time: String?      // HH:MM (nullable in DB)
+    let day_notes: String?
+    let sort_order: Int
+}
+
 // MARK: - Session Photographer Model
 struct SessionPhotographer: Codable, Hashable {
     let id: String
@@ -22,9 +37,15 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
     let organization_id: String
     let school_id: String
     let school_name: String
-    let date: String  // Format: YYYY-MM-DD
-    let start_time: String  // Format: HH:MM
-    let end_time: String  // Format: HH:MM
+    // Source of truth for when the session happens: the child `session_days` rows.
+    let days: [SessionDay]
+    // Representative date/time, derived from the FIRST day (earliest date, then
+    // sort_order). Kept as stored properties so every existing reader of
+    // `session.date`/`startTime`/`startDate`/etc. keeps working unchanged. Falls
+    // back to the legacy sessions columns only if days didn't come embedded.
+    let date: String  // Format: YYYY-MM-DD (from first day)
+    let start_time: String  // Format: HH:MM (from first day)
+    let end_time: String  // Format: HH:MM (from first day)
     let session_types: [String]  // JSONB array
     let custom_session_type: String?
     let photographers: [SessionPhotographer]  // JSONB array
@@ -99,6 +120,22 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
         Self.parseDateTime(date: date, time: end_time)
     }
 
+    /// The earliest day of the session (the representative day), or nil if none.
+    var firstDay: SessionDay? {
+        Self.firstDay(of: days)
+    }
+
+    /// How many days this session spans (1 for a normal single-day session).
+    var dayCount: Int { max(days.count, 1) }
+
+    /// Earliest day of a day list: earliest date, then lowest sort_order.
+    static func firstDay(of days: [SessionDay]) -> SessionDay? {
+        days.min { a, b in
+            if a.date != b.date { return a.date < b.date }
+            return a.sort_order < b.sort_order
+        }
+    }
+
     // MARK: - Initializers
 
     // Default Codable initializer works automatically for Supabase
@@ -112,6 +149,7 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
         date: String,
         start_time: String,
         end_time: String,
+        days: [SessionDay] = [],
         session_types: [String],
         custom_session_type: String? = nil,
         photographers: [SessionPhotographer],
@@ -134,6 +172,7 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
         self.organization_id = organization_id
         self.school_id = school_id
         self.school_name = school_name
+        self.days = days
         self.date = date
         self.start_time = start_time
         self.end_time = end_time
@@ -259,6 +298,7 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
 extension Session {
     enum CodingKeys: String, CodingKey {
         case id, organization_id, school_id, school_name, date, start_time, end_time
+        case days = "session_days"  // embedded child rows from .select("*, session_days(*)")
         case session_types, custom_session_type, photographers, notes, status
         case session_color, is_published, is_time_off
         case has_class_group_job, has_class_candids, has_sports_job
@@ -273,9 +313,27 @@ extension Session {
         organization_id = try container.decode(String.self, forKey: .organization_id)
         school_id = try container.decode(String.self, forKey: .school_id)
         school_name = try container.decode(String.self, forKey: .school_name)
-        date = try container.decode(String.self, forKey: .date)
-        start_time = try container.decode(String.self, forKey: .start_time)
-        end_time = try container.decode(String.self, forKey: .end_time)
+
+        // Source of truth: the embedded session_days rows (from
+        // .select("*, session_days(*)")). The representative date/time come from
+        // the first day. Legacy sessions.date/start_time/end_time are read only as
+        // a fallback (decodeIfPresent) for transition/older-cache rows, so this
+        // decodes cleanly whether or not those columns still exist.
+        let embeddedDays = try container.decodeIfPresent([SessionDay].self, forKey: .days) ?? []
+        days = embeddedDays
+        let legacyDate = try container.decodeIfPresent(String.self, forKey: .date)
+        let legacyStart = try container.decodeIfPresent(String.self, forKey: .start_time)
+        let legacyEnd = try container.decodeIfPresent(String.self, forKey: .end_time)
+        if let fd = Session.firstDay(of: embeddedDays) {
+            date = fd.date
+            start_time = fd.start_time ?? legacyStart ?? ""
+            end_time = fd.end_time ?? legacyEnd ?? ""
+        } else {
+            date = legacyDate ?? ""
+            start_time = legacyStart ?? ""
+            end_time = legacyEnd ?? ""
+        }
+
         session_types = try container.decode([String].self, forKey: .session_types)
         custom_session_type = try container.decodeIfPresent(String.self, forKey: .custom_session_type)
         photographers = try container.decode([SessionPhotographer].self, forKey: .photographers)

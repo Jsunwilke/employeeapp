@@ -211,8 +211,28 @@ serve(async (req) => {
 
     const sessionId = sessionData.id as string;
     const schoolName = sessionData.school_name as string || "Unknown School";
-    const sessionDate = sessionData.date as string;
     const organizationId = sessionData.organization_id as string;
+
+    // A session's date lives in the `session_days` child table now. Prefer the
+    // legacy sessions.date column while it still exists (transition); once it's
+    // dropped, fall back to the first day from session_days. On DELETE the day
+    // rows are already cascade-removed, so only the legacy column (if present)
+    // can supply the date.
+    let sessionDate = (sessionData.date as string) || "";
+    if (!sessionDate && type !== "DELETE") {
+      const { data: dayRows } = await supabase
+        .from("session_days")
+        .select("date, sort_order")
+        .eq("session_id", sessionId)
+        .order("date", { ascending: true })
+        .order("sort_order", { ascending: true });
+      if (dayRows && dayRows.length > 0) {
+        const extra = dayRows.length - 1;
+        sessionDate = extra > 0
+          ? `${dayRows[0].date} (+${extra} more day${extra > 1 ? "s" : ""})`
+          : (dayRows[0].date as string);
+      }
+    }
 
     // Get assigned employee IDs from photographers array
     const photographers = sessionData.photographers as Photographer[] || [];
@@ -255,16 +275,23 @@ serve(async (req) => {
     let body: string;
     let notificationType: string;
 
+    const onDate = sessionDate ? ` on ${sessionDate}` : "";
+
     if (type === "INSERT") {
       title = "New Session Assigned";
-      body = `You've been assigned to ${schoolName} on ${sessionDate}`;
+      body = `You've been assigned to ${schoolName}${onDate}`;
       notificationType = "session_new";
     } else if (type === "DELETE") {
       title = "Session Cancelled";
-      body = `Your session at ${schoolName} on ${sessionDate} has been cancelled`;
+      body = `Your session at ${schoolName}${onDate} has been cancelled`;
       notificationType = "session_delete";
     } else {
-      // UPDATE - detect what changed
+      // UPDATE - detect what changed. date/start_time live in session_days now;
+      // these legacy-column comparisons still work while the columns exist
+      // (transition) and harmlessly report no date/time change once dropped — a
+      // pure day move is a session_days change that doesn't fire this sessions
+      // trigger anyway (see rollout note: a session_days-trigger notification is
+      // the follow-up for granular day-move pushes).
       const changes: string[] = [];
       if (old_record?.date !== record.date) {
         changes.push("date");

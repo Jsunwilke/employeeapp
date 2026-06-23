@@ -42,12 +42,15 @@ serve(async (req) => {
       const targetTime = thirtyMinutesFromNow.toTimeString().slice(0, 5);
       const currentTime = now.toTimeString().slice(0, 5);
 
-      // Get sessions starting soon
-      const { data: sessions, error: sessionsError } = await supabase
-        .from("sessions")
-        .select("id, school_name, start_time, assigned_employees")
-        .eq("session_date", today)
-        .eq("is_published", true)
+      // Get day-rows starting soon. A session's date/time live in the
+      // `session_days` child table; the parent session (school + assigned
+      // photographers + published flag) is embedded.
+      const { data: dayRows, error: sessionsError } = await supabase
+        .from("session_days")
+        .select(
+          "start_time, session:sessions!inner(id, school_name, photographers, is_published)"
+        )
+        .eq("date", today)
         .gte("start_time", currentTime)
         .lte("start_time", targetTime);
 
@@ -56,18 +59,25 @@ serve(async (req) => {
         throw sessionsError;
       }
 
-      if (!sessions || sessions.length === 0) {
+      if (!dayRows || dayRows.length === 0) {
         return new Response(
           JSON.stringify({ message: "No upcoming sessions found" }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
-      // For each session, notify assigned employees who haven't clocked in
+      // For each upcoming day, notify assigned photographers who haven't clocked in
       let totalSent = 0;
 
-      for (const session of sessions) {
-        const assignedEmployees = session.assigned_employees as string[] || [];
+      for (const day of dayRows) {
+        const session = (day as Record<string, unknown>).session as
+          | { id: string; school_name: string; photographers?: { id: string }[]; is_published?: boolean }
+          | null;
+
+        if (!session || !session.is_published) continue;
+
+        const startTime = (day as Record<string, unknown>).start_time as string;
+        const assignedEmployees = (session.photographers || []).map((p) => p.id);
 
         if (assignedEmployees.length === 0) continue;
 
@@ -103,7 +113,7 @@ serve(async (req) => {
 
         const payload = createAlertPayload(
           "Clock-In Reminder",
-          `Your session at ${session.school_name} starts at ${session.start_time}. Don't forget to clock in!`,
+          `Your session at ${session.school_name} starts at ${startTime}. Don't forget to clock in!`,
           {
             type: "clock_reminder",
             reminderType: "clock_in",
@@ -126,7 +136,7 @@ serve(async (req) => {
           success: true,
           type: "clock_in",
           sent: totalSent,
-          sessionsChecked: sessions.length,
+          sessionsChecked: dayRows.length,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
