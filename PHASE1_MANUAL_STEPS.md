@@ -24,19 +24,34 @@ They were in git history, so treat all four as compromised.
 - Redeploy the Cloud Functions (`firebase deploy --only functions` or your flow).
 
 ## 3. Deploy the Claude proxy + lock down the key
-The app now calls a `claude-proxy` Edge Function instead of reading the key.
 
-```bash
-# from repo root, with the Supabase CLI linked to your project
-supabase secrets set ANTHROPIC_API_KEY=sk-ant-...   # a NEWLY ROTATED key
-supabase functions deploy claude-proxy
-supabase db push        # applies 20260712_lock_down_app_config.sql
-```
+### DONE (2026-07-12)
+- `claude-proxy` Edge Function deployed to project `nofegnmrgnanpznavlqy` (Focal-Point).
+- `ANTHROPIC_API_KEY` secret set (currently the EXISTING key — rotate below).
+- Tested working: text request returned a valid Claude response; a 5MB image
+  payload passed through the function to Anthropic without hitting a size limit.
 
-- Rotate the Anthropic key at console.anthropic.com first (the old one was
-  readable by every employee — treat as compromised).
-- The migration drops the permissive RLS policy and nulls the stored key.
-- Verify roster/portrait-card scanning still works in the app after deploy.
+### STILL TO DO — in this order
+1. **Ship a new app build** (TestFlight → App Store). The new build calls the
+   proxy and no longer needs the key. The CURRENTLY INSTALLED app still reads
+   the key from the `app_config` table, so do NOT lock that down yet.
+2. **After the new build is in users' hands**, run the lock-down migration:
+   ```bash
+   supabase db push        # applies 20260712_lock_down_app_config.sql
+   ```
+   This drops the permissive RLS policy and nulls the stored key. Running it
+   BEFORE the new build is universal will break roster scanning on old app
+   versions.
+3. **Rotate the Anthropic key** at console.anthropic.com (the old one was
+   readable by every employee + is in git history — treat as compromised),
+   then update BOTH places that use it until the migration in step 2 has run:
+   ```bash
+   supabase secrets set ANTHROPIC_API_KEY=sk-ant-<new>   # proxy
+   # and update app_config.claude_api_key in the dashboard so the OLD app
+   # build keeps working until everyone has updated
+   ```
+   Once step 2's migration has run and old builds are gone, only the proxy
+   secret matters.
 
 ## 4. Restrict the Google API key
 - Google Cloud console → Credentials → the key `AIzaSy…UJnSE`: add an iOS

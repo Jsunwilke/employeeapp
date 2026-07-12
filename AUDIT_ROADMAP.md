@@ -7,7 +7,7 @@ Full visual report: https://claude.ai/code/artifact/4ae6e46a-bc04-4307-b589-ef32
 (`[x]`), and add a dated note under the phase when it's done. To resume in a new session,
 say "continue the audit roadmap" or "start phase N" — everything needed is in this file.
 
-Status: **Phase 1 code changes done (2026-07-12); manual account steps pending — see PHASE1_MANUAL_STEPS.md.**
+Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude proxy DEPLOYED and TESTED working on Focal-Point project. NOT YET DONE: (a) lock-down migration must wait until a new app build is live in users' hands — running it now breaks the current app's roster scanning; (b) rotate Anthropic key; (c) revoke Apple keys + Google key restriction + git history purge. See PHASE1_MANUAL_STEPS.md.
 
 ---
 
