@@ -775,9 +775,12 @@ private class RouteLocationManager: NSObject, ObservableObject, CLLocationManage
             manager.requestWhenInUseAuthorization()
         }
 
-        // Start updating location if authorized
+        // Fetch a single location fix if authorized. The route planner only
+        // needs the current position once (as a starting point), so we use a
+        // one-shot request instead of continuous updates that would drain the
+        // battery for as long as this manager is alive.
         if authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways {
-            manager.startUpdatingLocation()
+            manager.requestLocation()
         }
     }
 
@@ -800,8 +803,10 @@ private class RouteLocationManager: NSObject, ObservableObject, CLLocationManage
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         authorizationStatus = manager.authorizationStatus
 
+        // One-shot fix on authorization (e.g. the user just granted access) —
+        // not continuous tracking.
         if authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways {
-            manager.startUpdatingLocation()
+            manager.requestLocation()
         }
     }
 }

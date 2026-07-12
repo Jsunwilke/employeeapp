@@ -55,7 +55,7 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
         let defaultName = try await generateConversationName(participants: participants, type: type)
 
         // Generate UUID for conversation
-        let conversationId = UUID().uuidString
+        let conversationId = UUID().uuidString.lowercased()
 
         // Initialize unread counts
         var unreadCounts: [String: Int] = [:]
@@ -119,7 +119,7 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
     // MARK: - Messaging
 
     func sendMessage(conversationId: String, senderId: String, text: String, type: ChatMessage.MessageType, fileUrl: String?, senderName: String) async throws -> String {
-        let messageId = UUID().uuidString
+        let messageId = UUID().uuidString.lowercased()
 
         struct MessageInsert: Encodable {
             let id: String
@@ -223,13 +223,15 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
         Task {
             await channel.subscribe()
 
-            // Initial fetch
+            // Initial fetch — hop to the main actor like the change-stream
+            // path below, since completion mutates @Published state on
+            // ChatManager (@MainActor).
             do {
                 let conversations = try await getUserConversations(userId: userId)
-                completion(conversations)
+                await MainActor.run { completion(conversations) }
             } catch {
                 print("❌ Error on initial conversations fetch: \(error)")
-                completion([])
+                await MainActor.run { completion([]) }
             }
 
             // Listen for changes
@@ -264,13 +266,14 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
         Task {
             await channel.subscribe()
 
-            // Initial fetch
+            // Initial fetch — hop to the main actor like the change-stream
+            // path below (completion mutates @Published state on ChatManager).
             do {
                 let (messages, _) = try await getConversationMessages(conversationId: conversationId, limit: 100, offset: 0)
-                completion(messages)
+                await MainActor.run { completion(messages) }
             } catch {
                 print("❌ Error on initial messages fetch: \(error)")
-                completion([])
+                await MainActor.run { completion([]) }
             }
 
             // Listen for changes

@@ -593,7 +593,7 @@ class TemplateService: ObservableObject {
 
         // Build the report
         let report = DailyJobReport(
-            id: UUID().uuidString,
+            id: UUID().uuidString.lowercased(),
             organizationID: storedUserOrganizationID,
             userId: currentUserId,
             date: Date(),

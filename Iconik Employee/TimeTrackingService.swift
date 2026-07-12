@@ -133,7 +133,7 @@ class TimeTrackingService: ObservableObject {
         }
 
         let insertData = InsertData(
-            id: UUID().uuidString,
+            id: UUID().uuidString.lowercased(),
             user_id: userId,
             organization_id: orgId,
             start_time: Date(),
@@ -582,7 +582,7 @@ class TimeTrackingService: ObservableObject {
         }
 
         let insertData = InsertData(
-            id: UUID().uuidString,
+            id: UUID().uuidString.lowercased(),
             user_id: userId,
             organization_id: orgId,
             start_time: startTime,

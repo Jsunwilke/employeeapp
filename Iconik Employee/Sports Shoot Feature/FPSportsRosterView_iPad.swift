@@ -808,11 +808,13 @@ struct FPSportsRosterView_iPad: View {
 
         // Group photo ready (from Production)
         fpSync.onGroupPhotoReady = { groupName, presentSubjectIds, totalInGroup in
-            // Update attendance from Production side
-            let presentIds = Set(presentSubjectIds)
+            // Update attendance from Production side. Lowercase the incoming
+            // ids: they may arrive uppercase (iPad-origin) or lowercase
+            // (Surface/Postgres-origin), and the local comparison is lowercase.
+            let presentIds = Set(presentSubjectIds.map { $0.lowercased() })
             let memberIds = viewModel.subjects
                 .filter { presentIds.contains($0.id.uuidString.lowercased()) }
-                .map { $0.id.uuidString }
+                .map { $0.id.uuidString.lowercased() }
             groupAttendance[groupName] = Set(memberIds)
             print("[FPSync] Group '\(groupName)' ready: \(presentSubjectIds.count)/\(totalInGroup)")
         }

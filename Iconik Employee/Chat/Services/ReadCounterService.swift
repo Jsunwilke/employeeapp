@@ -57,7 +57,7 @@ class ReadCounterService: ReadCounterProtocol {
     static let shared = ReadCounterService()
     
     private init() {
-        let sessionId = UUID().uuidString
+        let sessionId = UUID().uuidString.lowercased()
         self.sessionKey = "focal_read_session_\(sessionId)"
         self.dailyKey = "focal_read_daily_\(Date().toYYYYMMDD())"
         

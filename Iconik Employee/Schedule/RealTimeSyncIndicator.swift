@@ -3,10 +3,15 @@ import SwiftUI
 /// Real-time sync status indicator
 /// Shows users when data is syncing, last updated, or if offline
 struct RealTimeSyncIndicator: View {
-    @State private var isOnline: Bool = true
+    // Backed by the app's real connectivity signal (an NWPathMonitor lives on
+    // SessionService), so "Live"/"Offline" reflects actual network state
+    // instead of being hardcoded.
+    @ObservedObject private var sessionService = SessionService.shared
     @State private var lastUpdateTime: Date = Date()
     @State private var isAnimating: Bool = false
-    
+
+    private var isOnline: Bool { sessionService.isConnected }
+
     let style: IndicatorStyle
     
     enum IndicatorStyle {
@@ -47,7 +52,7 @@ struct RealTimeSyncIndicator: View {
                     isAnimating = true
                 }
             }
-            .onChange(of: isOnline) { newValue in
+            .onChange(of: sessionService.isConnected) { newValue in
                 isAnimating = newValue
             }
     }
@@ -73,7 +78,7 @@ struct RealTimeSyncIndicator: View {
                 isAnimating = true
             }
         }
-        .onChange(of: isOnline) { newValue in
+        .onChange(of: sessionService.isConnected) { newValue in
             isAnimating = newValue
         }
     }
@@ -114,7 +119,7 @@ struct RealTimeSyncIndicator: View {
                 isAnimating = true
             }
         }
-        .onChange(of: isOnline) { newValue in
+        .onChange(of: sessionService.isConnected) { newValue in
             isAnimating = newValue
         }
         .task {
@@ -152,24 +157,6 @@ struct RealTimeSyncIndicator: View {
         }
     }
     
-    // MARK: - Methods
-    
-    /// Call this when data is updated to refresh the timestamp
-    func dataUpdated() {
-        lastUpdateTime = Date()
-        isOnline = true
-    }
-    
-    /// Call this when connection is lost
-    func connectionLost() {
-        isOnline = false
-    }
-    
-    /// Call this when connection is restored
-    func connectionRestored() {
-        isOnline = true
-        lastUpdateTime = Date()
-    }
 }
 
 // MARK: - Preview

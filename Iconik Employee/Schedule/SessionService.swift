@@ -510,7 +510,7 @@ class SessionService: ObservableObject {
         // Create the session row. A session's date/time live in the `session_days`
         // child table (inserted below) — the legacy date/start_time/end_time columns
         // have been dropped, so the sessions row carries only shared job data.
-        let sessionId = UUID().uuidString
+        let sessionId = UUID().uuidString.lowercased()
         let nowISO = Date().ISO8601Format()
         let sessionInsert = SessionInsert(
             id: sessionId,
@@ -544,7 +544,7 @@ class SessionService: ObservableObject {
 
         // Insert the single day row (the source of truth for when it happens)
         let dayInsert = SessionDayInsert(
-            id: UUID().uuidString,
+            id: UUID().uuidString.lowercased(),
             session_id: sessionId,
             date: formData.date,
             start_time: formData.startTime,
@@ -660,7 +660,7 @@ class SessionService: ObservableObject {
                 .execute()
         } else {
             let dayInsert = SessionDayInsert(
-                id: UUID().uuidString,
+                id: UUID().uuidString.lowercased(),
                 session_id: sessionId,
                 date: formData.date,
                 start_time: formData.startTime,
