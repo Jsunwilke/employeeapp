@@ -27,7 +27,6 @@ struct SlingWeeklyView: View {
     @State private var showingTimeOffDetail = false
     
     @State private var scheduleMode: ScheduleMode = .myShifts
-    @State private var isTogglingMode = false  // Loading state for mode toggle
     @State private var showCreateSession = false
     @State private var isPublishingDay = false
     @State private var publishError: String?
@@ -317,32 +316,14 @@ struct SlingWeeklyView: View {
             
             // Interactive pill button that toggles between My Shifts and All Shifts
             Button(action: {
-                guard !isTogglingMode else { return }
-                let newMode: ScheduleMode = scheduleMode == .myShifts ? .allShifts : .myShifts
-
-                isTogglingMode = true
-
-                // Short delay to force UI to render spinner before filtering
-                Task {
-                    try? await Task.sleep(for: .milliseconds(50))
-                    await MainActor.run {
-                        scheduleMode = newMode
-                        filterSessions()
-                        isTogglingMode = false
-                    }
-                }
+                scheduleMode = scheduleMode == .myShifts ? .allShifts : .myShifts
+                filterSessions()
             }) {
                 HStack(spacing: 6) {
-                    ZStack {
-                        ProgressView()
-                            .tint(.blue)
-                            .opacity(isTogglingMode ? 1 : 0)
-                        Image(systemName: "arrow.left.arrow.right")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .opacity(isTogglingMode ? 0 : 1)
-                    }
-                    .frame(width: 16, height: 16)
+                    Image(systemName: "arrow.left.arrow.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(width: 16, height: 16)
                     Text(scheduleMode.rawValue)
                         .font(.subheadline)
                         .fontWeight(.medium)
@@ -355,7 +336,6 @@ struct SlingWeeklyView: View {
                     RoundedRectangle(cornerRadius: 16)
                         .stroke(Color(.systemGray4), lineWidth: 1)
                 )
-                .animation(.easeInOut(duration: 0.15), value: isTogglingMode)
             }
             .buttonStyle(PlainButtonStyle())
         }
@@ -1580,17 +1560,19 @@ struct SlingWeeklyView: View {
     }
     
     // Local-time yyyy-MM-dd <-> Date helpers for matching session_days rows.
-    private func dayString(_ date: Date) -> String {
+    // Cached formatter — these run per session per day cell, and DateFormatter
+    // construction is expensive.
+    private static let dayStringFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.timeZone = .current
-        return f.string(from: date)
+        return f
+    }()
+    private func dayString(_ date: Date) -> String {
+        Self.dayStringFormatter.string(from: date)
     }
     private func startOfDay(forDayString s: String) -> Date? {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        guard let d = f.date(from: s) else { return nil }
+        guard let d = Self.dayStringFormatter.date(from: s) else { return nil }
         return Calendar.current.startOfDay(for: d)
     }
 

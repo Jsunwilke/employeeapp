@@ -269,14 +269,20 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
 
     // MARK: - Helper Methods
 
+    // Cached formatter — DateFormatter construction is expensive (~1ms), and
+    // startDate/endDate are hit thousands of times when sorting/filtering the
+    // schedule. DateFormatter is thread-safe on iOS 7+.
+    private static let dateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        f.timeZone = TimeZone.current
+        return f
+    }()
+
     /// Parse date + time strings into Date object
     static func parseDateTime(date: String, time: String) -> Date? {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
-        dateFormatter.timeZone = TimeZone.current
-
         let dateTimeString = "\(date) \(time)"
-        return dateFormatter.date(from: dateTimeString)
+        return dateTimeFormatter.date(from: dateTimeString)
     }
 
     /// Get the display name for the session type (handles "other" with custom type)
