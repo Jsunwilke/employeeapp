@@ -21,9 +21,10 @@ const corsHeaders = {
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 
-// Bound what the proxy will forward: roster/portrait-card OCR requests.
-// Keeps the endpoint from being used as a general-purpose Claude proxy.
-const MAX_TOKENS_CAP = 8192;
+// Ceiling on max_tokens — high enough never to clip a legitimate roster
+// scan (the app requests 32000), low enough to bound abuse. Claude
+// Sonnet 4.6's max output is 64000.
+const MAX_TOKENS_CAP = 64000;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
