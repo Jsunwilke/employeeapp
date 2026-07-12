@@ -45,6 +45,17 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 
 ## Phase 2 — Weeks 1–2 (quick wins users will feel)
 
+> STATUS 2026-07-12: Batches 1–3 done + committed + build-verified. DONE: GPS one-shot,
+> Live indicator wired to real network, UUID lowercase sweep (insert sites + FP iPad;
+> SportsShootListView skipped — protected), chat @Published main-actor hop, photo-note
+> delete confirmation, clock in/out error surfacing, signed-URL image cache. Also
+> verified the 3 flagged swipe-deletes already confirm (no change). DEFERRED: launch-chain
+> rewrite (high blast radius — startup gate w/ recent bug eb97c6e; do with live verification),
+> upload downsampling (partly in protected files), UserFacingError helper, TimeTrackingService
+> singleton (touches shared state; verify carefully). Extra work this session: diagnosed the
+> Captura image-number save bug (race in protected SportsShootDetailView) and shipped
+> always-on logging to catch it (see RosterEditDiagnostics + PHASE1 notes).
+
 - [ ] **Launch chain** (`RootView.swift:25-57`): replace the 50ms busy-poll on `sessionCheckComplete` (up to 10s) with await/continuation; drop the redundant org-ID query (`UserManager.swift:117-142`, fully subsumed by the profile query in `UserProfileService.swift:214-219`); remove up to 1.5s retry sleeps; render optimistically from cached org id
 - [ ] **Clock in/out error surfacing + offline queue** (`TimeTrackingService.swift:95-209`): writes throw when offline with nothing queued; the AllFeaturesView clock button (`AllFeaturesView.swift:163-165`) swallows errors with print only. Queue clock events (append-only, conflict-free), reconcile on reconnect, add toast + haptic on failure. This is payroll data.
 - [ ] **GPS**: `RoutePlannerView.swift:762-804` starts `kCLLocationAccuracyBest` continuous updates, never stopped anywhere in the codebase. Use one-shot `requestLocation()` (wrapper already exists at `:788`)
