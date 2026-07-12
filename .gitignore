@@ -118,3 +118,9 @@ credentials.json
 token.json
 focal-point-c452c-9201afe26bb3.json
 *.json.bak
+
+# Supabase CLI local cache
+supabase/.temp/
+
+# Generated status reports
+*.generated.html
