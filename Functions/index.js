@@ -200,8 +200,14 @@ exports.cleanupPlayerSearchIndex = onSchedule('every 24 hours', async (event) =>
 exports.rebuildPlayerSearchIndex = onRequest(async (req, res) => {
     // Add authentication check
     const authToken = req.headers.authorization;
-    const expectedToken = process.env.REBUILD_TOKEN || '***REMOVED-REBUILD-TOKEN***';
-    
+    const expectedToken = process.env.REBUILD_TOKEN;
+
+    if (!expectedToken) {
+        logger.error('REBUILD_TOKEN is not configured; refusing all rebuild requests');
+        res.status(503).send('Service not configured');
+        return;
+    }
+
     if (authToken !== `Bearer ${expectedToken}`) {
         res.status(403).send('Unauthorized');
         return;
@@ -1655,9 +1661,12 @@ async function getCapturaAccessToken() {
 
     logger.info('Fetching new Captura token');
 
-    // Get credentials from environment config or fallback to hardcoded values
-    const clientId = process.env.CAPTURA_CLIENT_ID || '1ab255f1-5a89-4ae8-b454-4da98b64afcb';
-    const clientSecret = process.env.CAPTURA_CLIENT_SECRET || '***REMOVED-CAPTURA-SECRET***';
+    // Credentials come from environment config only — never hardcode them here.
+    const clientId = process.env.CAPTURA_CLIENT_ID;
+    const clientSecret = process.env.CAPTURA_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+        throw new Error('CAPTURA_CLIENT_ID / CAPTURA_CLIENT_SECRET are not configured');
+    }
     const tokenUrl = 'https://api.imagequix.com/api/oauth/token';
 
     try {

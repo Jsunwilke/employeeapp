@@ -154,21 +154,57 @@ class SupabaseAuthService: ObservableObject {
 
     /// Sign out current user.
     ///
-    /// Phase AC H1.15 — before the auth state flips to signed-out, purge
-    /// the SubscriptionCache's persisted state across all galleries. The
-    /// cache file may contain PII (subject names, contact info, etc.) and
-    /// must not survive across sign-in transitions to a different user
-    /// account. In-memory + disk both cleared via SubscriptionCache.purgeAll.
-    /// The purge fires BEFORE supabase.auth.signOut so it runs while auth
-    /// context is still valid (in case the cache needs auth context for
-    /// any operation — none today, but defensive ordering).
+    /// Before the auth state flips to signed-out, purge ALL locally
+    /// persisted user data — not just the SubscriptionCache. Shared iPads
+    /// are handed between accounts (and sometimes to non-employees
+    /// on-site), so student rosters, pending edit queues, chat caches,
+    /// schedule caches, and the user's own PII must not survive into the
+    /// next session. Wipes run BEFORE supabase.auth.signOut so they
+    /// execute while auth context is still valid (defensive ordering),
+    /// and each wipe is independent — one failing must not skip the rest.
     func signOut() async throws {
         isLoading = true
         defer { isLoading = false }
 
-        do {
-            SubscriptionCache.shared.purgeAll()
+        // 1. Gallery subscription cache (subject names, contact info)
+        SubscriptionCache.shared.purgeAll()
 
+        // 2. PowerSync roster database (student PII) — disconnect + clear
+        await PowerSyncManager.shared.wipeForSignOut()
+
+        // 3. Pending subject-edit command queue (payloads contain PII)
+        do {
+            try await CommandQueue.shared.purgeAll()
+        } catch {
+            print("[SupabaseAuthService] CommandQueue purge failed: \(error)")
+        }
+
+        // 4. Chat conversations/messages/users caches
+        ChatCacheService.shared.clearAllCache()
+
+        // 5. Schedule + time-entry disk caches
+        await ScheduleCacheManager.shared.clearCache()
+        await TimeEntryCacheManager.shared.clearCache()
+        SessionService.shared.clearCache()
+
+        // 6. Cached role/permissions map
+        PermissionsService.shared.clear()
+
+        // 7. PII + identity keys in UserDefaults (leave device prefs
+        //    like appTheme alone — they are not account data)
+        let piiKeys = [
+            "userID", "userEmail", "userFirstName", "userLastName",
+            "userDisplayName", "userHomeAddress", "userAddress",
+            "userCity", "userState", "userZipCode", "userCountry",
+            "userCoordinates", "userPhone", "userBio", "userPosition",
+            "userPhotoURL", "userRole", "userRoleId", "userOrganizationID",
+            "CLAUDE_API_KEY", "photoshootNotes", "jobNotes", "jobNotesSchool"
+        ]
+        for key in piiKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+
+        do {
             try await supabase.auth.signOut()
 
             self.currentUser = nil

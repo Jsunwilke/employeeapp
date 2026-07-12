@@ -381,6 +381,26 @@ class PowerSyncManager: ObservableObject {
         print("PowerSyncManager: Cleared local data and reconnected")
     }
 
+    /// Wipe the local PowerSync database without reconnecting.
+    /// Called on sign-out: the roster data (student names, contact info)
+    /// must not survive across accounts on shared iPads, and the next
+    /// sign-in re-syncs from scratch with that user's credentials.
+    func wipeForSignOut() async {
+        guard let db = database else { return }
+        syncStatusWatchTask?.cancel()
+        syncStatusWatchTask = nil
+        do {
+            try await db.disconnectAndClear()
+        } catch {
+            print("PowerSyncManager: wipeForSignOut failed: \(error)")
+        }
+        hasSynced = false
+        isConnected = false
+        isUploading = false
+        isDownloading = false
+        print("PowerSyncManager: Local data wiped for sign-out")
+    }
+
     /// Wait for first sync to complete using the SDK's built-in method.
     /// Local SQLite reads work immediately (cached data from previous sessions),
     /// but on a fresh install this waits for the first full sync from the server.

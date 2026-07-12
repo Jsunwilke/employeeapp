@@ -7,7 +7,7 @@ Full visual report: https://claude.ai/code/artifact/4ae6e46a-bc04-4307-b589-ef32
 (`[x]`), and add a dated note under the phase when it's done. To resume in a new session,
 say "continue the audit roadmap" or "start phase N" — everything needed is in this file.
 
-Status: **Phase 1 not started.**
+Status: **Phase 1 code changes done (2026-07-12); manual account steps pending — see PHASE1_MANUAL_STEPS.md.**
 
 ---
 

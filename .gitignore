@@ -124,3 +124,9 @@ supabase/.temp/
 
 # Generated status reports
 *.generated.html
+
+# Private keys & signing identities — never commit
+*.p8
+*.p12
+*.cer
+*.mobileprovision

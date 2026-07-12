@@ -213,6 +213,17 @@ final class CommandQueue {
         }
     }
 
+    /// Delete every queued command. Called on sign-out so pending
+    /// edits (which can contain subject PII in payload_json) never
+    /// survive across accounts on a shared device.
+    func purgeAll() async throws {
+        try await withSerial { [weak self] in
+            guard let self else { throw CommandQueueError.notInitialized }
+            try self.ensureOpen()
+            try self.exec("DELETE FROM command_queue;")
+        }
+    }
+
     /// Read up to `limit` queued commands in FIFO order without
     /// removing them. The drain loop calls this, sends each command,
     /// and on `applied` or `dedupe` ack calls `remove(rowId:)` to

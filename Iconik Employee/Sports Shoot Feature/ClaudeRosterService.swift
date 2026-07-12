@@ -26,146 +26,44 @@ class ClaudeRosterService {
         }
     }
     
-    // Claude API key - fetched from Supabase app_config table
-    // Returns cached key if available, empty string otherwise (triggers async fetch)
-    private var apiKey: String {
-        // Return cached key if we have one
-        if let cached = cachedAPIKey, !cached.isEmpty {
-            if debugMode {
-                print("[ClaudeRosterService] Using cached API key")
-            }
-            return cached
-        }
+    // MARK: - Claude access via server-side proxy
+    //
+    // The Anthropic key used to live in the app_config table (readable by
+    // EVERY authenticated employee) and was cached in UserDefaults. It now
+    // lives ONLY as a secret on the `claude-proxy` Supabase Edge Function.
+    // The app authenticates to the proxy with the signed-in user's Supabase
+    // JWT and never sees the Anthropic key.
 
-        // Check Info.plist as secondary option (compiled from Config.xcconfig)
-        if let infoPlistKey = Bundle.main.object(forInfoDictionaryKey: "CLAUDE_API_KEY") as? String,
-           !infoPlistKey.isEmpty,
-           !infoPlistKey.contains("YOUR-API-KEY-HERE"),
-           !infoPlistKey.contains("YOUR_API_KEY_HERE"),
-           !infoPlistKey.contains("$("),  // Check that variable substitution worked
-           infoPlistKey.hasPrefix("sk-") {  // Verify it looks like a real API key
-            if debugMode {
-                print("[ClaudeRosterService] Using Info.plist API key")
-            }
-            return infoPlistKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        // No key available - will trigger async fetch
-        if debugMode {
-            print("[ClaudeRosterService] No cached API key, will fetch from Supabase")
-        }
-        return ""
-    }
-    
-    // Property to cache the API key after fetching from Supabase
-    private var cachedAPIKey: String? = nil
-
-    // Fetch API key from Supabase organization settings and return it via completion handler
-    func fetchAPIKeyFromSupabase(completion: @escaping (String?) -> Void) {
-        guard let orgID = UserDefaults.standard.string(forKey: "userOrganizationID"),
-              !orgID.isEmpty else {
-            if debugMode {
-            }
-            completion(nil)
-            return
-        }
-
-        if debugMode {
-        }
-
-        Task {
-            do {
-                let supabase = SupabaseManager.shared.client
-
-                struct OrgRecord: Decodable {
-                    let claude_api_key: String?
-                }
-
-                let orgs: [OrgRecord] = try await supabase
-                    .from("organizations")
-                    .select("claude_api_key")
-                    .eq("id", value: orgID.lowercased())
-                    .limit(1)
-                    .execute()
-                    .value
-
-                if let apiKey = orgs.first?.claude_api_key, !apiKey.isEmpty {
-                    if self.debugMode {
-                    }
-
-                    // Store it in UserDefaults for future use
-                    UserDefaults.standard.set(apiKey, forKey: "CLAUDE_API_KEY")
-
-                    // Also cache it in memory
-                    self.cachedAPIKey = apiKey
-
-                    await MainActor.run {
-                        completion(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
-                    }
-                } else {
-                    if self.debugMode {
-                    }
-                    await MainActor.run {
-                        completion(nil)
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    completion(nil)
-                }
-            }
-        }
+    private var proxyURL: URL? {
+        URL(string: "\(AppEnvironment.current.supabaseURL)/functions/v1/claude-proxy")
     }
 
-    // Fetch API key from Supabase app_config table (shared across all organizations)
-    func fetchAPIKeyFromAppConfig(completion: @escaping (String?) -> Void) {
-        if debugMode {
-            print("[ClaudeRosterService] Fetching API key from app_config table...")
+    /// Current user's access token, falling back to the anon key so the
+    /// request still reaches the gateway (which rejects it if the proxy
+    /// requires an authenticated user).
+    private func currentAccessToken() async -> String {
+        if let token = try? await SupabaseManager.shared.client.auth.session.accessToken {
+            return token
         }
+        return AppEnvironment.current.supabaseAnonKey
+    }
 
-        Task {
-            do {
-                let supabase = SupabaseManager.shared.client
-
-                struct AppConfig: Decodable {
-                    let claude_api_key: String?
-                }
-
-                let configs: [AppConfig] = try await supabase
-                    .from("app_config")
-                    .select("claude_api_key")
-                    .limit(1)
-                    .execute()
-                    .value
-
-                if let apiKey = configs.first?.claude_api_key, !apiKey.isEmpty {
-                    if self.debugMode {
-                        print("[ClaudeRosterService] Successfully retrieved API key from app_config")
-                    }
-
-                    // Cache it in memory
-                    self.cachedAPIKey = apiKey
-
-                    await MainActor.run {
-                        completion(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
-                    }
-                } else {
-                    if self.debugMode {
-                        print("[ClaudeRosterService] No API key found in app_config table")
-                    }
-                    await MainActor.run {
-                        completion(nil)
-                    }
-                }
-            } catch {
-                if self.debugMode {
-                    print("[ClaudeRosterService] Error fetching from app_config: \(error.localizedDescription)")
-                }
-                await MainActor.run {
-                    completion(nil)
-                }
-            }
+    /// Build a POST request to the claude-proxy Edge Function carrying an
+    /// Anthropic Messages API body. Returns nil if the URL is malformed or
+    /// the body can't be serialized.
+    private func buildProxyRequest(body: [String: Any], accessToken: String) -> URLRequest? {
+        guard let url = proxyURL,
+              let httpBody = try? JSONSerialization.data(withJSONObject: body, options: []) else {
+            return nil
         }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(AppEnvironment.current.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.httpBody = httpBody
+        return request
     }
 
     // Claude model to use
@@ -181,145 +79,11 @@ class ClaudeRosterService {
         return highestID + 1
     }
     
-    // Verify the API key is valid before attempting to use it
-    func verifyAPIKey(apiKey: String, completion: @escaping (Bool, String?) -> Void) {
-        // Create a simple request to the Anthropic API to check if the key is valid
-        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
-            completion(false, "Invalid API URL")
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        // Use the API key directly in the x-api-key header without "Bearer " prefix
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        
-        // Updated API version
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        
-        // Create a minimal valid request body
-        let requestBody: [String: Any] = [
-            "model": modelName,
-            "messages": [
-                ["role": "user", "content": [["type": "text", "text": "Hello"]]]
-            ],
-            "max_tokens": 10
-        ]
-        
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: requestBody, options: [])
-            request.httpBody = jsonData
-        } catch {
-            completion(false, "Error creating request body: \(error.localizedDescription)")
-            return
-        }
-        
-        // Make the request
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            // Check for network error
-            if let error = error {
-                completion(false, "Network error: \(error.localizedDescription)")
-                return
-            }
-            
-            // Check HTTP status code
-            if let httpResponse = response as? HTTPURLResponse {
-                // Print full response data for debugging
-                if self.debugMode, let data = data, let responseString = String(data: data, encoding: .utf8) {
-                }
-                
-                if httpResponse.statusCode == 200 {
-                    completion(true, nil)
-                } else if httpResponse.statusCode == 401 {
-                    // API key is invalid
-                    var errorMessage = "Invalid API key (HTTP 401)"
-                    
-                    // Try to extract more detailed error message from response body
-                    if let data = data, let responseJSON = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let error = responseJSON["error"] as? [String: Any],
-                       let message = error["message"] as? String {
-                        errorMessage = message
-                    }
-                    
-                    completion(false, errorMessage)
-                } else {
-                    var errorMessage = "HTTP Error: \(httpResponse.statusCode)"
-                    
-                    // Try to extract more detailed error message from response body
-                    if let data = data, let responseJSON = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let error = responseJSON["error"] as? [String: Any],
-                       let message = error["message"] as? String {
-                        errorMessage = message
-                    }
-                    
-                    completion(false, errorMessage)
-                }
-            } else {
-                completion(false, "Invalid response from server")
-            }
-        }.resume()
-    }
-    
     // Extract roster entries from an image - with a starting Subject ID and sportsJobId
     func extractRosterFromImage(_ image: UIImage, sportsJobId: UUID = UUID(), organizationId: String = "", startingSubjectID: Int = 101, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
-        // Get and verify API key first
-        if apiKey.isEmpty {
-            // Try to fetch the API key from app_config table first (shared key)
-            fetchAPIKeyFromAppConfig { [weak self] fetchedKey in
-                guard let self = self else { return }
-
-                if let key = fetchedKey, !key.isEmpty {
-                    // Verify the key before using it
-                    self.verifyAPIKey(apiKey: key) { isValid, errorMessage in
-                        if isValid {
-                            self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
-                        } else {
-                            let error = NSError(domain: "ClaudeRosterService", code: 101,
-                                                userInfo: [NSLocalizedDescriptionKey: "API key validation failed: \(errorMessage ?? "Unknown error")"])
-                            completion(.failure(error))
-                        }
-                    }
-                } else {
-                    // Fallback: try organization-specific key
-                    self.fetchAPIKeyFromSupabase { fetchedOrgKey in
-                        if let key = fetchedOrgKey, !key.isEmpty {
-                            self.verifyAPIKey(apiKey: key) { isValid, errorMessage in
-                                if isValid {
-                                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, apiKey: key, completion: completion)
-                                } else {
-                                    let error = NSError(domain: "ClaudeRosterService", code: 101,
-                                                        userInfo: [NSLocalizedDescriptionKey: "API key validation failed: \(errorMessage ?? "Unknown error")"])
-                                    completion(.failure(error))
-                                }
-                            }
-                        } else {
-                            let error = NSError(domain: "ClaudeRosterService", code: 101,
-                                                userInfo: [NSLocalizedDescriptionKey: "Could not find a valid Claude API key. Please contact your administrator."])
-                            completion(.failure(error))
-                        }
-                    }
-                }
-            }
-        } else {
-            // We have an API key, let's verify it first
-            verifyAPIKey(apiKey: apiKey) { [weak self] isValid, errorMessage in
-                guard let self = self else { return }
-                
-                if isValid {
-                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, apiKey: self.apiKey, completion: completion)
-                } else {
-                    // The API key we had is invalid
-                    // Don't clear from UserDefaults in case it's a temporary issue
-                    self.cachedAPIKey = nil
-                    
-                    let error = NSError(domain: "ClaudeRosterService", code: 101,
-                                        userInfo: [NSLocalizedDescriptionKey: "Invalid API key: \(errorMessage ?? "Unknown error"). Please contact your administrator."])
-                    completion(.failure(error))
-                }
-            }
-        }
+        // The Claude key lives server-side now — go straight to extraction
+        // through the proxy. No client-side key fetch or validation.
+        proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, completion: completion)
     }
     
     // Helper function to compress image to stay under 5MB limit
@@ -377,7 +141,7 @@ class ClaudeRosterService {
     }
     
     // This is the actual extraction logic, only called once we have a valid API key
-    private func proceedWithRosterExtraction(_ image: UIImage, sportsJobId: UUID, organizationId: String = "", startingSubjectID: Int, apiKey: String, retryCount: Int = 0, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
+    private func proceedWithRosterExtraction(_ image: UIImage, sportsJobId: UUID, organizationId: String = "", startingSubjectID: Int, retryCount: Int = 0, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Convert and compress image to stay under 5MB
         guard let imageData = compressImageForAPI(image) else {
             let error = NSError(domain: "ClaudeRosterService", code: 100,
@@ -385,30 +149,9 @@ class ClaudeRosterService {
             completion(.failure(error))
             return
         }
-        
-        let sizeInMB = Double(imageData.count) / (1024.0 * 1024.0)
-        if debugMode {
-        }
-        
+
         let base64Image = imageData.base64EncodedString()
-        
-        // Prepare the request to the Anthropic API
-        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
-            let error = NSError(domain: "ClaudeRosterService", code: 102,
-                                userInfo: [NSLocalizedDescriptionKey: "Invalid API URL"])
-            completion(.failure(error))
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        // Use the API key directly in the x-api-key header without "Bearer " prefix
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        
+
         // Updated prompt to match the requirements
         let promptText = """
         I have a photo of a sports team roster. Please extract athlete information from this image. For each athlete:
@@ -485,17 +228,21 @@ class ClaudeRosterService {
             "max_tokens": 32000  // Max output for Opus 4.5
         ]
         
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: requestBody, options: [])
-            request.httpBody = jsonData
-            
-            if debugMode {
+        Task { [weak self] in
+            guard let self = self else { return }
+            let token = await self.currentAccessToken()
+            guard let request = self.buildProxyRequest(body: requestBody, accessToken: token) else {
+                DispatchQueue.main.async {
+                    completion(.failure(NSError(domain: "ClaudeRosterService", code: 102,
+                        userInfo: [NSLocalizedDescriptionKey: "Could not build request to Claude proxy"])))
+                }
+                return
             }
-            
+
             // Make the request
             URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
                 guard let self = self else { return }
-                
+
                 // Check for network error
                 if let error = error {
                     let nsError = NSError(domain: "ClaudeRosterService", code: 103,
@@ -546,7 +293,7 @@ class ClaudeRosterService {
                             if retryCount < 3 {
                                 let delay = Double(retryCount + 1) * 2.0  // 2s, 4s, 6s
                                 DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, apiKey: apiKey, retryCount: retryCount + 1, completion: completion)
+                                    self.proceedWithRosterExtraction(image, sportsJobId: sportsJobId, organizationId: organizationId, startingSubjectID: startingSubjectID, retryCount: retryCount + 1, completion: completion)
                                 }
                                 return
                             }
@@ -600,14 +347,9 @@ class ClaudeRosterService {
                     }
                 }
             }.resume()
-            
-        } catch {
-            let nsError = NSError(domain: "ClaudeRosterService", code: 108,
-                                userInfo: [NSLocalizedDescriptionKey: "Failed to create request: \(error.localizedDescription)"])
-            completion(.failure(nsError))
         }
     }
-    
+
     // Parse JSON string to roster entries
     private func parseJsonToRosterEntries(jsonString: String, sportsJobId: UUID, organizationId: String = "", startingSubjectID: Int, completion: @escaping (Result<[RosterEntry], Error>) -> Void) {
         // Extract JSON from the response if it's wrapped in code blocks
@@ -878,37 +620,16 @@ extension ClaudeRosterService {
         let isOnline = isNetworkAvailable()
 
         if isOnline {
-            // Try Claude API
-            let doExtract = { [weak self] (key: String) in
-                self?.proceedWithPortraitCardExtraction(image, galleryId: galleryId, organizationId: organizationId, apiKey: key) { result in
-                    switch result {
-                    case .success(let subject):
-                        completion(.success(PortraitCardResult(subject: subject, usedOnDeviceOCR: false)))
-                    case .failure(let error):
-                        // Claude failed (maybe brief connectivity loss) — fall back to on-device
-                        if self?.debugMode == true { print("[ClaudeRosterService] Claude API failed, falling back to on-device OCR: \(error.localizedDescription)") }
-                        self?.extractWithOnDeviceOCR(image, galleryId: galleryId, organizationId: organizationId, completion: completion)
-                    }
+            // Try Claude via the proxy; fall back to on-device OCR on failure.
+            proceedWithPortraitCardExtraction(image, galleryId: galleryId, organizationId: organizationId) { [weak self] result in
+                switch result {
+                case .success(let subject):
+                    completion(.success(PortraitCardResult(subject: subject, usedOnDeviceOCR: false)))
+                case .failure(let error):
+                    // Claude failed (maybe brief connectivity loss) — fall back to on-device
+                    if self?.debugMode == true { print("[ClaudeRosterService] Claude proxy failed, falling back to on-device OCR: \(error.localizedDescription)") }
+                    self?.extractWithOnDeviceOCR(image, galleryId: galleryId, organizationId: organizationId, completion: completion)
                 }
-            }
-
-            if apiKey.isEmpty {
-                fetchAPIKeyFromAppConfig { [weak self] fetchedKey in
-                    if let key = fetchedKey, !key.isEmpty {
-                        doExtract(key)
-                    } else {
-                        self?.fetchAPIKeyFromSupabase { fetchedOrgKey in
-                            if let key = fetchedOrgKey, !key.isEmpty {
-                                doExtract(key)
-                            } else {
-                                // No API key — fall back to on-device
-                                self?.extractWithOnDeviceOCR(image, galleryId: galleryId, organizationId: organizationId, completion: completion)
-                            }
-                        }
-                    }
-                }
-            } else {
-                doExtract(apiKey)
             }
         } else {
             // Offline — use on-device OCR
@@ -1056,7 +777,6 @@ extension ClaudeRosterService {
         _ image: UIImage,
         galleryId: String,
         organizationId: String,
-        apiKey: String,
         completion: @escaping (Result<FPSubject, Error>) -> Void
     ) {
         guard let imageData = compressImageForAPI(image) else {
@@ -1066,18 +786,6 @@ extension ClaudeRosterService {
         }
 
         let base64Image = imageData.base64EncodedString()
-
-        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
-            completion(.failure(NSError(domain: "ClaudeRosterService", code: 102,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid API URL"])))
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
         let promptText = """
         This is a photo of a handwritten student portrait card. Please extract the student's information.
@@ -1123,14 +831,18 @@ extension ClaudeRosterService {
             "max_tokens": 500
         ]
 
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: requestBody) else {
-            completion(.failure(NSError(domain: "ClaudeRosterService", code: 103,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to serialize request"])))
-            return
-        }
-        request.httpBody = httpBody
+        Task { [weak self] in
+            guard let self = self else { return }
+            let token = await self.currentAccessToken()
+            guard let request = self.buildProxyRequest(body: requestBody, accessToken: token) else {
+                DispatchQueue.main.async {
+                    completion(.failure(NSError(domain: "ClaudeRosterService", code: 103,
+                        userInfo: [NSLocalizedDescriptionKey: "Could not build request to Claude proxy"])))
+                }
+                return
+            }
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+            URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
                     completion(.failure(error))
@@ -1187,7 +899,8 @@ extension ClaudeRosterService {
                     completion(.failure(error))
                 }
             }
-        }.resume()
+            }.resume()
+        }
     }
 
     /// Mock extraction returning FPSubjects
