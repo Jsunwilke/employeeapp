@@ -45,9 +45,39 @@ class TimeOffService: ObservableObject {
         }
     }
 
+    // MARK: - Identity Resolution
+
+    /// The singleton may be created before sign-in completes (e.g. the app backgrounds
+    /// during signup), leaving the init-time snapshot nil for the rest of the app run.
+    /// Always re-check the live session instead of trusting the cached value.
+    private func resolveUserId() async throws -> String {
+        if currentUserId == nil {
+            currentUserId = (try? await supabase.auth.session)?.user.id.uuidString.lowercased()
+        }
+        guard let userId = currentUserId else {
+            throw NSError(domain: "TimeOffService", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+        return userId
+    }
+
+    private func resolveIdentity() async throws -> (userId: String, orgId: String) {
+        let userId = try await resolveUserId()
+        if currentOrgId == nil || currentOrgId?.isEmpty == true {
+            currentOrgId = UserDefaults.standard.string(forKey: "userOrganizationID")
+        }
+        guard let orgId = currentOrgId, !orgId.isEmpty else {
+            throw NSError(domain: "TimeOffService", code: 401, userInfo: [NSLocalizedDescriptionKey: "Organization not found — please sign out and back in"])
+        }
+        return (userId, orgId)
+    }
+
     // MARK: - Real-time Listeners
 
     func startListeningToRequests() async {
+        // Refresh the user ID in case the singleton was created before sign-in,
+        // otherwise updateFilteredLists() leaves myRequests empty
+        _ = try? await resolveUserId()
+
         // Try currentOrgId first, fall back to UserDefaults if not set yet
         let orgId: String
         if let cachedOrgId = currentOrgId, !cachedOrgId.isEmpty {
@@ -189,10 +219,7 @@ class TimeOffService: ObservableObject {
         ptoHoursRequested: Double? = nil,
         projectedPTOBalance: Double? = nil
     ) async throws {
-        guard let userId = currentUserId,
-              let orgId = currentOrgId else {
-            throw NSError(domain: "TimeOffService", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
-        }
+        let (userId, orgId) = try await resolveIdentity()
 
         // Get user info
         let firstName = UserDefaults.standard.string(forKey: "userFirstName") ?? ""
@@ -287,10 +314,7 @@ class TimeOffService: ObservableObject {
         ptoHoursRequested: Double? = nil,
         projectedPTOBalance: Double? = nil
     ) async throws {
-        guard let userId = currentUserId,
-              let _ = currentOrgId else {
-            throw NSError(domain: "TimeOffService", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
-        }
+        let userId = try await resolveUserId()
 
         // Find the existing request
         guard let existingRequest = timeOffRequests.first(where: { $0.id == requestId }) else {
@@ -355,10 +379,7 @@ class TimeOffService: ObservableObject {
     // MARK: - Cancel Request
 
     func cancelTimeOffRequest(requestId: String) async throws {
-        guard let userId = currentUserId,
-              let orgId = currentOrgId else {
-            throw NSError(domain: "TimeOffService", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
-        }
+        let (userId, orgId) = try await resolveIdentity()
 
         // Find the existing request
         guard let existingRequest = timeOffRequests.first(where: { $0.id == requestId }) else {
@@ -417,9 +438,7 @@ class TimeOffService: ObservableObject {
     // MARK: - Manager Actions
 
     func approveTimeOffRequest(requestId: String) async throws {
-        guard let userId = currentUserId else {
-            throw NSError(domain: "TimeOffService", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
-        }
+        let userId = try await resolveUserId()
 
         // Find the request to check if it uses PTO
         guard let request = timeOffRequests.first(where: { $0.id == requestId }) else {
@@ -478,9 +497,7 @@ class TimeOffService: ObservableObject {
     }
 
     func denyTimeOffRequest(requestId: String, denialReason: String) async throws {
-        guard let userId = currentUserId else {
-            throw NSError(domain: "TimeOffService", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
-        }
+        let userId = try await resolveUserId()
 
         if denialReason.trimmingCharacters(in: .whitespaces).isEmpty {
             throw NSError(domain: "TimeOffService", code: 400, userInfo: [NSLocalizedDescriptionKey: "Denial reason is required"])
@@ -545,9 +562,7 @@ class TimeOffService: ObservableObject {
     }
 
     func putTimeOffRequestInReview(requestId: String) async throws {
-        guard let userId = currentUserId else {
-            throw NSError(domain: "TimeOffService", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
-        }
+        let userId = try await resolveUserId()
 
         // Find the request
         guard let request = timeOffRequests.first(where: { $0.id == requestId }) else {

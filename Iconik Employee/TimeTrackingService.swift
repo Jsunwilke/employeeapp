@@ -14,9 +14,16 @@ class TimeTrackingService: ObservableObject {
     @Published var isConnected = true
 
     private var timer: Timer?
-    private var currentUserId: String?
-    private var currentOrgId: String?
     private var isClockingOut = false
+
+    // Computed from the live session/UserDefaults rather than captured at init,
+    // so a sign-in that completes after this service is created is still picked up
+    private var currentUserId: String? {
+        supabase.auth.currentUser?.id.uuidString.lowercased()
+    }
+    private var currentOrgId: String? {
+        UserDefaults.standard.string(forKey: "userOrganizationID")
+    }
 
     // Persistent cache and network monitoring
     private let persistentCache = TimeEntryCacheManager.shared
@@ -24,7 +31,6 @@ class TimeTrackingService: ObservableObject {
     private let monitorQueue = DispatchQueue(label: "TimeTrackingNetworkMonitor")
 
     init() {
-        setupUser()
         setupNetworkMonitoring()
         Task {
             // Load cached current entry immediately for instant display
@@ -80,22 +86,7 @@ class TimeTrackingService: ObservableObject {
         await persistentCache.saveCurrentEntry(currentTimeEntry)
     }
 
-    func setupUser() {
-        // Get user ID from Supabase auth (synchronously access current session)
-        if let user = supabase.auth.currentUser {
-            self.currentUserId = user.id.uuidString.lowercased()
-        } else {
-            return
-        }
-
-        // Get organization ID from UserManager
-        if let orgIdString = UserDefaults.standard.string(forKey: "userOrganizationID") {
-            self.currentOrgId = orgIdString
-        }
-    }
-
     func refreshUserAndStatus() async {
-        setupUser()
         await checkCurrentStatus()
     }
 
