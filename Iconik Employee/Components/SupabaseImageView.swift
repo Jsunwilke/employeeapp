@@ -9,6 +9,32 @@
 import SwiftUI
 import Supabase
 
+/// Caches Supabase signed URLs by storage path so the same image isn't
+/// re-signed (and, crucially, re-downloaded by AsyncImage/URLCache) on every
+/// appearance. Previously each scroll of a list re-minted a fresh signature,
+/// giving every avatar a new URL and forcing a full re-download.
+///
+/// Reuse window is deliberately shorter than the URL's 1-hour validity so a
+/// changed photo (uploaded to the same path) refreshes within a few minutes.
+/// Callers that overwrite an image can force-refresh via `invalidate(key:)`.
+actor SignedURLCache {
+    static let shared = SignedURLCache()
+    private var entries: [String: (url: URL, expiresAt: Date)] = [:]
+
+    func url(for key: String) -> URL? {
+        guard let entry = entries[key], entry.expiresAt > Date() else { return nil }
+        return entry.url
+    }
+
+    func store(_ url: URL, for key: String, ttl: TimeInterval) {
+        entries[key] = (url, Date().addingTimeInterval(ttl))
+    }
+
+    func invalidate(key: String) {
+        entries.removeValue(forKey: key)
+    }
+}
+
 struct SupabaseImageView: View {
     let storageURL: String
     let bucket: String
@@ -96,8 +122,6 @@ struct SupabaseImageView: View {
             return
         }
 
-        print("SupabaseImageView: Input URL: \(storageURL)")
-
         // Extract the path from the full URL
         guard let path = extractStoragePath(from: storageURL) else {
             print("SupabaseImageView: Could not extract path from URL: \(storageURL)")
@@ -106,15 +130,28 @@ struct SupabaseImageView: View {
             return
         }
 
-        print("SupabaseImageView: Extracted path: \(path) from bucket: \(bucket)")
+        let cacheKey = "\(bucket)/\(path)"
+
+        // Reuse a still-valid signed URL so AsyncImage/URLCache can serve the
+        // image from cache instead of re-downloading on every appearance.
+        if let cached = await SignedURLCache.shared.url(for: cacheKey) {
+            await MainActor.run {
+                self.signedURL = cached
+                self.isLoading = false
+            }
+            return
+        }
 
         do {
             let supabase = SupabaseManager.shared.client
             let url = try await supabase.storage
                 .from(bucket)
-                .createSignedURL(path: path, expiresIn: 3600) // 1 hour
+                .createSignedURL(path: path, expiresIn: 3600) // URL valid 1 hour
 
-            print("SupabaseImageView: ✅ Generated signed URL successfully")
+            // Reuse for 5 minutes — long enough to kill scroll re-downloads,
+            // short enough that a re-uploaded photo refreshes quickly.
+            await SignedURLCache.shared.store(url, for: cacheKey, ttl: 300)
+
             await MainActor.run {
                 self.signedURL = url
                 self.isLoading = false
