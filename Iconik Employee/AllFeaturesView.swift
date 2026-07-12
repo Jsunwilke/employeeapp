@@ -9,6 +9,8 @@ struct AllFeaturesView: View {
     @StateObject private var timeTrackingService = TimeTrackingService()
     @State private var elapsedTime: String = "00:00:00"
     @State private var timer: Timer?
+    @State private var clockErrorMessage: String?
+    @State private var showClockError = false
     
     // Manager features
     let managerFeatures: [FeatureItem] = [
@@ -133,6 +135,11 @@ struct AllFeaturesView: View {
             toolbarContent
         }
         .environment(\.editMode, $localEditMode)
+        .alert("Clock In/Out Failed", isPresented: $showClockError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(clockErrorMessage ?? "Something went wrong. Your time may not have been recorded — please try again or check your connection.")
+        }
         .task {
             await timeTrackingService.refreshUserAndStatus()
             startTimerIfNeeded()
@@ -161,7 +168,13 @@ struct AllFeaturesView: View {
                             }
                         }
                     } catch {
+                        // Clock in/out is payroll data — never fail silently.
                         print("Clock in/out error: \(error.localizedDescription)")
+                        await MainActor.run {
+                            clockErrorMessage = error.localizedDescription
+                            showClockError = true
+                            UINotificationFeedbackGenerator().notificationOccurred(.error)
+                        }
                     }
                 }
             }) {

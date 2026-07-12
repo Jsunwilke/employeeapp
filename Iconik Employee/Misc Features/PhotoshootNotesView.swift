@@ -17,6 +17,7 @@ struct PhotoshootNotesView: View {
     @State private var isLoadingSchedule: Bool = false
     @State private var scheduleError: String = ""
     @State private var showSchoolSelectionDialog = false
+    @State private var showDeleteNoteConfirmation = false
     @State private var pendingNote: PhotoshootNote? = nil
     
     // User's stored information
@@ -94,7 +95,7 @@ struct PhotoshootNotesView: View {
                     }
                     
                     if selectedNote != nil {
-                        Button(action: deleteSelectedNote) {
+                        Button(action: { showDeleteNoteConfirmation = true }) {
                             HStack {
                                 Image(systemName: "trash")
                                 Text("Delete")
@@ -628,6 +629,16 @@ struct PhotoshootNotesView: View {
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Re-subscribe when app returns to foreground
             loadScheduleForToday()
+        }
+        .confirmationDialog(
+            "Delete this note?",
+            isPresented: $showDeleteNoteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Note", role: .destructive) { deleteSelectedNote() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This permanently deletes the note and any attached photos. This can't be undone.")
         }
         .confirmationDialog(
             "Select School for Note",
