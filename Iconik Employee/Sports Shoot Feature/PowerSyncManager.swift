@@ -476,6 +476,17 @@ class PowerSyncManager: ObservableObject {
             throw PowerSyncManagerError.notInitialized
         }
 
+        // DIAGNOSTIC: capture the image_numbers value at the moment of the
+        // local write. If a number "vanishes", this line reveals whether the
+        // correct value ever reached the save (empty here == lost upstream in
+        // the editing UI; correct here == lost later in sync).
+        RosterEditDiagnostics.shared.log(
+            "saveRosterEntry",
+            entryId: entry.id.uuidString.lowercased(),
+            numbers: entry.imageNumbers,
+            extra: "v=\(entry.version)"
+        )
+
         let idString = entry.id.uuidString.lowercased()
         let jobIdString = entry.sportsJobId.uuidString.lowercased()
         let updatedByString: String? = entry.updatedBy?.uuidString.lowercased()

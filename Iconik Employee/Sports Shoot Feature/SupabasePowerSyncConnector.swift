@@ -144,6 +144,11 @@ final class SupabasePowerSyncConnector: PowerSyncBackendConnectorProtocol {
 
         Self.sanitizeTemporalEmpties(table: table, record: &record)
 
+        if table == "roster_entries" {
+            RosterEditDiagnostics.shared.log(
+                "upload.upsert", entryId: id, numbers: record["image_numbers"] ?? "<omitted>")
+        }
+
         try await supabase
             .from(table)
             .upsert(record)
@@ -173,6 +178,14 @@ final class SupabasePowerSyncConnector: PowerSyncBackendConnectorProtocol {
         guard !record.isEmpty else {
             print("SupabasePowerSyncConnector: Skipping no-op update for \(table)/\(id) (only empty-string temporals)")
             return
+        }
+
+        if table == "roster_entries" {
+            // 'image_numbers' key ABSENT here means PowerSync didn't consider it
+            // changed — a clue the value never made it into the local write.
+            RosterEditDiagnostics.shared.log(
+                "upload.update", entryId: id,
+                numbers: record["image_numbers"] ?? "<not-in-patch>")
         }
 
         try await supabase
