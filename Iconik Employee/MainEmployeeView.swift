@@ -1200,34 +1200,7 @@ struct MainEmployeeView: View {
     }
     
     private func featureColorFor(_ id: String) -> Color {
-        switch id {
-        case "timeTracking": return .cyan
-        case "photoshootNotes": return .purple
-        case "dailyJobReport": return .blue
-        case "customDailyReports": return .mint
-        case "myDailyJobReports": return .green
-        case "mileageReports": return .orange
-        case "schedule": return .red
-        case "locationPhotos": return .pink
-        case "capture": return .blue
-        case "sportsShoot": return .indigo
-        case "focalPointSports": return .mint
-        case "yearbookChecklists": return .purple
-        case "classGroups": return .teal
-        case "training": return .yellow
-        case "chat": return .blue
-        case "scan": return .orange
-        case "flagUser": return .red
-        case "unflagUser": return .green
-        case "managerMileage": return .blue
-        case "stats": return .indigo
-        case "galleryCreator": return .green
-        case "jobBoxTracker": return .teal
-        case "equipment": return .cyan
-        case "tasks": return .blue
-        case "routePlanner": return .green
-        default: return .gray
-        }
+        FeatureTheme.color(for: id)  // single source of truth — see DesignTokens.swift
     }
 
     private func loadSchedule() {

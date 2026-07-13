@@ -490,21 +490,6 @@ struct TabBarConfigurationView: View {
     }
     
     private func featureColorFor(_ id: String) -> Color {
-        switch id {
-        case "timeTracking": return .cyan
-        case "chat": return .blue
-        case "scan": return .orange
-        case "photoshootNotes": return .purple
-        case "dailyJobReport": return .green
-        case "customDailyReports": return .mint
-        case "myDailyJobReports": return .green
-        case "mileageReports": return .orange
-        case "schedule": return .red
-        case "locationPhotos": return .pink
-        case "sportsShoot": return .indigo
-        case "timeOffRequests": return .teal
-        case "equipment": return .cyan
-        default: return .gray
-        }
+        FeatureTheme.color(for: id)  // single source of truth — see DesignTokens.swift
     }
 }
