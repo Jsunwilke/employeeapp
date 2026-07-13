@@ -1,5 +1,17 @@
 # Phase 1 — Manual steps only you can do
 
+> UPDATE 2026-07-12: Owner decided NOT to revoke/rotate the exposed credentials
+> — repo is private and single-user, so the leaked keys are treated as
+> uncompromised (accepted residual risk; a leaked key stays usable by anyone who
+> ever copied it until revoked). Git history WAS purged: all `.p8`/`.p12` and
+> `GoogleService-Info.plist` removed from every branch + tag, and the Captura
+> secret + rebuild token scrubbed from old `Functions/index.js` blobs, then
+> force-pushed. Full pre-rewrite backup: `~/Desktop/employeeapp-backup-before-purge.bundle`.
+> The actual key FILES now live only in `~/Desktop/employeeapp-keys-TO-REVOKE/`
+> — they are still VALID and may be needed for signing/APNs, so keep them safe
+> (the folder name is now a misnomer). Sections 1–2 below are therefore SKIPPED
+> by choice; section 5 (purge) is DONE.
+
 The code changes are done and committed. These remaining steps require your
 Apple, Supabase, and Google accounts. Do them before/around the git history
 purge. Check each off in AUDIT_ROADMAP.md as you finish.
