@@ -45,7 +45,7 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 
 ## Phase 2 — Weeks 1–2 (quick wins users will feel)
 
-> STATUS 2026-07-12: Batches 1–3 done + committed + build-verified. DONE: GPS one-shot,
+> STATUS 2026-07-12: Batches 1–3 done + committed + build-verified + USER-TESTED OK on a build. DONE: GPS one-shot,
 > Live indicator wired to real network, UUID lowercase sweep (insert sites + FP iPad;
 > SportsShootListView skipped — protected), chat @Published main-actor hop, photo-note
 > delete confirmation, clock in/out error surfacing, signed-URL image cache. Also
