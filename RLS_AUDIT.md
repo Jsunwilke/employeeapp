@@ -154,6 +154,73 @@ they act on any well-formed payload). Client-callable ones (`send-notification`,
 
 ## D. Status
 - Repo-visible surface: audited. Findings above.
-- Live-DB-only surface (core-table policies, chat RPC bodies, per-function verify_jwt):
-  **pending** — run §B in the Supabase console; drop results back here to close it out.
-- One drafted fix (`acquire_lock`) ready for review; not deployed.
+- Live-DB-only surface: **DONE 2026-07-12** — §B run against the live project
+  (`nofegnmrgnanpznavlqy`) via the Management API. Results in §E. This closes the item.
+- Drafted fixes (not deployed): `supabase/drafts/harden_acquire_lock.sql` and
+  `supabase/drafts/rls_hardening.sql` (§E fixes). All need owner review — this is the
+  SHARED Focal-Point DB (also backs Captura production), so DDL has cross-system blast radius.
+
+---
+
+## E. Live DB results (2026-07-12) — what the console SQL found
+
+The client-side-authorization thesis is not just confirmed, it's **worse than "read-only
+leakage"**: the server actively permits privilege escalation and unauthenticated data access.
+
+### 🔴🔴 CRITICAL 1 — any employee can make themselves org admin
+`users` has a `role text` column, and `is_user_admin()` / `is_admin_of_org()` (both
+SECURITY DEFINER) gate admin power on `role = 'admin'`. The `users_update_org` policy
+allows a user to UPDATE their **own** row (`id = auth.uid()`), and column grants show
+`authenticated` **and `anon`** hold `UPDATE` on `users.role`, `users.role_id`, AND
+`users.organization_id`. RLS can't restrict columns → **any employee can set their own
+`role='admin'`** (real server-side admin, not just UI) or change their `organization_id`
+to hop orgs. Exploitable with the JWT every employee already has.
+
+### 🔴🔴 CRITICAL 2 — 14 tables are RLS-off AND granted to `anon` (public key) with full DML
+RLS is disabled on and SELECT/INSERT/UPDATE/DELETE granted to **`anon`** (the anon key is
+public — it ships in the app binary / `Config.xcconfig`) for: all `audit_log_2026_05 …
+2027_01` + `audit_log_default` partitions, `access_code_pricing`, `archive_step_legacy_fields`,
+`_recurring_tasks_backup_2026_05_28`, `_w12_repeats_backup_2026_05`. So **anyone with the
+public anon key — no login — can read the entire audit log and pricing, and DELETE those
+rows.** This is the shared Focal-Point DB, so the audit log likely spans Captura orgs too.
+
+### 🔴 HIGH 3 — payroll / PTO / schedule writable by any employee
+These use `FOR ALL` with only an org check (`organization_id = get_user_organization_id()`),
+no owner/role restriction, so any authenticated org member can INSERT/UPDATE/DELETE **any**
+row in their org:
+- `pto_balances` — an employee can inflate their own PTO balance (money).
+- `time_entries` — an employee can edit/delete colleagues' payroll punches.
+- `time_off_requests` — an employee can self-approve or delete others' requests (the
+  manager-only approve policy from migration 005 is moot — RLS policies OR together, so the
+  permissive `ALL` policy wins).
+- `sessions` / `session_days` — any employee can edit the whole org's schedule server-side.
+
+### 🔴 HIGH 4 — `role_permissions` writable by any authenticated org member
+`modify_role_permissions` (cmd ALL, role `authenticated`) only checks the target role is in
+the caller's org — **not** that the caller is an admin. An employee can rewrite their own
+role's permission set (self-serve permission escalation for the client-side gate).
+
+### ✅ / minor
+- `messages`, `conversations` — correctly scoped to participants (`participants @> auth.uid()`,
+  `sender_id = auth.uid()`). Good.
+- `organizations` — SELECT own, UPDATE admin-only. Good (INSERT open is fine for onboarding).
+- Org-scope helper fns (`get_user_org_id`, `is_admin_of_org`, …) correctly derive from
+  `auth.uid()`. Good.
+- `acquire_lock` — LIVE is `SECURITY INVOKER` (not DEFINER as in the repo migration), so RLS
+  applies and the cross-org concern is mitigated; it still trusts `p_user_id` for lock-owner
+  identity (minor griefing only). Lower severity than the repo suggested.
+- Chat RPCs (`mark_conversation_read`, `toggle_pin_conversation`,
+  `add_conversation_participants`, `remove_conversation_participant`, `leave_conversation`)
+  **do not exist** in the DB — the client `rpc(...)` calls to them fail at runtime. Separate
+  bug to chase, but not an authz hole.
+
+### Priority
+1. **CRITICAL 2** (anon → audit/pricing/backups): revoke anon/authenticated grants + enable
+   RLS (or drop the backups). Fastest to fix, worst exposure (unauthenticated).
+2. **CRITICAL 1** (self-admin): revoke `UPDATE` on `users.role`/`role_id`/`organization_id`
+   from anon+authenticated; route role changes through an admin-only SECURITY DEFINER RPC.
+3. **HIGH 3 & 4**: tighten the `FOR ALL` policies to owner/manager for writes; make
+   `role_permissions` writes admin-only.
+Draft SQL for all of the above: `supabase/drafts/rls_hardening.sql`. ⚠️ Shared Captura DB —
+review each against live app + Captura flows before applying; some `FOR ALL` writes may be
+intentional. Not auto-applied.
