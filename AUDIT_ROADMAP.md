@@ -45,7 +45,16 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 
 ## Phase 2 — Weeks 1–2 (quick wins users will feel)
 
-> STATUS 2026-07-12: Batches 1–3 done + committed + build-verified + USER-TESTED OK on a build. DONE: GPS one-shot,
+> STATUS 2026-07-12: PHASE 2 COMPLETE except the launch-chain rewrite (deferred — see below).
+> Also done beyond batches 1–3: offline clock in/out queue (TimeClockOutbox, user-tested OK),
+> unpinGallery fix, chat channel leak fix (ChatManager), UserFacingError helper (wired into
+> clock + sign-in), UIImage downsampling on editable upload sites, TimeTrackingService is now a
+> shared singleton. NotificationCenter observer-leak item: the one flagged instance is in
+> SportsShootListView (PROTECTED — can't touch); the editable FP iPad view didn't have the
+> block-observer pattern, so effectively closed. STILL DEFERRED: launch-chain rewrite — it gates
+> sign-in (recent bug eb97c6e) and must be done with live login testing, not a blind change.
+> --- original batch 1–3 note follows ---
+> Batches 1–3 done + committed + build-verified + USER-TESTED OK on a build. DONE: GPS one-shot,
 > Live indicator wired to real network, UUID lowercase sweep (insert sites + FP iPad;
 > SportsShootListView skipped — protected), chat @Published main-actor hop, photo-note
 > delete confirmation, clock in/out error surfacing, signed-URL image cache. Also
