@@ -214,19 +214,22 @@ role's permission set (self-serve permission escalation for the client-side gate
   **do not exist** in the DB — the client `rpc(...)` calls to them fail at runtime. Separate
   bug to chase, but not an authz hole.
 
-### APPLIED / STATUS (2026-07-12, live)
-- ✅ **CRITICAL 2 — DONE & verified.** anon revoked entirely on all 14 tables;
-  authenticated lost INSERT/UPDATE/DELETE/TRUNCATE (kept SELECT). Verified: no anon
-  grants remain; authenticated has only SELECT/REFERENCES/TRIGGER.
-- ⚠️ **CRITICAL 1 — NOT yet applied.** The approved column-`REVOKE` is a Postgres no-op:
-  authenticated/anon hold a **table-level** UPDATE grant on `users`, so column revokes
-  don't remove the privilege (verified still updatable). Corrected fix = a BEFORE UPDATE
-  trigger (`supabase/drafts/fix_users_privileged_columns.sql`) blocking non-admins from
-  CHANGING privileged columns. Also newly found: the same grant exposes
-  `hourly_rate`, `salary_amount`, `compensation_type`, `amount_per_mile`,
-  `overtime_threshold`, `is_accountant`, `is_active`, `is_flagged` to self-edit (raise
-  your own pay / self-unflag). The trigger covers all but `is_flagged` (managers set that
-  on others → needs the manager-or-admin check with the HIGH items). Awaiting go-ahead.
+### APPLIED / STATUS (2026-07-12, live) — ALL DONE & VERIFIED
+- ✅ **CRITICAL 2 — applied.** anon revoked entirely on all 14 RLS-off tables;
+  authenticated lost write (kept SELECT). Verified: no anon grants remain.
+- ✅ **CRITICAL 1 — applied.** Trigger `trg_prevent_privilege_self_escalation` is live
+  (verified `tgenabled='O'`). Blocks non-admins from CHANGING role/role_id/organization_id
+  + pay/status columns (hourly_rate, salary_amount, compensation_type, amount_per_mile,
+  overtime_threshold, is_accountant, is_active) on any users row. Admin/dashboard still can.
+  `is_flagged` intentionally left out (managers set it; low risk).
+- ✅ **HIGH batch — applied.** `has_permission()` helper live; new per-table policies live on
+  pto_balances, time_entries, time_off_requests, sessions, session_days, role_permissions.
+  Verified: each has `_select` (org-wide read) + `_write`/`_modify` (owner OR matching
+  role_permission OR admin); zero leftover `_org_access` policies.
+- **Watch after rollout** (all reversible — restore the `*_org_access` FOR ALL policy):
+  a manager can still approve time-off + edit the schedule; an employee can still clock
+  in/out + submit a time-off request + reserve PTO. Report anything that suddenly says
+  "not authorized" and I'll adjust the matching policy.
 
 ### F. Final remediation set (verified against BOTH apps, 2026-07-12)
 Cross-checked the fixes against the iOS app AND the web app (`~/Desktop/Focal-Point-Supabase`,
