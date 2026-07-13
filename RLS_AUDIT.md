@@ -228,6 +228,27 @@ role's permission set (self-serve permission escalation for the client-side gate
   your own pay / self-unflag). The trigger covers all but `is_flagged` (managers set that
   on others → needs the manager-or-admin check with the HIGH items). Awaiting go-ahead.
 
+### F. Final remediation set (verified against BOTH apps, 2026-07-12)
+Cross-checked the fixes against the iOS app AND the web app (`~/Desktop/Focal-Point-Supabase`,
+same DB). Findings that shaped the fixes:
+- The apps' real authorization is **`role_permissions(area_code, level)`** (1=view,2=edit,3=admin)
+  keyed by `users.role_id` — not a plain role string. So HIGH policies use a
+  `has_permission(area, level)` SQL helper that mirrors `PermissionsService`/`hasPermission`.
+- **Pay + role editing is admin-only** in practice (web `TeamManagement`/`EditTeamMemberModal`
+  gate on `role === 'admin'`). So the CRITICAL 1 trigger's admin-only gate on role/pay is
+  correct — managers do NOT edit those.
+- Manager-relevant areas that are NOT admin: `schedule` (sessions), `timeOffApprovals`
+  (time-off approve). HIGH policies gate those on the matching permission, so managers keep working.
+
+Paste-ready files (Supabase SQL editor, project `nofegnmrgnanpznavlqy`):
+1. ✅ `apply_criticals_now.sql` — CRITICAL 2 **already applied**. (Its `users` column-REVOKE
+   lines are inert — superseded by #2.)
+2. `fix_users_privileged_columns.sql` — CRITICAL 1 trigger (role/org/pay self-edit block). Ready.
+3. `rls_high_batch.sql` — HIGH batch (role_permissions, pto_balances, time_entries,
+   time_off_requests, sessions/session_days). `has_permission()` helper + per-table owner/
+   permission/admin write policies. Reads stay org-wide. Apply the sessions block last (it
+   gates the schedule) and confirm a manager can still edit a session.
+
 ### Priority
 1. **CRITICAL 2** (anon → audit/pricing/backups): ✅ done.
 2. **CRITICAL 1** (self-admin): revoke `UPDATE` on `users.role`/`role_id`/`organization_id`
