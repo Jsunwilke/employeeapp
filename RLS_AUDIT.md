@@ -211,8 +211,13 @@ role's permission set (self-serve permission escalation for the client-side gate
   identity (minor griefing only). Lower severity than the repo suggested.
 - Chat RPCs (`mark_conversation_read`, `toggle_pin_conversation`,
   `add_conversation_participants`, `remove_conversation_participant`, `leave_conversation`)
-  **do not exist** in the DB — the client `rpc(...)` calls to them fail at runtime. Separate
-  bug to chase, but not an authz hole.
+  **did not exist** in the DB — the client `rpc(...)` calls failed at runtime (mark-read,
+  pin, add/remove participant, leave all silently broken). ✅ FIXED 2026-07-13: created all
+  5 (behavior mirrors web `chatService.js`) + added the missing `conversations.pinned_by`
+  column; each SECURITY DEFINER with a caller-is-participant + `actor = auth.uid()` guard
+  (also closes the "trusts p_user_id" concern). `supabase/drafts/fix_chat_rpcs.sql`. Note:
+  chat dormant since Sep 2025; 9 of 14 conversations are orphaned legacy Firebase-UID rows
+  (current UUID users can't see them — pre-existing, untouched).
 
 ### APPLIED / STATUS (2026-07-12, live) — ALL DONE & VERIFIED
 - ✅ **CRITICAL 2 — applied.** anon revoked entirely on all 14 RLS-off tables;
