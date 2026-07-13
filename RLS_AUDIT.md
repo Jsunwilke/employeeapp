@@ -214,9 +214,22 @@ role's permission set (self-serve permission escalation for the client-side gate
   **do not exist** in the DB — the client `rpc(...)` calls to them fail at runtime. Separate
   bug to chase, but not an authz hole.
 
+### APPLIED / STATUS (2026-07-12, live)
+- ✅ **CRITICAL 2 — DONE & verified.** anon revoked entirely on all 14 tables;
+  authenticated lost INSERT/UPDATE/DELETE/TRUNCATE (kept SELECT). Verified: no anon
+  grants remain; authenticated has only SELECT/REFERENCES/TRIGGER.
+- ⚠️ **CRITICAL 1 — NOT yet applied.** The approved column-`REVOKE` is a Postgres no-op:
+  authenticated/anon hold a **table-level** UPDATE grant on `users`, so column revokes
+  don't remove the privilege (verified still updatable). Corrected fix = a BEFORE UPDATE
+  trigger (`supabase/drafts/fix_users_privileged_columns.sql`) blocking non-admins from
+  CHANGING privileged columns. Also newly found: the same grant exposes
+  `hourly_rate`, `salary_amount`, `compensation_type`, `amount_per_mile`,
+  `overtime_threshold`, `is_accountant`, `is_active`, `is_flagged` to self-edit (raise
+  your own pay / self-unflag). The trigger covers all but `is_flagged` (managers set that
+  on others → needs the manager-or-admin check with the HIGH items). Awaiting go-ahead.
+
 ### Priority
-1. **CRITICAL 2** (anon → audit/pricing/backups): revoke anon/authenticated grants + enable
-   RLS (or drop the backups). Fastest to fix, worst exposure (unauthenticated).
+1. **CRITICAL 2** (anon → audit/pricing/backups): ✅ done.
 2. **CRITICAL 1** (self-admin): revoke `UPDATE` on `users.role`/`role_id`/`organization_id`
    from anon+authenticated; route role changes through an admin-only SECURITY DEFINER RPC.
 3. **HIGH 3 & 4**: tighten the `FOR ALL` policies to owner/manager for writes; make
