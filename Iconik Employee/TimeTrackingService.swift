@@ -35,6 +35,8 @@ class TimeTrackingService: ObservableObject {
         Task {
             // Load cached current entry immediately for instant display
             await loadCachedCurrentEntry()
+            // Flush any clock events queued while offline in a previous session
+            await drainOutbox()
             // Then check actual status from network
             await checkCurrentStatus()
         }
@@ -54,11 +56,13 @@ class TimeTrackingService: ObservableObject {
                 let wasOffline = self?.isConnected == false
                 self?.isConnected = path.status == .satisfied
 
-                // When coming back online, refresh status
+                // When coming back online, flush queued clock events first,
+                // then refresh status so the UI reflects server truth.
                 if wasOffline && path.status == .satisfied {
                     self?.isUsingOfflineData = false
+                    await self?.drainOutbox()
                     await self?.checkCurrentStatus()
-                    print("📡 TimeTrackingService: Network restored - refreshing status")
+                    print("📡 TimeTrackingService: Network restored - synced offline clock events + refreshed status")
                 }
             }
         }
@@ -90,6 +94,108 @@ class TimeTrackingService: ObservableObject {
         await checkCurrentStatus()
     }
 
+    // MARK: - Offline Clock In/Out
+
+    private var isDrainingOutbox = false
+
+    /// Record a clock-in with no network: create the entry locally, show it
+    /// immediately, and queue an insert for when the connection returns.
+    private func clockInOffline(userId: String, orgId: String, sessionId: String?, notes: String?) async throws {
+        let entryId = UUID().uuidString.lowercased()
+        let now = Date()
+        let trimmed = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let entry = TimeEntry(
+            id: entryId, userId: userId, organizationID: orgId,
+            clockInTime: now, clockOutTime: nil, date: now.toYYYYMMDD(),
+            status: "clocked-in", sessionId: sessionId, sessionName: nil,
+            notes: trimmed, taskId: nil, createdAt: now, updatedAt: now
+        )
+
+        await TimeClockOutbox.shared.enqueue(PendingClockOp(
+            id: UUID().uuidString.lowercased(), kind: .clockIn, entryId: entryId,
+            userId: userId, organizationId: orgId, notes: trimmed, queuedAt: now,
+            startTime: now, date: now.toYYYYMMDD(), sessionId: sessionId, sessionName: nil,
+            endTime: nil, totalHours: nil
+        ))
+
+        currentTimeEntry = entry
+        isClockIn = true
+        isUsingOfflineData = true
+        startTimer()
+        await cacheCurrentEntry()
+    }
+
+    /// Clock out with no network, using the cached active entry, and queue the
+    /// update for replay on reconnect.
+    private func clockOutOffline(userId: String, orgId: String, notes: String?) async throws {
+        let active: TimeEntry?
+        if let current = currentTimeEntry, current.status == "clocked-in" {
+            active = current
+        } else {
+            active = await persistentCache.loadCurrentEntry()
+        }
+        guard let activeEntry = active, activeEntry.status == "clocked-in",
+              let startTime = activeEntry.start_time else {
+            throw TimeTrackingError.noActiveEntry
+        }
+
+        let endTime = Date()
+        let totalHours = endTime.timeIntervalSince(startTime) / 3600.0
+        let trimmed = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        await TimeClockOutbox.shared.enqueue(PendingClockOp(
+            id: UUID().uuidString.lowercased(), kind: .clockOut, entryId: activeEntry.id,
+            userId: userId, organizationId: orgId, notes: trimmed, queuedAt: endTime,
+            startTime: nil, date: nil, sessionId: nil, sessionName: nil,
+            endTime: endTime, totalHours: totalHours
+        ))
+
+        isClockIn = false
+        currentTimeEntry = nil
+        isUsingOfflineData = true
+        stopTimer()
+        await persistentCache.saveCurrentEntry(nil)
+    }
+
+    /// Replay any queued offline clock events to Supabase, in order. Called on
+    /// reconnect and at launch. Idempotent: clock-in upserts by id, clock-out
+    /// updates by id. Stops on the first failure to preserve FIFO order.
+    func drainOutbox() async {
+        guard isConnected, !isDrainingOutbox else { return }
+        if await TimeClockOutbox.shared.isEmpty() { return }
+        isDrainingOutbox = true
+        defer { isDrainingOutbox = false }
+
+        for op in await TimeClockOutbox.shared.all() {
+            do {
+                switch op.kind {
+                case .clockIn:
+                    let insert = TimeClockInsert(
+                        id: op.entryId, user_id: op.userId, organization_id: op.organizationId,
+                        start_time: op.startTime ?? op.queuedAt, date: op.date,
+                        status: "clocked-in", session_id: op.sessionId,
+                        session_name: op.sessionName, notes: op.notes
+                    )
+                    try await supabase.from("time_entries").upsert(insert).execute()
+                case .clockOut:
+                    let update = TimeClockUpdate(
+                        end_time: op.endTime ?? op.queuedAt,
+                        total_hours: op.totalHours ?? 0,
+                        status: "clocked-out", notes: op.notes
+                    )
+                    try await supabase.from("time_entries")
+                        .update(update).eq("id", value: op.entryId).execute()
+                }
+                await TimeClockOutbox.shared.remove(id: op.id)
+                print("⏱️ TimeTrackingService: synced offline \(op.kind.rawValue) for \(op.entryId)")
+            } catch {
+                print("⏱️ TimeTrackingService: outbox replay failed (\(op.id)): \(error). Will retry on next reconnect.")
+                break
+            }
+        }
+    }
+
     // MARK: - Main Clock In/Out Functions
 
     func clockIn(sessionId: String? = nil, notes: String? = nil) async throws {
@@ -102,6 +208,14 @@ class TimeTrackingService: ObservableObject {
         let (isValid, error) = TimeEntryValidator.validateNotes(notes)
         if !isValid {
             throw TimeTrackingError.validationFailed(error ?? "Invalid notes")
+        }
+
+        // OFFLINE: record locally and queue for replay. Session name can't be
+        // resolved without the network, so it's filled in on sync instead.
+        if !isConnected {
+            if isClockIn { throw TimeTrackingError.alreadyClockedIn }
+            try await clockInOffline(userId: userId, orgId: orgId, sessionId: sessionId, notes: notes)
+            return
         }
 
         // Check for active entry
@@ -170,6 +284,14 @@ class TimeTrackingService: ObservableObject {
         let (isValid, error) = TimeEntryValidator.validateNotes(notes)
         if !isValid {
             throw TimeTrackingError.validationFailed(error ?? "Invalid notes")
+        }
+
+        // OFFLINE: clock out against the cached active entry and queue the
+        // update for replay. Without this, a photographer with no signal
+        // simply can't clock out — and it's payroll data.
+        if !isConnected {
+            try await clockOutOffline(userId: userId, orgId: orgId, notes: notes)
+            return
         }
 
         guard let activeEntry = try await getCurrentTimeEntry(userId: userId, organizationID: orgId) else {
@@ -822,6 +944,31 @@ class TimeTrackingService: ObservableObject {
 
         return (overlapCount > 0, overlapCount)
     }
+}
+
+// MARK: - Offline replay payloads
+
+/// Insert payload used when replaying a queued offline clock-in. Mirrors the
+/// columns the online clock-in writes; upserted by id so a retry can't create
+/// a duplicate row.
+private struct TimeClockInsert: Encodable {
+    let id: String
+    let user_id: String
+    let organization_id: String
+    let start_time: Date
+    let date: String?
+    let status: String
+    let session_id: String?
+    let session_name: String?
+    let notes: String?
+}
+
+/// Update payload used when replaying a queued offline clock-out.
+private struct TimeClockUpdate: Encodable {
+    let end_time: Date
+    let total_hours: Double
+    let status: String
+    let notes: String?
 }
 
 // MARK: - TimeTrackingError
