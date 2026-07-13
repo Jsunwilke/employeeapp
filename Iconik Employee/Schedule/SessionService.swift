@@ -45,7 +45,21 @@ class SessionService: ObservableObject {
     // In-memory cache for sessions
     private var sessionsCache: [Session] = []
     private var lastCacheUpdate: Date?
+    // Scope the cache was populated with. The cache is shared across all callers,
+    // so a manager view that cached unpublished sessions must never be served to a
+    // published-only caller. Guarded by `cacheSatisfying(includeUnpublished:)`.
+    private var cachedIncludeUnpublished: Bool = false
     private let cacheValidityDuration: TimeInterval = 300 // 5 minutes
+
+    // Coalesce concurrent network fetches for the same (org, scope). A realtime
+    // burst (e.g. a multi-row color recalc) makes every subscriber refetch at once;
+    // without this that's one full-org query per subscriber per event. Keyed by
+    // "org|includeUnpublished" so published/unpublished callers don't cross-serve.
+    private var inFlightFetches: [String: Task<[Session], Error>] = [:]
+
+    // Per-subscription debounce so a burst of realtime events collapses into a
+    // single refetch instead of one fetch per event.
+    private var refetchDebounce: [UUID: Task<Void, Never>] = [:]
 
     // Persistent cache manager for offline support
     private let persistentCache = ScheduleCacheManager.shared
@@ -73,20 +87,41 @@ class SessionService: ObservableObject {
     /// Fetch sessions for a specific organization
     /// - Parameter forceRefresh: If true, bypasses cache and fetches fresh data (used by real-time handlers)
     func fetchSessions(organizationID: String, includeUnpublished: Bool = false, forceRefresh: Bool = false) async throws -> [Session] {
-        // Check in-memory cache first (skip if forceRefresh)
+        // Check in-memory cache first (skip if forceRefresh). Only serve it when its
+        // scope satisfies the request, so unpublished rows can't leak to a
+        // published-only caller through the shared cache.
         if !forceRefresh,
            let lastUpdate = lastCacheUpdate,
            Date().timeIntervalSince(lastUpdate) < cacheValidityDuration,
-           !sessionsCache.isEmpty {
-            print("📅 SessionService: Returning \(sessionsCache.count) in-memory cached sessions")
-            return sessionsCache
+           !sessionsCache.isEmpty,
+           let served = cacheSatisfying(includeUnpublished: includeUnpublished) {
+            print("📅 SessionService: Returning \(served.count) in-memory cached sessions")
+            return served
         }
 
         // If offline, try to load from persistent cache
         if !isConnected {
-            return try await loadFromOfflineCache(organizationID: organizationID)
+            return try await loadFromOfflineCache(organizationID: organizationID, includeUnpublished: includeUnpublished)
         }
 
+        // Coalesce concurrent network fetches for the same scope: if an identical
+        // fetch is already in flight (e.g. another subscriber reacting to the same
+        // realtime event), await it instead of issuing a duplicate query.
+        let key = fetchKey(organizationID, includeUnpublished)
+        if let existing = inFlightFetches[key] {
+            return try await existing.value
+        }
+        let task = Task { () throws -> [Session] in
+            defer { inFlightFetches[key] = nil }
+            return try await performFetch(organizationID: organizationID, includeUnpublished: includeUnpublished)
+        }
+        inFlightFetches[key] = task
+        return try await task.value
+    }
+
+    /// The actual sessions query + cache write. Callers go through `fetchSessions`,
+    /// which coalesces concurrent calls onto a single invocation of this.
+    private func performFetch(organizationID: String, includeUnpublished: Bool) async throws -> [Session] {
         var query = supabase
             .from("sessions")
             .select("*, session_days(*)")
@@ -101,8 +136,9 @@ class SessionService: ObservableObject {
             let sessions: [Session] = try await query.execute().value
             print("📅 SessionService: Fetched \(sessions.count) sessions for org \(organizationID)")
 
-            // Update in-memory cache
+            // Update in-memory cache (record the scope it was populated with)
             sessionsCache = sessions
+            cachedIncludeUnpublished = includeUnpublished
             lastCacheUpdate = Date()
 
             // Save to persistent cache for offline use
@@ -117,7 +153,7 @@ class SessionService: ObservableObject {
             print("❌ SessionService fetch error: \(describeDecodingError(error))")
 
             // On network error, try to load from persistent cache
-            if let cached = await loadFromOfflineCacheIfAvailable(organizationID: organizationID) {
+            if let cached = await loadFromOfflineCacheIfAvailable(organizationID: organizationID, includeUnpublished: includeUnpublished) {
                 return cached
             }
 
@@ -125,29 +161,52 @@ class SessionService: ObservableObject {
         }
     }
 
-    /// Load sessions from offline cache
-    private func loadFromOfflineCache(organizationID: String) async throws -> [Session] {
+    /// Build the coalescing key for a fetch scope.
+    private func fetchKey(_ organizationID: String, _ includeUnpublished: Bool) -> String {
+        "\(organizationID)|\(includeUnpublished)"
+    }
+
+    /// Returns the in-memory cache if its scope satisfies the request, else nil.
+    /// A published-only request can be served from an unpublished-inclusive cache by
+    /// filtering; the reverse (needing unpublished from a published-only cache) can't.
+    private func cacheSatisfying(includeUnpublished: Bool) -> [Session]? {
+        if cachedIncludeUnpublished == includeUnpublished {
+            return sessionsCache
+        }
+        if !includeUnpublished && cachedIncludeUnpublished {
+            return sessionsCache.filter { $0.is_published }
+        }
+        return nil
+    }
+
+    /// Load sessions from offline cache. The persistent cache can hold unpublished
+    /// sessions (a manager view may have saved them), so a published-only caller is
+    /// served a filtered copy — the in-memory cache is populated with the full set
+    /// but tagged with its true scope so `cacheSatisfying` guards later reads.
+    private func loadFromOfflineCache(organizationID: String, includeUnpublished: Bool) async throws -> [Session] {
         if let cached = await persistentCache.loadSessions(organizationId: organizationID) {
             print("📱 SessionService: Using offline cache (\(cached.sessions.count) sessions)")
             sessionsCache = cached.sessions
+            cachedIncludeUnpublished = true  // persistent cache may include unpublished
             lastCacheUpdate = cached.lastSync
             isUsingOfflineData = true
             lastSyncTime = cached.lastSync
-            return cached.sessions
+            return includeUnpublished ? cached.sessions : cached.sessions.filter { $0.is_published }
         }
 
         throw SessionError.networkError
     }
 
     /// Try to load from offline cache without throwing
-    private func loadFromOfflineCacheIfAvailable(organizationID: String) async -> [Session]? {
+    private func loadFromOfflineCacheIfAvailable(organizationID: String, includeUnpublished: Bool) async -> [Session]? {
         if let cached = await persistentCache.loadSessions(organizationId: organizationID) {
             print("📱 SessionService: Falling back to offline cache after network error")
             sessionsCache = cached.sessions
+            cachedIncludeUnpublished = true  // persistent cache may include unpublished
             lastCacheUpdate = cached.lastSync
             isUsingOfflineData = true
             lastSyncTime = cached.lastSync
-            return cached.sessions
+            return includeUnpublished ? cached.sessions : cached.sessions.filter { $0.is_published }
         }
         return nil
     }
@@ -193,10 +252,12 @@ class SessionService: ObservableObject {
         if let cached = await persistentCache.loadSessions(organizationId: organizationID) {
             print("📅 SessionService: Showing \(cached.sessions.count) cached sessions immediately")
             sessionsCache = cached.sessions
+            cachedIncludeUnpublished = true  // persistent cache may include unpublished
             lastCacheUpdate = cached.lastSync
             isUsingOfflineData = !isConnected  // Only mark as offline if actually offline
             lastSyncTime = cached.lastSync
-            onChange(cached.sessions)
+            // A published-only subscriber must not see unpublished rows the cache holds.
+            onChange(includeUnpublished ? cached.sessions : cached.sessions.filter { $0.is_published })
         }
 
         // Now fetch fresh data from network (if online)
@@ -218,24 +279,32 @@ class SessionService: ObservableObject {
             onChange([])
         }
 
-        // Listen for changes in a separate task (matching RosterEntryService exactly)
+        // Listen for changes in a separate task (matching RosterEntryService exactly).
+        // A single edit can fan out into many events — e.g. recalculating colors
+        // updates one row per session on the date, each firing its own change — so
+        // debounce them into one refetch per subscription. Combined with the in-flight
+        // coalescing in fetchSessions, a burst across N subscribers collapses to a
+        // single network query instead of (events × subscribers).
         Task {
             for await change in changes {
                 print("📡 SessionService: Received realtime event! Change: \(change)")
-                do {
-                    let sessions = try await self.fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished, forceRefresh: true)
-                    print("📡 SessionService: Fetched \(sessions.count) sessions after realtime update")
+                self.refetchDebounce[subscriptionId]?.cancel()
+                self.refetchDebounce[subscriptionId] = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 400_000_000)  // 400ms coalescing window
+                    guard !Task.isCancelled, let self else { return }
+                    do {
+                        let sessions = try await self.fetchSessions(organizationID: organizationID, includeUnpublished: includeUnpublished, forceRefresh: true)
+                        print("📡 SessionService: Fetched \(sessions.count) sessions after realtime update")
 
-                    // Save to persistent cache on realtime updates
-                    await self.persistentCache.saveSessions(sessions, organizationId: organizationID)
+                        // Save to persistent cache on realtime updates
+                        await self.persistentCache.saveSessions(sessions, organizationId: organizationID)
 
-                    await MainActor.run {
                         self.isUsingOfflineData = false
                         self.lastSyncTime = Date()
                         onChange(sessions)
+                    } catch {
+                        print("❌ Error fetching sessions after realtime update: \(error)")
                     }
-                } catch {
-                    print("❌ Error fetching sessions after realtime update: \(error)")
                 }
             }
             print("📡 SessionService: Changes stream ended for \(subscriptionId)")
@@ -243,6 +312,8 @@ class SessionService: ObservableObject {
     }
 
     private func stopListeningToSessionsAsync(subscriptionId: UUID) async {
+        refetchDebounce[subscriptionId]?.cancel()
+        refetchDebounce.removeValue(forKey: subscriptionId)
         if let channel = activeChannels[subscriptionId] {
             await channel.unsubscribe()
             activeChannels.removeValue(forKey: subscriptionId)
@@ -252,6 +323,8 @@ class SessionService: ObservableObject {
 
     /// Stop listening to sessions for a specific subscription
     func stopListeningToSessions(subscriptionId: UUID) {
+        refetchDebounce[subscriptionId]?.cancel()
+        refetchDebounce.removeValue(forKey: subscriptionId)
         if let channel = activeChannels[subscriptionId] {
             Task {
                 await channel.unsubscribe()
@@ -263,6 +336,8 @@ class SessionService: ObservableObject {
 
     /// Stop all session listeners (for cleanup)
     func stopAllListeners() {
+        for (_, task) in refetchDebounce { task.cancel() }
+        refetchDebounce.removeAll()
         for (_, channel) in activeChannels {
             Task {
                 await channel.unsubscribe()
@@ -824,12 +899,14 @@ class SessionService: ObservableObject {
     func clearCache() {
         sessionsCache = []
         lastCacheUpdate = nil
+        cachedIncludeUnpublished = false
     }
 
     /// Clear both in-memory and persistent cache
     func clearAllCaches() async {
         sessionsCache = []
         lastCacheUpdate = nil
+        cachedIncludeUnpublished = false
         await persistentCache.clearCache()
         isUsingOfflineData = false
         lastSyncTime = nil
