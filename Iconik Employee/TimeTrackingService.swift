@@ -4,6 +4,12 @@ import Network
 
 @MainActor
 class TimeTrackingService: ObservableObject {
+    /// Shared instance — clock state (and the offline outbox drain) must be
+    /// single-source. Previously each screen created its own instance, so
+    /// clocking in on one screen left others showing stale state, and multiple
+    /// network monitors ran at once.
+    static let shared = TimeTrackingService()
+
     private let supabase = SupabaseManager.shared.client
 
     @Published var currentTimeEntry: TimeEntry?

@@ -6,7 +6,7 @@ struct AllFeaturesView: View {
     @ObservedObject private var organizationService = OrganizationService.shared
     @State private var localEditMode: EditMode = .inactive
     let userRole: String
-    @StateObject private var timeTrackingService = TimeTrackingService()
+    @ObservedObject private var timeTrackingService = TimeTrackingService.shared
     @State private var elapsedTime: String = "00:00:00"
     @State private var timer: Timer?
     @State private var clockErrorMessage: String?
@@ -171,7 +171,7 @@ struct AllFeaturesView: View {
                         // Clock in/out is payroll data — never fail silently.
                         print("Clock in/out error: \(error.localizedDescription)")
                         await MainActor.run {
-                            clockErrorMessage = error.localizedDescription
+                            clockErrorMessage = error.userFacingMessage
                             showClockError = true
                             UINotificationFeedbackGenerator().notificationOccurred(.error)
                         }

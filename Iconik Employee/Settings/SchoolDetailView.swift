@@ -359,7 +359,7 @@ struct SchoolDetailView: View {
     
     func uploadNewPhoto() {
         guard let newLabeledImage = newLabeledImage else { return }
-        guard let imageData = newLabeledImage.image.jpegData(compressionQuality: 0.8) else { return }
+        guard let imageData = newLabeledImage.image.downsampledJPEGData(maxDimension: 2048, quality: 0.8) else { return }
 
         Task {
             do {

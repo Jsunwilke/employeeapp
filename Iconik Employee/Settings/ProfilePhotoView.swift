@@ -79,7 +79,7 @@ struct ProfilePhotoView: View {
         }
 
         // Convert image to data
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+        guard let imageData = image.downsampledJPEGData(maxDimension: 512, quality: 0.8) else {
             errorMessage = "Could not compress image."
             return
         }

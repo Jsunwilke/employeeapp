@@ -756,7 +756,7 @@ struct PhotoshootNotesView: View {
     }
     
     private func uploadImage(image: UIImage, for note: PhotoshootNote) {
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+        guard let imageData = image.downsampledJPEGData(maxDimension: 2048, quality: 0.8) else {
             errorMessage = "Could not compress image"
             return
         }

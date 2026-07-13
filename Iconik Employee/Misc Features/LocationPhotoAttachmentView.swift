@@ -632,7 +632,7 @@ struct LocationPhotoAttachmentView: View {
                 var uploadedPhotoDicts: [[String: String]] = []
 
                 for labeledImage in self.labeledImages {
-                    guard let imageData = labeledImage.image.jpegData(compressionQuality: 0.8) else { continue }
+                    guard let imageData = labeledImage.image.downsampledJPEGData(maxDimension: 2048, quality: 0.8) else { continue }
 
                     // Use lowercase IDs per CLAUDE.md guidelines
                     let path = "location-photos/\(storedUserOrganizationID.lowercased())/\(school.id.lowercased())/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"

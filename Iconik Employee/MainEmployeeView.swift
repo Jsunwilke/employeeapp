@@ -564,7 +564,7 @@ struct MainEmployeeView: View {
     @StateObject private var viewModel = MainEmployeeViewModel()
     
     // Shared time tracking service for header button
-    @StateObject private var timeTrackingService = TimeTrackingService()
+    @ObservedObject private var timeTrackingService = TimeTrackingService.shared
     
     // Tab bar management
     @StateObject private var tabBarManager = TabBarManager.shared

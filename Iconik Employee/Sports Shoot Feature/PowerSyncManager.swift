@@ -1283,11 +1283,12 @@ class PowerSyncManager: ObservableObject {
     func unpinGallery(userId: String, galleryId: String) async throws {
         guard let db = database else { throw PowerSyncManagerError.notInitialized }
 
-        let id = "\(userId)_\(galleryId)"
-
+        // Match by (user_id, gallery_id) — the row's `id` is a random UUID
+        // assigned at pin time, so deleting by a "userId_galleryId" composite
+        // never matched and galleries could never be unpinned.
         _ = try await db.execute(
-            sql: "DELETE FROM synced_galleries WHERE id = ?",
-            parameters: [id]
+            sql: "DELETE FROM synced_galleries WHERE user_id = ? AND gallery_id = ?",
+            parameters: [userId, galleryId]
         )
 
         SubscriptionCache.shared.purgeGallery(galleryId)

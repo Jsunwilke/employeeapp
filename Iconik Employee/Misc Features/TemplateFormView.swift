@@ -913,7 +913,7 @@ struct TemplateFormView: View {
                 var photoURLs: [String] = []
 
                 for image in selectedImages {
-                    if let imageData = image.jpegData(compressionQuality: 0.8) {
+                    if let imageData = image.downsampledJPEGData(maxDimension: 2048, quality: 0.8) {
                         // Use lowercase userId per CLAUDE.md guidelines
                         let path = "template-reports/\(currentUserId.lowercased())/\(Date().timeIntervalSince1970)_\(UUID().uuidString).jpg"
 

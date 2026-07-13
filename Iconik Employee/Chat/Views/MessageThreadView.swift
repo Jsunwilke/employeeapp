@@ -326,7 +326,7 @@ struct MessageThreadView: View {
             }
             
             // Compress the image for upload
-            guard let compressedData = image.jpegData(compressionQuality: 0.8) else {
+            guard let compressedData = image.downsampledJPEGData(maxDimension: 2048, quality: 0.8) else {
                 isUploadingMedia = false
                 return
             }

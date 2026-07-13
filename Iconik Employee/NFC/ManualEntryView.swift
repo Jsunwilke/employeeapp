@@ -33,7 +33,7 @@ struct ManualEntryView: View {
     
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var userManager = UserManager.shared
-    @StateObject private var timeTrackingService = TimeTrackingService()
+    @ObservedObject private var timeTrackingService = TimeTrackingService.shared
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     
     var body: some View {

@@ -112,7 +112,7 @@ struct SignInView: View {
 
       } catch {
         await MainActor.run {
-          errorMessage = error.localizedDescription
+          errorMessage = error.userFacingMessage
           isLoading = false
         }
       }

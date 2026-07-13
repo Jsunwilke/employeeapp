@@ -102,7 +102,7 @@ struct TimeTrackingButton: View {
 }
 
 struct TimeTrackingFloatingButton: View {
-    @StateObject private var timeTrackingService = TimeTrackingService()
+    @ObservedObject private var timeTrackingService = TimeTrackingService.shared
     
     var body: some View {
         VStack {

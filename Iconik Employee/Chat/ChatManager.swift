@@ -106,7 +106,9 @@ class ChatManager: ObservableObject {
             readCounter.recordCacheMiss(collection: "conversations", component: "ChatManager")
         }
 
-        // 2. Set up real-time listener using Supabase
+        // 2. Set up real-time listener using Supabase.
+        // Unsubscribe any previous channel first to avoid leaking it on reload.
+        await conversationsChannel?.unsubscribe()
         conversationsChannel = supabaseChatService.subscribeToUserConversations(userId: userId) { [weak self] updatedConversations in
             guard let self = self else { return }
 
@@ -187,7 +189,11 @@ class ChatManager: ObservableObject {
             readCounter.recordCacheMiss(collection: "messages", component: "ChatManager")
         }
 
-        // 2. Set up real-time listener for all messages
+        // 2. Set up real-time listener for all messages.
+        // Unsubscribe the previous conversation's channel first — otherwise
+        // switching conversations leaks a channel each time and stale
+        // callbacks keep firing.
+        await messagesChannel?.unsubscribe()
         messagesChannel = supabaseChatService.subscribeToConversationMessages(conversationId: conversation.id) { [weak self] updatedMessages in
             guard let self = self else { return }
 
