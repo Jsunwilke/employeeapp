@@ -104,6 +104,10 @@ struct PoserStationView: View {
     @State private var activeFilters: [String: Set<String>] = [:]  // field_key -> selected values (multiple fields, AND logic)
     @State private var sortField: String = "last_name"  // overridden in onAppear when shoot is sports
     @State private var showFilterPopover: Bool = false
+    // Memoizes the expensive `filteredSubjects` filter+sort (see there). Reference
+    // type held in @State so it survives re-renders; internal mutation intentionally
+    // does not publish (it must not trigger a re-render).
+    @State private var filteredSubjectsMemo = FilteredSubjectsMemo()
 
     // Layout
     @State private var detailPanelVisible = true
@@ -275,6 +279,48 @@ struct PoserStationView: View {
     }
 
     var filteredSubjects: [FPSubject] {
+        // The filter+sort below is O(n log n) and was being re-run ~8x per render
+        // (count label, roster ForEach, filmstrip, named/shot counts, …). Memoize on
+        // a cheap change-signature so it runs once per actual input change. The
+        // signature recomputes each access, so the cache can never serve a stale list.
+        filteredSubjectsMemo.value(signature: filteredSubjectsSignature) {
+            computeFilteredSubjects()
+        }
+    }
+
+    /// Cheap change-signature over every input `computeFilteredSubjects` reads.
+    private var filteredSubjectsSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(subjects.count)
+        for s in subjects {            // array order is a stable, ordered input
+            hasher.combine(s.id)
+            hasher.combine(s.updatedAt)      // any roster-field edit bumps this
+            hasher.combine(s.isPhotographed) // capture toggle (read by image filter)
+        }
+        hasher.combine(searchText)
+        hasher.combine(sortField)
+        hasher.combine(imageFilterType)
+        // Dictionaries have no stable iteration order — accumulate per-entry hashes
+        // commutatively (&+) so the signature is order-independent.
+        var af = 0
+        for (field, vals) in activeFilters {
+            var h = Hasher(); h.combine(field)
+            var v = 0
+            for val in vals { var hv = Hasher(); hv.combine(val); v = v &+ hv.finalize() }
+            h.combine(v)
+            af = af &+ h.finalize()
+        }
+        hasher.combine(af)
+        var pc = 0
+        for (sid, count) in photoCountMap {
+            var h = Hasher(); h.combine(sid); h.combine(count)
+            pc = pc &+ h.finalize()
+        }
+        hasher.combine(pc)
+        return hasher.finalize()
+    }
+
+    private func computeFilteredSubjects() -> [FPSubject] {
         var list = subjects
         // Apply all active filters (AND logic — must match every field)
         for (field, values) in activeFilters {
@@ -3351,5 +3397,23 @@ struct AddSubjectSheet: View {
                 })
             }
         }
+    }
+}
+
+/// Single-entry memo for `PoserStationView.filteredSubjects`. The view is a value
+/// type, so it can't cache in a computed property; this reference type (held in
+/// @State) stores the last signature + result and only re-runs `compute` when the
+/// signature changes. Because the signature is recomputed on every access, the
+/// cache is always consistent with current state — it can't serve a stale list.
+private final class FilteredSubjectsMemo {
+    private var signature: Int?
+    private var cached: [FPSubject] = []
+
+    func value(signature newSignature: Int, compute: () -> [FPSubject]) -> [FPSubject] {
+        if signature == newSignature { return cached }
+        let result = compute()
+        signature = newSignature
+        cached = result
+        return result
     }
 }
