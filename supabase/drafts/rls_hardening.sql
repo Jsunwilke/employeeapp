@@ -64,11 +64,18 @@ REVOKE UPDATE (role, role_id, organization_id) ON public.users FROM anon, authen
 -- an is_admin_of_org()/manager check for writes instead of owner-only. Confirm the
 -- real write flows before applying — this is the block most likely to break the app.
 -- =====================================================================
--- pto_balances: an employee must not write their own balance. Read own/org; writes
--- admin-only (balances are computed by payroll, not the client).
+-- pto_balances: the employee app (PTOService reserve/use/release/create) writes the
+-- user's OWN balance client-side, so admin-only would break time-off requests. Scope
+-- writes to the owner: closes the cross-employee hole (can't touch colleagues'
+-- balances) while keeping the app working. Residual: a user can still inflate their
+-- OWN balance via a crafted request — fully closing that needs the balance math moved
+-- server-side (RPC/trigger); tracked as a follow-up, not this policy.
 DROP POLICY IF EXISTS pto_balances_org_access ON public.pto_balances;
 CREATE POLICY pto_balances_select ON public.pto_balances
   FOR SELECT USING (organization_id = get_user_organization_id());
+CREATE POLICY pto_balances_own_write ON public.pto_balances
+  FOR ALL USING (user_id = (auth.uid())::text AND organization_id = get_user_organization_id())
+  WITH CHECK (user_id = (auth.uid())::text AND organization_id = get_user_organization_id());
 CREATE POLICY pto_balances_admin_write ON public.pto_balances
   FOR ALL USING (is_admin_of_org(organization_id)) WITH CHECK (is_admin_of_org(organization_id));
 
