@@ -51,8 +51,11 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 > clock + sign-in), UIImage downsampling on editable upload sites, TimeTrackingService is now a
 > shared singleton. NotificationCenter observer-leak item: the one flagged instance is in
 > SportsShootListView (PROTECTED — can't touch); the editable FP iPad view didn't have the
-> block-observer pattern, so effectively closed. STILL DEFERRED: launch-chain rewrite — it gates
-> sign-in (recent bug eb97c6e) and must be done with live login testing, not a blind change.
+> block-observer pattern, so effectively closed. DROPPED (won't do): launch-chain rewrite — reviewed the
+> cost/benefit with the owner 2026-07-12. Payoff is only a slightly faster cold launch (no
+> correctness benefit), and the owner has never noticed launch being slow. Not worth touching the
+> sign-in gate (high blast radius, recent bug eb97c6e) for polish nobody feels. Revisit ONLY if
+> users start reporting slow/hanging launches.
 > --- original batch 1–3 note follows ---
 > Batches 1–3 done + committed + build-verified + USER-TESTED OK on a build. DONE: GPS one-shot,
 > Live indicator wired to real network, UUID lowercase sweep (insert sites + FP iPad;
