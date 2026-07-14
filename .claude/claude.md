@@ -1,5 +1,26 @@
 # Claude Code Guidelines for This Project
 
+## Hard rules (read first, every session)
+
+Jason's shared working-style standards, adopted for this app 2026-07-13 to match how Focal
+Point Production / Focal Grade / KeepUp are built. Full versions live in the Focal Grade
+memory (`~/.claude/projects/-Users-jason-Desktop-Iconik-Photo-Grade/memory/feedback_*.md`).
+
+- **Questions are not requests.** If asked "how does X work" / "why does Y", answer it. Do not change code unless explicitly asked.
+- **Audits and investigations are reports, not work orders.** Present findings, wait for direction before fixing.
+- **Never assume; never guess — research first.** Read the actual code, check the actual DB, trace the real execution path before any fix. No "probably"/"likely".
+- **Don't fake knowing code.** Never describe a file from its name or plausible inference. Read it first, or say "I haven't read it yet."
+- **Read existing code before building a parallel feature. Match existing patterns exactly** (read that module's real code first).
+- **If not 100% certain a change is safe, say so explicitly.** Trace impact before changing behavior — grep every caller and name the consumers out loud.
+- **Build the professional way the first time. No hacks, patches, or workarounds.** No "MVP / fast path" framing. Never simplify or strip features to fix a bug — find the real cause.
+- **Delete-first migration.** When replacing an old path with a new one, delete the old path in the same commit. No parallel implementations, no transition flags. A phase cleans up its own scaffolding.
+- **Resolve build-time decisions yourself from the plan's principles; don't pop questions.** Build straight through; the operator confirms by running the app, not by reviewing diffs. Surface only a genuine safety/data-loss risk or a true conflict between locked decisions.
+- **Architecture decisions pass the plain-English decision gate first:** immediate fix or forward architecture? does it survive every real constraint? cost to undo if wrong? validated or assumed? Surface it to pressure-test before locking it in.
+- **Verify before saying "fixed."** After every edit, re-grep for the old pattern (or rebuild/run) to confirm the change landed. Don't commit broken code — fix all errors now.
+- **Verify by running, not by reading the diff.** The operator is not an engineer and can't vet a decision from a diff — reports are plain English, and high-stakes work gets a SEPARATE `/code-review` (high/max) that I run myself as the final step.
+- **Check remote before git pull/reset** (`git fetch` + review `HEAD..origin/main` first). At the end, advise merge-now vs hold.
+- **Use memory proactively** (grep existing files first to avoid duplicates). Plan/doc files: no backticks.
+
 ## Core Principle: Quality Over Speed
 
 **IMPORTANT:** This project prioritizes correctness and thoroughness over speed.

@@ -9,6 +9,10 @@ say "continue the audit roadmap" or "start phase N" — everything needed is in 
 
 Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude proxy DEPLOYED and TESTED working on Focal-Point project. NOT YET DONE: (a) lock-down migration must wait until a new app build is live in users' hands — running it now breaks the current app's roster scanning; (b) rotate Anthropic key; (c) revoke Apple keys + Google key restriction + git history purge. See PHASE1_MANUAL_STEPS.md.
 
+> Phase-level status (which phase is done / in progress) lives in the Phase menu in
+> kickoffs/START_A_PHASE.md — that is the status board. This file holds the per-item scope +
+> checklists + closeout detail (the equivalent of Focal Grade's docs/REBUILD_PLAN.md).
+
 ---
 
 ## Phase 1 — This week (security damage control + dead code)
