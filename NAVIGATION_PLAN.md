@@ -13,14 +13,17 @@ taken during the build:
   it crowded an already-full bar and Scan must keep the prominent center slot. (2) Swipe-on-the-
   bar + coach mark was built next — rejected: users swipe the CONTENT, and several screens
   (Schedule week/day paging at SlingWeeklyView.swift:620, the photo viewers) own horizontal
-  content swipes, so a swipe-for-Home was ambiguous. (3) FINAL: no Home in the bottom bar (Scan
-  keeps center); a top-left Home button (house.fill) on every feature screen's own nav bar via a
-  shared HomeToolbarButton / .homeToolbarItem() (Navigation/HomeToolbarButton.swift). The shell
-  adds it in one place to every shell-wrapped feature; the 5 self-nav features (capture, training,
-  unflagUser, tasks, equipment) add it in their own toolbars. The iPad Sports rosters
-  (SportsShootListView protected + FPSportsRosterView_iPad) are unchanged — they run full-screen
-  with the bottom bar hidden and already have their own internal Home button; on iPhone they go
-  through the wrapper. Drill-in details show the system Back button in that slot instead, so
+  content swipes, so a swipe-for-Home was ambiguous. (3) FINAL, per-device: on iPHONE no Home in
+  the bottom bar (Scan keeps center) — instead a top-left Home button (house.fill) on every feature
+  screen's own nav bar via a shared HomeToolbarButton / .homeToolbarItem()
+  (Navigation/HomeToolbarButton.swift). The shell adds it in one place to every shell-wrapped
+  feature; the 5 self-nav features (capture, training, unflagUser, tasks, equipment) add it in
+  their own toolbars. On iPAD, where the bottom bar has no center Scan button, Home is a prominent
+  LARGE CENTER button in the bottom bar (BottomTabBar.homeCenterButton; the iPad row is split
+  left/right around it) and the top-nav Home is omitted (HomeToolbarButton renders only on iPhone).
+  The iPad Sports rosters (SportsShootListView protected + FPSportsRosterView_iPad) are unchanged —
+  they run full-screen with the bottom bar hidden and already have their own internal Home button.
+  Drill-in details show the system Back button in that slot instead, so
   root = Home, deeper = Back. (Retires self-review findings #1 and #3 — no bar crowding, and
   title-less feature bars now carry the Home button instead of being empty.)
 - CONTAINER — the Home wrap and the shell-dependent feature wraps use NavigationView(.stack)

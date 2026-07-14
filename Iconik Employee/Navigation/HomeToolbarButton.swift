@@ -11,13 +11,20 @@ import SwiftUI
 /// shell-dependent feature, and each self-nav feature (which owns its own
 /// NavigationView) adds it to its own toolbar via `.homeToolbarItem()`.
 struct HomeToolbarButton: View {
+    // iPhone only. On iPad the bottom tab bar has no center Scan button, so Home
+    // is the prominent center button there instead — the top-nav Home would be
+    // redundant, so it is omitted on iPad.
+    private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+
     var body: some View {
-        Button {
-            TabBarManager.shared.selectedTab = "home"
-        } label: {
-            Image(systemName: "house.fill")
+        if isPhone {
+            Button {
+                TabBarManager.shared.selectedTab = "home"
+            } label: {
+                Image(systemName: "house.fill")
+            }
+            .accessibilityLabel("Home")
         }
-        .accessibilityLabel("Home")
     }
 }
 

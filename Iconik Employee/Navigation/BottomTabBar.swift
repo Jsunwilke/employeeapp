@@ -14,31 +14,33 @@ struct BottomTabBar: View {
             let isIPad = UIDevice.current.userInterfaceIdiom == .pad
             
             if isIPad {
-                // iPad layout: Even spacing, no scan button, up to 10 items
+                // iPad layout: no center Scan button, so a prominent Home button
+                // takes the center. The left and right item groups each take half
+                // the width, so Home stays dead-center regardless of item count.
                 HStack(spacing: 0) {
                     let items = tabBarManager.getQuickAccessItemsExcludingScan()
+                    let midPoint = (items.count + 1) / 2 // extra item on the left for odd counts
+                    let leftItems = Array(items.prefix(midPoint))
+                    let rightItems = Array(items.dropFirst(midPoint))
 
-                    ForEach(items) { item in
-                        TabBarButton(
-                            item: updatedItem(item),
-                            isSelected: selectedTab == item.id,
-                            showLabel: tabBarManager.configuration.showLabels,
-                            namespace: tabBarNamespace,
-                            isScanButton: false,
-                            isIPad: true,
-                            action: {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                    selectedTab = item.id
-                                    animateSelection = true
-                                }
-                                
-                                // Haptic feedback
-                                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-                                impactFeedback.impactOccurred()
-                            }
-                        )
-                        .frame(maxWidth: .infinity)
+                    HStack(spacing: 0) {
+                        ForEach(leftItems) { item in
+                            iPadTabButton(item)
+                                .frame(maxWidth: .infinity)
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+
+                    // Prominent center Home (iPad only), lifted above the bar
+                    homeCenterButton()
+
+                    HStack(spacing: 0) {
+                        ForEach(rightItems) { item in
+                            iPadTabButton(item)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             } else {
                 // iPhone layout: Current behavior with scan in center
@@ -144,6 +146,60 @@ struct BottomTabBar: View {
             alignment: .top
         )
         .id("bottomTabBar_\(chatManager.totalUnreadCount)") // Force redraw when unread count changes
+    }
+
+    // A standard iPad tab button (used for the left/right item groups).
+    private func iPadTabButton(_ item: TabBarItem) -> some View {
+        TabBarButton(
+            item: updatedItem(item),
+            isSelected: selectedTab == item.id,
+            showLabel: tabBarManager.configuration.showLabels,
+            namespace: tabBarNamespace,
+            isScanButton: false,
+            isIPad: true,
+            action: {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    selectedTab = item.id
+                    animateSelection = true
+                }
+
+                // Haptic feedback
+                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                impactFeedback.impactOccurred()
+            }
+        )
+    }
+
+    // Prominent center Home button for iPad. A large filled circle with a large
+    // house icon sized to sit FULLY inside it (unlike the Scan button, whose
+    // 60pt wave overflows its 50pt circle — a house at that size just clips).
+    // Lifted so it pokes a bit above the bar; the flat tab buttons are untouched.
+    private func homeCenterButton() -> some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                selectedTab = "home"
+                animateSelection = true
+            }
+
+            // Haptic feedback
+            let impact = UIImpactFeedbackGenerator(style: .medium)
+            impact.impactOccurred()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(selectedTab == "home" ? Color.blue : Color.gray.opacity(0.2))
+                    .frame(width: 64, height: 64)
+                Image(systemName: "house.fill")
+                    .font(.system(size: 40, weight: .semibold)) // big, but fully inside the 64pt circle
+                    .foregroundColor(selectedTab == "home" ? .white : .gray)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Home")
+        // Claim only a normal-height footprint so the bar/flat tabs don't grow,
+        // then lift the big circle so it pokes above the bar like Scan on iPhone.
+        .frame(width: 76, height: 44)
+        .offset(y: -16)
     }
 
     // Update item with current badge values

@@ -594,7 +594,6 @@ class SessionService: ObservableObject {
             school_name: school.value,
             session_types: formData.sessionTypes,
             custom_session_type: formData.sessionTypes.contains("other") ? formData.customSessionType : nil,
-            photographers: photographers,
             notes: formData.notes.isEmpty ? nil : formData.notes,
             status: formData.status,
             session_color: sessionColor,
@@ -617,14 +616,17 @@ class SessionService: ObservableObject {
             .insert(sessionInsert)
             .execute()
 
-        // Insert the single day row (the source of truth for when it happens)
+        // Insert the single day row (the source of truth for when it happens
+        // AND, since MD7, for who works it — crew lives on the day row; the
+        // sessions.photographers column is dropped).
         let dayInsert = SessionDayInsert(
             id: UUID().uuidString.lowercased(),
             session_id: sessionId,
             date: formData.date,
             start_time: formData.startTime,
             end_time: formData.endTime,
-            sort_order: 0
+            sort_order: 0,
+            photographers: photographers
         )
         try await supabase
             .from("session_days")
@@ -689,10 +691,11 @@ class SessionService: ObservableObject {
             "updated_at": .string(Date().ISO8601Format())
         ]
 
-        // Handle photographers
+        // Crew (MD7): photographers live on session_days, not the sessions row
+        // (that column is dropped). iOS edits ONE whole-session crew, so the
+        // array is written to EVERY day row below.
         let photographersData = try JSONEncoder().encode(photographers)
         let photographersJSON = try JSONDecoder().decode(AnyJSON.self, from: photographersData)
-        updateData["photographers"] = photographersJSON
 
         // Handle custom session type (set to null if not "other")
         if formData.sessionTypes.contains("other") {
@@ -740,11 +743,30 @@ class SessionService: ObservableObject {
                 date: formData.date,
                 start_time: formData.startTime,
                 end_time: formData.endTime,
-                sort_order: 0
+                sort_order: 0,
+                photographers: photographers
             )
             try await supabase
                 .from("session_days")
                 .insert(dayInsert)
+                .execute()
+        }
+
+        // Crew: iOS has one whole-session crew editor, so a crew CHANGE writes
+        // the photographers array to EVERY day row of the session (MD7). Skip
+        // when membership/notes are unchanged — a time-only or notes-only save
+        // must not flatten per-day crew that was set in the web app (the same
+        // guard the transitional DB trigger used). existingSession.photographers
+        // is the union across day rows, which is exactly what seeded this form.
+        if Set(existingSession.photographers) != Set(photographers) {
+            let crewUpdate: [String: AnyJSON] = [
+                "photographers": photographersJSON,
+                "updated_at": .string(Date().ISO8601Format())
+            ]
+            try await supabase
+                .from("session_days")
+                .update(crewUpdate)
+                .eq("session_id", value: sessionId)
                 .execute()
         }
 
@@ -1012,7 +1034,6 @@ private struct SessionInsert: Encodable {
     let school_name: String
     let session_types: [String]
     let custom_session_type: String?
-    let photographers: [SessionPhotographer]
     let notes: String?
     let status: String
     let session_color: String
@@ -1025,7 +1046,8 @@ private struct SessionInsert: Encodable {
     let created_by: SessionCreatedBy
 }
 
-/// Payload for inserting a row into the `session_days` table.
+/// Payload for inserting a row into the `session_days` table. Crew lives on
+/// the day row (MD7).
 private struct SessionDayInsert: Encodable {
     let id: String
     let session_id: String
@@ -1033,6 +1055,7 @@ private struct SessionDayInsert: Encodable {
     let start_time: String
     let end_time: String
     let sort_order: Int
+    let photographers: [SessionPhotographer]
 }
 
 // MARK: - Session Errors

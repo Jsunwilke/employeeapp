@@ -13,6 +13,9 @@ struct SessionDay: Codable, Equatable, Hashable, Identifiable {
     let end_time: String?      // HH:MM (nullable in DB)
     let day_notes: String?
     let sort_order: Int
+    // MD7: each day owns its crew. Optional so pre-migration rows and older
+    // payload shapes still decode.
+    let photographers: [SessionPhotographer]?
 }
 
 // MARK: - Session Photographer Model
@@ -414,7 +417,23 @@ extension Session {
 
         session_types = try container.decode([String].self, forKey: .session_types)
         custom_session_type = try container.decodeIfPresent(String.self, forKey: .custom_session_type)
-        photographers = try container.decode([SessionPhotographer].self, forKey: .photographers)
+        // MD7: crew lives on session_days — the sessions.photographers column is
+        // dropped. The session-level array here is the UNION of every day's crew
+        // (a person on any day is "on the session"), falling back to the legacy
+        // sessions column only for pre-migration payloads.
+        let legacyPhotographers = try container.decodeIfPresent([SessionPhotographer].self, forKey: .photographers) ?? []
+        var crewById: [String: SessionPhotographer] = [:]
+        var crewOrder: [String] = []
+        let crewLists: [[SessionPhotographer]] = embeddedDays.isEmpty
+            ? [legacyPhotographers]
+            : embeddedDays.map { $0.photographers ?? legacyPhotographers }
+        for list in crewLists {
+            for p in list where crewById[p.id] == nil {
+                crewById[p.id] = p
+                crewOrder.append(p.id)
+            }
+        }
+        photographers = crewOrder.compactMap { crewById[$0] }
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         status = try container.decode(String.self, forKey: .status)
         session_color = try container.decodeIfPresent(String.self, forKey: .session_color)

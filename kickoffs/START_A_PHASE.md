@@ -24,12 +24,13 @@ phase-naming registry as the rest of the family.
 
   🟡 BUILT — AWAITING ON-DEVICE VERIFY
       NAV.1   Navigation restructure — one nav bar per screen + Home reachable everywhere.
-              BUILT 2026-07-14 on branch nav-1-restructure. Home = a top-left Home button
-              (house icon) on every feature screen's nav bar (no Home in the bottom bar — Scan
-              keeps center); profile menu moved onto Home. Build clean, self code-review (high).
-              NEXT: run it on iPhone AND iPad, walk every feature (one bar; top-left Home works
-              everywhere; drill-ins show Back; capture mid-shoot back; kiosk still hides bar;
-              iPad Sports rosters still reach Home; manager features still gated), then say merge.
+              BUILT 2026-07-14 on branch nav-1-restructure. Home (per-device): iPhone = top-left
+              Home button (house icon) on every feature screen's nav bar (Scan keeps bar center);
+              iPad = large center Home button in the bottom bar (no center Scan there). Profile
+              menu moved onto Home. Build clean, self code-review (high).
+              NEXT: run it on iPhone AND iPad, walk every feature (one bar; Home works everywhere —
+              top-left on iPhone, center-bottom on iPad; drill-ins show Back; capture mid-shoot
+              back; kiosk still hides bar; iPad Sports rosters still reach Home; manager gated).
               Plan/closeout: NAVIGATION_PLAN.md + AUDIT_ROADMAP.md. The nav-single-stack branch
               is superseded (never merged) — safe to delete.
 

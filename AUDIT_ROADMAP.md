@@ -102,13 +102,14 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
     (capture, training, unflagUser, tasks, equipment; sportsShoot + focalPointSports on iPad)
     render bare. Profile menu moved off every feature onto Home. HOME REACHABILITY (operator
     decision, three iterations — bottom-bar Home button, then swipe+coach-mark, both rejected):
-    FINAL = no Home in the bottom bar (Scan keeps center); a top-left Home button (house.fill) on
-    every feature screen's own nav bar via a shared HomeToolbarButton / .homeToolbarItem()
-    (Navigation/HomeToolbarButton.swift) — added once by the shell wrapper for shell-dependent
-    features and in-toolbar for the 5 self-nav features (capture, training, unflagUser, tasks,
-    equipment). iPad Sports rosters keep their own internal Home + hide the bar (protected file
-    untouched); on iPhone they get the wrapper Home. Drill-in details show system Back in that
-    slot. ZERO edits to protected Captura files (SportsShootListView/Detail untouched; only Sports
+    FINAL (per-device): iPHONE = no Home in the bottom bar (Scan keeps center); a top-left Home
+    button (house.fill) on every feature screen's own nav bar via a shared HomeToolbarButton /
+    .homeToolbarItem() (Navigation/HomeToolbarButton.swift) — added once by the shell wrapper for
+    shell-dependent features and in-toolbar for the 5 self-nav features (capture, training,
+    unflagUser, tasks, equipment). iPAD (no center Scan) = a prominent large center Home button in
+    the bottom bar (BottomTabBar.homeCenterButton), top-nav Home omitted there. iPad Sports rosters
+    keep their own internal Home + hide the bar (protected file untouched). Drill-in details show
+    system Back in that slot. ZERO edits to protected Captura files (SportsShootListView/Detail untouched; only Sports
     edit was removing the 3 override lines in the NON-protected PoserStationView). Build clean,
     self /code-review (high). STILL DEFERRED per plan: TabView shell, Hashable typed routes,
     deep-link onOpenURL, and replacing the remaining ~100 NavigationView uses / the two
