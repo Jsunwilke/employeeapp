@@ -23,13 +23,15 @@ phase-naming registry as the rest of the family.
   Full per-item scope + closeouts live in AUDIT_ROADMAP.md.
 
   🟡 BUILT — AWAITING ON-DEVICE VERIFY
-      NAV.1   Navigation restructure — one nav bar per screen + a permanent Home.
-              BUILT 2026-07-14 on branch nav-1-restructure (signed off Option A: permanent
-              Home in bottom bar + profile on Home). Build clean, self code-review (high) done.
-              NEXT: run it on iPhone AND iPad, walk every feature (one bar, Home always one tap,
-              capture mid-shoot back, kiosk still hides bar, manager features still gated), then
-              say merge. Plan/closeout: NAVIGATION_PLAN.md + AUDIT_ROADMAP.md. The nav-single-stack
-              branch is superseded (never merged) — safe to delete.
+      NAV.1   Navigation restructure — one nav bar per screen + Home reachable everywhere.
+              BUILT 2026-07-14 on branch nav-1-restructure. Home is reached by a SWIPE on the
+              tab bar (no Home button — Scan keeps the center) taught by a first-run coach mark;
+              profile menu moved onto Home. Build clean, self code-review (high) done.
+              NEXT: run it on iPhone AND iPad, walk every feature (one bar; swipe-to-Home works
+              everywhere + coach mark shows then retires after first swipe; capture mid-shoot
+              back; kiosk still hides bar; manager features still gated), then say merge.
+              Plan/closeout: NAVIGATION_PLAN.md + AUDIT_ROADMAP.md. The nav-single-stack branch
+              is superseded (never merged) — safe to delete.
 
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).

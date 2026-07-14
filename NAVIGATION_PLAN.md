@@ -1,24 +1,33 @@
 # Navigation Restructure — Plan (Phase 3.1, done correctly)
 
-Status: BUILT 2026-07-14 (branch nav-1-restructure) — decision gate signed off (Option A:
-permanent Home in bottom bar + profile menu on Home). Build clean, self /code-review (high)
-done. AWAITING the operator's on-device run (iPhone AND iPad) as the final gate before merge.
+Status: BUILT 2026-07-14 (branch nav-1-restructure). Build clean, self /code-review (high) done.
+AWAITING the operator's on-device run (iPhone AND iPad) as the final gate before merge.
 Written 2026-07-13 from a full, code-verified research pass (two research agents + direct
 verification of the one point they disagreed on). Supersedes the shell-suppression patch on
 branch nav-single-stack (never merged to main; safe to delete).
 
-BUILT NOTE (2026-07-14): Implemented exactly as the "correct fix" below, with one deliberate
-build choice — the Home wrap and the shell-dependent feature wraps use NavigationView(.stack)
-(the container every feature was already built and tested inside), NOT NavigationStack. This
-achieves one-bar-per-screen + permanent Home with zero change to each feature's proven nav
-semantics; the NavigationStack/typed-routes modernization stays deferred exactly as the
-decision gate says. Files: MainEmployeeView, BottomTabBar, TabBarItem, PoserStationView.
-Verified feature inventory re-confirmed against real code (the iPhone-VStack vs iPad-NavigationView
-split for sportsShoot/focalPointSports holds; the self-nav predicate matches those views'
-own `UIDevice.userInterfaceIdiom == .phone` check). Open verify-items from the self-review:
-(1) iPhone bottom bar may clip if a user pins the max 6 quick-access items (Home adds a slot) —
-check on device; one-line fix is iPhone max 6→5. (2) Feature screens with no navigationTitle now
-show an empty (not doubled) nav bar — confirm it reads as intentional.
+BUILT NOTE (2026-07-14): Implemented as the "correct fix" below, with two operator decisions
+taken during the build:
+- HOME REACHABILITY — the plan's "permanent Home button in the bottom bar" was built first, then
+  changed at the operator's call: it crowded an already-full bar and Scan must keep the prominent
+  center slot. Final design = NO Home button; a horizontal SWIPE on the always-visible tab bar
+  returns to the dashboard, taught by a first-run coach mark ("Swipe across the bar to go Home")
+  that re-shows on each feature screen until the user performs the swipe once (@AppStorage
+  "hasSwipedHome"). Home is still always reachable; the gesture is conflict-free (horizontal,
+  on the bar — clear of the edge-back gesture and list swipe-actions). Trade-off accepted: a
+  taught gesture is slightly less bulletproof than a visible button, mitigated by the repeat-
+  until-used hint. (This retires self-review finding #1 — no button is added to the bar.)
+- CONTAINER — the Home wrap and the shell-dependent feature wraps use NavigationView(.stack)
+  (the container every feature was already built and tested inside), NOT NavigationStack, so
+  one-bar-per-screen lands with zero change to each feature's proven nav semantics; the
+  NavigationStack/typed-routes modernization stays deferred exactly as the decision gate says.
+Files: MainEmployeeView, BottomTabBar, TabBarItem, PoserStationView. Verified feature inventory
+re-confirmed against real code (the iPhone-VStack vs iPad-NavigationView split for
+sportsShoot/focalPointSports holds; the self-nav predicate matches those views' own
+`UIDevice.userInterfaceIdiom == .phone` check). Open verify-item: feature screens with no
+navigationTitle show an empty (not doubled) nav bar — confirm it reads as intentional. On-device
+verify must include: swipe-to-Home works from every feature, and the coach mark shows then
+disappears for good after the first swipe.
 
 ## What the app does today (verified, not assumed)
 
