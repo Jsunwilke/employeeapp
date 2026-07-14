@@ -167,7 +167,6 @@ struct PoserStationView: View {
     @AppStorage("userFirstName") private var storedUserFirstName: String = ""
     @AppStorage("userLastName") private var storedUserLastName: String = ""
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.dismiss) private var dismiss
 
     // MARK: - Computed
 
@@ -634,15 +633,9 @@ struct PoserStationView: View {
             lastConnectionStatus = newStatus
         }
         .onAppear {
-            // Swap the global "Home" button for a "Galleries" back button so
-            // tapping the top-left chevron pops back to the gallery picker
-            // (CaptureGalleryListView) instead of jumping straight to the
-            // dashboard. From there the operator can hit Home themselves.
-            // Cleared in onDisappear so the override doesn't leak after the
-            // view goes away.
-            TabBarManager.shared.topBarBackOverride = TopBarBackOverride(label: "Galleries") {
-                dismiss()
-            }
+            // PoserStationView is pushed via NavigationLink inside
+            // CaptureGalleryListView's own NavigationView, so it gets a normal
+            // back button to the gallery picker — no shell override needed.
             // Phase G G.5 — register this gallery as in an active FP
             // capture session so PowerSyncManager's Layer 2 wrapper
             // refuses any direct PowerSync write on subjects /
@@ -688,9 +681,6 @@ struct PoserStationView: View {
             try? await GroupImageService.shared.releaseExpiredLocks(forJob: gallery.id)
         }
         .onDisappear {
-            // Drop the back-override so the top toolbar reverts to the
-            // global "Home" button on the parent (gallery picker) view.
-            TabBarManager.shared.topBarBackOverride = nil
             // Phase G G.5 — paired with beginActiveCaptureSession in
             // .onAppear above. Once the operator leaves this view the
             // gallery is no longer "in a shoot" on this iPad and direct

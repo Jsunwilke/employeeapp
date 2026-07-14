@@ -17,7 +17,11 @@ struct BottomTabBar: View {
                 // iPad layout: Even spacing, no scan button, up to 10 items
                 HStack(spacing: 0) {
                     let items = tabBarManager.getQuickAccessItemsExcludingScan()
-                    
+
+                    // Permanent Home — always present, not part of the customizable set.
+                    homeButton(isIPad: true)
+                        .frame(maxWidth: .infinity)
+
                     ForEach(items) { item in
                         TabBarButton(
                             item: updatedItem(item),
@@ -49,7 +53,11 @@ struct BottomTabBar: View {
                     let rightItems = Array(items.dropFirst(midPoint))
                     
                     Spacer(minLength: 10) // Add space from left edge
-                    
+
+                    // Permanent Home — always present, not part of the customizable set.
+                    homeButton(isIPad: false)
+                        .frame(width: 50)
+
                     // Left side items grouped together
                     HStack(spacing: 0) {
                         ForEach(leftItems) { item in
@@ -146,6 +154,42 @@ struct BottomTabBar: View {
         .id("bottomTabBar_\(chatManager.totalUnreadCount)") // Force redraw when unread count changes
     }
     
+    // Fixed Home destination. Not stored in the customizable configuration —
+    // Home must always be reachable, so it is rendered directly by the bar.
+    private var homeItem: TabBarItem {
+        TabBarItem(
+            id: "home",
+            title: "Home",
+            systemImage: "house.fill",
+            description: "Return to the dashboard",
+            order: -1,
+            isQuickAccess: true
+        )
+    }
+
+    // Permanent Home button, styled like every other tab. Selecting it routes
+    // the shell back to the dashboard from any screen.
+    private func homeButton(isIPad: Bool) -> some View {
+        TabBarButton(
+            item: homeItem,
+            isSelected: selectedTab == "home",
+            showLabel: tabBarManager.configuration.showLabels,
+            namespace: tabBarNamespace,
+            isScanButton: false,
+            isIPad: isIPad,
+            action: {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    selectedTab = "home"
+                    animateSelection = true
+                }
+
+                // Haptic feedback
+                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                impactFeedback.impactOccurred()
+            }
+        )
+    }
+
     // Update item with current badge values
     private func updatedItem(_ item: TabBarItem) -> TabBarItem {
         var updatedItem = item

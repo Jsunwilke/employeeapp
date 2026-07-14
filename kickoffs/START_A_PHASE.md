@@ -11,7 +11,7 @@ phase-naming registry as the rest of the family.
 
 # 🚀 START HERE  (you, the operator)
 
-      WHAT TO BUILD:  ______________________________________________
+      WHAT TO BUILD:  Nav.1
 
   An arc id (e.g. NAV.1) or just describe the item in plain words. That is the only
   line you fill in — the agent works out the exact phase and scope.
@@ -22,10 +22,14 @@ phase-naming registry as the rest of the family.
   Named by arc code (ARC.N) per the family registry, FocalPointProduction/docs/PHASES.md.
   Full per-item scope + closeouts live in AUDIT_ROADMAP.md.
 
-  🟢 OPEN NOW
+  🟡 BUILT — AWAITING ON-DEVICE VERIFY
       NAV.1   Navigation restructure — one nav bar per screen + a permanent Home.
-              Plan: NAVIGATION_PLAN.md (awaiting your sign-off). The nav-single-stack
-              branch is a superseded patch — do not extend it.
+              BUILT 2026-07-14 on branch nav-1-restructure (signed off Option A: permanent
+              Home in bottom bar + profile on Home). Build clean, self code-review (high) done.
+              NEXT: run it on iPhone AND iPad, walk every feature (one bar, Home always one tap,
+              capture mid-shoot back, kiosk still hides bar, manager features still gated), then
+              say merge. Plan/closeout: NAVIGATION_PLAN.md + AUDIT_ROADMAP.md. The nav-single-stack
+              branch is superseded (never merged) — safe to delete.
 
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).

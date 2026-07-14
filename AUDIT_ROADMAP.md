@@ -89,10 +89,25 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 
 ## Phase 3 — Month 1–2 (structural)
 
-- [ ] **Real TabView navigation** (fixes double back buttons + state loss):
+- [~] **Real TabView navigation** (fixes double back buttons + state loss) — NAV.1 done the
+  foundation; the TabView/typed-routes/deep-link modernization stays deferred by plan.
   - Root cause: `MainEmployeeView` wraps everything in `NavigationView` (`:623,668`) + fake string tabs (`TabBarManager.selectedTab` string, 29-case switch at `:872-932`) + fake "< Home" toolbar button (`:944-963`) + `topBarBackOverride` hack (`:938-951`); features open nested NavigationViews (`SportsShootListView.swift:232,293,1095,1344`)
   - Target: `TabView` with 5 role-aware tabs (Today / Schedule / Scan / Time / More), each owning one `NavigationStack` + `NavigationPath`; "More" = searchable grouped grid (26 flat features → ~12 grouped); Hashable route enums + `navigationDestination`; deep links via `onOpenURL` route parser
   - Migrate incrementally: shell first, then feature by feature; replace 102 `NavigationView` uses over time; kill `DoubleColumnNavigationViewStyle` at `SportsShootListView.swift:2018`, `FPSportsRosterView_iPad.swift:2634`
+  - NAV.1 CLOSEOUT 2026-07-14 (branch nav-1-restructure, plan NAVIGATION_PLAN.md, family arc
+    NAV.1). Fixed the two root causes without the TabView rewrite: added a permanent Home button
+    to the bottom bar (always reachable), removed the shell's global NavigationView + the fake
+    "< Home" button + the topBarBackOverride bridge, normalized the "" vs "home" router to one
+    canonical "home", and gave every screen exactly one nav bar — Home + shell-dependent features
+    each wrapped in one NavigationView(.stack); self-nav features (capture, training, unflagUser,
+    tasks, equipment; sportsShoot + focalPointSports on iPad) render bare. Profile menu moved off
+    every feature onto Home. ZERO edits to protected Captura files (SportsShootListView/Detail
+    untouched; the only Sports edit was removing the 3 override lines in the NON-protected
+    PoserStationView). Build clean, self /code-review (high). STILL DEFERRED per plan: TabView
+    shell, Hashable typed routes, deep-link onOpenURL, and replacing the remaining ~100
+    NavigationView uses / the two DoubleColumn split-view styles. Open verify-items: iPhone bar
+    crowding at max pinned items (fix = iPhone max 6→5); empty nav bar on title-less feature
+    screens. GATE: operator on-device run (iPhone AND iPad) before merge.
 - [ ] **Shared RosterEditingController** (highest-value refactor) — ⚠️ CONSTRAINED: `SportsShootDetailView.swift`, `SportsShootListView.swift` and other Captura roster files are PROTECTED (hook-blocked, used by other photographers in production — see protected-captura-files memory). The original plan (retrofit both device views to call a shared controller) is NOT allowed because it requires editing the protected files. Revised approach: only `FPSportsRosterView_iPad.swift` (not protected) can be refactored; any shared logic must live in a NEW file that the protected files are not modified to use. The iPad/iPhone dedup as originally scoped is effectively off the table unless the user edits the Captura files themselves. Still safe: cache `PoserStationView.filteredSubjects` (`:277`, evaluated ~8x/render — PoserStationView is not protected; verify against hook first)
   - DONE 2026-07-12, build-verified. `PoserStationView` confirmed not protected (deny-list empty; not in the protected set). `filteredSubjects` (3 filter passes + O(n log n) sort) now memoizes on a cheap change-signature (subjects' id/updatedAt/isPhotographed + searchText/sortField/imageFilterType + order-independent hashes of activeFilters & photoCountMap) via a `FilteredSubjectsMemo` reference held in @State. Runs once per input change instead of ~8x/render; signature is recomputed each access so it can't serve a stale list. The rest of the shared-RosterEditingController refactor stays off the table (needs protected Captura files).
 - [x] **SessionService refetch storm** (`SessionService.swift:90-101,222-240,726-748`): full-org fetch, no date bound, refetched per-subscriber (~10 views) on every realtime event; `recalculateSessionColorsForDate` = 1 UPDATE per session, each triggering more refetches. Debounce, share one fetch, batch color updates into a single RPC, bound query by date range. Also: cache ignores `includeUnpublished` (`:77-83`) → unpublished sessions leak to employees for up to 5 min

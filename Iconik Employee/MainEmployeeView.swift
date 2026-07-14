@@ -620,52 +620,45 @@ struct MainEmployeeView: View {
     }
     
     var body: some View {
-        NavigationView {
-            ZStack {
-                // Main content with tab bar
-                VStack(spacing: 0) {
-                    // Main content area
-                    mainContent
-                    
-                    // Bottom tab bar (hidden during full-screen overlay like photo viewer)
-                    if !tabBarManager.isFullScreenOverlayActive {
-                        BottomTabBar(
-                            selectedTab: $tabBarManager.selectedTab,
-                            tabBarManager: tabBarManager,
-                            chatManager: chatManager,
-                            timeTrackingService: timeTrackingService
-                        )
-                    }
-                }
-                .ignoresSafeArea(edges: .bottom) // Keep tab bar positioned correctly
-                
-                // Flag notification banner overlay
-                if isFlagged && !flagNote.isEmpty && !isBannerDismissed {
-                    flagNotificationBanner
-                }
-            }
-            .navigationBarTitle("", displayMode: .inline)
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
+        ZStack {
+            // Main content with tab bar. The shell no longer owns a global
+            // NavigationView — each screen provides its own nav bar (see
+            // mainContent), so nothing stacks a second bar on top of a
+            // feature that brings its own.
+            VStack(spacing: 0) {
+                // Main content area — routed to its own nav container per feature
+                mainContent
+
+                // Bottom tab bar (hidden during full-screen overlay like photo viewer)
                 if !tabBarManager.isFullScreenOverlayActive {
-                    toolbarContent
+                    BottomTabBar(
+                        selectedTab: $tabBarManager.selectedTab,
+                        tabBarManager: tabBarManager,
+                        chatManager: chatManager,
+                        timeTrackingService: timeTrackingService
+                    )
                 }
             }
-            .onChange(of: tabBarManager.selectedTab) { newTab in
-                // Clean up chat if we're leaving it
-                if tabBarManager.selectedTab == "chat" && newTab != "chat" {
-                    ChatManager.shared.cleanup()
-                }
-            }
-            .onAppear {
-                onAppearActions()
-            }
-            .onDisappear {
-                viewModel.saveEmployeeFeatureOrder()
-                // Keep listeners active to continue receiving real-time updates
+            .ignoresSafeArea(edges: .bottom) // Keep tab bar positioned correctly
+
+            // Flag notification banner overlay
+            if isFlagged && !flagNote.isEmpty && !isBannerDismissed {
+                flagNotificationBanner
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .onChange(of: tabBarManager.selectedTab) { newTab in
+            // Clean up chat if we're leaving it
+            if tabBarManager.selectedTab == "chat" && newTab != "chat" {
+                ChatManager.shared.cleanup()
+            }
+        }
+        .onAppear {
+            onAppearActions()
+        }
+        .onDisappear {
+            viewModel.saveEmployeeFeatureOrder()
+            // Keep listeners active to continue receiving real-time updates
+        }
         .toast(isPresented: $showToast, message: toastMessage, isSuccess: true)
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowReportSuccessToast"))) { _ in
             toastMessage = "Report submitted successfully"
@@ -677,20 +670,72 @@ struct MainEmployeeView: View {
     
     private var mainContent: some View {
         Group {
-            if tabBarManager.selectedTab == "home" || tabBarManager.selectedTab == "" {
-                homeView
+            if tabBarManager.selectedTab == "home" {
+                homeContainer
+            } else if viewModel.isFeatureAvailable(tabBarManager.selectedTab) {
+                featureContainer(for: tabBarManager.selectedTab)
             } else {
-                // Show selected feature view only if the feature is available
-                if viewModel.isFeatureAvailable(tabBarManager.selectedTab) {
-                    featureView(for: tabBarManager.selectedTab)
-                } else {
-                    // Feature is disabled, redirect to home
-                    Color.clear
-                        .onAppear {
-                            tabBarManager.selectedTab = "home"
-                        }
-                }
+                // Feature is disabled, redirect to home
+                Color.clear
+                    .onAppear {
+                        tabBarManager.selectedTab = "home"
+                    }
             }
+        }
+    }
+
+    // MARK: - Per-screen navigation containers
+    //
+    // Every screen owns exactly one nav bar. The shell used to wrap the whole
+    // app in a single NavigationView, which stacked a second bar on top of any
+    // feature that brought its own (the "double back button"). Now the shell
+    // hands each screen its own container instead.
+
+    /// Home dashboard in its own nav container. The profile menu (Settings /
+    /// Appearance / Logout) lives here rather than on top of every feature.
+    private var homeContainer: some View {
+        NavigationView {
+            homeView
+                .navigationBarTitle("", displayMode: .inline)
+                .navigationBarBackButtonHidden(true)
+                .toolbar {
+                    homeProfileToolbar
+                }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+    }
+
+    /// Wrap a feature in exactly one nav bar. Self-nav features already own
+    /// one, so they render bare; everything else gets a shell-provided
+    /// NavigationView that shows the feature's own title/toolbar.
+    @ViewBuilder
+    private func featureContainer(for featureId: String) -> some View {
+        if isSelfNavFeature(featureId) {
+            featureView(for: featureId)
+        } else {
+            NavigationView {
+                featureView(for: featureId)
+            }
+            .navigationViewStyle(StackNavigationViewStyle())
+        }
+    }
+
+    /// Features whose root view already provides its own NavigationView /
+    /// NavigationStack (verified against each view's body, 2026-07-14).
+    /// Wrapping these would re-create the doubled nav bar.
+    private func isSelfNavFeature(_ featureId: String) -> Bool {
+        switch featureId {
+        case "capture", "training", "unflagUser", "tasks", "equipment":
+            // Self-nav on every device.
+            return true
+        case "sportsShoot", "focalPointSports":
+            // Self-nav on iPad (sidebar NavigationView); a bare VStack on
+            // iPhone that needs a shell wrap. Match the views' own `isIPhone`
+            // predicate exactly (UIDevice idiom) so an iPad in Split View
+            // still counts as self-nav.
+            return UIDevice.current.userInterfaceIdiom != .phone
+        default:
+            return false
         }
     }
     
@@ -931,38 +976,13 @@ struct MainEmployeeView: View {
         }
     }
     
-    // MARK: - Toolbar Content
-    
+    // MARK: - Home Profile Toolbar
+
+    /// Profile menu shown only on the Home screen. Home is reachable from the
+    /// permanent Home button in the bottom bar, so there is no top-left Home
+    /// button and no per-feature back-override anymore.
     @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        // Left toolbar:
-        //  - If a nested feature view registered a back-override (e.g. the
-        //    capture view sitting inside CaptureGalleryListView's nav stack),
-        //    show that label + run its handler so the operator pops one
-        //    level instead of jumping all the way to home mid-shoot.
-        //  - Otherwise: show the global "Home" button when not already home.
-        ToolbarItem(placement: .navigationBarLeading) {
-            if let override = tabBarManager.topBarBackOverride {
-                Button(action: override.action) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                        Text(override.label)
-                    }
-                }
-            } else if tabBarManager.selectedTab == "home" || tabBarManager.selectedTab == "" {
-                EmptyView()
-            } else {
-                Button(action: {
-                    tabBarManager.selectedTab = "home"
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                        Text("Home")
-                    }
-                }
-            }
-        }
-        
+    private var homeProfileToolbar: some ToolbarContent {
         // Right toolbar: profile info
         ToolbarItem(placement: .navigationBarTrailing) {
             HStack(spacing: 10) {

@@ -111,44 +111,17 @@ struct TabBarConfiguration: Codable {
     )
 }
 
-// MARK: - Top Bar Back Override
-/// Snapshot of the back-action a nested feature view wants the top
-/// toolbar to expose in place of the global "Home" button. `id` lets
-/// SwiftUI and Equatable tell two overrides apart so the same view
-/// can refresh its handler without leaking stale closures.
-struct TopBarBackOverride: Equatable {
-    let id: UUID
-    let label: String
-    let action: () -> Void
-
-    init(label: String, action: @escaping () -> Void) {
-        self.id = UUID()
-        self.label = label
-        self.action = action
-    }
-
-    static func == (lhs: TopBarBackOverride, rhs: TopBarBackOverride) -> Bool {
-        lhs.id == rhs.id
-    }
-}
-
 // MARK: - Tab Bar Manager
 class TabBarManager: ObservableObject {
     static let shared = TabBarManager()
-    
+
     @Published var configuration: TabBarConfiguration
-    @Published var selectedTab: String = ""
-    
+    // Canonical Home identity. Home is a permanent destination reachable from
+    // the fixed Home button in the bottom bar; there is no "" vs "home" split.
+    @Published var selectedTab: String = "home"
+
     // Full-screen overlay state (hides tab bar when photo viewer etc. is active)
     @Published var isFullScreenOverlayActive: Bool = false
-
-    // When set, the top-left toolbar swaps the "Home" button for a "Back"
-    // button that runs this closure. Lets a nested feature view (e.g. the
-    // capture view sitting inside CaptureGalleryListView's NavigationLink
-    // stack) intercept the global Home action so the operator pops one
-    // level back to the gallery picker first, instead of being yanked to
-    // the dashboard mid-shoot. Set in .onAppear, cleared in .onDisappear.
-    @Published var topBarBackOverride: TopBarBackOverride? = nil
 
     // Navigation data for passing between features
     @Published var selectedSportsSession: Session? = nil
