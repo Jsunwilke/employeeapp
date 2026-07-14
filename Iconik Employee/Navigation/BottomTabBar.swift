@@ -188,9 +188,9 @@ struct BottomTabBar: View {
             ZStack {
                 Circle()
                     .fill(selectedTab == "home" ? Color.blue : Color.gray.opacity(0.2))
-                    .frame(width: 64, height: 64)
+                    .frame(width: 78, height: 78) // clearly larger than a flat tab (~60pt footprint)
                 Image(systemName: "house.fill")
-                    .font(.system(size: 40, weight: .semibold)) // big, but fully inside the 64pt circle
+                    .font(.system(size: 44, weight: .semibold)) // big, but fully inside the 78pt circle
                     .foregroundColor(selectedTab == "home" ? .white : .gray)
             }
         }
@@ -198,7 +198,7 @@ struct BottomTabBar: View {
         .accessibilityLabel("Home")
         // Claim only a normal-height footprint so the bar/flat tabs don't grow,
         // then lift the big circle so it pokes above the bar like Scan on iPhone.
-        .frame(width: 76, height: 44)
+        .frame(width: 84, height: 44)
         .offset(y: -16)
     }
 

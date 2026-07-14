@@ -158,8 +158,10 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
         days.first { $0.date == dateStr }
     }
 
-    /// A copy of this session whose representative date/time are set to `day`
-    /// (keeping the same id + all other fields). For rendering one block per day.
+    /// A copy of this session whose representative date/time — and crew (MD7:
+    /// each day owns its photographers) — are set to `day`. For rendering one
+    /// block per day: a day occurrence shows only that day's crew, and
+    /// isUserAssigned on an occurrence answers "does this person work THIS day".
     func with(day: SessionDay) -> Session {
         Session(
             id: id,
@@ -172,7 +174,7 @@ struct Session: Identifiable, Codable, Equatable, Hashable {
             days: days,
             session_types: session_types,
             custom_session_type: custom_session_type,
-            photographers: photographers,
+            photographers: day.photographers ?? photographers,
             notes: notes,
             status: status,
             session_color: session_color,

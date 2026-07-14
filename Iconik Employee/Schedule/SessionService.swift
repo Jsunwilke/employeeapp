@@ -691,12 +691,6 @@ class SessionService: ObservableObject {
             "updated_at": .string(Date().ISO8601Format())
         ]
 
-        // Crew (MD7): photographers live on session_days, not the sessions row
-        // (that column is dropped). iOS edits ONE whole-session crew, so the
-        // array is written to EVERY day row below.
-        let photographersData = try JSONEncoder().encode(photographers)
-        let photographersJSON = try JSONDecoder().decode(AnyJSON.self, from: photographersData)
-
         // Handle custom session type (set to null if not "other")
         if formData.sessionTypes.contains("other") {
             updateData["custom_session_type"] = .string(formData.customSessionType)
@@ -754,11 +748,19 @@ class SessionService: ObservableObject {
 
         // Crew: iOS has one whole-session crew editor, so a crew CHANGE writes
         // the photographers array to EVERY day row of the session (MD7). Skip
-        // when membership/notes are unchanged — a time-only or notes-only save
-        // must not flatten per-day crew that was set in the web app (the same
-        // guard the transitional DB trigger used). existingSession.photographers
-        // is the union across day rows, which is exactly what seeded this form.
-        if Set(existingSession.photographers) != Set(photographers) {
+        // when nothing the USER can change here changed — membership (by id)
+        // and per-photographer notes (nil ≡ "") — so a time-only save cannot
+        // flatten per-day crew that was set in the web app. Deliberately NOT
+        // full-struct equality: name/email are re-derived from the current
+        // team-member record on every save and web writes them in a different
+        // shape, so struct equality would false-positive on cosmetic skew.
+        let existingIds = Set(existingSession.photographers.map { $0.id })
+        let newIds = Set(photographers.map { $0.id })
+        let existingNotes = Dictionary(uniqueKeysWithValues: existingSession.photographers.map { ($0.id, $0.notes ?? "") })
+        let newNotes = Dictionary(uniqueKeysWithValues: photographers.map { ($0.id, $0.notes ?? "") })
+        if existingIds != newIds || existingNotes != newNotes {
+            let photographersData = try JSONEncoder().encode(photographers)
+            let photographersJSON = try JSONDecoder().decode(AnyJSON.self, from: photographersData)
             let crewUpdate: [String: AnyJSON] = [
                 "photographers": photographersJSON,
                 "updated_at": .string(Date().ISO8601Format())

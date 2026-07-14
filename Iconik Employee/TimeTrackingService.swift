@@ -598,11 +598,14 @@ class TimeTrackingService: ObservableObject {
         )
 
         // A session's days live in session_days; include any session with a day on
-        // today (not just first-day), rendered as that day's occurrence.
+        // today, rendered as that day's occurrence. Assignment is checked on the
+        // OCCURRENCE (MD7: crew is per-day) — only people on TODAY's crew can
+        // clock in, matching the web time-tracking gate.
         return allSessions.compactMap { session -> Session? in
-            guard session.isUserAssigned(userID: userId, userEmail: currentUserEmail),
-                  let todayDay = session.day(onDate: today) else { return nil }
-            return session.with(day: todayDay)
+            guard let todayDay = session.day(onDate: today) else { return nil }
+            let occurrence = session.with(day: todayDay)
+            guard occurrence.isUserAssigned(userID: userId, userEmail: currentUserEmail) else { return nil }
+            return occurrence
         }
     }
 

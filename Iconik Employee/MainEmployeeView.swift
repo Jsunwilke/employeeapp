@@ -276,11 +276,13 @@ class MainEmployeeViewModel: ObservableObject {
                 let startOfToday = calendar.startOfDay(for: now)
                 let endOfDayAfterTomorrow = calendar.date(byAdding: .day, value: 3, to: startOfToday) ?? startOfToday
 
-                // Expand each assigned session into one occurrence per day so a
-                // multi-day session appears once for each of its upcoming days.
+                // Expand each session into one occurrence per day, then keep the
+                // days THIS user works (MD7: crew is per-day — an occurrence
+                // carries its own day's photographers, so a multi-day session
+                // appears only on the user's own days).
                 let userSessions = sessions
-                    .filter { $0.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail) }
                     .flatMap { $0.dayOccurrences() }
+                    .filter { $0.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail) }
                     .filter { session in
                         guard let startDate = session.startDate else {
                             return false
