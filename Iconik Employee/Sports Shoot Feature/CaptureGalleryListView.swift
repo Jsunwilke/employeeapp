@@ -98,6 +98,7 @@ struct CaptureGalleryListView: View {
                 }
             }
             .navigationTitle("Capture")
+            .homeToolbarItem()
             .searchable(text: $searchText, prompt: "Search galleries...")
             .task {
                 await loadGalleries()

@@ -8,10 +8,6 @@ struct BottomTabBar: View {
     
     @State private var animateSelection = false
     @Namespace private var tabBarNamespace
-
-    // Set true once the user has performed the swipe-to-Home gesture, which
-    // permanently retires the coach-mark hint (read in MainEmployeeView).
-    @AppStorage("hasSwipedHome") private var hasSwipedHome = false
     
     var body: some View {
         Group {
@@ -148,32 +144,6 @@ struct BottomTabBar: View {
             alignment: .top
         )
         .id("bottomTabBar_\(chatManager.totalUnreadCount)") // Force redraw when unread count changes
-        .contentShape(Rectangle()) // let the swipe register across the whole bar, gaps included
-        .gesture(swipeHomeGesture)
-    }
-
-    // Swipe-to-Home: a horizontal swipe anywhere on the always-visible tab bar
-    // returns to the dashboard. There is no Home button in the bar — Scan keeps
-    // the prominent center slot — so a first-run coach mark (MainEmployeeView)
-    // teaches this gesture, repeating on each feature until the user does it once.
-    private var swipeHomeGesture: some Gesture {
-        DragGesture(minimumDistance: 30)
-            .onEnded { value in
-                // Require a clearly horizontal swipe: not a tap (min distance
-                // above) and not a vertical drag toward the home indicator, so
-                // taps on the tab buttons and Scan are unaffected.
-                let horizontal = abs(value.translation.width)
-                let vertical = abs(value.translation.height)
-                guard horizontal > 44, horizontal > vertical else { return }
-
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    selectedTab = "home"
-                }
-                hasSwipedHome = true
-
-                let impact = UIImpactFeedbackGenerator(style: .medium)
-                impact.impactOccurred()
-            }
     }
 
     // Update item with current badge values

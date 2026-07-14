@@ -69,6 +69,10 @@ struct EquipmentTabView: View {
             }
             .navigationTitle("Equipment")
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    HomeToolbarButton()
+                }
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if canManageKits {
                         Button {

@@ -46,6 +46,7 @@ struct PhotoCritiqueListView: View {
             }
             .navigationTitle("Training Photos")
             .navigationBarTitleDisplayMode(.large)
+            .homeToolbarItem()
             .onAppear {
                 critiqueService.startListening()
             }

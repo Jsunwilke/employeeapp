@@ -85,6 +85,7 @@ struct UnflagUserView: View {
                 }
             }
             .navigationTitle("Unflag Users")
+            .homeToolbarItem()
             .onAppear {
                 loadFlaggedUsers()
             }

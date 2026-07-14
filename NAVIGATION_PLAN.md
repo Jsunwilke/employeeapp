@@ -8,15 +8,21 @@ branch nav-single-stack (never merged to main; safe to delete).
 
 BUILT NOTE (2026-07-14): Implemented as the "correct fix" below, with two operator decisions
 taken during the build:
-- HOME REACHABILITY — the plan's "permanent Home button in the bottom bar" was built first, then
-  changed at the operator's call: it crowded an already-full bar and Scan must keep the prominent
-  center slot. Final design = NO Home button; a horizontal SWIPE on the always-visible tab bar
-  returns to the dashboard, taught by a first-run coach mark ("Swipe across the bar to go Home")
-  that re-shows on each feature screen until the user performs the swipe once (@AppStorage
-  "hasSwipedHome"). Home is still always reachable; the gesture is conflict-free (horizontal,
-  on the bar — clear of the edge-back gesture and list swipe-actions). Trade-off accepted: a
-  taught gesture is slightly less bulletproof than a visible button, mitigated by the repeat-
-  until-used hint. (This retires self-review finding #1 — no button is added to the bar.)
+- HOME REACHABILITY — went through three iterations at the operator's direction and landed on a
+  TOP-NAV HOME BUTTON. (1) A permanent Home button in the bottom bar was built first — rejected:
+  it crowded an already-full bar and Scan must keep the prominent center slot. (2) Swipe-on-the-
+  bar + coach mark was built next — rejected: users swipe the CONTENT, and several screens
+  (Schedule week/day paging at SlingWeeklyView.swift:620, the photo viewers) own horizontal
+  content swipes, so a swipe-for-Home was ambiguous. (3) FINAL: no Home in the bottom bar (Scan
+  keeps center); a top-left Home button (house.fill) on every feature screen's own nav bar via a
+  shared HomeToolbarButton / .homeToolbarItem() (Navigation/HomeToolbarButton.swift). The shell
+  adds it in one place to every shell-wrapped feature; the 5 self-nav features (capture, training,
+  unflagUser, tasks, equipment) add it in their own toolbars. The iPad Sports rosters
+  (SportsShootListView protected + FPSportsRosterView_iPad) are unchanged — they run full-screen
+  with the bottom bar hidden and already have their own internal Home button; on iPhone they go
+  through the wrapper. Drill-in details show the system Back button in that slot instead, so
+  root = Home, deeper = Back. (Retires self-review findings #1 and #3 — no bar crowding, and
+  title-less feature bars now carry the Home button instead of being empty.)
 - CONTAINER — the Home wrap and the shell-dependent feature wraps use NavigationView(.stack)
   (the container every feature was already built and tested inside), NOT NavigationStack, so
   one-bar-per-screen lands with zero change to each feature's proven nav semantics; the
@@ -24,10 +30,10 @@ taken during the build:
 Files: MainEmployeeView, BottomTabBar, TabBarItem, PoserStationView. Verified feature inventory
 re-confirmed against real code (the iPhone-VStack vs iPad-NavigationView split for
 sportsShoot/focalPointSports holds; the self-nav predicate matches those views' own
-`UIDevice.userInterfaceIdiom == .phone` check). Open verify-item: feature screens with no
-navigationTitle show an empty (not doubled) nav bar — confirm it reads as intentional. On-device
-verify must include: swipe-to-Home works from every feature, and the coach mark shows then
-disappears for good after the first swipe.
+`UIDevice.userInterfaceIdiom == .phone` check). On-device verify must include: the top-left Home
+button appears and works on EVERY feature screen (both shell-wrapped and the 5 self-nav ones),
+drill-in details show Back (not Home) in that slot, and the iPad Sports rosters still reach Home
+via their own control.
 
 ## What the app does today (verified, not assumed)
 

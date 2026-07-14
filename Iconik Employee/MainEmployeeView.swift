@@ -609,14 +609,6 @@ struct MainEmployeeView: View {
     
     // Track initialization state to prevent duplicate loads
     @State private var hasInitializedData = false
-
-    // Swipe-to-Home coach mark. There is no Home button in the bar (Scan keeps
-    // the center); a horizontal swipe on the tab bar returns to the dashboard.
-    // The hint shows on feature screens until the user performs the swipe once
-    // (hasSwipedHome, shared with BottomTabBar). It re-arms on each feature
-    // navigation; the per-screen dismiss (x) only hides it for the current screen.
-    @AppStorage("hasSwipedHome") private var hasSwipedHome = false
-    @State private var swipeHintDismissedForScreen = false
     
     // Environment
     @Environment(\.colorScheme) var colorScheme
@@ -653,19 +645,12 @@ struct MainEmployeeView: View {
             if isFlagged && !flagNote.isEmpty && !isBannerDismissed {
                 flagNotificationBanner
             }
-
-            // Swipe-to-Home coach mark (feature screens only, until first swipe)
-            if shouldShowSwipeHint {
-                swipeHomeHint
-            }
         }
         .onChange(of: tabBarManager.selectedTab) { newTab in
             // Clean up chat if we're leaving it
             if tabBarManager.selectedTab == "chat" && newTab != "chat" {
                 ChatManager.shared.cleanup()
             }
-            // Re-arm the swipe-to-Home hint each time the user lands on a screen.
-            swipeHintDismissedForScreen = false
         }
         .onAppear {
             onAppearActions()
@@ -726,10 +711,13 @@ struct MainEmployeeView: View {
     @ViewBuilder
     private func featureContainer(for featureId: String) -> some View {
         if isSelfNavFeature(featureId) {
+            // Self-nav features own their bar and add their own Home button
+            // (via .homeToolbarItem() inside each view).
             featureView(for: featureId)
         } else {
             NavigationView {
                 featureView(for: featureId)
+                    .homeToolbarItem() // top-left Home on every shell-wrapped feature
             }
             .navigationViewStyle(StackNavigationViewStyle())
         }
@@ -1039,51 +1027,6 @@ struct MainEmployeeView: View {
                 }
             }
         }
-
-    // MARK: - Swipe-to-Home Coach Mark
-
-    /// The hint shows only on feature screens, only until the user has swiped
-    /// home once, and never while a full-screen overlay (kiosk/photo viewer) is up.
-    private var shouldShowSwipeHint: Bool {
-        tabBarManager.selectedTab != "home"
-            && !hasSwipedHome
-            && !tabBarManager.isFullScreenOverlayActive
-            && !swipeHintDismissedForScreen
-    }
-
-    private var swipeHomeHint: some View {
-        VStack {
-            Spacer()
-            HStack(spacing: 10) {
-                Image(systemName: "hand.draw")
-                    .font(.title3)
-                    .foregroundColor(.accentColor)
-                Text("Swipe across the bar to go Home")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
-                Button {
-                    withAnimation { swipeHintDismissedForScreen = true }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color(UIColor.secondarySystemBackground))
-                    .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 4)
-            )
-            .padding(.horizontal, 20)
-            .padding(.bottom, 92) // sit just above the tab bar
-        }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-        .animation(.easeInOut(duration: 0.25), value: shouldShowSwipeHint)
-    }
 
     // MARK: - On Appear Actions
     

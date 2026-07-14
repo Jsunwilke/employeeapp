@@ -93,6 +93,10 @@ struct TasksMainView: View {
             .navigationTitle("Tasks")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    HomeToolbarButton()
+                }
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
                         showingCreateTask = true
