@@ -22,16 +22,6 @@ phase-naming registry as the rest of the family.
   Named by arc code (ARC.N) per the family registry, FocalPointProduction/docs/PHASES.md.
   Full per-item scope + closeouts live in AUDIT_ROADMAP.md.
 
-  ✅ SHIPPED
-      NAV.1   Navigation restructure — one nav bar per screen + Home reachable everywhere.
-              SHIPPED 2026-07-14 — merged + pushed to origin/main (25a16ac). Home (per-device):
-              iPhone = top-left Home button (house icon) on every feature screen's nav bar (Scan
-              keeps bar center); iPad = large center Home button in the bottom bar (notched top
-              line, no center Scan there). Profile menu moved onto Home. TabView/typed-routes/
-              deep-links deferred by plan. Closeout: NAVIGATION_PLAN.md + AUDIT_ROADMAP.md.
-              (A parallel MD7 schedule session committed onto the same branch; its work merged
-              + pushed in the same push — intended.)
-
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).
       DJR.1   Daily Job Report redesign (wizard, draft auto-save, offline outbox).
@@ -41,9 +31,12 @@ phase-naming registry as the rest of the family.
       SEC.*   iOS data protection (at-rest DB encryption, PII out of UserDefaults,
               LAN TLS) — folds into the existing family SEC arc, not a new code.
 
-  ✅ DONE   (July 2026, under the pre-arc audit scheme — closeouts in AUDIT_ROADMAP.md)
-      RLS security fixes (live)  ·  SessionService perf  ·  PoserStation memo  ·
-      design tokens (partial)  ·  the 5 missing chat RPCs.
+  ✅ DONE   (closeouts in AUDIT_ROADMAP.md)
+      NAV.1   Navigation restructure — one nav bar per screen; Home = top-left button per feature
+              (iPhone) / large center bottom-bar button (iPad). SHIPPED 2026-07-14 to origin/main,
+              verified on-device iPhone + iPad. TabView/typed-routes/deep-links deferred by plan.
+      Pre-arc (July 2026):  RLS security fixes (live)  ·  SessionService perf  ·  PoserStation
+              memo  ·  design tokens (partial)  ·  the 5 missing chat RPCs.
 
 
 # ⚙️ The workflow  (the agent runs this)
