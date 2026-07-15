@@ -17,7 +17,9 @@ struct BottomTabBar: View {
                 // iPad layout: no center Scan button, so a prominent Home button
                 // takes the center. The left and right item groups each take half
                 // the width, so Home stays dead-center regardless of item count.
-                HStack(spacing: 0) {
+                // Bottom-aligned so the big Home circle sits on the bar and only
+                // its size makes it rise above the top (no artificial offset).
+                HStack(alignment: .bottom, spacing: 0) {
                     let items = tabBarManager.getQuickAccessItemsExcludingScan()
                     let midPoint = (items.count + 1) / 2 // extra item on the left for odd counts
                     let leftItems = Array(items.prefix(midPoint))
@@ -140,11 +142,7 @@ struct BottomTabBar: View {
             Color(.systemBackground)
                 .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: -5)
         )
-        .overlay(
-            Divider()
-                .background(Color(.separator)),
-            alignment: .top
-        )
+        .overlay(topBorder, alignment: .top)
         .id("bottomTabBar_\(chatManager.totalUnreadCount)") // Force redraw when unread count changes
     }
 
@@ -187,8 +185,13 @@ struct BottomTabBar: View {
         } label: {
             ZStack {
                 Circle()
-                    .fill(selectedTab == "home" ? Color.blue : Color.gray.opacity(0.2))
+                    // Opaque fill so the bar's top line doesn't show through the circle.
+                    .fill(selectedTab == "home" ? Color.blue : Color(.systemGray5))
                     .frame(width: 78, height: 78) // clearly larger than a flat tab (~60pt footprint)
+                    // Small border to set the circle off from the bar.
+                    .overlay(
+                        Circle().strokeBorder(Color(.separator), lineWidth: 1.5)
+                    )
                 Image(systemName: "house.fill")
                     .font(.system(size: 44, weight: .semibold)) // big, but fully inside the 78pt circle
                     .foregroundColor(selectedTab == "home" ? .white : .gray)
@@ -196,10 +199,27 @@ struct BottomTabBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Home")
-        // Claim only a normal-height footprint so the bar/flat tabs don't grow,
-        // then lift the big circle so it pokes above the bar like Scan on iPhone.
-        .frame(width: 84, height: 44)
-        .offset(y: -16)
+        // No offset. Cap the LAYOUT height to a flat-tab footprint so the big
+        // circle can't stretch the bar taller, and bottom-align it: the circle's
+        // bottom sits on the bar with the flat tabs while its size overflows
+        // UPWARD, above the bar. Bigger circle => sticks up more.
+        .frame(width: 84, height: 44, alignment: .bottom)
+    }
+
+    // Top hairline. On iPad it NOTCHES around the prominent center Home button
+    // (leaving a gap so the line doesn't cut across the circle); on iPhone it's
+    // a normal full-width divider.
+    @ViewBuilder
+    private var topBorder: some View {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            HStack(spacing: 0) {
+                Rectangle().fill(Color(.separator)).frame(height: 0.5)
+                Color.clear.frame(width: 92, height: 0.5) // gap for the Home circle (wider than its 78pt)
+                Rectangle().fill(Color(.separator)).frame(height: 0.5)
+            }
+        } else {
+            Divider().background(Color(.separator))
+        }
     }
 
     // Update item with current badge values
