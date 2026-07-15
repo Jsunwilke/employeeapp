@@ -746,30 +746,36 @@ class SessionService: ObservableObject {
                 .execute()
         }
 
-        // Crew: iOS has one whole-session crew editor, so a crew CHANGE writes
-        // the photographers array to EVERY day row of the session (MD7). Skip
-        // when nothing the USER can change here changed — membership (by id)
-        // and per-photographer notes (nil ≡ "") — so a time-only save cannot
-        // flatten per-day crew that was set in the web app. Deliberately NOT
-        // full-struct equality: name/email are re-derived from the current
-        // team-member record on every save and web writes them in a different
-        // shape, so struct equality would false-positive on cosmetic skew.
-        let existingIds = Set(existingSession.photographers.map { $0.id })
-        let newIds = Set(photographers.map { $0.id })
-        let existingNotes = Dictionary(uniqueKeysWithValues: existingSession.photographers.map { ($0.id, $0.notes ?? "") })
-        let newNotes = Dictionary(uniqueKeysWithValues: photographers.map { ($0.id, $0.notes ?? "") })
-        if existingIds != newIds || existingNotes != newNotes {
-            let photographersData = try JSONEncoder().encode(photographers)
-            let photographersJSON = try JSONDecoder().decode(AnyJSON.self, from: photographersData)
-            let crewUpdate: [String: AnyJSON] = [
-                "photographers": photographersJSON,
-                "updated_at": .string(Date().ISO8601Format())
-            ]
-            try await supabase
-                .from("session_days")
-                .update(crewUpdate)
-                .eq("session_id", value: sessionId)
-                .execute()
+        // Crew (MD7, per-day): the edit form was seeded from the TAPPED day's
+        // crew (the occurrence built by `with(day:)`), so a crew change applies
+        // to THAT day only — editing day 2 must never touch day 1 (same
+        // semantics as the web calendar/modal). A single-day session's only
+        // day IS the session. Skip when nothing the user can change here
+        // changed — membership (by id) and per-photographer notes (nil ≡ "") —
+        // compared against the tapped day's stored crew, so a time-only save
+        // writes nothing. Not full-struct equality: name/email are re-derived
+        // from the current team-member record on every save and would
+        // false-positive on cosmetic skew.
+        if let targetDayId = targetDayId {
+            let baseline = existingSession.days.first { $0.id == targetDayId }?.photographers
+                ?? existingSession.photographers
+            let baselineIds = Set(baseline.map { $0.id })
+            let newIds = Set(photographers.map { $0.id })
+            let baselineNotes = Dictionary(uniqueKeysWithValues: baseline.map { ($0.id, $0.notes ?? "") })
+            let newNotes = Dictionary(uniqueKeysWithValues: photographers.map { ($0.id, $0.notes ?? "") })
+            if baselineIds != newIds || baselineNotes != newNotes {
+                let photographersData = try JSONEncoder().encode(photographers)
+                let photographersJSON = try JSONDecoder().decode(AnyJSON.self, from: photographersData)
+                let crewUpdate: [String: AnyJSON] = [
+                    "photographers": photographersJSON,
+                    "updated_at": .string(Date().ISO8601Format())
+                ]
+                try await supabase
+                    .from("session_days")
+                    .update(crewUpdate)
+                    .eq("id", value: targetDayId)
+                    .execute()
+            }
         }
 
         // Recalculate colors if date changed

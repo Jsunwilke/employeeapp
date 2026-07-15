@@ -1579,10 +1579,19 @@ struct SlingWeeklyView: View {
     private func getSessionsForDay(_ day: Date) -> [Session] {
         // A session's date lives in session_days now; render one copy per day that
         // falls on `day`, so a multi-day session appears on each of its days.
+        // MD7: the occurrence carries that day's OWN crew, so in "My Shifts" the
+        // per-day check keeps only the days this user actually works.
         let dayStr = dayString(day)
+        let currentUserID = userManager.getCurrentUserIDUnified()
+        let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail")
         return filteredSessions.compactMap { session -> Session? in
             guard let match = session.day(onDate: dayStr) else { return nil }
-            return session.with(day: match)
+            let occurrence = session.with(day: match)
+            if scheduleMode == .myShifts, let uid = currentUserID,
+               !occurrence.isUserAssigned(userID: uid, userEmail: currentUserEmail) {
+                return nil
+            }
+            return occurrence
         }.sorted(by: { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) })
     }
 
