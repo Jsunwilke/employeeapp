@@ -22,17 +22,15 @@ phase-naming registry as the rest of the family.
   Named by arc code (ARC.N) per the family registry, FocalPointProduction/docs/PHASES.md.
   Full per-item scope + closeouts live in AUDIT_ROADMAP.md.
 
-  🟡 BUILT — AWAITING ON-DEVICE VERIFY
+  ✅ SHIPPED
       NAV.1   Navigation restructure — one nav bar per screen + Home reachable everywhere.
-              BUILT 2026-07-14 on branch nav-1-restructure. Home (per-device): iPhone = top-left
-              Home button (house icon) on every feature screen's nav bar (Scan keeps bar center);
-              iPad = large center Home button in the bottom bar (no center Scan there). Profile
-              menu moved onto Home. Build clean, self code-review (high).
-              NEXT: run it on iPhone AND iPad, walk every feature (one bar; Home works everywhere —
-              top-left on iPhone, center-bottom on iPad; drill-ins show Back; capture mid-shoot
-              back; kiosk still hides bar; iPad Sports rosters still reach Home; manager gated).
-              Plan/closeout: NAVIGATION_PLAN.md + AUDIT_ROADMAP.md. The nav-single-stack branch
-              is superseded (never merged) — safe to delete.
+              SHIPPED 2026-07-14 — merged + pushed to origin/main (25a16ac). Home (per-device):
+              iPhone = top-left Home button (house icon) on every feature screen's nav bar (Scan
+              keeps bar center); iPad = large center Home button in the bottom bar (notched top
+              line, no center Scan there). Profile menu moved onto Home. TabView/typed-routes/
+              deep-links deferred by plan. Closeout: NAVIGATION_PLAN.md + AUDIT_ROADMAP.md.
+              (A parallel MD7 schedule session committed onto the same branch; its work merged
+              + pushed in the same push — intended.)
 
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).

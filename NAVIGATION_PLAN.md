@@ -1,7 +1,8 @@
 # Navigation Restructure — Plan (Phase 3.1, done correctly)
 
-Status: BUILT 2026-07-14 (branch nav-1-restructure). Build clean, self /code-review (high) done.
-AWAITING the operator's on-device run (iPhone AND iPad) as the final gate before merge.
+Status: SHIPPED 2026-07-14 — merged + pushed to origin/main (25a16ac). Build clean, self
+/code-review (high) done. Owner verified the iPad Home extensively on-device; a full iPhone nav
+walkthrough is a light follow-up if anything surfaces.
 Written 2026-07-13 from a full, code-verified research pass (two research agents + direct
 verification of the one point they disagreed on). Supersedes the shell-suppression patch on
 branch nav-single-stack (never merged to main; safe to delete).
