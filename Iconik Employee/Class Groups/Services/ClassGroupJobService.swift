@@ -98,16 +98,42 @@ class ClassGroupJobService: ObservableObject {
 
         Task {
             do {
-                // First, get all sessions in the date range
-                let allSessions: [Session] = try await supabase
-                    .from(sessionsTable)
-                    .select()
-                    .eq("organization_id", value: organizationId)
+                // Session dates live on the child session_days rows (sessions.date was
+                // dropped in the multi-day refactor), so this is the same two-step the
+                // schedule's SessionService uses: find ids with a day in range, then
+                // fetch those sessions with their embedded days.
+                struct SessionDayIdRow: Decodable {
+                    let session_id: String
+                }
+
+                let dayRows: [SessionDayIdRow] = try await supabase
+                    .from("session_days")
+                    .select("session_id")
                     .gte("date", value: startDateStr)
                     .lte("date", value: endDateStr)
-                    .order("date")
                     .execute()
                     .value
+
+                let sessionIdsInRange = Array(Set(dayRows.map { $0.session_id }))
+
+                guard !sessionIdsInRange.isEmpty else {
+                    await MainActor.run {
+                        completion(.success([]))
+                    }
+                    return
+                }
+
+                let unsortedSessions: [Session] = try await supabase
+                    .from(sessionsTable)
+                    .select("*, session_days(*)")
+                    .eq("organization_id", value: organizationId)
+                    .in("id", values: sessionIdsInRange)
+                    .execute()
+                    .value
+
+                let allSessions = unsortedSessions.sorted {
+                    ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture)
+                }
 
                 print("Found \(allSessions.count) total sessions in date range")
 
