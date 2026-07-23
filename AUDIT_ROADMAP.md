@@ -97,6 +97,20 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 > optimistic array write; re-edit + blur re-saves unconditionally); (4) pre-existing off-main
 > @State writes on some iPhone failure paths (extends an accepted file-wide pattern). Operator
 > smoke pending: the 4 per-item device tests in the plan + the 6bf00ba regression check.
+>
+> **2026-07-23 operator ruling (post-build):** camera-station capture is NOT used from the
+> Captura views in practice — Production Sync is an FP Sports workflow only. The Captura
+> views' fpSync/auto-fill code is pre-split legacy (entered both views 2026-03-14, commit
+> 1d63bc3, when they were the only sports views; FP Sports later became the real home and
+> the Captura copies were frozen in by the protection rule). Consequences: W3's on-device
+> test is WAIVED by the operator (the path is double-gated — needs a gallery link + PIN
+> connect — and never armed on Captura jobs; fix is correct, build-verified, dormant);
+> residual (1) above (capture-vs-shoot-switch debounce loss) lives in the SAME dormant path
+> and is downgraded to moot-in-practice — do NOT spend a hook lift on it; stripping the
+> Production Sync panel from the Captura views is NOT a standalone phase — it folds into
+> the FP Sports parity/retirement deletion of both Captura views whole. Remaining operator
+> smoke: W1 (fast entry ping-pong), W2 (shoot switch mid-typing), 6bf00ba regression
+> (type, wait 35s, switch, reload).
 
 - [ ] **Launch chain** (`RootView.swift:25-57`): replace the 50ms busy-poll on `sessionCheckComplete` (up to 10s) with await/continuation; drop the redundant org-ID query (`UserManager.swift:117-142`, fully subsumed by the profile query in `UserProfileService.swift:214-219`); remove up to 1.5s retry sleeps; render optimistically from cached org id
 - [ ] **Clock in/out error surfacing + offline queue** (`TimeTrackingService.swift:95-209`): writes throw when offline with nothing queued; the AllFeaturesView clock button (`AllFeaturesView.swift:163-165`) swallows errors with print only. Queue clock events (append-only, conflict-free), reconcile on reconnect, add toast + haptic on failure. This is payroll data.
