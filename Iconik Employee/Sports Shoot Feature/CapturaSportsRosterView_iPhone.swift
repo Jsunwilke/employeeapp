@@ -1499,8 +1499,9 @@ struct CapturaSportsRosterView_iPhone: View {
                                 // Save immediately when focus leaves this field
                                 if let value = editingValues[entry.id] {
                                     Task {
-                                        await saveEntry(entryId: entry.id, imageNumbers: value)
-                                        lastSavedValues[entry.id] = value
+                                        if await saveEntry(entryId: entry.id, imageNumbers: value) {
+                                            lastSavedValues[entry.id] = value
+                                        }
                                     }
                                 }
                             },
@@ -2215,8 +2216,9 @@ struct CapturaSportsRosterView_iPhone: View {
             Task { @MainActor [self] in
                 // Verify we're still editing this entry before saving
                 guard self.currentlyEditingEntryId == capturedEntryId else { return }
-                await self.saveEntry(entryId: capturedEntryId, imageNumbers: capturedValue)
-                self.lastSavedValues[capturedEntryId] = capturedValue
+                if await self.saveEntry(entryId: capturedEntryId, imageNumbers: capturedValue) {
+                    self.lastSavedValues[capturedEntryId] = capturedValue
+                }
             }
         }
 
@@ -2224,8 +2226,12 @@ struct CapturaSportsRosterView_iPhone: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: task)
     }
 
-    private func saveEntry(entryId: UUID, imageNumbers: String) async {
-        guard var entry = rosterEntries.first(where: { $0.id == entryId }) else { return }
+    /// Returns true when the local PowerSync write succeeded, so callers only
+    /// advance lastSavedValues on success. On final failure the typed value
+    /// stays on screen, the failure is logged, and an alert names the athlete.
+    @discardableResult
+    private func saveEntry(entryId: UUID, imageNumbers: String) async -> Bool {
+        guard var entry = rosterEntries.first(where: { $0.id == entryId }) else { return false }
 
         entry.imageNumbers = imageNumbers.trimmingCharacters(in: .whitespacesAndNewlines)
         entry.updatedAt = Date()
@@ -2244,7 +2250,7 @@ struct CapturaSportsRosterView_iPhone: View {
         while retries < 3 {
             do {
                 try await powerSync.saveRosterEntry(entry)
-                return
+                return true
             } catch {
                 retries += 1
                 print("CapturaSportsRosterView_iPhone: Save retry \(retries)/3: \(error)")
@@ -2255,6 +2261,14 @@ struct CapturaSportsRosterView_iPhone: View {
         }
         print("CapturaSportsRosterView_iPhone: Failed to save entry after 3 retries")
         UINotificationFeedbackGenerator().notificationOccurred(.error)
+        RosterEditDiagnostics.shared.log(
+            "saveEntry FAILED (3 retries exhausted)",
+            entryId: entry.id.uuidString.lowercased(),
+            numbers: entry.imageNumbers
+        )
+        errorMessage = "Could not save image numbers \"\(entry.imageNumbers)\" for \(entry.firstName) \(entry.lastName). The value is still on screen — please try again."
+        showingErrorAlert = true
+        return false
     }
 
     private func moveToNextEditableEntry(currentID: UUID) {

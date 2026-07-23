@@ -11,7 +11,7 @@ phase-naming registry as the rest of the family.
 
 # 🚀 START HERE  (you, the operator)
 
-      WHAT TO BUILD:  Nav.1
+      WHAT TO BUILD:  CRS.1
 
   An arc id (e.g. NAV.1) or just describe the item in plain words. That is the only
   line you fill in — the agent works out the exact phase and scope.
@@ -28,12 +28,15 @@ phase-naming registry as the rest of the family.
       ONB.1   Invite-code onboarding + sign-in hardening.
       TST.1   Tests for the money paths (TimeEntryValidator, PayPeriodService).
       GIC.1   Group-images conflict handling (version-checked, not last-write-wins).
-      CRS.1   Captura roster save hardening — the 4 pre-existing loss paths from the
-              6bf00ba post-ship review. Full plan: CAPTURA_ROSTER_HARDENING_PLAN.md.
       SEC.*   iOS data protection (at-rest DB encryption, PII out of UserDefaults,
               LAN TLS) — folds into the existing family SEC arc, not a new code.
 
   ✅ DONE   (closeouts in AUDIT_ROADMAP.md)
+      CRS.1   Captura roster save hardening — all 4 pre-existing loss paths from the
+              6bf00ba post-ship review fixed 2026-07-23 (both protected editors, hook
+              lifted with operator authorization + restored). 2 audits, 0 crit/high.
+              Operator device smoke pending; capture-vs-shoot-switch debounce loss
+              recorded as a follow-on candidate. Plan: CAPTURA_ROSTER_HARDENING_PLAN.md.
       NAV.1   Navigation restructure — one nav bar per screen; Home = top-left button per feature
               (iPhone) / large center bottom-bar button (iPad). SHIPPED 2026-07-14 to origin/main,
               verified on-device iPhone + iPad. TabView/typed-routes/deep-links deferred by plan.

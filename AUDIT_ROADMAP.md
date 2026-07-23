@@ -72,6 +72,32 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 > Captura image-number save bug (race in protected SportsShootDetailView) and shipped
 > always-on logging to catch it (see RosterEditDiagnostics + PHASE1 notes).
 
+> **CRS.1 CLOSEOUT 2026-07-23** — Captura roster save hardening: all 4 pre-existing loss paths
+> from the 6bf00ba post-ship review FIXED (plan: CAPTURA_ROSTER_HARDENING_PLAN.md). W1 own-lock
+> entry switch now saves+releases the previous entry (mirrors the normal branch, same ordering);
+> W2 sidebar shoot switch saves the in-progress edit against the old roster synchronously in
+> onChange(of: shoot.id) then clears editing state (both sidebar set-points verified to funnel
+> through that one onChange); W3 capture-mid-typing merges from the live editing text (screen
+> can no longer clobber unsent keystrokes; persisted value now always equals what is on screen);
+> W4 both files: exhausted save retries now log via RosterEditDiagnostics, alert naming athlete
+> + value, and (iPad) revert the optimistic baseline under an entry-identity + attempted-value
+> guard so a later blur re-attempts. iPhone twin checks all verified in code as the plan
+> predicted (W1/W2/W3 need no iPhone change; W4 is both-files: saveEntry -> @discardableResult
+> Bool, lastSavedValues advances only on success at both caller sites). Hook lifted per the
+> established procedure with explicit operator authorization mid-session, restored, exit-2
+> re-verified on both basenames. BUILD SUCCEEDED (workspace), no warnings from either edited
+> file; anchors re-grepped. Two adversarial audits: ZERO critical/high; both independently
+> confirmed all 4 paths closed. Residuals recorded (all pre-existing or accepted-by-design,
+> report-only): (1) MEDIUM follow-on candidate — a capture landing <=500ms before a sidebar
+> shoot switch is still lost for entries NOT being edited (pendingCaptureSaves neither flushed
+> nor rescued by W2; same lookup-fails-after-reload mechanism); (2) iPad W4 re-attempt is
+> manual (alert) when the failure lands after the user already switched entries — equality
+> guard means re-tapping alone won't re-save, user must modify the text; (3) iPhone stopEditing
+> ignores the save Bool and clears editing state regardless (value stays on screen via the
+> optimistic array write; re-edit + blur re-saves unconditionally); (4) pre-existing off-main
+> @State writes on some iPhone failure paths (extends an accepted file-wide pattern). Operator
+> smoke pending: the 4 per-item device tests in the plan + the 6bf00ba regression check.
+
 - [ ] **Launch chain** (`RootView.swift:25-57`): replace the 50ms busy-poll on `sessionCheckComplete` (up to 10s) with await/continuation; drop the redundant org-ID query (`UserManager.swift:117-142`, fully subsumed by the profile query in `UserProfileService.swift:214-219`); remove up to 1.5s retry sleeps; render optimistically from cached org id
 - [ ] **Clock in/out error surfacing + offline queue** (`TimeTrackingService.swift:95-209`): writes throw when offline with nothing queued; the AllFeaturesView clock button (`AllFeaturesView.swift:163-165`) swallows errors with print only. Queue clock events (append-only, conflict-free), reconcile on reconnect, add toast + haptic on failure. This is payroll data.
 - [ ] **GPS**: `RoutePlannerView.swift:762-804` starts `kCLLocationAccuracyBest` continuous updates, never stopped anywhere in the codebase. Use one-shot `requestLocation()` (wrapper already exists at `:788`)

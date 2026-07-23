@@ -582,7 +582,11 @@ struct CapturaSportsView: View {
             let entryId = viewModel.rosterEntries[idx].id
 
             var entry = viewModel.rosterEntries[idx]
-            var numbers = parseImageNumbers(entry.imageNumbers)
+            // When the user is mid-typing in this entry, merge from the live editing
+            // text — the array value lags it between watch emissions and would
+            // clobber unsent keystrokes on screen.
+            let isEditingThisEntry = viewModel.currentlyEditingEntry == entryId
+            var numbers = parseImageNumbers(isEditingThisEntry ? viewModel.editingImageNumber : entry.imageNumbers)
             if !numbers.contains(imageNumber) {
                 numbers.append(imageNumber)
             }
@@ -593,7 +597,7 @@ struct CapturaSportsView: View {
             viewModel.rosterEntries[idx] = entry
 
             // If user is editing this entry's image numbers, update the editing text too
-            if viewModel.currentlyEditingEntry == entryId {
+            if isEditingThisEntry {
                 viewModel.editingImageNumber = formatted
             }
 
@@ -1983,6 +1987,19 @@ struct CapturaSportsView: View {
                     pendingCaptureSaves = [:]
                 }
                 .onChange(of: shoot.id) { newShootID in
+                    // Save any in-progress edit while the OLD roster array is still in
+                    // memory (after the reload the entry lookup fails and the typed text
+                    // is silently dropped), then clear editing state so it can't leak
+                    // across shoots.
+                    if let previousEntryID = viewModel.currentlyEditingEntry {
+                        saveCurrentEditingEntry()
+                        Task {
+                            await LockManager.shared.releaseRosterEntryLock(entryId: previousEntryID)
+                        }
+                        viewModel.currentlyEditingEntry = nil
+                        viewModel.editingImageNumber = ""
+                        viewModel.lastSavedImageNumber = ""
+                    }
                     // Cancel old watchers and set up new ones for the new shoot
                     rosterWatchTask?.cancel()
                     groupWatchTask?.cancel()
@@ -4268,7 +4285,9 @@ struct CapturaSportsView: View {
                                 updatedEntry.updatedAt = Date()
                                 updatedEntry.updatedBy = SupabaseManager.shared.client.auth.currentUser?.id
 
-                                viewModel.lastSavedImageNumber = viewModel.editingImageNumber
+                                let attemptedValue = viewModel.editingImageNumber
+                                let previousSavedImageNumber = viewModel.lastSavedImageNumber
+                                viewModel.lastSavedImageNumber = attemptedValue
 
                                 // Update local state immediately
                                 if let index = viewModel.rosterEntries.firstIndex(where: { $0.id == entryID }) {
@@ -4296,6 +4315,21 @@ struct CapturaSportsView: View {
                                     print("CapturaSportsView: Failed to save entry after 3 retries")
                                     await MainActor.run {
                                         UINotificationFeedbackGenerator().notificationOccurred(.error)
+                                        RosterEditDiagnostics.shared.log(
+                                            "saveRosterEntry FAILED (3 retries exhausted)",
+                                            entryId: updatedEntry.id.uuidString.lowercased(),
+                                            numbers: updatedEntry.imageNumbers,
+                                            extra: "v=\(updatedEntry.version)"
+                                        )
+                                        // Revert the optimistic baseline so a later switch/blur
+                                        // re-attempts this save instead of skipping it — only if
+                                        // the baseline still belongs to this entry's attempt.
+                                        if viewModel.currentlyEditingEntry == entryID,
+                                           viewModel.lastSavedImageNumber == attemptedValue {
+                                            viewModel.lastSavedImageNumber = previousSavedImageNumber
+                                        }
+                                        viewModel.errorMessage = "Could not save image numbers \"\(updatedEntry.imageNumbers)\" for \(updatedEntry.firstName) \(updatedEntry.lastName). The value is still on screen — please try again."
+                                        viewModel.showingErrorAlert = true
                                     }
                                 }
                             }
@@ -4311,7 +4345,13 @@ struct CapturaSportsView: View {
 
                                 // Check if we already have a lock on this entry
                                 if isOwnLock(entry.id) {
-                                    // We already have the lock, just start editing without acquiring a new lock
+                                    // We already have the lock, just start editing without acquiring a new lock.
+                                    // Mirror the normal branch: save + release any previous entry first (its
+                                    // typed text is otherwise lost and its lock leaks until expiry).
+                                    if let previousEntryID = viewModel.currentlyEditingEntry, previousEntryID != entry.id {
+                                        saveCurrentEditingEntry()
+                                        releaseLock(shootID: shootID, entryID: previousEntryID)
+                                    }
                                     viewModel.currentlyEditingEntry = entry.id
                                     viewModel.editingImageNumber = entry.imageNumbers
                                     viewModel.lastSavedImageNumber = entry.imageNumbers
