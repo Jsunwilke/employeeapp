@@ -111,6 +111,14 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 > the FP Sports parity/retirement deletion of both Captura views whole. Remaining operator
 > smoke: W1 (fast entry ping-pong), W2 (shoot switch mid-typing), 6bf00ba regression
 > (type, wait 35s, switch, reload).
+>
+> **2026-07-23 OPERATOR SMOKE PASSED — CRS.1 COMPLETE.** All three device tests passed on
+> iPad: W2 (typed digits held across a sidebar job switch), W1 (fast B->A->B entry
+> ping-pong, A's digits persisted), and the 35s 6bf00ba regression check. W3 device test
+> waived per the ruling above (path never armed on Captura jobs). Also confirmed during
+> smoke: the sidebar toggle (top-left of the shoot header) + the sidebar's "< Home" button
+> are the working exit path from the iPad shoot view — works as designed, low
+> discoverability noted. Awaiting operator push decision.
 
 - [ ] **Launch chain** (`RootView.swift:25-57`): replace the 50ms busy-poll on `sessionCheckComplete` (up to 10s) with await/continuation; drop the redundant org-ID query (`UserManager.swift:117-142`, fully subsumed by the profile query in `UserProfileService.swift:214-219`); remove up to 1.5s retry sleeps; render optimistically from cached org id
 - [ ] **Clock in/out error surfacing + offline queue** (`TimeTrackingService.swift:95-209`): writes throw when offline with nothing queued; the AllFeaturesView clock button (`AllFeaturesView.swift:163-165`) swallows errors with print only. Queue clock events (append-only, conflict-free), reconcile on reconnect, add toast + haptic on failure. This is payroll data.
