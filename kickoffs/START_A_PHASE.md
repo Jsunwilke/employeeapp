@@ -28,6 +28,8 @@ phase-naming registry as the rest of the family.
       ONB.1   Invite-code onboarding + sign-in hardening.
       TST.1   Tests for the money paths (TimeEntryValidator, PayPeriodService).
       GIC.1   Group-images conflict handling (version-checked, not last-write-wins).
+      CRS.1   Captura roster save hardening — the 4 pre-existing loss paths from the
+              6bf00ba post-ship review. Full plan: CAPTURA_ROSTER_HARDENING_PLAN.md.
       SEC.*   iOS data protection (at-rest DB encryption, PII out of UserDefaults,
               LAN TLS) — folds into the existing family SEC arc, not a new code.
 
