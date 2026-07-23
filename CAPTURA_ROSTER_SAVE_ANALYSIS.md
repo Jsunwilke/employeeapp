@@ -147,3 +147,32 @@ on iPhone only. History repeats.
 Long-term: do not refactor these files to share code (protected production files).
 The sanctioned path is FP Sports reaching feature parity, then deleting both Captura
 views whole (delete-first migration).
+
+## Post-ship adversarial review (2026-07-23, independent agent pass over commit 6bf00ba)
+
+Verdict: the fix is sound. Every write site of editingImageNumber and
+currentlyEditingEntry was enumerated and traced; no sequence was found where the new
+guard loses a typed value, skips a needed save, or saves a stale value to the wrong
+entry. No save loops; write volume strictly reduced. The camera path is confirmed
+limited to one redundant identical-value save. Rename verified complete repo-wide
+(pbxproj uses filesystem-synced groups, zero references; no dynamic string/selector
+references to the old names; old names survive only in historical planning docs).
+The iPhone file has zero functional change beyond names.
+
+Pre-existing holes observed while tracing — present before the fix, NOT regressions,
+unfixed. Report-only; candidates for a future phase:
+
+1. Low, plausible: startEditing own-lock branch (near line 4313) switches entries
+   without saving the previous one. Needs a stale lockedEntries window (release is
+   async): edit B, arrow to A, type into A quickly, tap B again before the next
+   watch emission — A's typed text is lost and A's lock leaks until expiry. The old
+   code lost the text identically.
+2. Low, plausible: switching the selected shoot in the sidebar mid-edit neither
+   saves nor clears editing state; if the text field's focus-loss save does not fire
+   before the roster array is replaced, unsaved typed text is dropped. Same behavior
+   pre-fix.
+3. Note: a camera capture landing mid-typing merges from the array value and can
+   overwrite the in-flight typed delta on screen (persisted outcome unchanged).
+4. Note: the baseline (and previously the array) advances optimistically before the
+   async local write; if all 3 retries of the local SQLite write fail, the value is
+   lost with only an error haptic. Requires local DB failure — rare.
