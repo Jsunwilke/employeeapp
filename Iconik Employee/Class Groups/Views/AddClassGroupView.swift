@@ -29,27 +29,29 @@ struct AddClassGroupView: View {
         NavigationView {
             VStack(spacing: 0) {
                 Form {
-                Section(header: Text("\(jobType == "classGroups" ? "Class" : "Candid") Information")) {
-                    // Grade with suggestions
+                Section(header: Text("\(ClassGroupJobType.formNoun(jobType)) Information")) {
+                    // Grade with suggestions (grade-based types only)
                     HStack {
-                        TextField("Grade", text: $grade)
+                        TextField(ClassGroupJobType.primaryFieldLabel(jobType), text: $grade)
                             .focused($focusedField, equals: .grade)
                             .submitLabel(.next)
                             .onSubmit { focusedField = .teacher }
-                        
-                        Menu {
-                            ForEach(ClassGroup.commonGrades, id: \.self) { gradeOption in
-                                Button(gradeOption) {
-                                    grade = gradeOption
+
+                        if ClassGroupJobType.showsGradeSuggestions(jobType) {
+                            Menu {
+                                ForEach(ClassGroup.commonGrades, id: \.self) { gradeOption in
+                                    Button(gradeOption) {
+                                        grade = gradeOption
+                                    }
                                 }
+                            } label: {
+                                Image(systemName: "chevron.down.circle")
+                                    .foregroundColor(.blue)
                             }
-                        } label: {
-                            Image(systemName: "chevron.down.circle")
-                                .foregroundColor(.blue)
                         }
                     }
-                    
-                    TextField("Teacher Name", text: $teacher)
+
+                    TextField(ClassGroupJobType.secondaryFieldLabel(jobType), text: $teacher)
                         .focused($focusedField, equals: .teacher)
                         .submitLabel(.next)
                         .onSubmit { focusedField = .images }
@@ -105,7 +107,7 @@ struct AddClassGroupView: View {
                 .disabled(!canShowWhiteboard)
                 .padding()
             }
-            .navigationTitle("Add \(jobType == "classGroups" ? "Class Group" : "Class Candid")")
+            .navigationTitle("Add \(ClassGroupJobType.singularTitle(jobType))")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -199,27 +201,29 @@ struct EditClassGroupView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 Form {
-                Section(header: Text("\(jobType == "classGroups" ? "Class" : "Candid") Information")) {
-                    // Grade with suggestions
+                Section(header: Text("\(ClassGroupJobType.formNoun(jobType)) Information")) {
+                    // Grade with suggestions (grade-based types only)
                     HStack {
-                        TextField("Grade", text: $grade)
+                        TextField(ClassGroupJobType.primaryFieldLabel(jobType), text: $grade)
                             .focused($focusedField, equals: .grade)
                             .submitLabel(.next)
                             .onSubmit { focusedField = .teacher }
-                        
-                        Menu {
-                            ForEach(ClassGroup.commonGrades, id: \.self) { gradeOption in
-                                Button(gradeOption) {
-                                    grade = gradeOption
+
+                        if ClassGroupJobType.showsGradeSuggestions(jobType) {
+                            Menu {
+                                ForEach(ClassGroup.commonGrades, id: \.self) { gradeOption in
+                                    Button(gradeOption) {
+                                        grade = gradeOption
+                                    }
                                 }
+                            } label: {
+                                Image(systemName: "chevron.down.circle")
+                                    .foregroundColor(.blue)
                             }
-                        } label: {
-                            Image(systemName: "chevron.down.circle")
-                                .foregroundColor(.blue)
                         }
                     }
-                    
-                    TextField("Teacher Name", text: $teacher)
+
+                    TextField(ClassGroupJobType.secondaryFieldLabel(jobType), text: $teacher)
                         .focused($focusedField, equals: .teacher)
                         .submitLabel(.next)
                         .onSubmit { focusedField = .images }
@@ -275,7 +279,7 @@ struct EditClassGroupView: View {
                 .disabled(!canShowWhiteboard)
                 .padding()
             }
-            .navigationTitle("Edit \(jobType == "classGroups" ? "Class Group" : "Class Candid")")
+            .navigationTitle("Edit \(ClassGroupJobType.singularTitle(jobType))")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {

@@ -29,7 +29,7 @@ struct ClassGroupJobDetailView: View {
                         .foregroundColor(.primary)
                         .multilineTextAlignment(.center)
 
-                    Text(job.jobType == "classGroups" ? "Class Groups" : "Class Candids")
+                    Text(ClassGroupJobType.displayName(job.jobType))
                         .font(.headline)
                         .foregroundColor(.secondary)
                 }
@@ -75,14 +75,14 @@ struct ClassGroupJobDetailView: View {
             }
         }
         .sheet(isPresented: $showingAddGroup) {
-            AddClassGroupView(jobId: jobId, jobType: job?.jobType ?? "classGroups") { success in
+            AddClassGroupView(jobId: jobId, jobType: ClassGroupJobType.normalize(job?.jobType)) { success in
                 if success {
                     refreshJob()
                 }
             }
         }
         .sheet(item: $selectedGroup) { group in
-            EditClassGroupView(jobId: jobId, classGroup: group, jobType: job?.jobType ?? "classGroups") { success in
+            EditClassGroupView(jobId: jobId, classGroup: group, jobType: ClassGroupJobType.normalize(job?.jobType)) { success in
                 if success {
                     refreshJob()
                 }
@@ -93,7 +93,7 @@ struct ClassGroupJobDetailView: View {
         } message: {
             Text(errorMessage)
         }
-        .alert("Delete \(job?.jobType == "classGroups" ? "Class Group" : "Class Candid")?",
+        .alert("Delete \(ClassGroupJobType.singularTitle(job?.jobType))?",
                isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
@@ -102,7 +102,7 @@ struct ClassGroupJobDetailView: View {
                 }
             }
         } message: {
-            Text("Are you sure you want to delete this \(job?.jobType == "classGroups" ? "class group" : "class candid")?")
+            Text("Are you sure you want to delete this \(ClassGroupJobType.rowNoun(job?.jobType))?")
         }
         .onAppear {
             loadJob()
@@ -114,14 +114,14 @@ struct ClassGroupJobDetailView: View {
 
     private var emptyStateView: some View {
         VStack(spacing: 20) {
-            Image(systemName: job?.jobType == "classGroups" ? "camera.viewfinder" : "camera")
+            Image(systemName: ClassGroupJobType.detailEmptyIcon(job?.jobType))
                 .font(.system(size: 60))
                 .foregroundColor(.gray)
 
-            Text("No \(job?.jobType == "classGroups" ? "Class Groups" : "Class Candids") Added")
+            Text("No \(ClassGroupJobType.displayName(job?.jobType)) Added")
                 .font(.headline)
 
-            Text("Tap the + button to add \(job?.jobType == "classGroups" ? "class groups" : "class candids") as you photograph them")
+            Text("Tap the + button to add \(ClassGroupJobType.rowNounPlural(job?.jobType)) as you photograph them")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -130,7 +130,7 @@ struct ClassGroupJobDetailView: View {
             Button(action: {
                 showingAddGroup = true
             }) {
-                Label("Add \(job?.jobType == "classGroups" ? "Class Group" : "Class Candid")", systemImage: "plus.circle.fill")
+                Label("Add \(ClassGroupJobType.singularTitle(job?.jobType))", systemImage: "plus.circle.fill")
                     .font(.headline)
             }
             .buttonStyle(.borderedProminent)

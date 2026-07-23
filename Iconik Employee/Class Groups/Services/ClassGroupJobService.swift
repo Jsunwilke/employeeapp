@@ -122,24 +122,30 @@ class ClassGroupJobService: ObservableObject {
                     return
                 }
 
-                // Get existing jobs of this type
-                let sessionIds = sessionsWithSchools.map { $0.id.lowercased() }
+                // Get existing jobs of this type. Decode only the selected column —
+                // decoding these rows as full ClassGroupJob throws (id/dates absent),
+                // which errored the whole session list whenever a job already existed.
+                // No server-side `in` filter: session ids are compared lowercased
+                // throughout, but a Postgres IN is case-sensitive and historical id
+                // casing varies — clubs have no legacy session flag to mask a missed
+                // match, so fetch the org's jobs of this type and compare client-side.
+                struct SessionIdRow: Decodable {
+                    let session_id: String?
+                }
 
-                // Query for existing jobs (batch if needed)
-                var sessionIdsWithJobs = Set<String>()
-
-                // Supabase supports 'in' filter
-                let existingJobs: [ClassGroupJob] = try await supabase
+                let existingJobs: [SessionIdRow] = try await supabase
                     .from(tableName)
                     .select("session_id")
                     .eq("organization_id", value: organizationId)
                     .eq("job_type", value: jobType)
-                    .in("session_id", values: sessionIds)
                     .execute()
                     .value
 
+                var sessionIdsWithJobs = Set<String>()
                 existingJobs.forEach { job in
-                    sessionIdsWithJobs.insert(job.session_id.lowercased())
+                    if let sessionId = job.session_id {
+                        sessionIdsWithJobs.insert(sessionId.lowercased())
+                    }
                 }
 
                 print("Sessions with existing jobs: \(sessionIdsWithJobs)")
@@ -147,12 +153,14 @@ class ClassGroupJobService: ObservableObject {
                 // Filter out sessions based on job type
                 let availableSessions = sessionsWithSchools.filter { session in
                     let hasExistingJob = sessionIdsWithJobs.contains(session.id.lowercased())
-                    if jobType == "classGroups" {
-                        print("📋 Checking session \(session.id): hasExistingJob=\(hasExistingJob), hasClassGroupJob=\(session.hasClassGroupJob)")
+                    switch jobType {
+                    case ClassGroupJobType.classGroups:
                         return !hasExistingJob && !session.hasClassGroupJob
-                    } else {
-                        print("📋 Checking session \(session.id): hasExistingJob=\(hasExistingJob), hasClassCandids=\(session.hasClassCandids)")
+                    case ClassGroupJobType.classCandids:
                         return !hasExistingJob && !session.hasClassCandids
+                    default:
+                        // Clubs (and any future type) have no legacy session flag.
+                        return !hasExistingJob
                     }
                 }
 
@@ -539,7 +547,13 @@ class ClassGroupJobService: ObservableObject {
     // MARK: - Private Helper Methods
 
     private func updateSessionHasJob(sessionId: String, jobType: String, hasJob: Bool) async {
-        let fieldName = jobType == "classGroups" ? "has_class_group_job" : "has_class_candids"
+        // Clubs have no session flag — only the two legacy types write one (D3).
+        let fieldName: String
+        switch jobType {
+        case ClassGroupJobType.classGroups: fieldName = "has_class_group_job"
+        case ClassGroupJobType.classCandids: fieldName = "has_class_candids"
+        default: return
+        }
 
         do {
             try await supabase
@@ -556,9 +570,14 @@ class ClassGroupJobService: ObservableObject {
 
     // MARK: - Export Operations
 
-    /// Export class group jobs to CSV
+    /// Export class group jobs to CSV. Headers follow the jobs' type when uniform
+    /// (clubs relabel Grade→Club Name, Teacher→Advisor); mixed lists keep the defaults.
     func exportToCSV(jobs: [ClassGroupJob]) -> String {
-        var csv = "Date,School,Grade,Teacher,Images,Notes\n"
+        let types = Set(jobs.map { ClassGroupJobType.normalize($0.jobType) })
+        let headerType = types.count == 1 ? types.first : ClassGroupJobType.defaultType
+        let primaryHeader = ClassGroupJobType.primaryFieldLabel(headerType)
+        let secondaryHeader = ClassGroupJobType.normalize(headerType) == ClassGroupJobType.clubs ? "Advisor" : "Teacher"
+        var csv = "Date,School,\(primaryHeader),\(secondaryHeader),Images,Notes\n"
 
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .short

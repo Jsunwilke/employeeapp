@@ -36,7 +36,7 @@ struct CreateClassGroupJobView: View {
                         Text("No Available Sessions")
                             .font(.headline)
                         
-                        Text("There are no upcoming sessions without \(selectedJobType == "classGroups" ? "class group" : "class candid") jobs in the next 2 weeks.")
+                        Text("There are no upcoming sessions without \(ClassGroupJobType.rowNoun(selectedJobType)) jobs in the next 2 weeks.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -55,7 +55,7 @@ struct CreateClassGroupJobView: View {
                     .listStyle(InsetGroupedListStyle())
                 }
             }
-            .navigationTitle("Create \(selectedJobType == "classGroups" ? "Class Group" : "Class Candid") Job")
+            .navigationTitle("Create \(ClassGroupJobType.singularTitle(selectedJobType)) Job")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {

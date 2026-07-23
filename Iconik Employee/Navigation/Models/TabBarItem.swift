@@ -76,7 +76,8 @@ struct TabBarItem: Identifiable, Codable, Equatable {
             "locationPhotos": "Photos",
             "sportsShoot": "Sports",
             "timeOffRequests": "Time Off",
-            "equipment": "Equipment"
+            "equipment": "Equipment",
+            "classGroups": "Groups"
         ]
         return shortTitles[featureId]
     }
@@ -127,6 +128,7 @@ class TabBarManager: ObservableObject {
     @Published var selectedSportsSession: Session? = nil
     @Published var selectedSportsShoot: SportsShoot? = nil
     @Published var selectedClassGroupJobId: String? = nil
+    @Published var selectedClassGroupJobType: String? = nil
     
     private let configurationKey = "TabBarConfiguration"
     

@@ -1371,7 +1371,7 @@ struct ClassGroupsWidget: View {
                 Image(systemName: "person.3.fill")
                     .font(.title2)
                     .foregroundColor(.purple)
-                Text("Class Group Jobs")
+                Text("Group Jobs")
                     .font(.headline)
                 Spacer()
                 
@@ -1403,14 +1403,14 @@ struct ClassGroupsWidget: View {
                     Image(systemName: "person.3.fill")
                         .font(.system(size: 40))
                         .foregroundColor(.gray)
-                    Text("No class group jobs today")
+                    Text("No group jobs today")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    
+
                     Button(action: {
                         showingCreateJob = true
                     }) {
-                        Text("Add Class Group Jobs")
+                        Text("Add Group Jobs")
                             .font(.caption)
                             .foregroundColor(.purple)
                             .padding(.horizontal, 16)
@@ -1425,8 +1425,10 @@ struct ClassGroupsWidget: View {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(todaysJobs.prefix(3)) { job in
                         Button(action: {
-                            // Set selected job and navigate to class groups feature
+                            // Set selected job (+ its type, so the list opens the right
+                            // segment) and navigate to the Groups feature
                             tabBarManager.selectedClassGroupJobId = job.id
+                            tabBarManager.selectedClassGroupJobType = job.jobType
                             tabBarManager.selectedTab = "classGroups"
                         }) {
                             VStack(alignment: .leading, spacing: 6) {
@@ -1446,12 +1448,12 @@ struct ClassGroupsWidget: View {
                                 // Group count and type
                                 HStack {
                                     if job.classGroupCount > 0 {
-                                        Label("\(job.classGroupCount) group\(job.classGroupCount == 1 ? "" : "s")", 
+                                        Label("\(job.classGroupCount) \(job.classGroupCount == 1 ? ClassGroupJobType.countNoun(job.jobType) : ClassGroupJobType.countNounPlural(job.jobType))",
                                               systemImage: "person.3")
                                             .font(.caption)
                                             .foregroundColor(.blue)
                                     } else {
-                                        Text("No groups added")
+                                        Text("No \(ClassGroupJobType.countNounPlural(job.jobType)) added")
                                             .font(.caption)
                                             .foregroundColor(.orange)
                                     }
@@ -1465,7 +1467,7 @@ struct ClassGroupsWidget: View {
                                     }
                                     
                                     // Job type badge
-                                    Text(job.jobType == "classGroups" ? "Groups" : "Candids")
+                                    Text(ClassGroupJobType.badgeLabel(job.jobType))
                                         .font(.caption)
                                         .foregroundColor(.purple)
                                         .padding(.horizontal, 8)
@@ -1484,8 +1486,9 @@ struct ClassGroupsWidget: View {
                     
                     if todaysJobs.count > 3 {
                         Button(action: {
-                            // Navigate to class groups feature to view all
+                            // Navigate to the Groups feature to view all
                             tabBarManager.selectedClassGroupJobId = nil
+                            tabBarManager.selectedClassGroupJobType = nil
                             tabBarManager.selectedTab = "classGroups"
                         }) {
                             HStack {

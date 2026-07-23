@@ -13,15 +13,16 @@ struct ClassGroupJobsListView: View {
     @ObservedObject private var tabBarManager = TabBarManager.shared
     
     var filteredJobs: [ClassGroupJob] {
-        service.classGroupJobs.filter { $0.jobType == selectedTab }
+        service.classGroupJobs.filter { ClassGroupJobType.normalize($0.jobType) == selectedTab }
     }
-    
+
     var body: some View {
         VStack {
             // Tab Picker
             Picker("", selection: $selectedTab) {
-                Text("Class Groups").tag("classGroups")
-                Text("Class Candids").tag("classCandids")
+                ForEach(ClassGroupJobType.all, id: \.self) { jobType in
+                    Text(ClassGroupJobType.displayName(jobType)).tag(jobType)
+                }
             }
             .pickerStyle(SegmentedPickerStyle())
             .padding()
@@ -47,7 +48,7 @@ struct ClassGroupJobsListView: View {
                 .listStyle(InsetGroupedListStyle())
             }
         }
-        .navigationTitle(selectedTab == "classGroups" ? "Class Groups" : "Class Candids")
+        .navigationTitle(ClassGroupJobType.displayName(selectedTab))
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: {
@@ -79,7 +80,7 @@ struct ClassGroupJobsListView: View {
                 }
             }
         } message: {
-            Text("This will delete the entire job and all its \(selectedTab == "classGroups" ? "class groups" : "class candids"). This action cannot be undone.")
+            Text("This will delete the entire job and all its \(ClassGroupJobType.rowNounPlural(selectedTab)). This action cannot be undone.")
         }
     }
     
@@ -120,10 +121,20 @@ struct ClassGroupJobsListView: View {
     private func checkForSelectedJob() {
         // Check if we have a selected job ID from the widget
         guard let selectedId = tabBarManager.selectedClassGroupJobId else { return }
-        
+
         // Clear the selected job after using it
-        defer { tabBarManager.selectedClassGroupJobId = nil }
-        
+        defer {
+            tabBarManager.selectedClassGroupJobId = nil
+            tabBarManager.selectedClassGroupJobType = nil
+        }
+
+        // Switch to the job's segment first — the NavigationLink for the job only
+        // exists in its own tab's list, so navigating from the widget to a candids
+        // or clubs job dead-ends without this.
+        if let jobType = tabBarManager.selectedClassGroupJobType {
+            selectedTab = ClassGroupJobType.normalize(jobType)
+        }
+
         // Navigate to the selected job
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.selectedJobId = selectedId
@@ -138,15 +149,15 @@ struct EmptyStateView: View {
     
     var body: some View {
         VStack(spacing: 20) {
-            Image(systemName: jobType == "classGroups" ? "person.3" : "camera")
+            Image(systemName: ClassGroupJobType.listEmptyIcon(jobType))
                 .font(.system(size: 80))
                 .foregroundColor(.gray)
-            
-            Text("No \(jobType == "classGroups" ? "Class Group" : "Class Candid") Jobs")
+
+            Text("No \(ClassGroupJobType.singularTitle(jobType)) Jobs")
                 .font(.title2)
                 .fontWeight(.semibold)
-            
-            Text("Create a job for an upcoming session to start tracking \(jobType == "classGroups" ? "class groups" : "class candids")")
+
+            Text("Create a job for an upcoming session to start tracking \(ClassGroupJobType.rowNounPlural(jobType))")
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -182,12 +193,12 @@ struct ClassGroupJobRowView: View {
             // Group count
             HStack {
                 if job.classGroupCount > 0 {
-                    Label("\(job.classGroupCount) group\(job.classGroupCount == 1 ? "" : "s")", 
+                    Label("\(job.classGroupCount) \(job.classGroupCount == 1 ? ClassGroupJobType.countNoun(job.jobType) : ClassGroupJobType.countNounPlural(job.jobType))",
                           systemImage: "person.3")
                         .font(.caption)
                         .foregroundColor(.blue)
                 } else {
-                    Text("No groups added")
+                    Text("No \(ClassGroupJobType.countNounPlural(job.jobType)) added")
                         .font(.caption)
                         .foregroundColor(.orange)
                 }

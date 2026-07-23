@@ -85,7 +85,7 @@ class MainEmployeeViewModel: ObservableObject {
         FeatureItem(id: "sportsShoot", title: "Sports Shoots", systemImage: "sportscourt", description: "Manage sports shoot rosters and images"),
         FeatureItem(id: "focalPointSports", title: "FP Sports", systemImage: "figure.run", description: "Focal Point Sports — direct subject management via Production"),
         FeatureItem(id: "yearbookChecklists", title: "Yearbook Checklists", systemImage: "list.clipboard", description: "Track yearbook photo requirements"),
-        FeatureItem(id: "classGroups", title: "Class Groups", systemImage: "person.3", description: "Track class photos by grade and teacher"),
+        FeatureItem(id: "classGroups", title: "Groups", systemImage: "person.3", description: "Track class group, candid, and club photos"),
         FeatureItem(id: "training", title: "Training", systemImage: "graduationcap.fill", description: "View your training photos and feedback"),
         FeatureItem(id: "tasks", title: "Tasks", systemImage: "checklist", description: "Manage team tasks and to-dos"),
         FeatureItem(id: "equipment", title: "Equipment", systemImage: "camera.fill", description: "Manage photography equipment"),
@@ -935,7 +935,7 @@ struct MainEmployeeView: View {
         case "capture":
             CaptureGalleryListView()
         case "sportsShoot":
-            SportsShootListView()
+            CapturaSportsView()
         case "focalPointSports":
             FPSportsRosterView_iPad()
         case "yearbookChecklists":
