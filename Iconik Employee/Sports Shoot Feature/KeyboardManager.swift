@@ -1,8 +1,17 @@
 import SwiftUI
 import UIKit
 
+// Which custom keyboard layout to use on iPad. Per-device preference,
+// toggled from a key on either keyboard and persisted across launches.
+enum IPadKeyboardStyle: String {
+    case strip      // vertical column fixed to the right edge
+    case floating   // drag-anywhere 3-column keypad
+}
+
 class KeyboardManager: ObservableObject {
     static let shared = KeyboardManager()
+
+    private static let styleDefaultsKey = "iPadCustomKeyboardStyle"
 
     @Published var isShowingCustomKeyboard = false
     @Published var activeFieldText: Binding<String>?
@@ -12,7 +21,16 @@ class KeyboardManager: ObservableObject {
     @Published var editingContext: String = ""
     @Published var useMiniMode: Bool = false
 
-    private init() {}
+    @Published var iPadKeyboardStyle: IPadKeyboardStyle {
+        didSet {
+            UserDefaults.standard.set(iPadKeyboardStyle.rawValue, forKey: Self.styleDefaultsKey)
+        }
+    }
+
+    private init() {
+        let stored = UserDefaults.standard.string(forKey: Self.styleDefaultsKey) ?? ""
+        self.iPadKeyboardStyle = IPadKeyboardStyle(rawValue: stored) ?? .strip
+    }
 
     func showKeyboard(for text: Binding<String>, context: String = "", miniMode: Bool = false, onUp: (() -> Void)? = nil, onDown: (() -> Void)? = nil, onDismiss: (() -> Void)? = nil) {
         self.activeFieldText = text
@@ -39,16 +57,18 @@ class KeyboardManager: ObservableObject {
 // MARK: - iPad Vertical Strip Keyboard
 // Fixed to the right edge of the screen. Single column of buttons.
 // Dynamically resizes so all buttons fit regardless of orientation.
-// Keys: 1-9, 0, -, +, ⌫, ▲, ▼, Done
+// Keys: layout switch, 1-9, 0, -, +, ⌫, Done
 
 struct iPadVerticalStripKeyboard: View {
     @Binding var text: String
     var onDismiss: (() -> Void)?
+    var onSwitchStyle: (() -> Void)?
 
     private enum KeyAction {
         case append(String)
         case backspace
         case done
+        case switchStyle
     }
 
     private struct KeyDef: Identifiable {
@@ -68,6 +88,7 @@ struct iPadVerticalStripKeyboard: View {
     }
 
     private let keys: [KeyDef] = [
+        KeyDef("Layout", icon: "square.grid.3x3", action: .switchStyle),
         KeyDef("1", action: .append("1")),
         KeyDef("2", action: .append("2")),
         KeyDef("3", action: .append("3")),
@@ -130,6 +151,8 @@ struct iPadVerticalStripKeyboard: View {
             if !text.isEmpty { text.removeLast() }
         case .done:
             onDismiss?()
+        case .switchStyle:
+            onSwitchStyle?()
         }
     }
 }
@@ -143,23 +166,57 @@ struct CustomKeyboardModifier: ViewModifier {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
+    // iPad mini-mode keyboard is active (either style)
+    private var iPadKeyboardActive: Bool {
+        isIPad && keyboardManager.useMiniMode && keyboardManager.isShowingCustomKeyboard
+    }
+
+    private var stripActive: Bool {
+        iPadKeyboardActive && keyboardManager.iPadKeyboardStyle == .strip
+    }
+
+    private var floatingActive: Bool {
+        iPadKeyboardActive && keyboardManager.iPadKeyboardStyle == .floating
+    }
+
     func body(content: Content) -> some View {
         GeometryReader { geo in
             HStack(spacing: 0) {
                 content
-                    .frame(width: isIPad && keyboardManager.useMiniMode && keyboardManager.isShowingCustomKeyboard ? geo.size.width - 56 : geo.size.width)
+                    .frame(width: stripActive ? geo.size.width - 56 : geo.size.width)
 
-                if isIPad && keyboardManager.useMiniMode && keyboardManager.isShowingCustomKeyboard,
+                if stripActive,
                    let textBinding = keyboardManager.activeFieldText {
                     iPadVerticalStripKeyboard(
                         text: textBinding,
-                        onDismiss: { keyboardManager.hideKeyboard() }
+                        onDismiss: { keyboardManager.hideKeyboard() },
+                        onSwitchStyle: { keyboardManager.iPadKeyboardStyle = .floating }
                     )
                     .frame(width: 56, height: geo.size.height)
                     .transition(.move(edge: .trailing))
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: keyboardManager.isShowingCustomKeyboard)
+            .overlay(alignment: .topLeading) {
+                if floatingActive,
+                   let textBinding = keyboardManager.activeFieldText {
+                    FloatingNumberKeypad(
+                        text: textBinding,
+                        containerSize: geo.size,
+                        onUp: {
+                            keyboardManager.onUp?()
+                            keyboardManager.hideKeyboard()
+                        },
+                        onDown: {
+                            keyboardManager.onDown?()
+                            keyboardManager.hideKeyboard()
+                        },
+                        onDismiss: { keyboardManager.hideKeyboard() },
+                        onSwitchStyle: { keyboardManager.iPadKeyboardStyle = .strip }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
+            }
         }
             .overlay(alignment: .bottom) {
                 if (!isIPad || !keyboardManager.useMiniMode) && keyboardManager.isShowingCustomKeyboard,
