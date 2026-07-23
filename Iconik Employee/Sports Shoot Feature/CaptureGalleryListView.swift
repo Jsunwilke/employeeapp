@@ -3,7 +3,7 @@
 //  Iconik Employee
 //
 //  Shows all galleries (all shoot types) for the Capture section.
-//  Sports galleries open SportsShootDetailView, non-sports open PoserStationView.
+//  Sports galleries open CapturaSportsRosterView_iPhone, non-sports open PoserStationView.
 //
 
 import SwiftUI
@@ -197,8 +197,8 @@ struct CaptureGalleryListView: View {
         // All shoot types open in the capture view (PoserStationView). The
         // capture view shows sports-conditional UI (image numbers box, grade
         // badge, roster id + sport on cards) when shootType == "sports".
-        // Captura photographers still reach the legacy SportsShootDetailView
-        // through the Sports tab (SportsShootListView), which is unaffected
+        // Captura photographers still reach the legacy CapturaSportsRosterView_iPhone
+        // through the Sports tab (CapturaSportsView), which is unaffected
         // by this routing change.
         PoserStationView(gallery: gallery)
     }

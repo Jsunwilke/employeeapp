@@ -48,7 +48,7 @@ extension View {
             if UIDevice.current.userInterfaceIdiom == .pad {
                 SportsShootDetailiPadView(sportsShootID: selectedSportsShootID ?? "")
             } else {
-                SportsShootListView()
+                CapturaSportsView()
             }
         },
         tag: "sportsShoot",

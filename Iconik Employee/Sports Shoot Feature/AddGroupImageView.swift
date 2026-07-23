@@ -21,8 +21,8 @@ struct AddGroupImageView: View {
     let organizationId: String
     let existingGroup: GroupImage?
     /// The shoot type of the gallery this group lives on. Defaults to
-    /// "sports" so existing callers (Captura's SportsShootListView and
-    /// SportsShootDetailView, FPSportsRosterView) keep the original
+    /// "sports" so existing callers (Captura's CapturaSportsView and
+    /// CapturaSportsRosterView_iPhone, FPSportsRosterView) keep the original
     /// sport-picker / gender / team-level form behavior without any call
     /// site change. Non-sports callers (the capture view for spring /
     /// underclass / portraits galleries) pass the actual shoot type so

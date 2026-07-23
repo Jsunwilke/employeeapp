@@ -172,7 +172,7 @@ class FocalPointSyncClient: ObservableObject {
     // Callbacks
     var onCaptureCompleted: ((FPCaptureEvent) -> Void)?
     /// Captura coexistence retention per FROM_SCRATCH_ARCHITECTURE.md §17.10:
-    /// SportsShootListView.swift:611 subscribes to this callback and decodes
+    /// CapturaSportsView.swift:611 subscribes to this callback and decodes
     /// the inline base64 `thumbnail` field. Phase I (FROM_SCRATCH_ARCHITECTURE.md
     /// §13 I) MUST NOT change this signature — Captura's 3-param closure binds
     /// against `((String, String?, Int?) -> Void)?`. Non-Captura subscribers
@@ -314,7 +314,7 @@ class FocalPointSyncClient: ObservableObject {
     /// credential — Surface no longer issues PINs in mDNS TXT records,
     /// never validates `auth_token` on `device_hello`, and never sends
     /// `auth_error`/`auth_failed`. This setter remains because Captura
-    /// roster files (SportsShootListView.swift, SportsShootDetailView.swift)
+    /// roster files (CapturaSportsView.swift, CapturaSportsRosterView_iPhone.swift)
     /// still call it; those files are protected per CLAUDE.md and must
     /// continue to compile. Whatever PIN a Captura user types is stored
     /// here, sent on the wire, and silently ignored by Surface.
@@ -1082,7 +1082,7 @@ class FocalPointSyncClient: ObservableObject {
     /// PoserStationView.swift and FPSportsRosterView_iPad.swift subscribe to
     /// `onCaptureThumbnail` and call this method to fetch the bytes by
     /// filename instead of decoding the inline base64 `thumbnail` field on
-    /// the wire. Captura's SportsShootListView keeps consuming the base64
+    /// the wire. Captura's CapturaSportsView keeps consuming the base64
     /// field per §17.10 retention.
     ///
     /// Returns a UIImage decoded from the JPEG bytes. Same bearer-auth and
@@ -1641,7 +1641,7 @@ class FocalPointSyncClient: ObservableObject {
             if let fromDevice = msg["device_id"] as? String,
                pairedCameraId == nil || fromDevice == pairedCameraId {
                 // Captura coexistence — retained 3-param callback fires with
-                // the inline base64 thumbnail. SportsShootListView subscribes
+                // the inline base64 thumbnail. CapturaSportsView subscribes
                 // here per §17.10.
                 onSubjectPhotographed?(subjectId, thumbnail, poseNumber)
                 // Phase I — URL-flavored callback. Fires when the new field
@@ -1826,7 +1826,7 @@ class FocalPointSyncClient: ObservableObject {
             // and delete the watchSubjects call sites in the same commit per
             // delete-first migration. The onSubjectUpdated callback property
             // itself is RETAINED beyond H5 per §17.10 because Captura-protected
-            // views (SportsShootListView, SportsShootDetailView) consume it
+            // views (CapturaSportsView, CapturaSportsRosterView_iPhone) consume it
             // until Captura sunset — so this parallel branch is a coexistence
             // pattern, not a transitional drift.
             if let g = galleryId, !g.isEmpty,

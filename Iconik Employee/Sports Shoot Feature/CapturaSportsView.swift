@@ -10,7 +10,7 @@ struct CaptureThumb: Identifiable {
 }
 
 // State management class to handle objectWillChange notifications
-class SportsShootListViewModel: ObservableObject {
+class CapturaSportsViewModel: ObservableObject {
     @Published var sportsShoots: [SportsShoot] = []
     @Published var selectedShoot: SportsShoot? = nil
     @Published var isLoading = true
@@ -48,6 +48,10 @@ class SportsShootListViewModel: ObservableObject {
     // Field editing state
     @Published var currentlyEditingEntry: UUID? = nil // ID of entry being edited
     @Published var editingImageNumber: String = ""
+    // Baseline for the save guard: editingImageNumber at edit-start / last save.
+    // Never compare against rosterEntries — the watch stream copies the live
+    // typed text into the array, so an array-compare skips real saves.
+    var lastSavedImageNumber: String = ""
     @Published var lockedEntries: [UUID: String] = [:] // [entryID: editorName]
     
     // UI state - header collapsed in landscape
@@ -123,7 +127,7 @@ class SportsShootListViewModel: ObservableObject {
     }
 }
 
-struct SportsShootListView: View {
+struct CapturaSportsView: View {
     // MARK: - Properties
     
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
@@ -140,7 +144,7 @@ struct SportsShootListView: View {
     }
     
     // Use the view model for state management
-    @StateObject private var viewModel = SportsShootListViewModel()
+    @StateObject private var viewModel = CapturaSportsViewModel()
 
     // PowerSync for offline-first operations
     // NOTE: Plain reference (not @StateObject) to prevent @Published changes from
@@ -1244,7 +1248,7 @@ struct SportsShootListView: View {
                                 )
                             ) {
                                 ForEach(group.shoots) { sportsShoot in
-                                    NavigationLink(destination: SportsShootDetailView(shootID: sportsShoot.id)) {
+                                    NavigationLink(destination: CapturaSportsRosterView_iPhone(shootID: sportsShoot.id)) {
                                         SportsShootRow(
                                             shoot: sportsShoot,
                                             isSelected: false,
@@ -1283,7 +1287,7 @@ struct SportsShootListView: View {
                     } else {
                         // Active: Show flat list
                         ForEach(viewModel.filteredSportsShoots) { sportsShoot in
-                            NavigationLink(destination: SportsShootDetailView(shootID: sportsShoot.id)) {
+                            NavigationLink(destination: CapturaSportsRosterView_iPhone(shootID: sportsShoot.id)) {
                                 SportsShootRow(
                                     shoot: sportsShoot,
                                     isSelected: false,
@@ -1920,7 +1924,7 @@ struct SportsShootListView: View {
                                 viewModel.multipeerSync = MultipeerRosterSync()
                             }
                             viewModel.multipeerSync?.startBrowsing(jobId: shootID)
-                            print("SportsShootListView: Started browsing for kiosks for shoot \(shootID)")
+                            print("CapturaSportsView: Started browsing for kiosks for shoot \(shootID)")
                         }
 
                         // Set up Focal Point Production sync callbacks
@@ -1950,7 +1954,7 @@ struct SportsShootListView: View {
                     // Stop browsing for kiosks
                     Task { @MainActor in
                         viewModel.multipeerSync?.disconnect()
-                        print("SportsShootListView: Stopped browsing for kiosks")
+                        print("CapturaSportsView: Stopped browsing for kiosks")
                     }
 
                     // Clear FP sync callbacks
@@ -2093,10 +2097,10 @@ struct SportsShootListView: View {
             // Stop browsing when kiosk opens, resume when it closes
             if isShowingKiosk {
                 viewModel.multipeerSync?.stopBrowsing()
-                print("SportsShootListView: Stopped browsing (kiosk opened)")
+                print("CapturaSportsView: Stopped browsing (kiosk opened)")
             } else if let shootID = viewModel.selectedShoot?.id {
                 viewModel.multipeerSync?.startBrowsing(jobId: shootID)
-                print("SportsShootListView: Resumed browsing (kiosk closed)")
+                print("CapturaSportsView: Resumed browsing (kiosk closed)")
             }
         }
         .sheet(isPresented: $viewModel.showingConnectionDetails) {
@@ -2378,7 +2382,7 @@ struct SportsShootListView: View {
         @Binding var isShowing: Bool
         @Binding var selectedFilters: Set<String>
         @Binding var selectedSpecialFilters: Set<String>
-        @Binding var imageFilterType: SportsShootListViewModel.ImageFilterType
+        @Binding var imageFilterType: CapturaSportsViewModel.ImageFilterType
         var groupNames: [String]
         var specialFilters: [String]
         var colorForGroup: (String) -> Color
@@ -3791,7 +3795,7 @@ struct SportsShootListView: View {
                                             }
                                         }
                                     } catch {
-                                        print("SportsShootListView: Refresh using PowerSync local data")
+                                        print("CapturaSportsView: Refresh using PowerSync local data")
                                     }
                                 }
                             }
@@ -3814,9 +3818,9 @@ struct SportsShootListView: View {
                                         try await powerSync.deleteBatchRosterEntries(ids: Array(ids))
                                         let idStrings = entriesToDelete.map { $0.id.uuidString.lowercased() }
                                         fpSync.broadcastEntriesDeleted(rosterEntryIds: idStrings)
-                                        print("[SportsShootListView] Batch deleted \(ids.count) entries")
+                                        print("[CapturaSportsView] Batch deleted \(ids.count) entries")
                                     } catch {
-                                        print("[SportsShootListView] Batch delete failed: \(error)")
+                                        print("[CapturaSportsView] Batch delete failed: \(error)")
                                         await MainActor.run {
                                             viewModel.rosterEntries.append(contentsOf: entriesToDelete)
                                         }
@@ -3835,7 +3839,7 @@ struct SportsShootListView: View {
                                     do {
                                         try await powerSync.deleteRosterEntry(id: entry.id)
                                     } catch {
-                                        print("SportsShootListView: Failed to delete entry: \(error)")
+                                        print("CapturaSportsView: Failed to delete entry: \(error)")
                                         // Restore on failure
                                         await MainActor.run {
                                             viewModel.rosterEntries.append(entry)
@@ -3855,7 +3859,7 @@ struct SportsShootListView: View {
                                     do {
                                         try await powerSync.deleteGroupImage(id: group.id)
                                     } catch {
-                                        print("SportsShootListView: Failed to delete group: \(error)")
+                                        print("CapturaSportsView: Failed to delete group: \(error)")
                                         // Restore on failure
                                         await MainActor.run {
                                             viewModel.groupImages.append(group)
@@ -4005,7 +4009,7 @@ struct SportsShootListView: View {
                             // MARK: - iPad Roster Data Loading
 
                             /// Loads roster data for the selected shoot on iPad (offline-first via PowerSync)
-                            /// iPhone uses SportsShootDetailView which handles this via loadSportsShoot()
+                            /// iPhone uses CapturaSportsRosterView_iPhone which handles this via loadSportsShoot()
                             private func loadRosterForSelectedShoot(shootID: UUID) async {
                                 // If PowerSync hasn't completed its first sync yet, wait for it.
                                 // This ensures local SQLite has data before we try to read it.
@@ -4035,7 +4039,7 @@ struct SportsShootListView: View {
                                         }
                                     }
                                 } catch {
-                                    print("SportsShootListView: Failed to load roster: \(error)")
+                                    print("CapturaSportsView: Failed to load roster: \(error)")
                                 }
                             }
 
@@ -4121,7 +4125,7 @@ struct SportsShootListView: View {
                                             }
                                         } catch {
                                             if Task.isCancelled { return }
-                                            print("SportsShootListView: Roster watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
+                                            print("CapturaSportsView: Roster watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
                                         }
                                         try? await Task.sleep(nanoseconds: retryDelay)
                                         retryDelay = min(retryDelay * 2, 30_000_000_000) // Cap at 30s
@@ -4141,7 +4145,7 @@ struct SportsShootListView: View {
                                             }
                                         } catch {
                                             if Task.isCancelled { return }
-                                            print("SportsShootListView: Group watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
+                                            print("CapturaSportsView: Group watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
                                         }
                                         try? await Task.sleep(nanoseconds: retryDelay)
                                         retryDelay = min(retryDelay * 2, 30_000_000_000) // Cap at 30s
@@ -4254,7 +4258,7 @@ struct SportsShootListView: View {
 
                                 guard let entryID = viewModel.currentlyEditingEntry,
                                       let currentEntry = viewModel.rosterEntries.first(where: { $0.id == entryID }),
-                                      viewModel.editingImageNumber != currentEntry.imageNumbers else {
+                                      viewModel.editingImageNumber != viewModel.lastSavedImageNumber else {
                                     return
                                 }
 
@@ -4263,6 +4267,8 @@ struct SportsShootListView: View {
                                 updatedEntry.version = currentEntry.version + 1
                                 updatedEntry.updatedAt = Date()
                                 updatedEntry.updatedBy = SupabaseManager.shared.client.auth.currentUser?.id
+
+                                viewModel.lastSavedImageNumber = viewModel.editingImageNumber
 
                                 // Update local state immediately
                                 if let index = viewModel.rosterEntries.firstIndex(where: { $0.id == entryID }) {
@@ -4281,13 +4287,13 @@ struct SportsShootListView: View {
                                             return
                                         } catch {
                                             retries += 1
-                                            print("SportsShootListView: Save retry \(retries)/3: \(error)")
+                                            print("CapturaSportsView: Save retry \(retries)/3: \(error)")
                                             if retries < 3 {
                                                 try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries))
                                             }
                                         }
                                     }
-                                    print("SportsShootListView: Failed to save entry after 3 retries")
+                                    print("CapturaSportsView: Failed to save entry after 3 retries")
                                     await MainActor.run {
                                         UINotificationFeedbackGenerator().notificationOccurred(.error)
                                     }
@@ -4308,6 +4314,7 @@ struct SportsShootListView: View {
                                     // We already have the lock, just start editing without acquiring a new lock
                                     viewModel.currentlyEditingEntry = entry.id
                                     viewModel.editingImageNumber = entry.imageNumbers
+                                    viewModel.lastSavedImageNumber = entry.imageNumbers
                                     return
                                 }
 
@@ -4319,6 +4326,7 @@ struct SportsShootListView: View {
 
                                 // Set up editing state
                                 viewModel.editingImageNumber = entry.imageNumbers
+                                viewModel.lastSavedImageNumber = entry.imageNumbers
                                 viewModel.currentlyEditingEntry = entry.id // Set synchronously to avoid placeholder showing
 
                                 // Acquire lock for this entry
@@ -4329,8 +4337,8 @@ struct SportsShootListView: View {
                             }
                         }
 
-                        struct SportsShootListView_Previews: PreviewProvider {
+                        struct CapturaSportsView_Previews: PreviewProvider {
                             static var previews: some View {
-                                SportsShootListView()
+                                CapturaSportsView()
                             }
                         }

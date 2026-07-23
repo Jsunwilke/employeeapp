@@ -662,7 +662,7 @@ struct FPSportsRosterView_iPad: View {
         // Phase I (FROM_SCRATCH_ARCHITECTURE.md §13 I) — migrated from
         // `onSubjectPhotographed` (inline base64) to `onCaptureThumbnail`
         // (HTTP fetch via `requestThumbnailOverHTTP`). The base64 field is
-        // still present on the wire for Captura's SportsShootListView per
+        // still present on the wire for Captura's CapturaSportsView per
         // §17.10 retention; this FP-Sports view ignores it. The
         // photographedSubjects set is updated synchronously on the
         // onCaptureThumbnail closure entry so the "this subject was shot"
@@ -1730,7 +1730,7 @@ struct FPSportsRosterView_iPad: View {
                                 )
                             ) {
                                 ForEach(group.shoots) { sportsShoot in
-                                    NavigationLink(destination: SportsShootDetailView(shootID: sportsShoot.id)) {
+                                    NavigationLink(destination: CapturaSportsRosterView_iPhone(shootID: sportsShoot.id)) {
                                         SportsShootRow(
                                             shoot: sportsShoot,
                                             isSelected: false,
@@ -1769,7 +1769,7 @@ struct FPSportsRosterView_iPad: View {
                     } else {
                         // Active: Show flat list
                         ForEach(viewModel.filteredSportsShoots) { sportsShoot in
-                            NavigationLink(destination: SportsShootDetailView(shootID: sportsShoot.id)) {
+                            NavigationLink(destination: CapturaSportsRosterView_iPhone(shootID: sportsShoot.id)) {
                                 SportsShootRow(
                                     shoot: sportsShoot,
                                     isSelected: false,
@@ -4791,7 +4791,7 @@ struct FPSportsRosterView_iPad: View {
                             // MARK: - iPad Roster Data Loading
 
                             /// Loads roster data for the selected shoot on iPad (offline-first via PowerSync)
-                            /// iPhone uses SportsShootDetailView which handles this via loadSportsShoot()
+                            /// iPhone uses CapturaSportsRosterView_iPhone which handles this via loadSportsShoot()
                             private func loadRosterForSelectedShoot(shootID: UUID, galleryId: String? = nil) async {
                                 // If PowerSync hasn't completed its first sync yet, wait for it.
                                 // This ensures local SQLite has data before we try to read it.

@@ -11,7 +11,7 @@
 // is unaffected. File writes happen async on a serial dispatch queue.
 //
 // §17.10 retention list: this file is NEW. It does not touch any of the
-// retained Captura roster files (SportsShootListView, SportsShootDetailView,
+// retained Captura roster files (CapturaSportsView, CapturaSportsRosterView_iPhone,
 // AddRosterEntryView, etc.). Phase J emission points are added inside
 // FocalPointSyncClient.swift at existing sites that already mutate state
 // (sendSubjectCommand, command_ack case, handleDisconnect, request*OverHTTP)

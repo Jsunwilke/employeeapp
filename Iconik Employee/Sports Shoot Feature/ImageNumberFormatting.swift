@@ -7,7 +7,7 @@
 //  end ranges, e.g. "1456-58;1462" means [1456, 1457, 1458, 1462].
 //
 //  Replaces three byte-identical copies of these helpers that previously
-//  lived in FPSportsRosterView_iPad.swift, SportsShootListView.swift, and
+//  lived in FPSportsRosterView_iPad.swift, CapturaSportsView.swift, and
 //  PoserStationView.swift. Keep ALL callers using these — divergent copies
 //  caused the "ImageNumbersMerger" complexity.
 //

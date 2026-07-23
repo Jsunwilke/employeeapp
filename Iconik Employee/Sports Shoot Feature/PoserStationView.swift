@@ -2214,7 +2214,7 @@ struct PoserStationView: View {
         // `/thumbnail/<filename>` HTTP endpoint via `requestThumbnailOverHTTP`
         // instead of base64-decoding an inline string. The wire body still
         // carries the base64 field for Captura coexistence per §17.10
-        // (SportsShootListView's onSubjectPhotographed subscriber); FP-aware
+        // (CapturaSportsView's onSubjectPhotographed subscriber); FP-aware
         // views just don't read it.
         fpSync.onCaptureThumbnail = { [weak fpSync] (subjectId: String, thumbnailFilename: String, _: Int?) in
             guard let client = fpSync else { return }

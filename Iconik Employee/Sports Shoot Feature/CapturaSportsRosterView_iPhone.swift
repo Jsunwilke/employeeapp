@@ -1,5 +1,5 @@
 //
-//  SportsShootDetailView.swift
+//  CapturaSportsRosterView_iPhone.swift
 //  Iconik Employee
 //
 //  Created for iPhone editing of sports shoots
@@ -10,7 +10,7 @@ import SwiftUI
 import Combine
 import UIKit
 
-struct SportsShootDetailView: View {
+struct CapturaSportsRosterView_iPhone: View {
     let shootID: UUID
 
     // State management - now uses separate state for shoot, roster, and groups
@@ -137,7 +137,7 @@ struct SportsShootDetailView: View {
             .task {
                 // Start browsing for kiosk registration stations
                 multipeerSync.startBrowsing(jobId: shootID)
-                print("SportsShootDetailView: Started browsing for kiosks for shoot \(shootID)")
+                print("CapturaSportsRosterView_iPhone: Started browsing for kiosks for shoot \(shootID)")
             }
             .task {
                 // Set up Focal Point Production sync callbacks
@@ -180,10 +180,10 @@ struct SportsShootDetailView: View {
                 // Stop browsing when kiosk opens, resume when it closes
                 if isShowingKiosk {
                     multipeerSync.stopBrowsing()
-                    print("SportsShootDetailView: Stopped browsing (kiosk opened)")
+                    print("CapturaSportsRosterView_iPhone: Stopped browsing (kiosk opened)")
                 } else {
                     multipeerSync.startBrowsing(jobId: shootID)
-                    print("SportsShootDetailView: Resumed browsing (kiosk closed)")
+                    print("CapturaSportsRosterView_iPhone: Resumed browsing (kiosk closed)")
                 }
             }
             .sheet(isPresented: $showingConnectionDetails) {
@@ -484,7 +484,7 @@ struct SportsShootDetailView: View {
 
         // Stop browsing for kiosks
         multipeerSync.disconnect()
-        print("SportsShootDetailView: Stopped browsing for kiosks")
+        print("CapturaSportsRosterView_iPhone: Stopped browsing for kiosks")
 
         // Clear callbacks to prevent stale state mutations after view disappears
         fpSync.onCaptureCompleted = nil
@@ -2087,7 +2087,7 @@ struct SportsShootDetailView: View {
                     }
                 } catch {
                     if Task.isCancelled { return }
-                    print("SportsShootDetailView: Roster watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
+                    print("CapturaSportsRosterView_iPhone: Roster watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
                 }
                 try? await Task.sleep(nanoseconds: retryDelay)
                 retryDelay = min(retryDelay * 2, 30_000_000_000) // Cap at 30s
@@ -2141,7 +2141,7 @@ struct SportsShootDetailView: View {
                     }
                 } catch {
                     if Task.isCancelled { return }
-                    print("SportsShootDetailView: Groups watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
+                    print("CapturaSportsRosterView_iPhone: Groups watch error, retrying in \(retryDelay / 1_000_000_000)s: \(error)")
                 }
                 try? await Task.sleep(nanoseconds: retryDelay)
                 retryDelay = min(retryDelay * 2, 30_000_000_000) // Cap at 30s
@@ -2247,13 +2247,13 @@ struct SportsShootDetailView: View {
                 return
             } catch {
                 retries += 1
-                print("SportsShootDetailView: Save retry \(retries)/3: \(error)")
+                print("CapturaSportsRosterView_iPhone: Save retry \(retries)/3: \(error)")
                 if retries < 3 {
                     try? await Task.sleep(nanoseconds: UInt64(500_000_000 * retries))
                 }
             }
         }
-        print("SportsShootDetailView: Failed to save entry after 3 retries")
+        print("CapturaSportsRosterView_iPhone: Failed to save entry after 3 retries")
         UINotificationFeedbackGenerator().notificationOccurred(.error)
     }
 
@@ -2305,7 +2305,7 @@ struct SportsShootDetailView: View {
         do {
             try await powerSync.deleteRosterEntry(id: entry.id)
         } catch {
-            print("SportsShootDetailView: Failed to delete entry: \(error)")
+            print("CapturaSportsRosterView_iPhone: Failed to delete entry: \(error)")
             // Restore on failure
             recentlyDeletedEntryIds.remove(entry.id)
             rosterEntries.append(entry)
@@ -2331,7 +2331,7 @@ struct SportsShootDetailView: View {
             let idStrings = idsToDelete.map { $0.uuidString.lowercased() }
             fpSync.broadcastEntriesDeleted(rosterEntryIds: idStrings)
         } catch {
-            print("SportsShootDetailView: Batch delete failed: \(error)")
+            print("CapturaSportsRosterView_iPhone: Batch delete failed: \(error)")
             // Restore on failure
             for id in idsToDelete { recentlyDeletedEntryIds.remove(id) }
             rosterEntries.append(contentsOf: entriesToDelete)
@@ -2351,7 +2351,7 @@ struct SportsShootDetailView: View {
         do {
             try await powerSync.deleteGroupImage(id: group.id)
         } catch {
-            print("SportsShootDetailView: Failed to delete group: \(error)")
+            print("CapturaSportsRosterView_iPhone: Failed to delete group: \(error)")
             // Restore on failure
             recentlyDeletedGroupIds.remove(group.id)
             groupImages.append(group)
@@ -2532,8 +2532,8 @@ struct SportsShootDetailView: View {
     }
 }
 
-struct SportsShootDetailView_Previews: PreviewProvider {
+struct CapturaSportsRosterView_iPhone_Previews: PreviewProvider {
     static var previews: some View {
-        SportsShootDetailView(shootID: UUID())
+        CapturaSportsRosterView_iPhone(shootID: UUID())
     }
 }
