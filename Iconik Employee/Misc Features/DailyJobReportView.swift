@@ -343,11 +343,12 @@ struct DailyJobReportView: View {
         } message: {
             Text(errorMessage)
         }
-        .alert("Confirm Vehicle", isPresented: $showVehicleConfirm) {
-            Button("Go Back", role: .cancel) {}
-            Button("Confirm & Submit") { submitReport() }
+        .confirmationDialog("Confirm Vehicle", isPresented: $showVehicleConfirm, titleVisibility: .visible) {
+            Button("Personal") { vehicleType = "personal" }
+            Button("Company") { vehicleType = "company" }
+            Button("Cancel", role: .cancel) {}
         } message: {
-            Text("You marked this drive as \(vehicleType == "company" ? "a Company" : "your Personal") vehicle. This sets your mileage reimbursement. Is that correct?")
+            Text("Select the vehicle again to confirm — this sets your mileage reimbursement and can't be changed by an accidental tap.")
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -883,14 +884,20 @@ struct DailyJobReportView: View {
                         .foregroundColor(.red)
                 }
 
-                Picker("Vehicle", selection: $vehicleType) {
+                // Tapping a segment does NOT commit — it opens a confirmation
+                // where the vehicle must be selected again. Only that second
+                // selection sets vehicleType, so an accidental tap can't stick.
+                Picker("Vehicle", selection: Binding(
+                    get: { vehicleType },
+                    set: { _ in showVehicleConfirm = true }
+                )) {
                     Text("Personal").tag("personal")
                     Text("Company").tag("company")
                 }
                 .pickerStyle(.segmented)
 
                 if vehicleType.isEmpty {
-                    Text("Required — select Personal or Company before submitting.")
+                    Text("Required — tap a vehicle, then confirm the selection.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -1788,15 +1795,14 @@ struct DailyJobReportView: View {
         }
     }
     
-    // Gate before submitting: the vehicle type must be explicitly chosen, then
-    // confirmed — so an accidental tap on the higher-paying option can't be
-    // waved away as a mistake.
+    // The vehicle type is confirmed at selection time (a tap opens a dialog that
+    // requires re-selecting it). Here we only guard that a choice was made at all.
     func attemptSubmit() {
         guard vehicleType == "personal" || vehicleType == "company" else {
             errorMessage = "Please select whether this was your Personal vehicle or a Company vehicle before submitting."
             return
         }
-        showVehicleConfirm = true
+        submitReport()
     }
 
     func submitReport() {
