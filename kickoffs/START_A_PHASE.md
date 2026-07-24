@@ -109,11 +109,12 @@ phase-naming registry as the rest of the family.
 
 # 📖 Read first  (open the files — the titles are not the rules)
 
-  1  .claude/CLAUDE.md — hard rules + project lessons (lowercase UUIDs, protected
-     Captura files).
+  1  CLAUDE.md (repo root) — hard rules + project lessons (lowercase UUIDs,
+     protected Captura files).
   2  Memory index ~/.claude/projects/-Users-jason-Desktop-employeeapp/memory/MEMORY.md
-     -> open working-style-rules, protected-captura-files, powersync-setup,
-     rls-remediation-2026-07, project-structure.
+     -> the titles are not the rules: open the linked feedback_*.md files, plus
+     protected-captura-files, powersync-setup, rls-remediation-2026-07,
+     project-structure.
   3  AUDIT_ROADMAP.md — the item's scope + any linked plan doc (RLS_AUDIT.md,
      NAVIGATION_PLAN.md, POWERSYNC_SETUP.md, DATABASE_SCHEMA.md).
   4  FocalPointProduction/docs/PHASES.md — the family arc registry (the naming rule).
