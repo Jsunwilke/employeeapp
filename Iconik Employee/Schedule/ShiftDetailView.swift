@@ -57,6 +57,15 @@ struct ShiftDetailView: View {
         self.currentUserID = currentUserID
     }
 
+    /// The day-row currently being shown: the one `viewedDayID` pins, falling back to
+    /// the row matching this occurrence's date.
+    private var viewedDay: SessionDay? {
+        if let id = viewedDayID, let day = session.days.first(where: { $0.id == id }) {
+            return day
+        }
+        return session.day(onDate: session.date)
+    }
+
     /// The id of the day-row a given occurrence represents, or nil for a session with
     /// no day rows. `Session.with(day:)` copies the day's date and times onto the
     /// occurrence, so match on those; fall back to the first row on that date.
@@ -151,11 +160,6 @@ struct ShiftDetailView: View {
                     // Minimal padding to create slight separation from header
                     Color.clear.frame(height: 10)
 
-                    // All days of a multi-day session (the tapped day is highlighted)
-                    if session.dayCount > 1 {
-                        multiDaySection
-                    }
-
                     // Action buttons
                     actionButtonsRow
                         .padding(.vertical, 8)
@@ -213,8 +217,28 @@ struct ShiftDetailView: View {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(Color(.secondarySystemBackground))
                     )
-                    
-                    
+
+                    // Notes for the day being viewed (CREW.4). These were only ever
+                    // visible inside the day list, which now sits at the bottom — and
+                    // they carry the day's real instructions (start time, location, what
+                    // is being shot), so they belong with the shift's own details.
+                    if let dayNotes = viewedDay?.day_notes, !dayNotes.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Notes for This Day")
+                                .font(.headline)
+                            Text(dayNotes)
+                                .font(.body)
+                                .foregroundColor(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(.secondarySystemBackground))
+                        )
+                    }
+
                     // Coworker photos
                     if !coworkerProfiles.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
@@ -292,7 +316,14 @@ struct ShiftDetailView: View {
                         }
                         .padding(.vertical, 8)
                     }
-                    
+
+                    // All days of a multi-day session, tapped day highlighted (CREW.4).
+                    // Last section on the screen: at the top it pushed the shift's own
+                    // details off-screen on a long multi-day job.
+                    if session.dayCount > 1 {
+                        multiDaySection
+                    }
+
                     Spacer(minLength: 30)
                 }
                 .padding()
@@ -441,7 +472,9 @@ struct ShiftDetailView: View {
             Text("Session Days")
                 .font(.headline)
             ForEach(Array(session.sortedDays.enumerated()), id: \.element.id) { index, day in
-                let isCurrent = day.date == session.date
+                // Match on the pinned day-row id, so two rows sharing a date can't both
+                // read as "the day you opened".
+                let isCurrent = day.id == viewedDay?.id
                 HStack(spacing: 12) {
                     Text("Day \(index + 1)")
                         .font(.subheadline)
