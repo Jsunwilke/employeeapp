@@ -41,12 +41,32 @@ struct ShiftDetailView: View {
     @State private var session: Session
     @State private var allSessions: [Session]
     let currentUserID: String?
-    
+
+    /// The day-row this view was opened on (CREW.2). Both entry points hand us a day
+    /// OCCURRENCE — a copy carrying one day's date/time and that day's own crew. The
+    /// realtime listener, though, delivers the whole session, whose date/time are the
+    /// FIRST day's and whose crew is every day's unioned. Remembering the day lets us
+    /// re-apply it on every update, so a multi-day shoot opened on day 2 stays on day 2.
+    @State private var viewedDayID: String?
+
     // Primary initializer for Session
     init(session: Session, allSessions: [Session], currentUserID: String?) {
         self._session = State(initialValue: session)
         self._allSessions = State(initialValue: allSessions)
+        self._viewedDayID = State(initialValue: Self.dayID(matching: session))
         self.currentUserID = currentUserID
+    }
+
+    /// The id of the day-row a given occurrence represents, or nil for a session with
+    /// no day rows. `Session.with(day:)` copies the day's date and times onto the
+    /// occurrence, so match on those; fall back to the first row on that date.
+    private static func dayID(matching occurrence: Session) -> String? {
+        let exact = occurrence.days.first {
+            $0.date == occurrence.date
+                && ($0.start_time ?? "") == occurrence.start_time
+                && ($0.end_time ?? "") == occurrence.end_time
+        }
+        return (exact ?? occurrence.day(onDate: occurrence.date))?.id
     }
     
     // State properties
@@ -1415,24 +1435,10 @@ struct ShiftDetailView: View {
         }
 
         // Also check for coworkers from other sessions on the same day/location
-        let calendar = Calendar.current
-        if let sessionDate = session.startDate {
-            let sessionDay = calendar.startOfDay(for: sessionDate)
-
-            for otherSession in allSessions {
-                guard let otherSessionDate = otherSession.startDate,
-                      otherSession.id != session.id,
-                      calendar.startOfDay(for: otherSessionDate) == sessionDay,
-                      otherSession.schoolName == session.schoolName else {
-                    continue
-                }
-
-                for photographer in otherSession.photographers {
-                    guard photographer.id != currentUserID else { continue }
-                    photographerIDs.insert(photographer.id)
-                    photographerNameMap[photographer.id] = photographer.name
-                }
-            }
+        for photographer in sameDayCoworkersAtSchool() {
+            guard photographer.id != currentUserID else { continue }
+            photographerIDs.insert(photographer.id)
+            photographerNameMap[photographer.id] = photographer.name
         }
 
         // Fetch all coworker photos in one batch
@@ -2181,12 +2187,22 @@ struct ShiftDetailView: View {
     }
     
     
+    /// Crew of OTHER jobs at this school on the SAME day (CREW.2). Matches on any of
+    /// the other session's day-rows — not only its first — and takes that day's own
+    /// crew, so a second multi-day job contributes the right people on each of its days.
+    private func sameDayCoworkersAtSchool() -> [SessionPhotographer] {
+        let dayStr = session.date
+        return allSessions.compactMap { other -> Session? in
+            guard other.id != session.id,
+                  other.schoolName == session.schoolName,
+                  let day = other.day(onDate: dayStr) else { return nil }
+            return other.with(day: day)
+        }.flatMap { $0.photographers }
+    }
+
     func otherEmployeesSameJob() -> [String] {
-        guard let shiftStart = session.startDate else { return [] }
-        let cal = Calendar.current
-        let shiftDay = cal.startOfDay(for: shiftStart)
-        
-        // Get all photographers working on the same session (same date, school, time)
+        // Photographers on THIS day of this session (the view holds a day occurrence,
+        // so `session.photographers` is already this day's crew — CREW.2).
         var coworkerNames: [String] = []
         
         // First, get all photographers from the current session (excluding current user)
@@ -2204,14 +2220,8 @@ struct ShiftDetailView: View {
         }
         
         // Also check other sessions on the same day at the same school (for different session types)
-        let otherSessionCoworkers = allSessions.filter { other in
-            guard let otherStart = other.startDate,
-                  other.id != session.id else { return false }
-            let otherDay = cal.startOfDay(for: otherStart)
-            return otherDay == shiftDay && other.schoolName == session.schoolName
-        }
-        .flatMap { $0.getPhotographerNames() }
-        
+        let otherSessionCoworkers = sameDayCoworkersAtSchool().map { $0.name }
+
         // Add unique names from other sessions
         for name in otherSessionCoworkers {
             if !coworkerNames.contains(name) {
@@ -2367,7 +2377,20 @@ struct ShiftDetailView: View {
             DispatchQueue.main.async {
                 // Filter for the specific session we're viewing
                 if let updatedSession = sessions.first(where: { $0.id == self.session.id }) {
-                    self.session = updatedSession
+                    // Re-apply the day this view was opened on (CREW.2). The feed carries
+                    // the WHOLE session — the first day's date/time and every day's crew
+                    // unioned — so assigning it straight through would silently move the
+                    // view (and its weather, travel plan and coworkers) onto day 1.
+                    if let dayID = self.viewedDayID,
+                       let day = updatedSession.days.first(where: { $0.id == dayID }) {
+                        self.session = updatedSession.with(day: day)
+                    } else {
+                        // The day isn't in this payload (deleted, or a stale cached copy
+                        // that arrives before the network fetch). Take the session as-is
+                        // but KEEP viewedDayID, so a later payload can restore the day
+                        // instead of pinning the view to day 1 forever.
+                        self.session = updatedSession
+                    }
 
                     // Reload related data that might have changed
                     self.loadCoworkerPhotos()
