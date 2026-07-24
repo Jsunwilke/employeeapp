@@ -125,7 +125,8 @@ struct DailyJobReportView: View {
     @State private var reportDate: Date = Date()
     @State private var showDatePicker: Bool = false
     @State private var totalMileage: String = ""
-    @State private var vehicleType: String = "personal"  // "personal" or "company"
+    @State private var vehicleType: String = ""  // "" = not yet chosen; must be "personal" or "company" before submit
+    @State private var showVehicleConfirm: Bool = false
     @State private var jobDescription: String = ""  // Optional free text
     
     // ------------------------------------------------------------------
@@ -342,10 +343,16 @@ struct DailyJobReportView: View {
         } message: {
             Text(errorMessage)
         }
+        .alert("Confirm Vehicle", isPresented: $showVehicleConfirm) {
+            Button("Go Back", role: .cancel) {}
+            Button("Confirm & Submit") { submitReport() }
+        } message: {
+            Text("You marked this drive as \(vehicleType == "company" ? "a Company" : "your Personal") vehicle. This sets your mileage reimbursement. Is that correct?")
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: submitReport) {
+                Button(action: attemptSubmit) {
                     if isSubmitting {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle())
@@ -867,15 +874,26 @@ struct DailyJobReportView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Vehicle")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 4) {
+                    Text("Vehicle")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Text("*")
+                        .font(.subheadline)
+                        .foregroundColor(.red)
+                }
 
                 Picker("Vehicle", selection: $vehicleType) {
                     Text("Personal").tag("personal")
                     Text("Company").tag("company")
                 }
                 .pickerStyle(.segmented)
+
+                if vehicleType.isEmpty {
+                    Text("Required — select Personal or Company before submitting.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
 
             if totalMileage == "Calculating..." {
@@ -1770,6 +1788,17 @@ struct DailyJobReportView: View {
         }
     }
     
+    // Gate before submitting: the vehicle type must be explicitly chosen, then
+    // confirmed — so an accidental tap on the higher-paying option can't be
+    // waved away as a mistake.
+    func attemptSubmit() {
+        guard vehicleType == "personal" || vehicleType == "company" else {
+            errorMessage = "Please select whether this was your Personal vehicle or a Company vehicle before submitting."
+            return
+        }
+        showVehicleConfirm = true
+    }
+
     func submitReport() {
         guard let currentUserId = UserManager.shared.getCurrentUserIDUnified() else {
             errorMessage = "User not signed in."
