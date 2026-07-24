@@ -125,6 +125,7 @@ struct DailyJobReportView: View {
     @State private var reportDate: Date = Date()
     @State private var showDatePicker: Bool = false
     @State private var totalMileage: String = ""
+    @State private var vehicleType: String = "personal"  // "personal" or "company"
     @State private var jobDescription: String = ""  // Optional free text
     
     // ------------------------------------------------------------------
@@ -863,6 +864,18 @@ struct DailyJobReportView: View {
                 }
                 .background(inputFieldBackground)
                 .cornerRadius(8)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Vehicle")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                Picker("Vehicle", selection: $vehicleType) {
+                    Text("Personal").tag("personal")
+                    Text("Company").tag("company")
+                }
+                .pickerStyle(.segmented)
             }
 
             if totalMileage == "Calculating..." {
@@ -1797,6 +1810,7 @@ struct DailyJobReportView: View {
                 sessionId: selectedSession?.id,
                 sessionName: selectedSession?.reportDisplayLabel,
                 totalMileage: mileage,
+                vehicleType: vehicleType,
                 jobDescriptions: jobDescriptionArray.isEmpty ? nil : jobDescriptionArray,
                 extraItems: extraItemsArray.isEmpty ? nil : extraItemsArray,
                 cardsScannedChoice: cardsScannedChoice.isEmpty ? nil : cardsScannedChoice,

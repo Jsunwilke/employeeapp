@@ -567,6 +567,10 @@ class TemplateService: ObservableObject {
             ?? (formData["mileage"] as? String).flatMap { Double($0) }
             ?? 0.0
 
+        let vehicleType = formData["vehicleType"] as? String
+            ?? formData["vehicle_type"] as? String
+            ?? "personal"
+
         let photoURLs = formData["photoURLs"] as? [String]
             ?? formData["photo_urls"] as? [String]
             ?? []
@@ -602,6 +606,7 @@ class TemplateService: ObservableObject {
             sessionId: sessionId,
             sessionName: sessionName,
             totalMileage: totalMileage,
+            vehicleType: vehicleType,
             jobDescriptions: jobDescriptions,
             extraItems: extraItems,
             jobDescriptionText: jobDescriptionText,

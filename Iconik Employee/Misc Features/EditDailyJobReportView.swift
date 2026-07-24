@@ -10,6 +10,7 @@ struct EditDailyJobReportView: View {
     // Form fields – note that "jobDescriptionText" is now represented as "jobNotes"
     @State private var reportDate: Date = Date()
     @State private var totalMileage: String = ""
+    @State private var vehicleType: String = "personal"  // "personal" or "company"
     @State private var jobNotes: String = ""
     @State private var photoshootNoteText: String = ""  // New field for photoshoot notes
     @State private var jobDescriptions: [String] = []
@@ -88,6 +89,11 @@ struct EditDailyJobReportView: View {
                 DatePicker("Date", selection: $reportDate, displayedComponents: .date)
                 TextField("Total Mileage", text: $totalMileage)
                     .keyboardType(.decimalPad)
+                Picker("Vehicle", selection: $vehicleType) {
+                    Text("Personal").tag("personal")
+                    Text("Company").tag("company")
+                }
+                .pickerStyle(.segmented)
                 TextField("School / Destination", text: $schoolOrDestination)
             }
             
@@ -225,6 +231,7 @@ struct EditDailyJobReportView: View {
                     await MainActor.run {
                         reportDate = supabaseReport.date
                         totalMileage = String(format: "%.1f", supabaseReport.total_mileage)
+                        vehicleType = supabaseReport.vehicle_type ?? "personal"
                         jobNotes = supabaseReport.job_description_text ?? ""
                         photoshootNoteText = supabaseReport.photoshoot_note_text ?? ""
                         jobDescriptions = supabaseReport.job_descriptions ?? []
@@ -319,6 +326,7 @@ struct EditDailyJobReportView: View {
             sessionId: sessionId,
             sessionName: sessionName,
             totalMileage: mileageValue,
+            vehicleType: vehicleType,
             jobDescriptions: jobDescriptions.isEmpty ? nil : jobDescriptions,
             extraItems: extraItems.isEmpty ? nil : extraItems,
             cardsScannedChoice: cardsScannedChoice.isEmpty ? nil : cardsScannedChoice,

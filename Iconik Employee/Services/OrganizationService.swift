@@ -38,10 +38,12 @@ struct Organization: Codable {
     let created_at: String?  // ISO8601 string
     let updated_at: String?  // ISO8601 string
     let use_photoshoot_notes_only: Bool?  // NEW: Toggle for photoshoot notes vs daily reports
+    let company_car_rate: Double?  // Flat per-mile rate for company-car miles (NULL → 0.10)
 
     // Backward compatibility computed properties
     var enableSessionPublishing: Bool? { enable_session_publishing }
     var usePhotoshootNotesOnly: Bool { use_photoshoot_notes_only ?? false }
+    var companyCarRate: Double { VehicleRates.resolveCompanyCarRate(company_car_rate) }
 
     // Extract address string from JSONB object
     var addressString: String? {
@@ -68,6 +70,7 @@ class OrganizationService: ObservableObject {
     @Published var organizationCoordinates: String = ""  // Format: "lat,lng"
     @Published var organizationHasPublishing: Bool = false
     @Published var usePhotoshootNotesOnly: Bool = false  // NEW: Toggle for photoshoot notes vs daily reports
+    @Published var companyCarRate: Double = VehicleRates.defaultCompanyCarRate  // Org company-car per-mile rate
     private var organizationChannel: RealtimeChannelV2?
 
     private init() {}
@@ -152,6 +155,10 @@ class OrganizationService: ObservableObject {
             // Update photoshoot notes only setting
             self.usePhotoshootNotesOnly = org.use_photoshoot_notes_only ?? false
             print("📸 Organization uses photoshoot notes only: \(self.usePhotoshootNotesOnly)")
+
+            // Update company-car rate (NULL → default 0.10)
+            self.companyCarRate = org.companyCarRate
+            print("🚗 Organization company-car rate: \(self.companyCarRate)")
 
         } catch {
             print("Error fetching organization: \(error.localizedDescription)")

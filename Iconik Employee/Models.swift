@@ -169,6 +169,7 @@ struct DailyJobReport: Codable, Identifiable {
 
     // Mileage
     var total_mileage: Double
+    var vehicle_type: String?  // "personal" (default/NULL) or "company"
 
     // Job details (stored as JSONB arrays in Supabase)
     var job_descriptions: [String]?
@@ -210,6 +211,7 @@ struct DailyJobReport: Codable, Identifiable {
     var sessionId: String? { session_id }
     var sessionName: String? { session_name }
     var totalMileage: Double { total_mileage }
+    var vehicleType: String { vehicle_type ?? "personal" }
     var jobDescriptions: [String] { job_descriptions ?? [] }
     var extraItems: [String] { extra_items ?? [] }
     var cardsScannedChoice: String? { cards_scanned_choice }
@@ -234,7 +236,7 @@ struct DailyJobReport: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, date
         case organization_id, user_id, your_name
-        case school_or_destination, session_id, session_name, total_mileage
+        case school_or_destination, session_id, session_name, total_mileage, vehicle_type
         case job_descriptions, extra_items
         case cards_scanned_choice, job_box_and_camera_cards, sports_background_shot
         case job_description_text
@@ -294,6 +296,7 @@ struct DailyJobReport: Codable, Identifiable {
         session_id = try container.decodeIfPresent(String.self, forKey: .session_id)
         session_name = try container.decodeIfPresent(String.self, forKey: .session_name)
         total_mileage = try container.decodeIfPresent(Double.self, forKey: .total_mileage) ?? 0.0
+        vehicle_type = try container.decodeIfPresent(String.self, forKey: .vehicle_type) ?? "personal"
         job_descriptions = try container.decodeIfPresent([String].self, forKey: .job_descriptions)
         extra_items = try container.decodeIfPresent([String].self, forKey: .extra_items)
         cards_scanned_choice = try container.decodeIfPresent(String.self, forKey: .cards_scanned_choice)
@@ -350,6 +353,7 @@ struct DailyJobReport: Codable, Identifiable {
         sessionId: String? = nil,
         sessionName: String? = nil,
         totalMileage: Double = 0.0,
+        vehicleType: String = "personal",
         jobDescriptions: [String]? = nil,
         extraItems: [String]? = nil,
         cardsScannedChoice: String? = nil,
@@ -377,6 +381,7 @@ struct DailyJobReport: Codable, Identifiable {
         self.session_id = sessionId
         self.session_name = sessionName
         self.total_mileage = totalMileage
+        self.vehicle_type = vehicleType
         self.job_descriptions = jobDescriptions
         self.extra_items = extraItems
         self.cards_scanned_choice = cardsScannedChoice

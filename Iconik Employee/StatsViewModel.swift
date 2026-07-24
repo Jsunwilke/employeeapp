@@ -12,7 +12,9 @@ struct MileageData: Identifiable {
     let sarah: Double
     let mike: Double
     let total: Double
-    
+    var personal: Double = 0
+    var company: Double = 0
+
     // This allows dynamic access to properties by name
     subscript(key: String) -> Any? {
         switch key {
@@ -71,6 +73,16 @@ class StatsViewModel: ObservableObject {
     @Published var monthlyRevenue: [MonthlyRevenueData] = []
     @Published var isLoading: Bool = true
     @Published var errorMessage: String = ""
+
+    // Org company-car rate (NULL → 0.10). Personal miles in this org-wide analytics
+    // view use the standard personal fallback since there's no single personal rate.
+    @Published var companyCarRate: Double = VehicleRates.defaultCompanyCarRate
+
+    /// Org-level reimbursement estimate: personal miles at the IRS standard fallback,
+    /// company miles at the org rate. (This view never had per-photographer rates.)
+    func reimbursement(for item: MileageData) -> Double {
+        item.personal * VehicleRates.defaultMileageRate + item.company * companyCarRate
+    }
     
     // AppStorage for user organization ID (needed for filtering data)
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
@@ -174,15 +186,29 @@ class StatsViewModel: ObservableObject {
         }
 
         do {
+            // Fetch the org company-car rate for the reimbursement estimate.
+            struct OrgRateRecord: Decodable { let company_car_rate: Double? }
+            if let orgRow = try? await supabase
+                .from("organizations")
+                .select("company_car_rate")
+                .eq("id", value: storedUserOrganizationID)
+                .limit(1)
+                .execute()
+                .value as [OrgRateRecord] {
+                let resolved = VehicleRates.resolveCompanyCarRate(orgRow.first?.company_car_rate)
+                await MainActor.run { self.companyCarRate = resolved }
+            }
+
             struct ReportRecord: Decodable {
                 let date: Date?
                 let your_name: String?
                 let total_mileage: Double?
+                let vehicle_type: String?
             }
 
             let reports: [ReportRecord] = try await supabase
                 .from("daily_job_reports")
-                .select("date, your_name, total_mileage")
+                .select("date, your_name, total_mileage, vehicle_type")
                 .eq("organization_id", value: storedUserOrganizationID)
                 .gte("date", value: startDate.ISO8601Format())
                 .lte("date", value: endDate.ISO8601Format())
@@ -207,7 +233,7 @@ class StatsViewModel: ObservableObject {
                 let monthName = monthNames[month]
 
                 if reportsByMonth[monthName] == nil {
-                    reportsByMonth[monthName] = ["John": 0, "Sarah": 0, "Mike": 0, "total": 0]
+                    reportsByMonth[monthName] = ["John": 0, "Sarah": 0, "Mike": 0, "total": 0, "personal": 0, "company": 0]
                 }
 
                 if reportsByMonth[monthName]?.index(forKey: photographerName) != nil {
@@ -217,6 +243,13 @@ class StatsViewModel: ObservableObject {
                 }
 
                 reportsByMonth[monthName]?["total", default: 0] += mileage
+
+                // Personal/company split
+                if VehicleRates.isCompany(report.vehicle_type) {
+                    reportsByMonth[monthName]?["company", default: 0] += mileage
+                } else {
+                    reportsByMonth[monthName]?["personal", default: 0] += mileage
+                }
             }
 
             // Convert dictionary to array
@@ -237,7 +270,9 @@ class StatsViewModel: ObservableObject {
                     john: monthData["John"] ?? 0,
                     sarah: monthData["Sarah"] ?? 0,
                     mike: monthData["Mike"] ?? 0,
-                    total: monthData["total"] ?? 0
+                    total: monthData["total"] ?? 0,
+                    personal: monthData["personal"] ?? 0,
+                    company: monthData["company"] ?? 0
                 )
                 mileageResult.append(item)
             }

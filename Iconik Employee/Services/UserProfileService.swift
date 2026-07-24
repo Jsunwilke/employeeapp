@@ -77,7 +77,7 @@ struct UserProfile: Codable {
     var homeAddress: String { home_address ?? "" }
     var zipCode: String { zip_code ?? "" }
     var organizationID: String { organization_id ?? "" }
-    var amountPerMile: Double { amount_per_mile ?? 0.3 }
+    var amountPerMile: Double { VehicleRates.resolvePersonalRate(amount_per_mile) }
     var isActive: Bool { is_active ?? true }
     var isFlagged: Bool { is_flagged ?? false }
     var createdAt: Date? { created_at }

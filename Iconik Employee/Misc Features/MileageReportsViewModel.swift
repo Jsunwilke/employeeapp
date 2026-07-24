@@ -9,8 +9,36 @@ class MileageReportsViewModel: ObservableObject {
     @Published var yearMileage: Double = 0
     @Published var records: [MileageRecordWrapper] = []
 
+    // Personal/company split miles per bucket (rate-independent; compensation is
+    // folded in reactively via the resolved rates below).
+    @Published var currentPeriodPersonalMiles: Double = 0
+    @Published var currentPeriodCompanyMiles: Double = 0
+    @Published var monthPersonalMiles: Double = 0
+    @Published var monthCompanyMiles: Double = 0
+    @Published var yearPersonalMiles: Double = 0
+    @Published var yearCompanyMiles: Double = 0
+
+    // Resolved rates: personal = this photographer's users.amount_per_mile (|| 0.67),
+    // company = org organizations.company_car_rate (|| 0.10).
+    @Published var personalRate: Double = VehicleRates.defaultMileageRate
+    @Published var companyRate: Double = VehicleRates.defaultCompanyCarRate
+
     var userName: String = ""
     var userId: String?
+
+    /// Split (miles + compensation) for a bucket, using the current resolved rates.
+    private func split(personalMiles: Double, companyMiles: Double) -> VehicleRates.Split {
+        var s = VehicleRates.Split()
+        s.personalMiles = personalMiles
+        s.companyMiles = companyMiles
+        s.personalCompensation = personalMiles * personalRate
+        s.companyCompensation = companyMiles * companyRate
+        return s
+    }
+
+    var currentPeriodSplit: VehicleRates.Split { split(personalMiles: currentPeriodPersonalMiles, companyMiles: currentPeriodCompanyMiles) }
+    var monthSplit: VehicleRates.Split { split(personalMiles: monthPersonalMiles, companyMiles: monthCompanyMiles) }
+    var yearSplit: VehicleRates.Split { split(personalMiles: yearPersonalMiles, companyMiles: yearCompanyMiles) }
 
     let calendar = Calendar.current
     var currentPeriodStart: Date = Date()
@@ -25,6 +53,7 @@ class MileageReportsViewModel: ObservableObject {
         let date: Date
         let totalMileage: Double
         let schoolName: String
+        let vehicleType: String  // "personal" or "company"
 
         /// Create from DailyJobReport
         init(from report: DailyJobReport) {
@@ -32,14 +61,16 @@ class MileageReportsViewModel: ObservableObject {
             self.date = report.date
             self.totalMileage = report.total_mileage
             self.schoolName = report.school_or_destination ?? ""
+            self.vehicleType = report.vehicle_type ?? "personal"
         }
 
         /// Direct initializer
-        init(id: String, date: Date, totalMileage: Double, schoolName: String) {
+        init(id: String, date: Date, totalMileage: Double, schoolName: String, vehicleType: String = "personal") {
             self.id = id
             self.date = date
             self.totalMileage = totalMileage
             self.schoolName = schoolName
+            self.vehicleType = vehicleType
         }
     }
     
@@ -79,6 +110,49 @@ class MileageReportsViewModel: ObservableObject {
     func listenForMileageUpdates(completion: @escaping () -> Void) {
         self.updateCallback = completion
     }
+
+    /// Fetch this photographer's personal rate (users.amount_per_mile) and the org's
+    /// company-car rate (organizations.company_car_rate). Both fall back via VehicleRates.
+    func loadRates() {
+        Task {
+            let supabase = SupabaseManager.shared.client
+
+            if let userId = userId {
+                struct PersonalRateResponse: Codable { let amount_per_mile: Double? }
+                do {
+                    let rows: [PersonalRateResponse] = try await supabase
+                        .from("users")
+                        .select("amount_per_mile")
+                        .eq("id", value: userId)
+                        .limit(1)
+                        .execute()
+                        .value
+                    let resolved = VehicleRates.resolvePersonalRate(rows.first?.amount_per_mile)
+                    await MainActor.run { self.personalRate = resolved }
+                } catch {
+                    print("Error fetching personal mileage rate: \(error.localizedDescription)")
+                }
+            }
+
+            let orgId = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+            if !orgId.isEmpty {
+                struct CompanyRateResponse: Codable { let company_car_rate: Double? }
+                do {
+                    let rows: [CompanyRateResponse] = try await supabase
+                        .from("organizations")
+                        .select("company_car_rate")
+                        .eq("id", value: orgId)
+                        .limit(1)
+                        .execute()
+                        .value
+                    let resolved = VehicleRates.resolveCompanyCarRate(rows.first?.company_car_rate)
+                    await MainActor.run { self.companyRate = resolved }
+                } catch {
+                    print("Error fetching company-car rate: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
     
     private func setDefaultPayPeriod() {
         // Fallback calculation using the old reference date
@@ -105,6 +179,9 @@ class MileageReportsViewModel: ObservableObject {
     
     /// Loads mileage records for the given pay period. If none provided, uses the current period.
     func loadRecords(forPayPeriodStart payPeriodStart: Date? = nil) {
+        // Refresh rates alongside records so compensation is always current.
+        loadRates()
+
         // If we're using the current period and it hasn't been set yet, wait for it
         if payPeriodStart == nil && currentPeriodStart == currentPeriodEnd {
             // Load pay period settings first
@@ -178,6 +255,12 @@ class MileageReportsViewModel: ObservableObject {
 
                     // Since we already filtered by date in the query, just sum all records
                     self.currentPeriodMileage = self.records.reduce(0) { $0 + $1.totalMileage }
+                    self.currentPeriodPersonalMiles = self.records
+                        .filter { !VehicleRates.isCompany($0.vehicleType) }
+                        .reduce(0) { $0 + $1.totalMileage }
+                    self.currentPeriodCompanyMiles = self.records
+                        .filter { VehicleRates.isCompany($0.vehicleType) }
+                        .reduce(0) { $0 + $1.totalMileage }
                     print("🚗 Pay period mileage: \(self.currentPeriodMileage) miles from \(self.records.count) records")
 
                     // Also load month and year totals
@@ -262,18 +345,22 @@ class MileageReportsViewModel: ObservableObject {
                     print("Found \(reports.count) reports for the year")
 
                     // Convert to tuples for processing
-                    let allRecords = reports.map { (date: $0.date, mileage: $0.total_mileage) }
+                    let allRecords = reports.map { (date: $0.date, mileage: $0.total_mileage, vehicleType: $0.vehicle_type ?? "personal") }
 
-                    // Sum mileage for the entire year
+                    // Sum mileage for the entire year (total + split)
                     self.yearMileage = allRecords.reduce(0) { $0 + $1.mileage }
+                    self.yearPersonalMiles = allRecords.filter { !VehicleRates.isCompany($0.vehicleType) }.reduce(0) { $0 + $1.mileage }
+                    self.yearCompanyMiles = allRecords.filter { VehicleRates.isCompany($0.vehicleType) }.reduce(0) { $0 + $1.mileage }
 
-                    // Sum mileage for the current month
+                    // Sum mileage for the current month (total + split)
                     let currentMonth = self.calendar.component(.month, from: Date())
                     let monthRecords = allRecords.filter {
                         self.calendar.component(.month, from: $0.date) == currentMonth &&
                         self.calendar.component(.year, from: $0.date) == currentYear
                     }
                     self.monthMileage = monthRecords.reduce(0) { $0 + $1.mileage }
+                    self.monthPersonalMiles = monthRecords.filter { !VehicleRates.isCompany($0.vehicleType) }.reduce(0) { $0 + $1.mileage }
+                    self.monthCompanyMiles = monthRecords.filter { VehicleRates.isCompany($0.vehicleType) }.reduce(0) { $0 + $1.mileage }
 
                     print("🚗 Calculated year mileage: \(self.yearMileage) miles from \(allRecords.count) total records")
                     print("🚗 Calculated month mileage: \(self.monthMileage) miles from \(monthRecords.count) month records")

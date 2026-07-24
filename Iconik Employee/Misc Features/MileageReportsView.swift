@@ -93,31 +93,34 @@ struct MileageReportsView: View {
                 // Summary info - Enhanced with more compact card-based UI
                 VStack(spacing: 12) {
                     // Current period and monthly in a row
-                    HStack(spacing: 10) {
+                    HStack(alignment: .top, spacing: 10) {
                         // Current Period card
                         SummaryCardView(
                             title: "Current Period",
                             miles: viewModel.currentPeriodMileage,
-                            reimbursement: viewModel.currentPeriodMileage * 0.3,
+                            reimbursement: viewModel.currentPeriodSplit.totalCompensation,
+                            split: viewModel.currentPeriodSplit,
                             iconName: "calendar",
                             color: .blue
                         )
-                        
+
                         // Monthly card
                         SummaryCardView(
                             title: "Miles in \(monthName)",
                             miles: viewModel.monthMileage,
-                            reimbursement: viewModel.monthMileage * 0.3,
+                            reimbursement: viewModel.monthSplit.totalCompensation,
+                            split: viewModel.monthSplit,
                             iconName: "clock",
                             color: .green
                         )
                     }
-                    
+
                     // Yearly card (full width)
                     SummaryCardView(
                         title: "Miles this Year",
                         miles: viewModel.yearMileage,
-                        reimbursement: viewModel.yearMileage * 0.3,
+                        reimbursement: viewModel.yearSplit.totalCompensation,
+                        split: viewModel.yearSplit,
                         iconName: "calendar.badge.clock",
                         color: .orange,
                         isWide: true
@@ -128,25 +131,41 @@ struct MileageReportsView: View {
                 // List of mileage records with updated navigation link to MileageDetailView
                 List {
                     ForEach(viewModel.records.sorted(by: { $0.date > $1.date })) { record in
-                        NavigationLink(destination: MileageDetailView(record: record)) {
+                        NavigationLink(destination: MileageDetailView(
+                            record: record,
+                            personalRate: viewModel.personalRate,
+                            companyRate: viewModel.companyRate
+                        )) {
                             HStack(alignment: .center) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(formatDate(record.date))
                                         .font(.headline)
-                                    
-                                    Text(record.schoolName)
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
+
+                                    HStack(spacing: 6) {
+                                        Text(record.schoolName)
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                        if VehicleRates.isCompany(record.vehicleType) {
+                                            Text("Company")
+                                                .font(.caption2)
+                                                .fontWeight(.medium)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.orange.opacity(0.15))
+                                                .foregroundColor(.orange)
+                                                .cornerRadius(4)
+                                        }
+                                    }
                                 }
-                                
+
                                 Spacer()
-                                
+
                                 VStack(alignment: .trailing, spacing: 2) {
                                     Text("\(record.totalMileage, specifier: "%.1f") miles")
                                         .font(.system(.body, design: .rounded))
                                         .fontWeight(.medium)
-                                    
-                                    Text("$\(record.totalMileage * 0.3, specifier: "%.2f")")
+
+                                    Text("$\(record.totalMileage * VehicleRates.rate(forVehicleType: record.vehicleType, personalRate: viewModel.personalRate, companyCarRate: viewModel.companyRate), specifier: "%.2f")")
                                         .font(.footnote)
                                         .foregroundColor(.secondary)
                                 }
@@ -177,50 +196,60 @@ struct SummaryCardView: View {
     let title: String
     let miles: Double
     let reimbursement: Double
+    var split: VehicleRates.Split? = nil
     let iconName: String
     let color: Color
     var isWide: Bool = false
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 4) {
                 Image(systemName: iconName)
                     .font(.headline)
                     .foregroundColor(color)
-                
+
                 Text(title)
                     .font(.subheadline)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                
+
                 Spacer()
             }
-            
+
             HStack(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(formatMiles(miles))
                         .font(.title3)
                         .fontWeight(.bold)
-                    
+
                     Text("miles")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                
+
                 Spacer()
-                
+
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(formatCurrency(reimbursement))
                         .font(.headline)
-                    
+
                     Text("reimbursement")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
             }
+
+            // Personal/company breakdown — only shown once company miles exist.
+            if let split = split, split.hasCompany {
+                Text("Personal \(formatMiles(split.personalMiles)) · Company \(formatMiles(split.companyMiles)) mi")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
         }
         .padding(10)
-        .frame(height: 85)
+        .frame(minHeight: 85)
         .frame(maxWidth: isWide ? .infinity : nil)
         .background(
             RoundedRectangle(cornerRadius: 12)

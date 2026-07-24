@@ -427,8 +427,8 @@ struct StatsView: View {
             ChartCard(title: "Mileage Reimbursement") {
                 VStack {
                     // Get maximum reimbursement value for scaling
-                    let maxReimbursement = viewModel.mileageData.map { $0.total * 0.3 }.max() ?? 1.0
-                    
+                    let maxReimbursement = viewModel.mileageData.map { viewModel.reimbursement(for: $0) }.max() ?? 1.0
+
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(alignment: .bottom, spacing: 15) {
                             ForEach(viewModel.mileageData) { item in
@@ -437,9 +437,9 @@ struct StatsView: View {
                                     ZStack(alignment: .bottom) {
                                         Rectangle()
                                             .fill(Color.green)
-                                            .frame(width: 24, height: getScaledHeight(for: item.total * 0.3, maxValue: maxReimbursement, maxHeight: 150))
-                                        
-                                        Text("$\(Int(item.total * 0.3))")
+                                            .frame(width: 24, height: getScaledHeight(for: viewModel.reimbursement(for: item), maxValue: maxReimbursement, maxHeight: 150))
+
+                                        Text("$\(Int(viewModel.reimbursement(for: item)))")
                                             .font(.caption)
                                             .fontWeight(.bold)
                                             .foregroundColor(.white)

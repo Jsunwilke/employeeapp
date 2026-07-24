@@ -18,11 +18,14 @@ struct EmployeeRecord: Identifiable {
     let amountPerMile: Double
 }
 
-/// Holds summary mileage stats for an employee.
+/// Holds summary mileage stats for an employee (totals + company-vehicle portion).
 struct ManagerMileageStats {
     let periodMiles: Double
     let monthMiles: Double
     let yearMiles: Double
+    let periodCompanyMiles: Double
+    let monthCompanyMiles: Double
+    let yearCompanyMiles: Double
 }
 
 /// ViewModel for ManagerMileageView, loading employees and computing mileage stats.
@@ -30,7 +33,8 @@ class ManagerMileageViewModel: ObservableObject {
     // Published properties for UI
     @Published var employees: [EmployeeRecord] = []
     @Published var statsByUser: [String: ManagerMileageStats] = [:]
-    
+    @Published var companyCarRate: Double = VehicleRates.defaultCompanyCarRate
+
     // Optional: hold an error message for display in an alert
     @Published var errorMessage: String? = nil
     
@@ -108,12 +112,23 @@ class ManagerMileageViewModel: ObservableObject {
                     .execute()
                     .value
 
+                // Fetch the org company-car rate (NULL → 0.10).
+                struct OrgRateRecord: Decodable { let company_car_rate: Double? }
+                let orgRows: [OrgRateRecord] = (try? await supabase
+                    .from("organizations")
+                    .select("company_car_rate")
+                    .eq("id", value: orgID)
+                    .limit(1)
+                    .execute()
+                    .value) ?? []
+                let resolvedCompanyRate = VehicleRates.resolveCompanyCarRate(orgRows.first?.company_car_rate)
+
                 var list: [EmployeeRecord] = []
                 for user in users {
                     list.append(EmployeeRecord(
                         id: user.id,
                         firstName: user.first_name ?? "Unknown",
-                        amountPerMile: user.amount_per_mile ?? 0.0
+                        amountPerMile: VehicleRates.resolvePersonalRate(user.amount_per_mile)
                     ))
                 }
 
@@ -121,6 +136,7 @@ class ManagerMileageViewModel: ObservableObject {
 
                 await MainActor.run {
                     self.employees = list
+                    self.companyCarRate = resolvedCompanyRate
                     self.loadStatsForPeriod(selectedPeriodStart: self.currentPeriodStart)
                 }
             } catch {
@@ -170,13 +186,14 @@ class ManagerMileageViewModel: ObservableObject {
                 let user_id: String?
                 let total_mileage: Double?
                 let date: Date?
+                let vehicle_type: String?
             }
 
             do {
                 // Fetch all reports for the organization within the available periods range
                 let reports: [ReportRecord] = try await supabase
                     .from("daily_job_reports")
-                    .select("user_id, total_mileage, date")
+                    .select("user_id, total_mileage, date, vehicle_type")
                     .eq("organization_id", value: organizationID)
                     .gte("date", value: queryStart.ISO8601Format())
                     .lte("date", value: queryEnd.ISO8601Format())
@@ -202,9 +219,13 @@ class ManagerMileageViewModel: ObservableObject {
                     var periodMiles = 0.0
                     var monthMiles  = 0.0
                     var yearMiles   = 0.0
+                    var periodCompanyMiles = 0.0
+                    var monthCompanyMiles  = 0.0
+                    var yearCompanyMiles   = 0.0
 
                     for report in empReports {
                         let miles = report.total_mileage ?? 0.0
+                        let isCompany = VehicleRates.isCompany(report.vehicle_type)
                         if let dateVal = report.date {
                             let docMonth = calendar.component(.month, from: dateVal)
                             let docYear  = calendar.component(.year,  from: dateVal)
@@ -212,16 +233,19 @@ class ManagerMileageViewModel: ObservableObject {
                             // Year miles: same year as selected period
                             if docYear == selectedYear {
                                 yearMiles += miles
+                                if isCompany { yearCompanyMiles += miles }
                             }
 
                             // Month miles: same month AND year as selected period
                             if docMonth == selectedMonth && docYear == selectedYear {
                                 monthMiles += miles
+                                if isCompany { monthCompanyMiles += miles }
                             }
 
                             // Period miles: within the 14-day period
                             if dateVal >= selectedPeriodStart && dateVal <= periodEnd {
                                 periodMiles += miles
+                                if isCompany { periodCompanyMiles += miles }
                             }
                         }
                     }
@@ -229,7 +253,10 @@ class ManagerMileageViewModel: ObservableObject {
                     newStats[emp.id] = ManagerMileageStats(
                         periodMiles: periodMiles,
                         monthMiles:  monthMiles,
-                        yearMiles:   yearMiles
+                        yearMiles:   yearMiles,
+                        periodCompanyMiles: periodCompanyMiles,
+                        monthCompanyMiles:  monthCompanyMiles,
+                        yearCompanyMiles:   yearCompanyMiles
                     )
                 }
 
@@ -341,11 +368,16 @@ struct ManagerMileageView: View {
                 let pMiles = stats?.periodMiles ?? 0
                 let mMiles = stats?.monthMiles  ?? 0
                 let yMiles = stats?.yearMiles   ?? 0
+                let pCompany = stats?.periodCompanyMiles ?? 0
+                let mCompany = stats?.monthCompanyMiles  ?? 0
+                let yCompany = stats?.yearCompanyMiles   ?? 0
                 let rate   = emp.amountPerMile
-                
-                let pPay = pMiles * rate
-                let mPay = mMiles * rate
-                let yPay = yMiles * rate
+                let companyRate = viewModel.companyCarRate
+
+                // Personal miles pay the employee's rate; company miles pay the org rate.
+                let pPay = (pMiles - pCompany) * rate + pCompany * companyRate
+                let mPay = (mMiles - mCompany) * rate + mCompany * companyRate
+                let yPay = (yMiles - yCompany) * rate + yCompany * companyRate
                 
                 NavigationLink(destination: {
                     // Navigate to the detail view
@@ -364,7 +396,13 @@ struct ManagerMileageView: View {
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                         }
-                        
+
+                        if pCompany > 0 {
+                            Text(String(format: "Personal %.1f · Company %.1f mi @ $%.2f", pMiles - pCompany, pCompany, companyRate))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+
                         HStack {
                             Text(String(format: "This Period: %.1f mi", pMiles))
                             Spacer()

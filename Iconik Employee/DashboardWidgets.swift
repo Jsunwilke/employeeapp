@@ -681,8 +681,7 @@ struct MileageWidget: View {
     @State private var isLoading = false
     @State private var hasInitialData = false
     @StateObject private var mileageViewModel: MileageReportsViewModel
-    @State private var mileageRate: Double = 0.30 // Default rate
-    
+
     init(userName: String) {
         self.userName = userName
         self._mileageViewModel = StateObject(wrappedValue: MileageReportsViewModel.shared)
@@ -727,9 +726,14 @@ struct MileageWidget: View {
                                 .foregroundColor(.secondary)
                             Text("\(Int(currentPeriodMileage)) mi")
                                 .font(.system(size: 24, weight: .semibold))
-                            Text("$\(currentPeriodMileage * mileageRate, specifier: "%.2f")")
+                            Text("$\(reimbursement(mileageViewModel.currentPeriodSplit, cachedMiles: currentPeriodMileage), specifier: "%.2f")")
                                 .font(.caption)
                                 .foregroundColor(.green)
+                            if mileageViewModel.currentPeriodSplit.hasCompany {
+                                Text("Personal \(Int(mileageViewModel.currentPeriodPersonalMiles)) · Company \(Int(mileageViewModel.currentPeriodCompanyMiles)) mi")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                         Spacer()
                     }
@@ -744,20 +748,20 @@ struct MileageWidget: View {
                                 .foregroundColor(.secondary)
                             Text("\(Int(monthMileage)) mi")
                                 .font(.system(size: 18, weight: .medium))
-                            Text("$\(monthMileage * mileageRate, specifier: "%.2f")")
+                            Text("$\(reimbursement(mileageViewModel.monthSplit, cachedMiles: monthMileage), specifier: "%.2f")")
                                 .font(.caption2)
                                 .foregroundColor(.green)
                         }
-                        
+
                         Spacer()
-                        
+
                         VStack(alignment: .trailing, spacing: 2) {
                             Text("This Year")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                             Text("\(Int(yearMileage)) mi")
                                 .font(.system(size: 18, weight: .medium))
-                            Text("$\(yearMileage * mileageRate, specifier: "%.2f")")
+                            Text("$\(reimbursement(mileageViewModel.yearSplit, cachedMiles: yearMileage), specifier: "%.2f")")
                                 .font(.caption2)
                                 .foregroundColor(.green)
                         }
@@ -792,9 +796,6 @@ struct MileageWidget: View {
             isLoading = true
         }
 
-        // Fetch user's mileage rate
-        fetchUserMileageRate()
-        
         // Listen for changes to the view model
         mileageViewModel.listenForMileageUpdates {
             DispatchQueue.main.async {
@@ -814,41 +815,15 @@ struct MileageWidget: View {
             }
         }
         
-        // Trigger initial load
+        // Trigger initial load (also refreshes personal + company rates)
         mileageViewModel.loadRecords()
     }
-    
-    private func fetchUserMileageRate() {
-        // Get current user ID
-        guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
-            return
-        }
 
-        // Fetch from Supabase
-        Task {
-            do {
-                struct MileageRateResponse: Codable {
-                    let amount_per_mile: Double?
-                }
-
-                let supabase = SupabaseManager.shared.client
-                let response: [MileageRateResponse] = try await supabase
-                    .from("users")
-                    .select("amount_per_mile")
-                    .eq("id", value: userId)
-                    .limit(1)
-                    .execute()
-                    .value
-
-                if let user = response.first, let rate = user.amount_per_mile {
-                    await MainActor.run {
-                        self.mileageRate = rate
-                    }
-                }
-            } catch {
-                print("Error fetching mileage rate: \(error)")
-            }
-        }
+    /// Reimbursement for a bucket. Once the split has loaded, use its vehicle-aware
+    /// total; before then (cold start), estimate from the cached total miles at the
+    /// personal rate so miles and dollars appear together instead of a bare $0.00.
+    private func reimbursement(_ split: VehicleRates.Split, cachedMiles: Double) -> Double {
+        split.totalMiles > 0 ? split.totalCompensation : cachedMiles * mileageViewModel.personalRate
     }
 }
 

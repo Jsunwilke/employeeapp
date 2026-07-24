@@ -14,6 +14,7 @@ struct ManagerDailyRecord: Identifiable {
     let date: Date
     let schoolName: String
     let totalMileage: Double
+    let vehicleType: String
     let photoURLs: [String]
 
     /// Create from DailyJobReport
@@ -22,15 +23,17 @@ struct ManagerDailyRecord: Identifiable {
         self.date = report.date
         self.schoolName = report.school_or_destination ?? "Unknown"
         self.totalMileage = report.total_mileage
+        self.vehicleType = report.vehicle_type ?? "personal"
         self.photoURLs = report.photo_urls ?? []
     }
 
     /// Direct initializer
-    init(id: String, date: Date, schoolName: String, totalMileage: Double, photoURLs: [String]) {
+    init(id: String, date: Date, schoolName: String, totalMileage: Double, vehicleType: String = "personal", photoURLs: [String]) {
         self.id = id
         self.date = date
         self.schoolName = schoolName
         self.totalMileage = totalMileage
+        self.vehicleType = vehicleType
         self.photoURLs = photoURLs
     }
 }
@@ -38,6 +41,8 @@ struct ManagerDailyRecord: Identifiable {
 class ManagerEmployeeDetailViewModel: ObservableObject {
     @Published var records: [ManagerDailyRecord] = []
     @Published var totalPeriodMileage: Double = 0.0
+    @Published var personalPeriodMileage: Double = 0.0
+    @Published var companyPeriodMileage: Double = 0.0
     @Published var errorMessage: String? = nil
 
     let employeeName: String
@@ -74,12 +79,17 @@ class ManagerEmployeeDetailViewModel: ObservableObject {
                     // Convert to ManagerDailyRecord and calculate totals
                     var tempRecords = reports.map { ManagerDailyRecord(from: $0) }
                     let totalMiles = tempRecords.reduce(0.0) { $0 + $1.totalMileage }
+                    let companyMiles = tempRecords
+                        .filter { VehicleRates.isCompany($0.vehicleType) }
+                        .reduce(0.0) { $0 + $1.totalMileage }
 
                     // Sort descending by date
                     tempRecords.sort { $0.date > $1.date }
 
                     self.records = tempRecords
                     self.totalPeriodMileage = totalMiles
+                    self.companyPeriodMileage = companyMiles
+                    self.personalPeriodMileage = totalMiles - companyMiles
                 }
             } catch {
                 await MainActor.run {
@@ -135,6 +145,17 @@ struct ManagerEmployeeDetailView: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
+
+            // Personal/company split — only shown once company miles exist.
+            if viewModel.companyPeriodMileage > 0 {
+                HStack {
+                    Text(String(format: "Personal %.1f · Company %.1f mi", viewModel.personalPeriodMileage, viewModel.companyPeriodMileage))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal)
+            }
             
             // 4) List of daily records
             List(viewModel.records) { record in
@@ -146,8 +167,20 @@ struct ManagerEmployeeDetailView: View {
                             Text(record.schoolName)
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
-                            Text(String(format: "%.1f miles", record.totalMileage))
-                                .font(.footnote)
+                            HStack(spacing: 6) {
+                                Text(String(format: "%.1f miles", record.totalMileage))
+                                    .font(.footnote)
+                                if VehicleRates.isCompany(record.vehicleType) {
+                                    Text("Company")
+                                        .font(.caption2)
+                                        .fontWeight(.medium)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.orange.opacity(0.15))
+                                        .foregroundColor(.orange)
+                                        .cornerRadius(4)
+                                }
+                            }
                         }
                         
                         Spacer()

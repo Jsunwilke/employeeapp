@@ -195,7 +195,8 @@ class DailyJobReportService: ObservableObject {
             "organization_id": .string(report.organization_id),
             "user_id": .string(report.user_id),
             "your_name": .string(report.your_name),
-            "total_mileage": .double(report.total_mileage)
+            "total_mileage": .double(report.total_mileage),
+            "vehicle_type": .string(report.vehicle_type ?? "personal")
         ]
 
         // Handle date - convert to ISO date string for Supabase DATE column
@@ -314,7 +315,8 @@ class DailyJobReportService: ObservableObject {
         // Build update data dictionary
         var updateData: [String: AnyJSON] = [
             "your_name": .string(report.your_name),
-            "total_mileage": .double(report.total_mileage)
+            "total_mileage": .double(report.total_mileage),
+            "vehicle_type": .string(report.vehicle_type ?? "personal")
         ]
 
         // Handle date
