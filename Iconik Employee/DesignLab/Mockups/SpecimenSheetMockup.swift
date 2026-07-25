@@ -340,7 +340,7 @@ struct LabEquipmentRow: View {
         .ambientCard(density: density,
                      state: state,
                      border: .hairline(borderTint))
-        .overlay(alignment: .leading) { kitStripe }
+        .labKitEdge(item.kitColor, density: density)
     }
 
     private var borderTint: Color {
@@ -367,17 +367,8 @@ struct LabEquipmentRow: View {
         }
     }
 
-    /// The kit tape colour, as a stripe down the leading edge — Equipment's
-    /// existing signal for "this belongs to a kit", kept because photographers
-    /// already read it.
-    @ViewBuilder
-    private var kitStripe: some View {
-        if let hex = item.kitColor {
-            Capsule()
-                .fill(Color(hex: hex))
-                .frame(width: 3)
-                .padding(.vertical, density.verticalPadding)
-                .padding(.leading, 1)
-        }
-    }
+    // The kit tape colour used to be drawn here as a second, slightly different
+    // copy of the same idea. Both are now one thing — `.labKitEdge(_:density:)`
+    // in EquipmentMockup.swift — because two drawings of one signal is how they
+    // drift apart, and these two had already drifted from the app's.
 }

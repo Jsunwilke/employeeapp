@@ -396,7 +396,7 @@ struct LabKitRow: View {
                 .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
         }
         .ambientCard(density: density, border: .hairline(borderTint))
-        .overlay(alignment: .leading) { LabKitStripe(kit: kit, density: density) }
+        .labKitEdge(kit.colorHex, density: density)
     }
 
     private var borderTint: Color {
@@ -438,31 +438,68 @@ struct LabKitDueBadge: View {
 
 // MARK: - Kit colour, including rainbow
 
-/// Rainbow is a real kit tape colour — the model has `isRainbow` and three views
-/// special-case it — so a stripe drawn as a flat `Color(hex:)` renders garbage.
-/// Mirrors `KitColorBorder`'s gradient without its endless animation: a colour
-/// spinning forever on every row is a battery cost and a distraction, and this
-/// is the right place to find out whether it is missed.
-struct LabKitStripe: View {
-    let kit: LabKit
-    var density: AmbientDensity = .compact
+/// The kit tape colour, as a FLUSH EDGE BAND on the card.
+///
+/// The first cut drew this as a 3pt Capsule inset 1pt from the leading edge and
+/// inset vertically by the card's own padding — which makes it a floating
+/// rounded pill sitting inside the card rather than an edge, and it read as a
+/// stray mark. The app does not do that: `KitColorBorder` is a plain Rectangle
+/// first in an HStack(spacing: 0), so it runs the FULL height of the card,
+/// flush to the leading edge, with the container's corner radius clipping its
+/// ends. That is why it reads as binding tape there and as litter here.
+///
+/// So: full height, flush, square ends, and the card clipped to its own radius
+/// so the band follows the corner. Full saturation is deliberate — this colour
+/// is matching real tape wrapped on a real case, so it has to be recognisable
+/// rather than tasteful.
+///
+/// Rainbow is a real tape colour (`KitTemplate.isRainbow`, special-cased in
+/// three views), so a band drawn as a flat `Color(hex:)` would render garbage.
+/// The gradient mirrors KitColorBorder's without its endless animation: a
+/// colour spinning forever on every row of a list is a battery cost and a
+/// distraction, and this is the right place to find out whether it is missed.
+struct LabKitEdge: ViewModifier {
+    /// A hex string, or the literal "rainbow", or nil for an item in no kit.
+    let hex: String?
+    let density: AmbientDensity
 
-    var body: some View {
-        Group {
-            if kit.isRainbow {
-                Capsule().fill(LabKitStripe.rainbow)
-            } else if let hex = kit.colorHex {
-                Capsule().fill(Color(hex: hex))
-            }
+    private var isRainbow: Bool { hex?.lowercased() == "rainbow" }
+
+    /// Branches on a value fixed at the call site — a row's kit does not change
+    /// under it — so the `_ConditionalContent` identity switch cannot fire
+    /// mid-animation. Same reasoning as `AmbientGlow`.
+    func body(content: Content) -> some View {
+        if let hex {
+            content
+                .overlay(alignment: .leading) {
+                    Group {
+                        if isRainbow {
+                            Rectangle().fill(LabKitEdge.rainbow)
+                        } else {
+                            Rectangle().fill(Color(hex: hex))
+                        }
+                    }
+                    .frame(width: 4)
+                }
+                // Clipping the CARD, not the band: this is what makes the band
+                // follow the corner curve instead of overhanging it.
+                .clipShape(RoundedRectangle(cornerRadius: density.cornerRadius,
+                                            style: .continuous))
+        } else {
+            content
         }
-        .frame(width: 3)
-        .padding(.vertical, density.verticalPadding)
-        .padding(.leading, 1)
     }
 
     static let rainbow = LinearGradient(
         colors: [.red, .orange, .yellow, .green, .blue, .purple],
         startPoint: .top, endPoint: .bottom)
+}
+
+extension View {
+    /// Bind a card with a kit's tape colour. No-op when the thing is in no kit.
+    func labKitEdge(_ hex: String?, density: AmbientDensity) -> some View {
+        modifier(LabKitEdge(hex: hex, density: density))
+    }
 }
 
 struct LabKitDot: View {
