@@ -246,20 +246,20 @@ extension DesignLabSampleData {
         static let yearPay = "$3,444.38"
     }
 
-    /// The dashboard's task strip — the five most urgent assigned to you.
-    static let urgentTasks: [LabTask] = [
-        .init(id: "t1", title: "Send Lincoln proofs to the office", priority: .urgent,
-              status: .inProgress, due: "Today", overdue: false, subtasks: (1, 3)),
-        .init(id: "t2", title: "Return the 70-200 to the equipment room", priority: .high,
-              status: .todo, due: "Yesterday", overdue: true, subtasks: (0, 0)),
-        .init(id: "t3", title: "Confirm Northgate day 3 call time with Ms. Reyes",
-              priority: .medium, status: .todo, due: "Tomorrow", overdue: false,
-              subtasks: (0, 2)),
-    ]
+    /// The dashboard's task strip — the most urgent assigned to you.
+    ///
+    /// Derived from `tasks` rather than typed out again: AMB.5's Tasks mockup
+    /// needs the same rows, and a photographer seeing the same three items on
+    /// home and in Tasks is what really happens. The first three entries of
+    /// `tasks` are the ones the approved dashboard mockup shipped with, so this
+    /// renders exactly what the operator already said yes to.
+    static var urgentTasks: [LabTask] { Array(tasks.prefix(3)) }
 }
 
+// MARK: - Tasks (AMB.5)
+
 struct LabTask: Identifiable {
-    enum Priority { case low, medium, high, urgent
+    enum Priority: String, CaseIterable { case low = "Low", medium = "Medium", high = "High", urgent = "Urgent"
         var color: Color {
             switch self {
             case .low: return .gray
@@ -269,7 +269,7 @@ struct LabTask: Identifiable {
             }
         }
     }
-    enum Status: String { case todo = "To Do", inProgress = "In Progress", completed = "Completed"
+    enum Status: String, CaseIterable { case todo = "To Do", inProgress = "In Progress", completed = "Completed"
         var color: Color {
             switch self {
             case .todo: return .gray
@@ -283,8 +283,283 @@ struct LabTask: Identifiable {
     let title: String
     let priority: Priority
     let status: Status
-    let due: String
+    /// Optional because a real task can carry no due date at all — the row has
+    /// to read without the date Label, not with an empty one.
+    let due: String?
     let overdue: Bool
     /// completed / total
     let subtasks: (Int, Int)
+    /// Everything below is on the MODEL and is NOT rendered by today's row.
+    /// Kept here because the mockup has to answer whether any of it earns a
+    /// place — the answer for most of it is no, and that is worth showing.
+    var comments: Int = 0
+    var assignee: String? = nil
+    var detail: String? = nil
+    var type: String? = nil
+    var estimatedHours: Double? = nil
+    /// False for a task assigned to someone else — the All filter shows these,
+    /// the default My Tasks filter does not.
+    var mine: Bool = true
+
+    var isCompleted: Bool { status == .completed }
+}
+
+extension DesignLabSampleData {
+
+    /// Fourteen tasks, seeded with the shapes that decide the row: every
+    /// priority, every status, an overdue one, one with NO due date, a title
+    /// long enough to wrap to two lines, completed ones that have to read as
+    /// finished without disappearing, and one assigned to somebody else.
+    static let tasks: [LabTask] = [
+        .init(id: "t1", title: "Send Lincoln proofs to the office", priority: .urgent,
+              status: .inProgress, due: "Today", overdue: false, subtasks: (1, 3),
+              comments: 2, assignee: "You",
+              detail: "Full set from the gym plus the twelve retakes. The office wants them before the Friday cutoff so the proofs go out with the Monday mailing.",
+              type: "Delivery", estimatedHours: 1.5),
+        .init(id: "t2", title: "Return the 70-200 to the equipment room", priority: .high,
+              status: .todo, due: "Yesterday", overdue: true, subtasks: (0, 0),
+              comments: 0, assignee: "You", type: "Equipment"),
+        .init(id: "t3", title: "Confirm Northgate day 3 call time with Ms. Reyes",
+              priority: .medium, status: .todo, due: "Tomorrow", overdue: false,
+              subtasks: (0, 2), comments: 1, assignee: "You", type: "Scheduling"),
+        // The two-line title. Nothing truncates it in the real row either — it
+        // is allowed two lines and then cuts.
+        .init(id: "t4", title: "Re-shoot the eleven Maple Grove kindergarten portraits flagged for eyes-closed, and pick up the class composite while you are there",
+              priority: .urgent, status: .todo, due: "Friday", overdue: false,
+              subtasks: (0, 4), comments: 5, assignee: "You", type: "Reshoot",
+              estimatedHours: 3),
+        .init(id: "t5", title: "Chase Ms. Alvarado for the missing photo release forms",
+              priority: .high, status: .inProgress, due: "Today", overdue: false,
+              subtasks: (2, 5), comments: 8, assignee: "You", type: "Paperwork"),
+        // No due date at all.
+        .init(id: "t6", title: "Order more gaffer tape", priority: .low,
+              status: .todo, due: nil, overdue: false, subtasks: (0, 0),
+              assignee: "You", type: "Supplies"),
+        .init(id: "t7", title: "Fix the tripod head that sticks when cold", priority: .high,
+              status: .todo, due: "Tuesday", overdue: false, subtasks: (1, 2),
+              comments: 1, assignee: "You", type: "Equipment"),
+        .init(id: "t8", title: "Pack the sports kit for Friday", priority: .urgent,
+              status: .todo, due: "Thursday", overdue: false, subtasks: (3, 7),
+              assignee: "You", type: "Equipment", estimatedHours: 0.5),
+        .init(id: "t9", title: "Swap the backdrop rolls in the studio", priority: .medium,
+              status: .todo, due: "Aug 4", overdue: false, subtasks: (0, 0),
+              assignee: "You", type: "Studio"),
+        // Someone else's — visible under All, hidden under the default My Tasks.
+        .init(id: "t10", title: "Review the new photographer's first day report",
+              priority: .medium, status: .inProgress, due: "Today", overdue: false,
+              subtasks: (0, 3), comments: 2, assignee: "Devon Wright",
+              type: "Review", mine: false),
+        .init(id: "t11", title: "Send the invoice for Northgate", priority: .low,
+              status: .todo, due: nil, overdue: false, subtasks: (0, 0),
+              assignee: "June Castillo", type: "Billing", mine: false),
+        .init(id: "t12", title: "Upload Riverside proofs", priority: .medium,
+              status: .completed, due: "Monday", overdue: false, subtasks: (4, 4),
+              comments: 3, assignee: "You", type: "Delivery"),
+        .init(id: "t13", title: "Clean the sensor on the R5 body", priority: .low,
+              status: .completed, due: "Last week", overdue: false, subtasks: (0, 0),
+              assignee: "You", type: "Equipment"),
+        .init(id: "t14", title: "Archive last season's job boxes", priority: .low,
+              status: .completed, due: "Jun 30", overdue: false, subtasks: (0, 0),
+              assignee: "You", type: "Admin"),
+    ]
+
+    /// Subtasks and comments for the one task whose detail sheet is mocked.
+    static let sampleSubtasks: [(title: String, done: Bool)] = [
+        ("Export the gym set at full resolution", true),
+        ("Cull the twelve retakes", false),
+        ("Upload to the office share", false),
+    ]
+
+    static let sampleComments: [(author: String, text: String, when: String)] = [
+        ("Devon Wright", "Two of the retakes are the same kid — I think Row 3 got shot twice.", "Yesterday"),
+        ("You", "Good catch, I'll drop the second one before it goes over.", "Yesterday"),
+    ]
+}
+
+// MARK: - Equipment kits (AMB.3, the DEFAULT tab)
+
+/// A kit as My Kits renders it. Fields taken from `KitCard` and `KitDetailView`:
+/// display name, an optional description, the tape colour, an item count, and
+/// exactly one of overdue / permanent / a return date.
+struct LabKit: Identifiable {
+    let id: String
+    let name: String
+    let detail: String?
+    /// A hex string, OR the literal "rainbow" — the real model accepts both
+    /// (`KitTemplate.isRainbow`), and rainbow tape is a real kit colour in the
+    /// field, so every place that draws a kit colour has to survive it.
+    let colorHex: String?
+    let due: LabKitDue
+    /// Ids into `DesignLabSampleData.equipment`.
+    let itemIDs: [String]
+
+    var itemCount: Int { itemIDs.count }
+    var isRainbow: Bool { colorHex?.lowercased() == "rainbow" }
+
+    var items: [LabEquipmentItem] {
+        itemIDs.compactMap { id in
+            DesignLabSampleData.equipment.first { $0.id == id }
+        }
+    }
+}
+
+enum LabKitDue {
+    case permanent
+    case on(String)
+    case overdue(days: Int)
+}
+
+extension DesignLabSampleData {
+
+    /// Three kits, because three is enough to carry the cases: a permanent kit,
+    /// one with a return date, and one that is overdue AND uses rainbow tape —
+    /// the shape most likely to break a stripe drawn as a flat colour.
+    static let myKits: [LabKit] = [
+        .init(id: "k1", name: "Portrait Kit A",
+              detail: "Two bodies, three lenses, tethering",
+              colorHex: "#3b82f6", due: .permanent,
+              itemIDs: ["e1", "e2", "e9", "e16", "e22", "e11"]),
+        .init(id: "k2", name: "Sports Kit B",
+              detail: "Long glass and the field lighting",
+              colorHex: "#f59e0b", due: .on("Aug 2"),
+              itemIDs: ["e5", "e7", "e8", "e13", "e19", "e20"]),
+        // No description, rainbow tape, and late.
+        .init(id: "k3", name: "Loaner Kit", detail: nil,
+              colorHex: "rainbow", due: .overdue(days: 3),
+              itemIDs: ["e12", "e17", "e21"]),
+    ]
+
+    /// Items checked out to you that belong to no kit — My Kits' second section.
+    static var otherAssignedEquipment: [LabEquipmentItem] {
+        equipment.filter { ["e15", "e14"].contains($0.id) }
+    }
+}
+
+// MARK: - Chat (AMB.6, the hardest test of compact)
+
+enum LabMessageKind {
+    case text, gif, image, link, file
+
+    /// The emoji-typed preview the conversation list shows instead of a body.
+    var previewLabel: String? {
+        switch self {
+        case .text: return nil
+        case .gif: return "🎞 GIF"
+        case .image: return "📷 Photo"
+        case .link: return "🔗 Link"
+        case .file: return "📎 File"
+        }
+    }
+}
+
+struct LabConversation: Identifiable {
+    let id: String
+    let name: String
+    let isGroup: Bool
+    let participants: [String]
+    let preview: String
+    let previewKind: LabMessageKind
+    /// Drives the "You: " prefix.
+    let fromYou: Bool
+    let time: String
+    let unread: Int
+    let pinned: Bool
+
+    var previewText: String {
+        let body = previewKind.previewLabel ?? preview
+        return fromYou ? "You: \(body)" : body
+    }
+}
+
+struct LabMessage: Identifiable {
+    let id: String
+    let sender: String
+    let mine: Bool
+    let text: String?
+    let kind: LabMessageKind
+    let sentAt: Date
+}
+
+extension DesignLabSampleData {
+
+    /// Eight conversations: two pinned, a group whose preview is somebody
+    /// else's line, a "You:" preview, every media preview type, an unread
+    /// count that needs two digits' worth of pill, and one preview long enough
+    /// to prove the two-line cut.
+    static let conversations: [LabConversation] = [
+        .init(id: "c1", name: "Maria Alvarez", isGroup: false, participants: ["Maria Alvarez"],
+              preview: "On my way — traffic on the 5", previewKind: .text,
+              fromYou: false, time: "9:41 AM", unread: 2, pinned: true),
+        .init(id: "c2", name: "Lincoln High — Fall Portraits", isGroup: true,
+              participants: ["Maria Alvarez", "Devon Wright", "Priya Nair", "Sam Okafor", "June Castillo"],
+              preview: "Sam: We're set up in the gym", previewKind: .text,
+              fromYou: false, time: "9:12 AM", unread: 12, pinned: true),
+        .init(id: "c3", name: "Devon Wright", isGroup: false, participants: ["Devon Wright"],
+              preview: "", previewKind: .gif,
+              fromYou: false, time: "Yesterday", unread: 0, pinned: false),
+        .init(id: "c4", name: "Office", isGroup: true,
+              participants: ["June Castillo", "Alex Fontaine"],
+              preview: "Sending the count now", previewKind: .text,
+              fromYou: true, time: "Yesterday", unread: 0, pinned: false),
+        .init(id: "c5", name: "June Castillo", isGroup: false, participants: ["June Castillo"],
+              preview: "", previewKind: .image,
+              fromYou: false, time: "Tuesday", unread: 1, pinned: false),
+        // Long enough to need the two-line cut.
+        .init(id: "c6", name: "Priya Nair", isGroup: false, participants: ["Priya Nair"],
+              preview: "I moved the composite to the stage end because the window light was blowing out the whole left side of the gym by about ten",
+              previewKind: .text, fromYou: false, time: "Monday", unread: 0, pinned: false),
+        .init(id: "c7", name: "Equipment Room", isGroup: true,
+              participants: ["Sam Okafor", "Alex Fontaine", "Devon Wright"],
+              preview: "", previewKind: .link,
+              fromYou: true, time: "Jul 18", unread: 0, pinned: false),
+        .init(id: "c8", name: "Alex Fontaine", isGroup: false, participants: ["Alex Fontaine"],
+              preview: "Thanks!", previewKind: .text,
+              fromYou: false, time: "Jul 14", unread: 0, pinned: false),
+    ]
+
+    /// The thread for the group conversation, which is the hard one: several
+    /// senders, consecutive runs from the same person, a GIF, an image, and a
+    /// day boundary. This is the scrollback the density question is decided on.
+    static var thread: [LabMessage] {
+        [
+            .init(id: "m1", sender: "Maria Alvarez", mine: false,
+                  text: "Are we still on for 7:45 tomorrow?", kind: .text,
+                  sentAt: at(16, 2, dayOffset: -1)),
+            .init(id: "m2", sender: "You", mine: true,
+                  text: "Yes — gym doors at 7:30", kind: .text,
+                  sentAt: at(16, 3, dayOffset: -1)),
+            .init(id: "m3", sender: "You", mine: true,
+                  text: "Bring the second backdrop stand, the one in Kit A is bent", kind: .text,
+                  sentAt: at(16, 3, dayOffset: -1)),
+            .init(id: "m4", sender: "Sam Okafor", mine: false,
+                  text: "I can grab it on the way", kind: .text,
+                  sentAt: at(16, 31, dayOffset: -1)),
+            // ── day boundary ──
+            .init(id: "m5", sender: "Sam Okafor", mine: false,
+                  text: "Loading now", kind: .text, sentAt: at(7, 12)),
+            .init(id: "m6", sender: "Sam Okafor", mine: false,
+                  text: nil, kind: .gif, sentAt: at(7, 12)),
+            .init(id: "m7", sender: "Maria Alvarez", mine: false,
+                  text: "On my way — traffic on the 5", kind: .text, sentAt: at(7, 41)),
+            .init(id: "m8", sender: "You", mine: true,
+                  text: "No rush, the first class isn't until 8:20", kind: .text,
+                  sentAt: at(7, 58)),
+            .init(id: "m9", sender: "Devon Wright", mine: false,
+                  text: nil, kind: .image, sentAt: at(8, 2)),
+            .init(id: "m10", sender: "Devon Wright", mine: false,
+                  text: "Gym looks like this — that window is going to be a problem by ten, the whole left side is already two stops hot",
+                  kind: .text, sentAt: at(8, 3)),
+            .init(id: "m11", sender: "You", mine: true,
+                  text: "Flag it and shoot the other end", kind: .text, sentAt: at(8, 5)),
+            .init(id: "m12", sender: "You", mine: true,
+                  text: "I'll bring the scrim", kind: .text, sentAt: at(8, 5)),
+            .init(id: "m13", sender: "Priya Nair", mine: false,
+                  text: "Where do you want the class composites?", kind: .text,
+                  sentAt: at(9, 10)),
+            .init(id: "m14", sender: "You", mine: true,
+                  text: "Stage end, same as last year", kind: .text, sentAt: at(9, 11)),
+            .init(id: "m15", sender: "Sam Okafor", mine: false,
+                  text: "We're set up in the gym", kind: .text, sentAt: at(9, 12)),
+        ]
+    }
 }

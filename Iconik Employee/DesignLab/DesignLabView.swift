@@ -38,7 +38,10 @@ import SwiftUI
 enum DesignLabMockup: String, CaseIterable, Identifiable {
     case specimens
     case palette
+    case equipment
     case dashboard
+    case tasks
+    case chat
 
     var id: String { rawValue }
 
@@ -46,7 +49,10 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
+        case .equipment: return "Equipment"
         case .dashboard: return "Home Dashboard"
+        case .tasks: return "Tasks"
+        case .chat: return "Chat"
         }
     }
 
@@ -56,7 +62,10 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
+        case .equipment: return "AMB.3"
         case .dashboard: return "AMB.4"
+        case .tasks: return "AMB.5"
+        case .chat: return "AMB.6"
         }
     }
 
@@ -66,8 +75,14 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "Every Ambient primitive at every density, drawn against Equipment's real row content. This is where the density decision gets made."
         case .palette:
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
+        case .equipment:
+            return "Both tabs — it opens on My Kits, not the list — plus both detail screens. AMB.3 does not start until this one is approved."
         case .dashboard:
             return "The most-opened screen in the app, with the company blue turned right down behind it. Its shift widget also stops disagreeing with the schedule."
+        case .tasks:
+            return "Nothing in Tasks has ever been a card. The switch at the top draws today's flat rows and the proposal side by side — that is the decision to bring back."
+        case .chat:
+            return "The hardest test of compact. Three switches inside the thread: per-message timestamps, grouping a run, and whose colour “mine” is."
         }
     }
 
@@ -75,15 +90,24 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
+        case .equipment: return "shippingbox.fill"
         case .dashboard: return "house.fill"
+        case .tasks: return "checklist"
+        case .chat: return "bubble.left.and.bubble.right.fill"
         }
     }
 
+    /// Batch-1 surfaces carry their own FEATURE colour (D11), so the gallery is
+    /// itself a check on whether four converted screens will read as four
+    /// different places.
     var tint: Color {
         switch self {
         case .specimens: return .purple
         case .palette: return .pink
+        case .equipment: return FeatureTheme.color(for: "equipment")
         case .dashboard: return AmbientStyle.brand
+        case .tasks: return FeatureTheme.color(for: "tasks")
+        case .chat: return FeatureTheme.color(for: "chat")
         }
     }
 
@@ -92,7 +116,10 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
+        case .equipment: EquipmentMockup()
         case .dashboard: DashboardMockup()
+        case .tasks: TasksMockup()
+        case .chat: ChatMockup()
         }
     }
 }

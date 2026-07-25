@@ -230,10 +230,11 @@ other rebases onto it.
   **Outstanding:** iPad smoke not run for AMB.1 — D7 (both devices every phase) was
   adopted after this phase shipped. Worth a pass when convenient; not blocking AMB.2.
 
-- [~] **AMB.2 Design system extraction + enforcement gate + the lab** — SESSION 1 OF 2
-  BUILT 2026-07-25, awaiting operator review. Session 2 carries batch 1's four
-  surface mockups (Equipment, home dashboard, Tasks, Chat) and the single review
-  sitting that gates AMB.3.
+- [~] **AMB.2 Design system extraction + enforcement gate + the lab** — THREE
+  SESSIONS BUILT 2026-07-25, all awaiting the one operator review sitting that
+  gates AMB.3. Batch 1 is now complete in the lab: all four surface mockups
+  (Equipment, home dashboard, Tasks, Chat) plus the specimen sheet and the
+  palette sheet, six entries in the Design Lab gallery.
 
   **Shipped in session 1:**
   - DesignSystem/ now holds the Ambient vocabulary as app-wide primitives:
@@ -311,6 +312,63 @@ other rebases onto it.
 
   **Raised, not resolved:** the time-tracking surface (~2,540 lines, nine
   screens) is named in no AMB phase. See the Open section of the plan.
+
+  **Shipped in session 2** (2026-07-25): the D11 palette proposed in the lab,
+  approved by the operator, and APPLIED to FeatureTheme — all 27 features now
+  have a distinct colour where 27 previously shared 11, five of them blue. That
+  re-cut is LIVE on three unconverted surfaces the moment it landed: the home
+  tiles, the All Features grid and the bottom bar. LabPalette keeps the
+  pre-AMB.2 map so the sheet still shows a before and an after. Compact chosen
+  as the density for dense lists, settling D5. The home dashboard mockup built
+  at a 90% company-blue wash, with its Upcoming Shifts widget using the
+  scheduler's colour rather than the position lookup that misses.
+
+  **Shipped in session 3** (2026-07-25): the three remaining batch-1 mockups,
+  built from AMB_BATCH1_RESEARCH.md rather than by re-reading the features.
+
+  - **Equipment (AMB.3's D10 gate).** Both tabs, because the app opens on My
+    Kits and not on the list — mocking only the list would have gated AMB.3 on a
+    screen the photographer never lands on. Kit rows with the tape-colour stripe
+    (rainbow included, which a flat `Color(hex:)` renders as garbage), the kit
+    detail with its category sections that open COLLAPSED, the equipment list
+    with live search and status filters, the real empty state, and the item
+    detail. My Kits and the kit detail were NOT in the batch-1 research; both
+    were read from MyKitsView, KitCard and KitDetailView before being drawn.
+  - **Tasks (AMB.5).** The one surface where Ambient is not a restyle of a card
+    but the arrival of one — Tasks has no card, background, radius or shadow
+    anywhere today. The mockup draws BOTH and switches between them, so the
+    operator decides against the real thing rather than a memory of it. Carries
+    a labelled non-restyle proposal: a failure banner, because Tasks has no
+    error UI at all and every failure is silent.
+  - **Chat (AMB.6).** Conversation list plus the thread, with the three levers
+    on scrollback height live: per-message timestamps (what ships today) against
+    a stamp only when the conversation paused, grouping a run from one person,
+    and a 15pt body against the default 17pt the app rides on. Whose colour
+    "mine" is stayed an open question rather than a decision, so it is a switch:
+    the company blue against chat's own pink, which under D11 is also the wash
+    behind the thread.
+
+  **Two facts found while building session 3, neither of them fixed here:**
+  1. Equipment is a SELF-NAV feature (MainEmployeeView.isSelfNavFeature) — it
+     builds its own NavigationStack, so the lab's container is not the one the
+     real screen gets. Every mockup pushes through `.ambientPush(item:)`, which
+     is the one form that works in both, so nothing approved can fail on the way
+     out; but AMB.3 still has to decide whether Equipment keeps its own stack.
+     Tasks is self-nav too, on a NavigationView — where `navigationDestination`
+     is silently ignored, which is the AMB.1 dead-tap shape.
+  2. `ambientCard` cannot express a chat bubble: it fills with a material, never
+     a solid tint. The bubble is prototyped in the lab (`LabChatBubble`) with the
+     gap named at the call site. If bubbles survive review, a tinted fill is
+     promoted INTO AmbientCard before AMB.6 converts anything.
+
+  **Evidence for session 3:** xcodebuild BUILD SUCCEEDED; zero errors and zero
+  warnings from any DesignLab or DesignSystem file (every warning in the build
+  is pre-existing and in other files); card-drift sweep clean; drift audit clean.
+  No production screen, service or model was touched — the only file changed
+  outside DesignLab/ is AUDIT_ROADMAP.md.
+
+  **Not verified by me, and only the operator can:** all six mockups on a device,
+  iPhone AND iPad (D7), in ONE sitting — that batching is the whole point of D10.
 
 **Batch 1** — mocked in AMB.2, reviewed in one sitting, then converted:
 

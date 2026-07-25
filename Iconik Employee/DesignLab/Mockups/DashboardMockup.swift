@@ -261,9 +261,14 @@ struct DashboardMockup: View {
                     .lineLimit(1)
                 HStack(spacing: 8) {
                     AmbientBadge(text: task.status.rawValue, tint: task.status.color)
-                    Label(task.due, systemImage: task.overdue ? "exclamationmark.triangle.fill" : "calendar")
-                        .font(.caption2)
-                        .foregroundStyle(task.overdue ? .red : .secondary)
+                    // `due` became optional when Tasks' own mockup needed a task
+                    // with no due date at all. Every task on this widget has
+                    // one, so what the approved dashboard renders is unchanged.
+                    if let due = task.due {
+                        Label(due, systemImage: task.overdue ? "exclamationmark.triangle.fill" : "calendar")
+                            .font(.caption2)
+                            .foregroundStyle(task.overdue ? .red : .secondary)
+                    }
                     if task.subtasks.1 > 0 {
                         Label("\(task.subtasks.0)/\(task.subtasks.1)", systemImage: "checklist")
                             .font(.caption2).foregroundStyle(.secondary)
