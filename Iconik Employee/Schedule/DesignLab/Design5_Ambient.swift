@@ -12,20 +12,52 @@
 
 import SwiftUI
 
+/// Ambient runs in one of two layouts, and the photographer picks. Both keep the
+/// countdown and the glass; they differ in how the rest of the schedule is read.
+///
+/// - `day`: one day at a time, chosen from the capsule strip. Best on a shoot day.
+/// - `timeline`: Agenda's continuous time-gutter scroll with pinned day headers,
+///   rendered in Ambient's material. Best for planning a stretch of days — you
+///   can see the run of the week without picking days one at a time.
+enum AmbientLayout: String, CaseIterable, Identifiable {
+    case day, timeline
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .day: return "Day"
+        case .timeline: return "Timeline"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .day: return "square.fill.text.grid.1x2"
+        case .timeline: return "list.bullet.indent"
+        }
+    }
+}
+
 struct AmbientScheduleView: View {
     @ObservedObject private var store = ScheduleLabStore.shared
 
     @State private var weekOffset = 0
     @State private var selectedDay = Calendar.current.startOfDay(for: Date())
     @State private var pushed: Session?
+    /// Sticky per photographer — pick once, it stays picked.
+    @AppStorage("ambientScheduleLayout") private var layoutRaw = AmbientLayout.day.rawValue
 
+    private var layout: AmbientLayout { AmbientLayout(rawValue: layoutRaw) ?? .day }
     private var week: [Date] { store.week(offset: weekOffset) }
     private var items: [ScheduleLabItem] { store.items(on: selectedDay) }
 
-    /// The colour the whole screen takes: the day's first shift, or the next one
-    /// coming up if the day is empty.
+    /// The colour the whole screen takes: in Day layout the day you're looking at,
+    /// in Timeline layout whatever is coming up next.
     private var ambientTint: Color {
-        if let first = store.shifts(on: selectedDay).first { return ScheduleLabStyle.accent(for: first) }
+        if layout == .day, let first = store.shifts(on: selectedDay).first {
+            return ScheduleLabStyle.accent(for: first)
+        }
+        if let focus = focusSession { return ScheduleLabStyle.accent(for: focus) }
         if let next = store.nextShift() { return ScheduleLabStyle.accent(for: next) }
         return .indigo
     }
@@ -34,21 +66,45 @@ struct AmbientScheduleView: View {
         NavigationStack {
             ZStack {
                 AmbientBackdrop(tint: ambientTint)
-                ScrollView {
-                    VStack(spacing: 20) {
-                        weekSelector
-                        if let focus = focusSession {
-                            AmbientCountdownCard(session: focus, tint: ScheduleLabStyle.accent(for: focus))
-                                .padding(.horizontal, 18)
-                                .onTapGesture { pushed = focus }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 20) {
+                            if let focus = focusSession {
+                                AmbientCountdownCard(session: focus, tint: ScheduleLabStyle.accent(for: focus))
+                                    .padding(.horizontal, 18)
+                                    .onTapGesture { pushed = focus }
+                            }
+
+                            layoutSwitch
+
+                            switch layout {
+                            case .day:
+                                weekSelector
+                                dayList
+                            case .timeline:
+                                AmbientTimeline(
+                                    store: store,
+                                    days: timelineDays,
+                                    onSelect: { pushed = $0 }
+                                )
+                            }
                         }
-                        dayList
+                        .padding(.top, 6)
+                        .padding(.bottom, 40)
                     }
-                    .padding(.top, 6)
-                    .padding(.bottom, 40)
+                    .onChange(of: layoutRaw) { _ in
+                        // Landing in Timeline should land you on today, not at the
+                        // top of a month you've already worked.
+                        guard layout == .timeline else { return }
+                        DispatchQueue.main.async {
+                            withAnimation(LabAnim.gentle) {
+                                proxy.scrollTo(AmbientTimeline.anchorID, anchor: .top)
+                            }
+                        }
+                    }
                 }
             }
-            .navigationTitle(ScheduleLabStyle.relativeDayLabel(selectedDay))
+            .navigationTitle(layout == .day ? ScheduleLabStyle.relativeDayLabel(selectedDay) : "Schedule")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) { LabModeMenu(store: store) }
@@ -58,6 +114,45 @@ struct AmbientScheduleView: View {
             }
         }
         .tint(ambientTint)
+    }
+
+    /// Four weeks forward from the start of this week, empty days dropped — the
+    /// timeline is for reading ahead, so blank days are noise.
+    private var timelineDays: [Date] {
+        (0..<4)
+            .flatMap { store.week(offset: $0) }
+            .filter { store.hasItems(on: $0) }
+    }
+
+    private var layoutSwitch: some View {
+        HStack(spacing: 4) {
+            ForEach(AmbientLayout.allCases) { option in
+                Button {
+                    withAnimation(LabAnim.gentle) { layoutRaw = option.rawValue }
+                    LabHaptics.selection()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: option.symbol).font(.system(size: 11, weight: .semibold))
+                        Text(option.title).font(.system(size: 13, weight: .semibold))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background {
+                        if layout == option {
+                            Capsule().fill(.thickMaterial)
+                                .shadow(color: .black.opacity(0.1), radius: 5, y: 2)
+                        }
+                    }
+                    .foregroundStyle(layout == option ? .primary : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(.ultraThinMaterial))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// What the countdown is about: the shift in progress, else the next one on
@@ -170,6 +265,249 @@ struct AmbientScheduleView: View {
             }
         }
         .padding(.horizontal, 18)
+    }
+}
+
+// MARK: - Timeline layout
+
+/// Agenda's continuous time-gutter scroll, wearing Ambient's glass: pinned day
+/// headers, a live spine down the left with each shift's start time on it, and
+/// the same material cards the Day layout uses. One scroll reads a whole week.
+private struct AmbientTimeline: View {
+    @ObservedObject var store: ScheduleLabStore
+    let days: [Date]
+    let onSelect: (Session) -> Void
+
+    /// Scroll target for "today" (or the first day shown, if today is clear).
+    static let anchorID = "ambient-timeline-anchor"
+
+    private var anchorDay: Date? {
+        days.first { Calendar.current.isDateInToday($0) } ?? days.first
+    }
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
+            if days.isEmpty {
+                LabEmptyDay(title: "Nothing ahead",
+                            message: "No shifts in the next four weeks.",
+                            systemImage: "moon.stars.fill")
+                    .padding(.top, 20)
+            }
+            ForEach(days, id: \.self) { day in
+                Section {
+                    VStack(spacing: 10) {
+                        ForEach(store.items(on: day)) { item in
+                            row(item, on: day)
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                } header: {
+                    header(day)
+                        .id(Calendar.current.isDate(day, inSameDayAs: anchorDay ?? .distantPast)
+                            ? AmbientTimeline.anchorID : "day-\(day.timeIntervalSince1970)")
+                }
+            }
+        }
+    }
+
+    // MARK: header
+
+    private func header(_ day: Date) -> some View {
+        let isToday = Calendar.current.isDateInToday(day)
+        let count = store.shifts(on: day).count
+        return HStack(spacing: 8) {
+            Text(ScheduleLabStyle.weekdayShort.string(from: day).uppercased())
+                .font(.system(size: 12, weight: .heavy))
+                .foregroundStyle(isToday ? Color.accentColor : .secondary)
+            Text(ScheduleLabStyle.dayNumber.string(from: day))
+                .font(.system(size: 19, weight: .bold, design: .rounded))
+            Text(ScheduleLabStyle.monthYear.string(from: day).prefix(3))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            if isToday {
+                Text("TODAY")
+                    .font(.system(size: 9, weight: .heavy))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor))
+                    .foregroundStyle(.white)
+            }
+            Spacer()
+            if count > 0 {
+                Text(dayHoursLabel(day))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(Capsule().fill(.regularMaterial))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.07)))
+        .padding(.horizontal, 18)
+        .padding(.vertical, 4)
+    }
+
+    private func dayHoursLabel(_ day: Date) -> String {
+        let seconds = store.shifts(on: day).reduce(0.0) { total, session in
+            guard let start = session.startDate, let end = session.endDate, end > start else { return total }
+            return total + end.timeIntervalSince(start)
+        }
+        guard seconds > 0 else { return "" }
+        return ScheduleLabStyle.durationString(seconds)
+    }
+
+    // MARK: rows
+
+    @ViewBuilder
+    private func row(_ item: ScheduleLabItem, on day: Date) -> some View {
+        switch item {
+        case .shift(let session):
+            Button { onSelect(session) } label: {
+                AmbientTimelineRow(session: session)
+            }
+            .buttonStyle(.plain)
+            .labScrollFade(minOpacity: 0.5)
+        case .timeOff(let entry):
+            AmbientTimelineTimeOffRow(entry: entry)
+                .labScrollFade(minOpacity: 0.5)
+        }
+    }
+}
+
+/// The gutter row: time on the left against a spine, glass card on the right.
+private struct AmbientTimelineRow: View {
+    let session: Session
+
+    var body: some View {
+        let accent = ScheduleLabStyle.accent(for: session)
+        return HStack(alignment: .top, spacing: 10) {
+            // Time gutter — the column your eye runs down.
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(session.startDate.map { ScheduleLabStyle.time.string(from: $0) } ?? "—")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                Text(ScheduleLabStyle.duration(session) ?? "")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                if let end = session.endDate {
+                    Text(ScheduleLabStyle.time.string(from: end))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
+            }
+            .frame(width: 58, alignment: .trailing)
+
+            // Spine with a node at the shift's start.
+            VStack(spacing: 0) {
+                Circle()
+                    .fill(accent)
+                    .frame(width: 9, height: 9)
+                    .padding(.top, 5)
+                Rectangle()
+                    .fill(accent.opacity(0.25))
+                    .frame(width: 2)
+                    .frame(maxHeight: .infinity)
+            }
+            .frame(width: 9)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: ScheduleLabStyle.symbol(for: session))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(accent)
+                    Text(session.schoolName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+
+                HStack(spacing: 6) {
+                    ForEach(session.sessionType.prefix(2), id: \.self) { type in
+                        LabBadge(text: ScheduleLabStyle.typeName(type, in: session),
+                                 tint: ScheduleLabStyle.typeColor(type))
+                    }
+                    if let label = session.multiDayLabel {
+                        LabBadge(text: label, systemImage: "square.stack.3d.up.fill", tint: accent)
+                    }
+                    if !session.isPublished {
+                        LabBadge(text: "Draft", systemImage: "pencil", tint: .orange)
+                    }
+                }
+
+                if !session.photographers.isEmpty {
+                    HStack(spacing: 8) {
+                        LabCrewStack(crew: session.photographers, size: 22, maxVisible: 4)
+                        Text(session.photographers.map(\.name).joined(separator: ", "))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(colors: [accent.opacity(0.4), accent.opacity(0.04)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                        lineWidth: 1
+                    )
+            }
+        }
+    }
+}
+
+private struct AmbientTimelineTimeOffRow: View {
+    let entry: TimeOffCalendarEntry
+
+    var body: some View {
+        let tint = ScheduleLabStyle.accent(for: entry)
+        return HStack(alignment: .top, spacing: 10) {
+            Text(entry.isPartialDay ? entry.startTime : "All day")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary)
+                .frame(width: 58, alignment: .trailing)
+                .padding(.top, 4)
+
+            VStack(spacing: 0) {
+                Circle()
+                    .strokeBorder(tint, lineWidth: 2)
+                    .frame(width: 9, height: 9)
+                    .padding(.top, 5)
+                Rectangle()
+                    .fill(tint.opacity(0.2))
+                    .frame(width: 2)
+                    .frame(maxHeight: .infinity)
+            }
+            .frame(width: 9)
+
+            HStack(spacing: 10) {
+                Image(systemName: entry.reason.systemImageName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(tint)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.reason.displayName).font(.system(size: 14, weight: .semibold))
+                    Text(entry.photographerName).font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                LabBadge(text: entry.status.displayName, tint: tint)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(tint.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+            }
+        }
     }
 }
 
