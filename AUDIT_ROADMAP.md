@@ -367,8 +367,53 @@ other rebases onto it.
   No production screen, service or model was touched — the only file changed
   outside DesignLab/ is AUDIT_ROADMAP.md.
 
-  **Not verified by me, and only the operator can:** all six mockups on a device,
-  iPhone AND iPad (D7), in ONE sitting — that batching is the whole point of D10.
+  **Session 3 was then RE-CUT** (10607b0) after the operator's correction: this
+  is a redesign, not a restyle, and no feature may be lost. That produced D12,
+  which supersedes the plan's opening restyle-only clause.
+
+  - **AMB_BATCH1_PARITY.md** is the re-cut's real deliverable. Every capability
+    of the three surfaces, read out of the SOURCE and marked kept / moved /
+    added / open. "No feature lost" is worth nothing as a promise; this makes it
+    checkable. It caught FIVE things the first mockups had outright wrong, none
+    of them stylistic and all of them feature loss: Equipment's CATEGORY filter
+    chips missing entirely, its three detail actions drawn as always-present
+    when they are conditional on status and ownership, Tasks' Urgent filter
+    being "urgent OR OVERDUE" rather than "urgent or high", Tasks' five distinct
+    per-filter empty states collapsed into one, and Chat's system messages
+    absent altogether.
+  - **Equipment** drops the two-tab picker. One screen leads with your gear and
+    states how much is out, due and LATE — today the only way to discover
+    something is overdue is to read every kit card. The inventory is one row
+    behind, or you start typing. The kit detail is a packing list: categories
+    open EXPANDED, in the app's own photography workflow order (cameras, lenses,
+    lighting, stands, bags), which is real domain logic in the code that an
+    alphabetical sort would have destroyed invisibly.
+  - **Tasks** groups by WHEN. The sample data carries the proof: a medium-priority
+    task that is late, which under today's priority sort lands below four urgent
+    ones that are not. All five filters, their live counts, the deliberately
+    absent count on All, the status row and the in-group sort all survive; the
+    four-tab detail becomes one scroll with every tab's content intact.
+  - **Chat** adds date separators and run grouping behind switches, and restores
+    system messages, the "No messages yet" italic, and delete-on-groups-only.
+  - **Two defects found in my own work before committing:** the conversation list
+    is a List rather than a LazyVStack, because `.swipeActions` is List-only and
+    on a stack row it compiles, renders and silently does nothing — dead swipes,
+    the same class as AMB.1's dead tap; and LabEquipmentRow keeps the assignee at
+    compact, since AllEquipmentView passes showAssignee: true.
+
+  **ARC LESSON:** a scope rule about CODE became a ceiling on the DESIGN. Drawing
+  today's rows beside the proposal turns an approval into a referendum on the
+  status quo. Read the source before redesigning a surface — the research doc
+  described how the screens LOOK, which is not what a redesign can drop.
+
+  **Operator approved the batch-1 designs 2026-07-25** ("those all look good,
+  lets go with it").
+
+  **Still open, and only the operator can settle it:** whether that approval was
+  given ON A DEVICE. D10 turns on the device specifically because approving an
+  approximation manufactures confidence that was never earned, and D7 wants
+  iPhone AND iPad. Until that is confirmed, AMB.3 does not start and the D8 push
+  does not fire.
 
 **Batch 1** — mocked in AMB.2, reviewed in one sitting, then converted:
 
