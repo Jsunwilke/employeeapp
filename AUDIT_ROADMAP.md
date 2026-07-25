@@ -355,8 +355,8 @@ Plan and the six decisions P1–P6: `DRAFT_VISIBILITY_PLAN.md`. Family registry 
 Deliberately NOT part of the AMB arc, whose D2 forbids behaviour changes inside a
 phase. Sequenced against AMB.3 because both touch `ScheduleView`'s per-day index.
 
-- [x] **PUB.1 Draft visibility** — DONE 2026-07-25. Committed to `main`, NOT pushed;
-  operator device smoke (iPhone AND iPad) is the one remaining gate.
+- [x] **PUB.1 Draft visibility** — DONE 2026-07-25. **Operator smoke PASSED 2026-07-25.**
+  Committed to `main` (`4fb5ce1` + `42d2ef6`); push is the operator's call.
 
   **What changed.** The schedule now fetches unpublished sessions for everyone
   (`includeUnpublished: true`, was `canEdit`), so a photographer can see what work is

@@ -97,9 +97,9 @@ phase-naming registry as the rest of the family.
       PUB.1   Draft visibility — photographers see UNPUBLISHED sessions, grouped under
               their own "Not published yet" heading, with NO assignment shown on a draft
               (not others', not their own) for anyone without schedule-edit rights;
-              staffing temperature deleted for everyone. BUILT 2026-07-25, committed to
-              main, NOT PUSHED — operator smoke on iPhone AND iPad is the last gate,
-              and it closes the arc. Client-only: one .eq dropped from one query, no
+              staffing temperature deleted for everyone. BUILT 2026-07-25, OPERATOR SMOKE
+              PASSED 2026-07-25; committed to main, push is the operator's call. Closes
+              the PUB arc. Client-only: one .eq dropped from one query, no
               schema/policy/write change; /security-review no HIGH or MEDIUM. Three
               audit-found defects fixed in-phase that the plan never anticipated — the
               offline cache silently dropping every draft, an async-permissions race
