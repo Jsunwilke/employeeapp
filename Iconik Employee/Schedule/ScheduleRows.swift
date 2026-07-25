@@ -249,7 +249,10 @@ struct ScheduleTimeline: View {
                     Section {
                         body(for: day, now: now)
                     } header: {
-                        header(day, now: now)
+                        // The divider above already says TODAY. Only label the
+                        // header too when there's no history, so the marker is
+                        // never missing and never doubled.
+                        header(day, now: now, showTodayChip: past.isEmpty)
                             .id(Calendar.current.isDateInToday(day)
                                 ? ScheduleTimeline.anchorID
                                 : "day-\(day.timeIntervalSince1970)")
@@ -272,47 +275,52 @@ struct ScheduleTimeline: View {
         Rectangle().fill(Color(.separator).opacity(0.6)).frame(height: 0.5)
     }
 
+    /// The line between what's done and what's ahead. Deliberately the loudest
+    /// horizontal element in the timeline — it's the one landmark you scroll to
+    /// find, so it has to be findable at a glance while flicking.
     private var nowDivider: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Rectangle()
-                .fill(LinearGradient(colors: [.clear, Color.accentColor.opacity(0.6)],
+                .fill(LinearGradient(colors: [.clear, Color.accentColor],
                                      startPoint: .leading, endPoint: .trailing))
-                .frame(height: 1.5)
-            Text("NOW")
-                .font(.system(size: 10, weight: .heavy))
-                .foregroundStyle(Color.accentColor)
-                .padding(.horizontal, 9).padding(.vertical, 4)
-                .background(Capsule().fill(Color.accentColor.opacity(0.14)))
-                .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.4)))
+                .frame(height: 3)
+            Text("TODAY")
+                .font(.system(size: 14, weight: .black, design: .rounded))
+                .kerning(0.6)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16).padding(.vertical, 7)
+                .background(Capsule().fill(Color.accentColor))
+                .shadow(color: Color.accentColor.opacity(0.35), radius: 8, y: 3)
             Rectangle()
-                .fill(LinearGradient(colors: [Color.accentColor.opacity(0.6), .clear],
+                .fill(LinearGradient(colors: [Color.accentColor, .clear],
                                      startPoint: .leading, endPoint: .trailing))
-                .frame(height: 1.5)
+                .frame(height: 3)
         }
         .padding(.horizontal, 18)
-        .padding(.top, 4)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
     }
 
-    private func header(_ day: Date, now: Date) -> some View {
+    private func header(_ day: Date, now: Date, showTodayChip: Bool = false) -> some View {
         let isToday = Calendar.current.isDateInToday(day)
         let isPast = day < Calendar.current.startOfDay(for: now)
         let dayHours = hours(day)
 
         return HStack(spacing: 8) {
             Text(ScheduleStyle.weekdayShort.string(from: day).uppercased())
-                .font(.system(size: 12, weight: .heavy))
+                .font(.system(size: isToday ? 13 : 12, weight: .heavy))
                 .foregroundStyle(isToday ? Color.accentColor : .secondary)
             Text(ScheduleStyle.dayNumber.string(from: day))
-                .font(.system(size: 19, weight: .bold, design: .rounded))
+                .font(.system(size: isToday ? 23 : 19, weight: .bold, design: .rounded))
                 .strikethrough(isPast, color: .secondary)
             Text(ScheduleStyle.monthYear.string(from: day).prefix(3))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            if isToday {
+            if isToday && showTodayChip {
                 Text("TODAY")
-                    .font(.system(size: 9, weight: .heavy))
-                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .font(.system(size: 10, weight: .heavy))
+                    .padding(.horizontal, 8).padding(.vertical, 4)
                     .background(Capsule().fill(Color.accentColor))
                     .foregroundStyle(.white)
             } else if isPast {
@@ -331,15 +339,22 @@ struct ScheduleTimeline: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(Capsule().fill(isPast
-                                   ? AnyShapeStyle(Color(.systemBackground).opacity(0.5))
-                                   : AnyShapeStyle(.regularMaterial)))
-        .overlay(Capsule().strokeBorder(isToday ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.07),
-                                        lineWidth: isToday ? 1.5 : 1))
+        // Today's header is tinted and outlined, not just materialised — it has
+        // to stay findable after you've scrolled past the divider.
+        .background(Capsule().fill(headerFill(isPast: isPast, isToday: isToday)))
+        .overlay(Capsule().strokeBorder(isToday ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.07),
+                                        lineWidth: isToday ? 2 : 1))
+        .shadow(color: isToday ? Color.accentColor.opacity(0.2) : .clear, radius: 8, y: 3)
         .grayscale(isPast ? 0.9 : 0)
         .opacity(isPast ? 0.8 : 1)
         .padding(.horizontal, 18)
         .padding(.vertical, 4)
+    }
+
+    private func headerFill(isPast: Bool, isToday: Bool) -> AnyShapeStyle {
+        if isPast { return AnyShapeStyle(Color(.systemBackground).opacity(0.5)) }
+        if isToday { return AnyShapeStyle(Color.accentColor.opacity(0.14)) }
+        return AnyShapeStyle(.regularMaterial)
     }
 
     private func body(for day: Date, now: Date) -> some View {
