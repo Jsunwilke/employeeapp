@@ -62,6 +62,12 @@ phase-naming registry as the rest of the family.
          Captura files + a live iPad shoot tool.
 
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
+      PUB.1   Draft visibility: photographers see UNPUBLISHED sessions (so they know what
+              is coming) with NO assignment shown on a draft — not others', not their own;
+              staffing temperature removed from the week strip for everyone. REGISTERED
+              arc, one phase. Plan: DRAFT_VISIBILITY_PLAN.md. Not part of AMB (that arc's
+              D2 forbids behaviour changes) — sequence it against AMB.3 since both touch
+              ScheduleView's index.
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).
               NOTE: overlaps AMB.4 (home dashboard) on DashboardWidgets.swift — whichever
               runs first wins, the other rebases onto it.
