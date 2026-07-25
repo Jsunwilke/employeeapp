@@ -23,6 +23,9 @@ phase-naming registry as the rest of the family.
   Full per-item scope + closeouts live in AUDIT_ROADMAP.md.
 
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
+      AMB.2   Ambient design system extraction + the build gate that makes hand-rolling
+              a card fail. Then AMB.3+ convert the app surface by surface, ordered by
+              traffic. Plan: AMBIENT_ROLLOUT_PLAN.md (registered arc — AMB.1 is done).
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).
       DJR.1   Daily Job Report redesign (wizard, draft auto-save, offline outbox).
       ONB.1   Invite-code onboarding + sign-in hardening.
@@ -32,6 +35,11 @@ phase-naming registry as the rest of the family.
               LAN TLS) — folds into the existing family SEC arc, not a new code.
 
   ✅ DONE   (closeouts in AUDIT_ROADMAP.md)
+      AMB.1   Schedule converted to the Ambient design language — ScheduleView +
+              ScheduleRows + ScheduleStyleKit replace SlingWeeklyView, ShiftDetailView
+              restyled with its data layer untouched. Operator smoke PASSED on device
+              2026-07-24; 8 code-review findings all fixed. Branch schedule-design-lab,
+              NOT pushed. Plan: AMBIENT_ROLLOUT_PLAN.md.
       CRS.1   Captura roster save hardening — all 4 pre-existing loss paths from the
               6bf00ba post-ship review fixed 2026-07-23 (both protected editors, hook
               lifted with operator authorization + restored). 2 audits, 0 crit/high.
