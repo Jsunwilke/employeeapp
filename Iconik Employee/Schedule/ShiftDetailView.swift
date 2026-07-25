@@ -102,7 +102,6 @@ struct ShiftDetailView: View {
     @State private var showingMapsOptions = false
     @State private var showingShareSheet = false
     @State private var showingAddToCalendar = false
-    @State private var scrollOffset: CGFloat = 0
     @State private var showingYearbookChecklist = false
     
     // Job box state
@@ -130,242 +129,62 @@ struct ShiftDetailView: View {
     private let sessionService = SessionService.shared
     
     var body: some View {
-        contentView
-    }
+        ZStack(alignment: .bottom) {
+            ScheduleBackdrop(tint: accent)
 
-    private var contentView: some View {
-        ZStack(alignment: .top) {
             if isInitializing {
-                // Loading view while data is being loaded
-                VStack(spacing: 20) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("Loading shift details...")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
+                VStack(spacing: 16) {
+                    ProgressView().scaleEffect(1.3)
+                    Text("Loading shift…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.systemBackground))
             } else {
-                // Fixed header at the top
-                headerView
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemBackground))
-                    .zIndex(1)
-                
-                // Scrollable content below the fixed header
                 ScrollView {
-                VStack(spacing: 16) {
-                    // Minimal padding to create slight separation from header
-                    Color.clear.frame(height: 10)
-
-                    // Action buttons
-                    actionButtonsRow
-                        .padding(.vertical, 8)
-
-                    // Session Types Pills
-                    if !session.sessionType.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(session.sessionType, id: \.self) { type in
-                                    SessionTypePill(
-                                        sessionType: type,
-                                        color: colorForSessionType(type)
-                                    )
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                        .padding(.vertical, 8)
+                    VStack(spacing: 16) {
+                        hero
+                        quickActions
+                        factsRow
+                        if session.dayCount > 1 { daySwitcher }
+                        notesCards
+                        crewCard
+                        jobBoxCard
+                        weatherCard
+                        travelCard
+                        locationPhotosCard
+                        Spacer(minLength: 96)
                     }
-                    
-                    // Shift details
-                    VStack(spacing: 8) {
-                        iconRow(systemName: "person.fill",
-                                label: "Employee",
-                                value: displayEmployeeName)
-                        
-                        if let _ = session.startDate {
-                            iconRow(systemName: "calendar",
-                                    label: "Date",
-                                    value: formattedFullDate)
-                        }
-                        
-                        if let start = session.startDate, let end = session.endDate {
-                            iconRow(systemName: "clock",
-                                    label: "Time",
-                                    value: timeRangeString)
-                            
-                            iconRow(systemName: "hourglass",
-                                    label: "Duration",
-                                    value: shiftDurationString(start: start, end: end))
-                        }
-                        
-                        if let location = session.location, !location.isEmpty {
-                            iconRow(systemName: "mappin.and.ellipse",
-                                    label: "Location",
-                                    value: location)
-                        }
-                        
-                        iconRow(systemName: "person.2.fill",
-                                label: "Coworkers",
-                                value: "\(otherEmployeesSameJob().count)")
-                    }
-                    .padding()
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.secondarySystemBackground))
-                    )
-
-                    // Notes for the day being viewed (CREW.4). These were only ever
-                    // visible inside the day list, which now sits at the bottom — and
-                    // they carry the day's real instructions (start time, location, what
-                    // is being shot), so they belong with the shift's own details.
-                    if let dayNotes = viewedDay?.day_notes, !dayNotes.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Notes for This Day")
-                                .font(.headline)
-                            Text(dayNotes)
-                                .font(.body)
-                                .foregroundColor(.primary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(.secondarySystemBackground))
-                        )
-                    }
-
-                    // Coworker photos
-                    if !coworkerProfiles.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Coworkers")
-                                .font(.headline)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 12) {
-                                    ForEach(coworkerProfiles) { coworker in
-                                        coworkerPhotoView(coworker)
-                                    }
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                    }
-                    
-                    // Job Box Status section
-                    jobBoxStatusSection
-                    
-                    // Session notes (from session.description)
-                    if let sessionNotes = session.description, !sessionNotes.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Session Notes")
-                                .font(.headline)
-                            Text(sessionNotes)
-                                .font(.body)
-                                .foregroundColor(.primary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(.secondarySystemBackground))
-                        )
-                    }
-                    
-                    // Photographer notes (from photographer array)
-                    if let userInfo = currentUserPhotographerInfo, let photographerNotes = userInfo.notes, !photographerNotes.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Personal Notes")
-                                .font(.headline)
-                            Text(photographerNotes)
-                                .font(.body)
-                                .foregroundColor(.primary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(.secondarySystemBackground))
-                        )
-                    }
-                    
-                    // Weather section
-                    weatherSection
-                    
-                    // Travel planning section
-                    travelPlanningSection
-                    
-                    // Location photos
-                    if !locationPhotos.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Location Photos")
-                                .font(.headline)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 12) {
-                                    ForEach(locationPhotos) { photo in
-                                        locationPhotoView(photo)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.vertical, 8)
-                    }
-
-                    // All days of a multi-day session, tapped day highlighted (CREW.4).
-                    // Last section on the screen: at the top it pushed the shift's own
-                    // details off-screen on a long multi-day job.
-                    if session.dayCount > 1 {
-                        multiDaySection
-                    }
-
-                    Spacer(minLength: 30)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 6)
                 }
-                .padding()
-                .background(GeometryReader { proxy in
-                    Color.clear.preference(key: ScrollOffsetKey.self, value: proxy.frame(in: .named("scroll")).minY)
-                })
-            }
-            .coordinateSpace(name: "scroll")
-            .onPreferenceChange(ScrollOffsetKey.self) { value in
-                scrollOffset = value
-            }
-            .padding(.top, 80)
+                .scheduleNoBounceWhenShort()
+
+                actionBar
             }
         }
-        .navigationTitle("Shift Details")
+        .navigationTitle(session.schoolName)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarItems(trailing: 
-            HStack {
-                if Permissions.has("schedule", level: .edit) {
-                    // Show publish button if organization has publishing enabled and session is unpublished
-                    if organizationService.organizationHasPublishing && session.isPublished == false {
-                        Button(action: {
-                            publishSession()
-                        }) {
-                            if isPublishing {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            } else {
-                                Text("Publish")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 12) {
+                    if Permissions.has("schedule", level: .edit) {
+                        if organizationService.organizationHasPublishing && !session.isPublished {
+                            Button(action: publishSession) {
+                                if isPublishing {
+                                    ProgressView().scaleEffect(0.8)
+                                } else {
+                                    Text("Publish")
+                                }
                             }
+                            .disabled(isPublishing)
                         }
-                        .disabled(isPublishing)
-                    }
-                    
-                    Button(action: {
-                        showEditSession = true
-                    }) {
-                        Text("Edit")
+                        Button("Edit") { showEditSession = true }
                     }
                 }
             }
-        )
+        }
+        .tint(accent)
         .sheet(isPresented: $showEditSession) {
             EditSessionView(session: session)
         }
@@ -373,41 +192,27 @@ struct ShiftDetailView: View {
             loadInitialData()
         }
         .onDisappear {
-            // Remove the job box listener
             jobBoxListener?.remove()
-            // Stop session listener via SessionService
             sessionService.stopListeningToSessions(subscriptionId: subscriptionId)
             sessionListenerActive = false
-            // Remove notification observer
             NotificationCenter.default.removeObserver(self)
         }
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
-            // Re-subscribe when app returns to foreground
             startSessionListener()
         }
         .alert(isPresented: .constant(!errorMessage.isEmpty)) {
             Alert(title: Text("Error"),
                   message: Text(errorMessage),
-                  dismissButton: .default(Text("OK")) {
-                      errorMessage = ""
-                  })
+                  dismissButton: .default(Text("OK")) { errorMessage = "" })
         }
         .alert(isPresented: $showSuccessMessage) {
             Alert(title: Text("Success"),
                   message: Text(successMessage),
                   dismissButton: .default(Text("OK")))
         }
-        .confirmationDialog(
-            "Get Directions",
-            isPresented: $showingMapsOptions,
-            titleVisibility: .visible
-        ) {
-            Button("Apple Maps") {
-                openInAppleMaps()
-            }
-            Button("Google Maps") {
-                openInGoogleMaps()
-            }
+        .confirmationDialog("Get Directions", isPresented: $showingMapsOptions, titleVisibility: .visible) {
+            Button("Apple Maps") { openInAppleMaps() }
+            Button("Google Maps") { openInGoogleMaps() }
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Choose a maps application")
@@ -415,10 +220,7 @@ struct ShiftDetailView: View {
         .sheet(isPresented: $isShowingMessageComposer) {
             messageComposerView
         }
-        .sheet(isPresented: $showingPhotoDetail, onDismiss: {
-            // Reset the selected photo when sheet is dismissed
-            selectedPhoto = nil
-        }) {
+        .sheet(isPresented: $showingPhotoDetail, onDismiss: { selectedPhoto = nil }) {
             if let photo = selectedPhoto {
                 PhotoDetailView(imageURL: photo.url, label: photo.label)
             }
@@ -429,448 +231,588 @@ struct ShiftDetailView: View {
                     schoolId: session.schoolId,
                     schoolName: session.schoolName,
                     sessionContext: YearbookSessionContext(
-                            sessionId: session.id,
-                            photographerId: currentUserID ?? "",
-                            photographerName: currentUserPhotographerInfo?.name ?? "Unknown",
-                            sessionDate: session.startDate ?? Date()
-                        )
+                        sessionId: session.id,
+                        photographerId: currentUserID ?? "",
+                        photographerName: currentUserPhotographerInfo?.name ?? "Unknown",
+                        sessionDate: session.startDate ?? Date()
                     )
-                }
+                )
+            }
         }
-        .overlay(
-            // Loading overlay for contacts
-            Group {
-                if isLoadingContacts {
-                    ZStack {
-                        Color.black.opacity(0.4)
-                            .ignoresSafeArea()
-                        
-                        VStack(spacing: 16) {
-                            ProgressView()
-                                .scaleEffect(1.5)
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            
-                            Text("Loading contact information...")
-                                .font(.headline)
-                                .foregroundColor(.white)
+        .overlay {
+            if isLoadingContacts {
+                ZStack {
+                    Color.black.opacity(0.4).ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.3)
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        Text("Loading contacts…")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                    }
+                    .padding(24)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+            }
+        }
+    }
+
+    // MARK: - Presentation helpers
+
+    private var accent: Color { ScheduleStyle.accent(for: session) }
+
+    /// The day-row being shown. Multi-day jobs can be switched between days
+    /// in-place; everything derived from the day (crew, notes, weather, travel)
+    /// follows the switch.
+    private var activeDay: SessionDay? { viewedDay }
+
+    // MARK: - Hero
+
+    /// Carries the job's identity — title, every discipline, then when it runs.
+    /// Height follows content, so a three-type job is never clipped.
+    private var hero: some View {
+        ZStack(alignment: .bottomLeading) {
+            LinearGradient(colors: heroColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+
+            Image(systemName: ScheduleStyle.symbol(for: session))
+                .font(.system(size: 120, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.14))
+                .offset(x: 30, y: 26)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(session.schoolName.isEmpty ? "Session" : session.schoolName)
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ScheduleFlowLayout(spacing: 6, lineSpacing: 6) {
+                    ForEach(session.sessionType, id: \.self) { type in
+                        HStack(spacing: 5) {
+                            Image(systemName: ScheduleStyle.typeSymbol(type, in: session))
+                                .font(.system(size: 10, weight: .bold))
+                            Text(ScheduleStyle.typeName(type, in: session))
+                                .font(.system(size: 11, weight: .bold))
                         }
-                        .padding(24)
-                        .background(Color(.systemBackground))
-                        .cornerRadius(12)
-                        .shadow(radius: 10)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(.white.opacity(0.24)))
+                    }
+                    if let label = session.multiDayLabel {
+                        Text(label)
+                            .font(.system(size: 11, weight: .bold))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(.black.opacity(0.22)))
+                    }
+                    if !session.isPublished {
+                        Text("DRAFT")
+                            .font(.system(size: 11, weight: .heavy))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(.black.opacity(0.3)))
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    if let start = session.startDate {
+                        Text(ScheduleStyle.longDate.string(from: start))
+                            .font(.caption.weight(.semibold))
+                            .opacity(0.85)
+                    }
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(ScheduleStyle.timeRange(session))
+                            .font(.system(size: 26, weight: .bold, design: .rounded))
+                        if let duration = ScheduleStyle.duration(session) {
+                            Text(duration).font(.subheadline.weight(.semibold)).opacity(0.9)
+                        }
                     }
                 }
             }
-        )
+            .foregroundStyle(.white)
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minHeight: 200)
+        .fixedSize(horizontal: false, vertical: true)
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .scheduleParallax(0.35)
+        .shadow(color: accent.opacity(0.3), radius: 20, y: 10)
+        .padding(.top, 6)
     }
 
-    // MARK: - View Components
+    private var heroColors: [Color] {
+        let colors = ScheduleStyle.typeColors(for: session)
+        return colors.count > 1 ? colors : [accent, accent.opacity(0.55)]
+    }
 
-    /// All days of a multi-day session, with the tapped day highlighted.
-    private var multiDaySection: some View {
+    // MARK: - Quick actions
+
+    private var quickActions: some View {
+        HStack(spacing: 10) {
+            if !schoolAddress.isEmpty || !(session.location ?? "").isEmpty {
+                actionTile("Directions", "car.fill") { showingMapsOptions = true }
+            }
+            actionTile("Message crew", "message.fill") { messageCoworkers() }
+            // schoolId is non-optional, so the old `!= nil` check was always true
+            // and the button showed even for a session with no school attached.
+            if !session.schoolId.isEmpty {
+                actionTile("Yearbook", "list.clipboard") { showingYearbookChecklist = true }
+            }
+        }
+    }
+
+    private func actionTile(_ title: String, _ systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: systemImage).font(.system(size: 17, weight: .semibold))
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .foregroundStyle(accent)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Facts
+
+    private var factsRow: some View {
+        HStack(spacing: 10) {
+            ScheduleStatTile(value: session.photographers.count, label: "On crew",
+                             systemImage: "person.2.fill", tint: accent)
+            ScheduleStatTile(value: session.dayCount, label: session.dayCount == 1 ? "Day" : "Days",
+                             systemImage: "calendar", tint: accent)
+            ScheduleStatTile(value: session.photographersNeeded + session.posersNeeded + session.helpersNeeded,
+                             label: "Needed", systemImage: "person.badge.plus", tint: accent)
+        }
+    }
+
+    // MARK: - Multi-day switcher
+
+    /// Switching days here moves the whole screen onto that day — crew, notes,
+    /// weather and the travel plan all follow, the same way opening the shift
+    /// from that day in the schedule would.
+    private var daySwitcher: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Session Days")
-                .font(.headline)
-            ForEach(Array(session.sortedDays.enumerated()), id: \.element.id) { index, day in
-                // Match on the pinned day-row id, so two rows sharing a date can't both
-                // read as "the day you opened".
-                let isCurrent = day.id == viewedDay?.id
+            ScheduleSectionTitle("Runs \(session.dayCount) days")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(session.sortedDays.enumerated()), id: \.element.id) { index, day in
+                        let isActive = day.id == activeDay?.id
+                        Button {
+                            selectDay(day)
+                        } label: {
+                            VStack(spacing: 2) {
+                                Text("DAY \(index + 1)").font(.system(size: 9, weight: .heavy))
+                                Text(dayShortLabel(day))
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                if let range = dayTimeRange(day) {
+                                    Text(range).font(.system(size: 10)).opacity(0.8)
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(isActive ? AnyShapeStyle(accent) : AnyShapeStyle(.ultraThinMaterial),
+                                        in: Capsule())
+                            .foregroundStyle(isActive ? .white : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func selectDay(_ day: SessionDay) {
+        guard day.id != activeDay?.id else { return }
+        withAnimation(ScheduleMotion.snappy) {
+            viewedDayID = day.id
+            session = session.with(day: day)
+        }
+        ScheduleHaptics.selection()
+        // Everything derived from the day has to be recomputed.
+        travelPlan = TravelPlan()
+        weatherData = nil
+        weatherErrorMessage = nil
+        loadCoworkerPhotos()
+        loadWeatherData()
+        calculateTravelPlan()
+    }
+
+    private func dayShortLabel(_ day: SessionDay) -> String {
+        guard let date = Session.parseDateTime(date: day.date, time: "00:00") else { return day.date }
+        return ScheduleStyle.monthDay.string(from: date)
+    }
+
+    /// "9:00 AM – 12:00 PM" for a day, or nil if it has no times.
+    private func dayTimeRange(_ day: SessionDay) -> String? {
+        guard let startString = day.start_time,
+              let start = Session.parseDateTime(date: day.date, time: startString) else { return nil }
+        guard let endString = day.end_time,
+              let end = Session.parseDateTime(date: day.date, time: endString) else {
+            return ScheduleStyle.time.string(from: start)
+        }
+        return "\(ScheduleStyle.time.string(from: start))–\(ScheduleStyle.time.string(from: end))"
+    }
+
+    // MARK: - Notes
+
+    @ViewBuilder
+    private var notesCards: some View {
+        if let dayNotes = activeDay?.day_notes, !dayNotes.isEmpty {
+            ScheduleNoteCard(title: "Notes for this day", text: dayNotes, accent: accent)
+        }
+        if let sessionNotes = session.notes, !sessionNotes.isEmpty {
+            ScheduleNoteCard(title: "Session notes", text: sessionNotes, accent: .secondary)
+        }
+        if let userInfo = currentUserPhotographerInfo,
+           let personal = userInfo.notes, !personal.isEmpty {
+            ScheduleNoteCard(title: "Your notes", text: personal, accent: .blue)
+        }
+    }
+
+    // MARK: - Crew
+
+    /// This day's crew. Anyone who scanned the job box is ringed, which is how
+    /// you find out who has the gear without asking.
+    private var crewCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ScheduleSectionTitle("Crew on this day", trailing: "\(session.photographers.count)")
+
+            if session.photographers.isEmpty {
+                Text("Nobody assigned to this day yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(session.photographers, id: \.id) { person in
                 HStack(spacing: 12) {
-                    Text("Day \(index + 1)")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .frame(width: 56, alignment: .leading)
+                    ScheduleAvatar(
+                        name: person.name,
+                        photoURL: photoURL(for: person),
+                        size: 40,
+                        ringColor: isMatchingUser(profileName: person.name, scannedByName: latestJobBoxScannedBy)
+                            ? jobBoxHighlightColor : nil
+                    )
                     VStack(alignment: .leading, spacing: 2) {
-                        if let dayDate = Session.parseDateTime(date: day.date, time: "00:00") {
-                            Text(dateFormatter.string(from: dayDate))
-                                .font(.subheadline)
-                        } else {
-                            Text(day.date).font(.subheadline)
-                        }
-                        if let range = dayTimeRange(day) {
-                            Text(range)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        if let notes = day.day_notes, !notes.isEmpty {
-                            Text(notes)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                        Text(person.name).font(.subheadline.weight(.semibold))
+                        if let notes = person.notes, !notes.isEmpty {
+                            Text(notes).font(.caption).foregroundStyle(.secondary)
+                        } else if isMatchingUser(profileName: person.name, scannedByName: latestJobBoxScannedBy) {
+                            Text("Has the job box").font(.caption).foregroundStyle(jobBoxHighlightColor)
                         }
                     }
                     Spacer()
-                    if isCurrent {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.blue)
-                    }
-                }
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(isCurrent ? Color.blue.opacity(0.1) : Color(.systemGray6))
-                )
-            }
-        }
-        .padding(.horizontal)
-    }
-
-    /// "9:00 AM - 12:00 PM" for a day, or nil if it has no times.
-    private func dayTimeRange(_ day: SessionDay) -> String? {
-        guard let startStr = day.start_time,
-              let start = Session.parseDateTime(date: day.date, time: startStr) else {
-            return nil
-        }
-        if let endStr = day.end_time,
-           let end = Session.parseDateTime(date: day.date, time: endStr) {
-            return "\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))"
-        }
-        return timeFormatter.string(from: start)
-    }
-
-    private var headerView: some View {
-        HStack(alignment: .center, spacing: 16) {
-            // Session info
-            VStack(alignment: .leading, spacing: 4) {
-                Text(session.schoolName.isEmpty ? "School" : session.schoolName)
-                    .font(.title2)
-                    .fontWeight(.bold)
-                
-                if let start = session.startDate, let end = session.endDate {
-                    Text("\(dateFormatter.string(from: start))")
-                        .font(.headline)
-                    
-                    Text("\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
                 }
             }
-            
-            Spacer()
-            
-            // Employee Profile Photo
-            if let profile = employeeProfile, !profile.photoURL.isEmpty {
-                SupabaseAvatarView(storageURL: profile.photoURL, size: 80)
-            } else {
-                Image(systemName: "person.circle")
-                    .resizable()
-                    .frame(width: 80, height: 80)
-                    .foregroundColor(.gray)
-            }
-        }
-    }
-    
-    // Action Buttons Row
-    private var actionButtonsRow: some View {
-        HStack(spacing: 8) {
-            // Directions Button - Show if we have school coordinates or location
-            if !schoolAddress.isEmpty || (session.location != nil && !session.location!.isEmpty) {
-                ActionButton(
-                    title: "Directions",
-                    systemImage: "map.fill",
-                    action: {
-                        showingMapsOptions = true
-                    }
-                )
-            }
-            
-            // Message Coworkers Button
-            ActionButton(
-                title: "Message Coworkers",
-                systemImage: "message.fill",
-                action: {
-                    messageCoworkers()
-                }
-            )
-            
-            // Yearbook Button
-            if session.schoolId != nil {
-                ActionButton(
-                    title: "Yearbook",
-                    systemImage: "list.clipboard",
-                    action: {
-                        print("📚 Yearbook button tapped")
-                        print("📚 Session schoolId: '\(session.schoolId ?? "nil")'")
-                        print("📚 Session schoolName: '\(session.schoolName)'")
-                        print("📚 Session ID: '\(session.id)'")
-                        showingYearbookChecklist = true
-                    }
-                )
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
-    }
 
-    // Job Box Status section
-    @ViewBuilder
-    private var jobBoxStatusSection: some View {
-        if latestJobBoxStatus != .unknown {
-            let stepsCompleted = statusToStep(latestJobBoxStatus)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Job Box Status")
-                        .font(.headline)
-
-                    if let latestBox = jobBoxes.sorted(by: { $0.timestampDate > $1.timestampDate }).first,
-                       !latestBox.boxNumber.isEmpty {
+            // Crew from OTHER jobs at this school today — people you'll actually
+            // run into, who aren't on your session row.
+            let others = sameDayCoworkersAtSchool()
+            if !others.isEmpty {
+                Divider().padding(.vertical, 2)
+                ScheduleSectionTitle("Also at this school today")
+                ForEach(others, id: \.id) { person in
+                    HStack(spacing: 12) {
+                        ScheduleAvatar(name: person.name, photoURL: photoURL(for: person), size: 32)
+                        Text(person.name).font(.subheadline)
                         Spacer()
-                        Text("Box #\(latestBox.boxNumber)")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private func photoURL(for person: SessionPhotographer) -> String? {
+        if person.id == currentUserID { return employeeProfile?.photoURL }
+        return coworkerProfiles.first { $0.id == person.id }?.photoURL
+    }
+
+    // MARK: - Job box
+
+    @ViewBuilder
+    private var jobBoxCard: some View {
+        if latestJobBoxStatus != .unknown {
+            let step = statusToStep(latestJobBoxStatus)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    ScheduleSectionTitle("Job box")
+                    if let box = jobBoxes.sorted(by: { $0.timestampDate > $1.timestampDate }).first,
+                       !box.boxNumber.isEmpty {
+                        Text("#\(box.boxNumber)")
+                            .font(.footnote.weight(.bold))
+                            .foregroundStyle(jobBoxHighlightColor)
                     }
                 }
 
-                // Status indicators as pills
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-
-                    statusStep(number: 1, title: "Packed", isActive: stepsCompleted >= 1, isCompleted: stepsCompleted >= 1)
-                    statusStep(number: 2, title: "Picked Up", isActive: stepsCompleted >= 2, isCompleted: stepsCompleted >= 2)
-                    statusStep(number: 3, title: "Left Job", isActive: stepsCompleted >= 3, isCompleted: stepsCompleted >= 3)
-                    statusStep(number: 4, title: "Turned In", isActive: stepsCompleted >= 4, isCompleted: stepsCompleted >= 4)
-
-                    Spacer(minLength: 0)
+                // Four states, drawn as a track that fills — you read progress
+                // from the shape before you read any label.
+                HStack(spacing: 0) {
+                    ForEach(Array(jobBoxSteps.enumerated()), id: \.offset) { index, title in
+                        let number = index + 1
+                        let done = step >= number
+                        VStack(spacing: 6) {
+                            ZStack {
+                                Circle()
+                                    .fill(done ? jobBoxHighlightColor : Color(.tertiarySystemFill))
+                                    .frame(width: 28, height: 28)
+                                if done {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(.white)
+                                } else {
+                                    Text("\(number)")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Text(title)
+                                .font(.system(size: 10, weight: done ? .semibold : .regular))
+                                .foregroundStyle(done ? .primary : .secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .overlay(alignment: .top) {
+                            if index < jobBoxSteps.count - 1 {
+                                Rectangle()
+                                    .fill(step > number ? jobBoxHighlightColor : Color(.tertiarySystemFill))
+                                    .frame(height: 2)
+                                    .padding(.leading, 20)
+                                    .offset(x: 24, y: 13)
+                            }
+                        }
+                    }
                 }
-                .padding(.horizontal, 4)
 
-                // Last scanned info
                 if !latestJobBoxScannedBy.isEmpty {
                     HStack(spacing: 4) {
-                        Text("Last scanned by:")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        Text("Last scanned by")
+                            .font(.caption).foregroundStyle(.secondary)
                         Text(latestJobBoxScannedBy)
-                            .font(.caption)
-                            .fontWeight(.medium)
-
+                            .font(.caption.weight(.semibold))
                         if let timestamp = latestJobBoxTimestamp {
-                            Text("•")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("Scan time:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(formatTimestamp(timestamp))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            Text("· \(jobBoxTimestampFormatter.string(from: timestamp))")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(.secondarySystemBackground))
-            )
-            .padding(.horizontal, 16)
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
     }
 
-    // Weather section
-    private var weatherSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var jobBoxSteps: [String] { ["Packed", "Picked up", "Left job", "Turned in"] }
+
+    private var jobBoxHighlightColor: Color {
+        switch latestJobBoxStatus {
+        case .pickedUp: return .blue
+        case .leftJob: return .orange
+        case .turnedIn: return .green
+        default: return .gray
+        }
+    }
+
+    private var jobBoxTimestampFormatter: DateFormatter {
+        let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"; return f
+    }
+
+    // MARK: - Weather
+
+    private var weatherCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Image(systemName: "thermometer.sun")
-                    .font(.title3)
-                    .foregroundColor(.orange)
-                if let sessionDate = session.startDate {
-                    Text("Weather Forecast for \(formatDateForDisplay(sessionDate))")
-                        .font(.headline)
-                } else {
-                    Text("Weather Forecast")
-                        .font(.headline)
-                }
-                Spacer()
-                
-                if isLoadingWeather {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                }
+                ScheduleSectionTitle("Weather")
+                if isLoadingWeather { ProgressView().scaleEffect(0.7) }
             }
-            
+
             if let weather = weatherData {
                 WeatherBar(weather: weather, errorMessage: weatherErrorMessage)
+            } else if let message = weatherErrorMessage, !message.isEmpty {
+                Text(message).font(.footnote).foregroundStyle(.secondary)
             } else if !isLoadingWeather {
-                Button(action: {
+                Button {
                     loadWeatherData()
-                }) {
-                    HStack {
-                        Spacer()
-                        Text("Load Weather Forecast")
-                            .fontWeight(.medium)
-                        Spacer()
-                    }
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
+                } label: {
+                    Label("Load forecast", systemImage: "cloud.sun.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(accent.opacity(0.14), in: Capsule())
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(accent)
             }
         }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.secondarySystemBackground))
-        )
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
-    
-    // Helper function to format date for display
-    private func formatDateForDisplay(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        return formatter.string(from: date)
-    }
-    
-    // Format timestamp for display
-    private func formatTimestamp(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d, h:mm a"
-        return formatter.string(from: date)
-    }
-    
-    // Travel planning section
-    private var travelPlanningSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+
+    // MARK: - Travel
+
+    private var travelCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "alarm.fill")
-                    .font(.title2)
-                    .foregroundColor(.orange)
-                Text("Travel Planning")
-                    .font(.headline)
+                ScheduleSectionTitle("Getting there")
                 Spacer()
-                
                 if travelPlan.isCalculating {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                        .padding(.trailing, 8)
+                    ProgressView().scaleEffect(0.7)
                 } else {
-                    Button(action: {
-                        calculateTravelPlan()
-                    }) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 16))
+                    Button { calculateTravelPlan() } label: {
+                        Image(systemName: "arrow.clockwise").font(.footnote.weight(.semibold))
                     }
-                    .padding(.trailing, 8)
+                    .foregroundStyle(.secondary)
                 }
             }
-            
+
             if !travelPlan.errorMessage.isEmpty {
-                Text(travelPlan.errorMessage)
-                    .font(.subheadline)
-                    .foregroundColor(.red)
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .background(Color(.systemGray6))
-                    .cornerRadius(8)
+                Text(travelPlan.errorMessage).font(.footnote).foregroundStyle(.secondary)
             } else if travelPlan.isCalculating {
-                HStack {
-                    Spacer()
-                    Text("Calculating travel times...")
-                    Spacer()
-                }
-                .font(.subheadline)
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(8)
+                Text("Calculating…").font(.footnote).foregroundStyle(.secondary)
             } else if let leave = travelPlan.suggestedLeaveTime, let arrival = travelPlan.arrivalTime {
-                VStack(spacing: 12) {
-                    // Only show wake-up time if ready time is available and this is the first shift
+                VStack(spacing: 10) {
                     if let wakeup = travelPlan.suggestedWakeupTime, travelPlan.readyTime > 0, isFirstShiftOfDay() {
-                        HStack {
-                            Image(systemName: "bed.double.fill")
-                                .frame(width: 30)
-                                .foregroundColor(.blue)
-                            Text("Wake up at:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(shortTimeFormatter.string(from: wakeup))
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
+                        travelRow("Wake up", ScheduleStyle.time.string(from: wakeup), "bed.double.fill", .indigo, prominent: true)
                     }
-                    
-                    HStack {
-                        Image(systemName: "figure.walk")
-                            .frame(width: 30)
-                            .foregroundColor(.green)
-                        Text("Leave by:")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(shortTimeFormatter.string(from: leave))
-                            .font(.title3)
-                            .fontWeight(.semibold)
-                    }
-                    
-                    HStack {
-                        Image(systemName: "arrow.down.to.line")
-                            .frame(width: 30)
-                            .foregroundColor(.orange)
-                        Text("Arrive at:")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(shortTimeFormatter.string(from: arrival))
-                            .font(.title3)
-                            .fontWeight(.semibold)
-                    }
-                    
-                    // Display travel duration
-                    HStack {
-                        Image(systemName: "car.fill")
-                            .frame(width: 30)
-                            .foregroundColor(.red)
-                        Text("Travel time:")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(formatDuration(travelPlan.travelDuration))
-                            .font(.subheadline)
-                    }
-                    
-                    // Display ready time only if it's set and this is the first shift
+                    travelRow("Leave by", ScheduleStyle.time.string(from: leave), "figure.walk", .green, prominent: true)
+                    travelRow("Arrive", ScheduleStyle.time.string(from: arrival), "mappin.and.ellipse", .orange, prominent: false)
+                    travelRow("Drive time", formatDuration(travelPlan.travelDuration), "car.fill", .red, prominent: false)
                     if travelPlan.readyTime > 0 && isFirstShiftOfDay() {
-                        HStack {
-                            Image(systemName: "clock.fill")
-                                .frame(width: 30)
-                                .foregroundColor(.purple)
-                            Text("Getting ready:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(formatDuration(travelPlan.readyTime))
-                                .font(.subheadline)
-                        }
+                        travelRow("Getting ready", formatDuration(travelPlan.readyTime), "clock.fill", .purple, prominent: false)
                     }
                 }
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(8)
             } else {
-                Button(action: {
-                    calculateTravelPlan()
-                }) {
-                    HStack {
-                        Spacer()
-                        Text("Calculate Travel Plan")
-                            .fontWeight(.medium)
-                        Spacer()
-                    }
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
+                Button { calculateTravelPlan() } label: {
+                    Label("Plan the drive", systemImage: "car.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(accent.opacity(0.14), in: Capsule())
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(accent)
             }
         }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.secondarySystemBackground))
-        )
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
-    
+
+    private func travelRow(_ label: String, _ value: String, _ systemImage: String,
+                           _ tint: Color, prominent: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(tint.opacity(0.14)))
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(prominent
+                      ? .system(size: 18, weight: .bold, design: .rounded)
+                      : .system(size: 14, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+        }
+    }
+
+    // MARK: - Location photos
+
+    @ViewBuilder
+    private var locationPhotosCard: some View {
+        if !locationPhotos.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                ScheduleSectionTitle("Location photos", trailing: "\(locationPhotos.count)")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(locationPhotos) { photo in
+                            Button {
+                                selectedPhoto = photo
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                    showingPhotoDetail = true
+                                }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    AsyncImage(url: URL(string: photo.url)) { phase in
+                                        switch phase {
+                                        case .success(let image):
+                                            image.resizable().scaledToFill()
+                                        case .failure:
+                                            Image(systemName: "photo").foregroundStyle(.secondary)
+                                        default:
+                                            ProgressView()
+                                        }
+                                    }
+                                    .frame(width: 118, height: 92)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    Text(photo.label)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .frame(width: 118, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+    }
+
+    // MARK: - Floating action bar
+
+    private var actionBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                showingMapsOptions = true
+            } label: {
+                Label("Directions", systemImage: "car.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(accent, in: Capsule())
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .disabled(schoolAddress.isEmpty && (session.location ?? "").isEmpty)
+            .opacity(schoolAddress.isEmpty && (session.location ?? "").isEmpty ? 0.4 : 1)
+
+            Button {
+                messageCoworkers()
+            } label: {
+                Image(systemName: "message.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 48, height: 46)
+                    .background(.thinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .clipShape(TopRoundedRectangle(radius: 24))
+        .ignoresSafeArea(edges: .bottom)
+    }
+
+    // MARK: - Message composer
+
     private var messageComposerView: some View {
         VStack(spacing: 20) {
             if MFMessageComposeViewController.canSendText() {
@@ -883,26 +825,24 @@ struct ShiftDetailView: View {
                 Text("Messaging is not available on this device")
                     .font(.headline)
                     .padding(.top, 30)
-                
+
                 if coworkerContacts.isEmpty {
                     Text("No coworker phone numbers found")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .padding()
                 } else {
-                    Text("Coworker phone numbers:")
+                    Text("Coworker phone numbers")
                         .font(.subheadline)
                         .padding(.top, 10)
-                    
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
                             ForEach(coworkerContacts) { contact in
                                 HStack {
-                                    Text(contact.name)
-                                        .font(.body)
+                                    Text(contact.name).font(.body)
                                     Spacer()
                                     Text(contact.phoneNumber)
                                         .font(.system(.body, design: .monospaced))
-                                        .foregroundColor(.blue)
+                                        .foregroundStyle(.blue)
                                 }
                                 .padding(.horizontal, 20)
                                 Divider()
@@ -912,245 +852,27 @@ struct ShiftDetailView: View {
                     }
                     .frame(height: 200)
                 }
-                
-                Button("Close") {
-                    isShowingMessageComposer = false
-                }
-                .padding(.horizontal, 50)
-                .padding(.vertical, 12)
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(10)
-                .padding(.top, 20)
-                .padding(.bottom, 30)
+
+                Button("Close") { isShowingMessageComposer = false }
+                    .padding(.horizontal, 50)
+                    .padding(.vertical, 12)
+                    .background(Color.blue, in: Capsule())
+                    .foregroundStyle(.white)
+                    .padding(.top, 20)
             }
         }
         .padding()
     }
-    
-    // MARK: - Reusable Components
-    
-    // Button for action row
-    struct ActionButton: View {
-        let title: String
-        let systemImage: String
-        let action: () -> Void
-        
-        var body: some View {
-            Button(action: action) {
-                VStack(spacing: 4) {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 22))
-                    Text(title)
-                        .font(.caption)
-                }
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PlainButtonStyle())
-            .contentShape(Rectangle())
-        }
-    }
-    
-    private func iconRow(systemName: String, label: String, value: String) -> some View {
-        HStack {
-            Image(systemName: systemName)
-                .frame(width: 24)
-                .foregroundColor(colorForPosition)
-            Text(label + ":")
-                .font(.subheadline)
-                .fontWeight(.medium)
-            Spacer()
-            Text(value)
-                .font(.subheadline)
-        }
-        .padding(.vertical, 4)
-    }
-    
-    private func coworkerPhotoView(_ profile: CoworkerProfile) -> some View {
-        // Check if this is the coworker who scanned the job box
-        let shouldHighlight = isMatchingUser(profileName: profile.name, scannedByName: latestJobBoxScannedBy)
-        
-        return VStack(spacing: 4) {
-            ZStack {
-                if !profile.photoURL.isEmpty {
-                    AsyncImage(url: URL(string: profile.photoURL)) { phase in
-                        switch phase {
-                        case .empty:
-                            ProgressView()
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 60, height: 60)
-                                .clipShape(Circle())
-                        case .failure(_):
-                            // Show initials when image fails to load
-                            ZStack {
-                                Circle()
-                                    .fill(Color.blue.opacity(0.7))
-                                    .frame(width: 60, height: 60)
-                                
-                                Text(getInitials(from: profile.name))
-                                    .font(.system(size: 20, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                        @unknown default:
-                            EmptyView()
-                        }
-                    }
-                } else {
-                    // Show initials instead of generic icon
-                    ZStack {
-                        Circle()
-                            .fill(Color.blue.opacity(0.7))
-                            .frame(width: 60, height: 60)
-                        
-                        Text(getInitials(from: profile.name))
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(.white)
-                    }
-                }
-                
-                // Show highlight if this person scanned the job box
-                if shouldHighlight {
-                    Circle()
-                        .stroke(getHighlightColor(), lineWidth: 3)
-                        .frame(width: 66, height: 66)
-                }
-            }
-            
-            Text(profile.name)
-                .font(.caption)
-                .lineLimit(1)
-                .frame(width: 60)
-        }
-    }
-    
-    // Using a better approach for location photo view with proper state management
-    private func locationPhotoView(_ photo: LocationPhoto) -> some View {
-        VStack(spacing: 4) {
-            Button(action: {
-                // First set the selected photo
-                selectedPhoto = photo
-                // Then show the photo detail view after a small delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    showingPhotoDetail = true
-                }
-            }) {
-                AsyncImage(url: URL(string: photo.url)) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 100, height: 100)
-                            .cornerRadius(8)
-                    case .failure(_):
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.2))
-                            .frame(width: 100, height: 100)
-                            .cornerRadius(8)
-                            .overlay(
-                                Image(systemName: "photo")
-                                    .foregroundColor(.gray)
-                            )
-                    @unknown default:
-                        EmptyView()
-                    }
-                }
-                .overlay(
-                    // Magnifying glass icon in the corner to indicate the photo is zoomable
-                    Image(systemName: "magnifyingglass")
-                        .font(.caption)
-                        .padding(4)
-                        .background(Color.black.opacity(0.6))
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                        .padding(4),
-                    alignment: .bottomTrailing
-                )
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            Text(photo.label)
-                .font(.caption)
-                .lineLimit(1)
-        }
-    }
-    
-    // Job Box Status components
-    
-    // Convert JobBoxStatus to step number (1-4)
+
+    // MARK: - Job box step mapping
+
     private func statusToStep(_ status: JobBoxStatus) -> Int {
         switch status {
-        case .packed:
-            return 1
-        case .pickedUp:
-            return 2
-        case .leftJob:
-            return 3
-        case .turnedIn:
-            return 4
-        case .unknown:
-            return 0
-        }
-    }
-    
-    // A view for each step in the job box status flow
-    private func statusStep(number: Int, title: String, isActive: Bool, isCompleted: Bool) -> some View {
-        VStack(spacing: 4) {
-            // Circle with number or checkmark
-            ZStack {
-                Circle()
-                    .fill(getStepColor(isActive: isActive, isCompleted: isCompleted))
-                    .frame(width: 30, height: 30)
-                
-                if isCompleted {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.white)
-                } else {
-                    Text("\(number)")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(isActive ? .white : .gray)
-                }
-            }
-            
-            // Step title
-            Text(title)
-                .font(.caption)
-                .fontWeight(isActive ? .medium : .regular)
-                .foregroundColor(isActive ? .primary : .gray)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-        }
-    }
-    
-    // Get the color for a step based on its state
-    private func getStepColor(isActive: Bool, isCompleted: Bool) -> Color {
-        if isCompleted {
-            return .green
-        } else if isActive {
-            return .blue
-        } else {
-            return Color(.systemGray4)
-        }
-    }
-    
-    // Get highlight color based on job box status
-    private func getHighlightColor() -> Color {
-        switch latestJobBoxStatus {
-        case .pickedUp:
-            return .blue
-        case .leftJob:
-            return .orange
-        case .turnedIn:
-            return .green
-        default:
-            return .gray
+        case .packed: return 1
+        case .pickedUp: return 2
+        case .leftJob: return 3
+        case .turnedIn: return 4
+        case .unknown: return 0
         }
     }
     
@@ -1216,90 +938,6 @@ struct ShiftDetailView: View {
     
     // MARK: - Properties
     
-    private var colorForPosition: Color {
-        if let positionColor = positionColorMap[session.position] {
-            return positionColor
-        }
-        
-        let colorMap: [String: Color] = [
-            "Photographer 1": .red,
-            "Photographer 2": .blue,
-            "Photographer 3": .green,
-            "Photographer 4": .orange,
-            "Photographer 5": .purple,
-            "Poser 1": .pink,
-            "Poser 2": .teal,
-            "Production": .mint,
-            "Delivery": .gray
-        ]
-        
-        return colorMap[session.position] ?? .blue
-    }
-    
-    private func colorForSessionType(_ type: String) -> Color {
-        // First check positionColorMap
-        if let positionColor = positionColorMap[type] {
-            return positionColor
-        }
-        
-        // Then use the color map
-        let colorMap: [String: Color] = [
-            "Photographer 1": .red,
-            "Photographer 2": .blue,
-            "Photographer 3": .green,
-            "Photographer 4": .orange,
-            "Photographer 5": .purple,
-            "Photographer 6": .indigo,
-            "Photographer 7": .brown,
-            "Photographer 8": .cyan,
-            "Poser 1": .pink,
-            "Poser 2": .teal,
-            "Poser 3": .mint,
-            "Poser 4": .yellow,
-            "Poser 5": .gray,
-            "Poser 6": .purple,
-            "Production": .mint,
-            "Production Manager": .mint,
-            "Delivery": .gray,
-            "Front Office Assistant": .blue,
-            "Graphic Designer": .purple,
-            "Sales Representative": .orange,
-            "Yearbook Team": .green,
-            "Leadership Team": .indigo
-        ]
-        
-        return colorMap[type] ?? .blue
-    }
-    
-    private var dateFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .full
-        return formatter
-    }
-    
-    private var timeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter
-    }
-    
-    private var shortTimeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        formatter.dateStyle = .none
-        return formatter
-    }
-    
-    private var formattedFullDate: String {
-        guard let start = session.startDate else { return "Date unavailable" }
-        return dateFormatter.string(from: start)
-    }
-    
-    private var timeRangeString: String {
-        guard let start = session.startDate, let end = session.endDate else { return "Time unavailable" }
-        return "\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))"
-    }
-    
     // Get the current user's photographer info from the session
     private var currentUserPhotographerInfo: (name: String, notes: String?)? {
         guard let userID = currentUserID else { return nil }
@@ -1313,32 +951,7 @@ struct ShiftDetailView: View {
         return session.employeeName.isEmpty ? "Employee" : session.employeeName // Fallback with defensive check
     }
     
-    private var displayNotes: String {
-        var notes: [String] = []
-        
-        // Add session-level notes if they exist
-        if let sessionNotes = session.description, !sessionNotes.isEmpty {
-            notes.append("Session: \(sessionNotes)")
-        }
-        
-        // Add photographer-specific notes if they exist
-        if let userInfo = currentUserPhotographerInfo, let photographerNotes = userInfo.notes, !photographerNotes.isEmpty {
-            notes.append("Personal: \(photographerNotes)")
-        }
-        
-        return notes.joined(separator: "\n")
-    }
-    
     // MARK: - Helper Methods
-    
-    private func shiftDurationString(start: Date, end: Date) -> String {
-        let interval = end.timeIntervalSince(start)
-        if interval <= 0 { return "0m" }
-        let totalMinutes = Int(interval / 60)
-        let hours = totalMinutes / 60
-        let mins = totalMinutes % 60
-        return hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m"
-    }
     
     private func formatDuration(_ seconds: TimeInterval) -> String {
         let minutes = Int(seconds / 60)
@@ -2315,25 +1928,6 @@ struct ShiftDetailView: View {
         return firstPart
     }
     
-    // Get initials from a full name
-    private func getInitials(from name: String) -> String {
-        let components = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: .whitespaces)
-            .filter { !$0.isEmpty }
-        
-        if components.count >= 2 {
-            // First and last name initials
-            let firstInitial = String(components.first?.prefix(1) ?? "")
-            let lastInitial = String(components.last?.prefix(1) ?? "")
-            return (firstInitial + lastInitial).uppercased()
-        } else if let first = components.first {
-            // Just first name initial
-            return String(first.prefix(1)).uppercased()
-        } else {
-            return "?"
-        }
-    }
-    
     // MARK: - Publishing
     
     private func publishSession() {
@@ -2474,13 +2068,5 @@ struct MessageComposeView: UIViewControllerRepresentable {
     
     static var canSendText: Bool {
         MFMessageComposeViewController.canSendText()
-    }
-}
-
-// Define ScrollOffsetKey for tracking scroll position
-struct ScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }

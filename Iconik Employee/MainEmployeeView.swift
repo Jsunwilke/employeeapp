@@ -956,7 +956,7 @@ struct MainEmployeeView: View {
         case "mileageReports":
             MileageReportsView(userName: storedUserFirstName)
         case "schedule":
-            SlingWeeklyView()
+            ScheduleView()
         case "locationPhotos":
             LocationPhotoAttachmentView()
         case "timeOffRequests":

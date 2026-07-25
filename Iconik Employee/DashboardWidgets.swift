@@ -894,7 +894,7 @@ struct UpcomingShiftsWidget: View {
                     }
                     
                     if sessions.count > 3 {
-                        NavigationLink(destination: SlingWeeklyView()) {
+                        NavigationLink(destination: ScheduleView()) {
                             HStack {
                                 Spacer()
                                 Text("View All (\(sessions.count) shifts)")
