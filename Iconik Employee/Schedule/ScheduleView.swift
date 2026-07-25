@@ -392,8 +392,13 @@ struct ScheduleView: View {
                 }
                 .frame(height: 5)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
+            // Fixed, not maxWidth: .infinity. The old seven-across HStack divided
+            // the screen between exactly seven capsules, so .infinity was right
+            // there — but inside a horizontal scroll it collapses each capsule to
+            // its content width, which crams three weeks onto one screen at a
+            // size nothing is readable or tappable at. 52x74 is the lab's size:
+            // about six days visible, thumb-sized, the rest a scroll away.
+            .frame(width: 52, height: 74)
             .background {
                 if isSelected {
                     // ambient-allow: the selected-day chip in the week strip is
