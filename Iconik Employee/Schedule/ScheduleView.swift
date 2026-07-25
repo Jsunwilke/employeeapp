@@ -51,6 +51,10 @@ struct ScheduleView: View {
     @State private var selectedTimeOff: TimeOffCalendarEntry?
     @State private var showCreateSession = false
     @State private var staffingPopoverDay: Date?
+    /// The timeline anchors on today once, not every time this screen re-appears.
+    @State private var hasAnchored = false
+    @State private var hasStarted = false
+    @State private var index = ScheduleIndex()
 
     // Manager publishing
     @State private var isPublishingDay = false
@@ -111,6 +115,7 @@ struct ScheduleView: View {
             loadSessions()
         }
         .onChange(of: weekOffset) { _ in loadTimeOff() }
+        .onChange(of: modeRaw) { _ in rebuildIndex() }
         .tint(ambientTint)
     }
 
@@ -148,7 +153,14 @@ struct ScheduleView: View {
                 .padding(.bottom, 40)
             }
             .refreshable { await refresh() }
-            .onAppear { anchorOnToday(proxy, animated: false) }
+            .onAppear {
+                // Only on the FIRST appearance. onAppear also fires when you pop
+                // back from a shift, and re-anchoring there yanked the timeline
+                // to today, losing the place you were reading.
+                guard !hasAnchored else { return }
+                hasAnchored = true
+                anchorOnToday(proxy, animated: false)
+            }
             .onChange(of: layoutRaw) { _ in anchorOnToday(proxy, animated: true) }
         }
     }
@@ -178,10 +190,10 @@ struct ScheduleView: View {
         return nextShift(after: now) ?? day.first
     }
 
+    /// The index keeps occurrences in start order, so this is a scan of a
+    /// prebuilt array rather than a re-expansion of every session.
     private func nextShift(after date: Date) -> Session? {
-        occurrences()
-            .filter { ($0.startDate ?? .distantPast) > date }
-            .min { ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture) }
+        index.occurrences.first { ($0.startDate ?? .distantPast) > date }
     }
 
     // MARK: - Chrome
@@ -429,19 +441,9 @@ struct ScheduleView: View {
     // MARK: - Timeline layout
 
     /// Centred on today: a week of history above, today always present even when
-    /// clear (it's the scroll anchor), then six weeks ahead.
-    private var timelineDays: [Date] {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let past = (1...7)
-            .compactMap { calendar.date(byAdding: .day, value: -$0, to: today) }
-            .filter { hasItems(on: $0) }
-            .sorted()
-        let future = (1...42)
-            .compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
-            .filter { hasItems(on: $0) }
-        return past + [today] + future
-    }
+    /// clear (it's the scroll anchor), then six weeks ahead. Built with the index
+    /// rather than re-filtering 49 days on every render.
+    private var timelineDays: [Date] { index.timelineDays }
 
     private func anchorOnToday(_ proxy: ScrollViewProxy, animated: Bool) {
         guard layout == .timeline else { return }
@@ -488,6 +490,12 @@ struct ScheduleView: View {
     // MARK: - Data
 
     private func start() {
+        // Re-entrant: onAppear fires again on every pop back from a shift.
+        defer { hasStarted = true }
+        guard !hasStarted else {
+            if !isListening { loadSessions() }
+            return
+        }
         userManager.initializeOrganizationID()
         let orgID = userManager.getCachedOrganizationID()
         if !orgID.isEmpty {
@@ -518,6 +526,7 @@ struct ScheduleView: View {
         ) { incoming in
             DispatchQueue.main.async {
                 self.sessions = incoming
+                self.rebuildIndex()
                 self.isLoading = false
             }
         }
@@ -536,7 +545,10 @@ struct ScheduleView: View {
 
         Task {
             let entries = await timeOffService.getTimeOffForCalendar(dateRange: (start: start, end: end))
-            await MainActor.run { self.timeOff = entries }
+            await MainActor.run {
+                self.timeOff = entries
+                self.rebuildIndex()
+            }
         }
     }
 
@@ -550,7 +562,10 @@ struct ScheduleView: View {
                 includeUnpublished: canEdit,
                 forceRefresh: true
             )
-            await MainActor.run { self.sessions = fresh }
+            await MainActor.run {
+                self.sessions = fresh
+                self.rebuildIndex()
+            }
         } catch {
             await MainActor.run { self.errorMessage = error.localizedDescription }
         }
@@ -580,71 +595,52 @@ struct ScheduleView: View {
 
     // MARK: - Queries
 
-    /// Every day-occurrence of every session, honouring the My/All filter. A
-    /// multi-day job only counts on a day whose own crew includes the viewer.
-    private func occurrences() -> [Session] {
-        let viewer = userManager.getCurrentUserIDUnified()
-        let email = UserDefaults.standard.string(forKey: "userEmail")
-        return sessions.flatMap { $0.dayOccurrences() }.filter { occurrence in
-            guard mode == .myShifts else { return true }
-            guard let viewer else { return false }
-            return occurrence.isUserAssigned(userID: viewer, userEmail: email)
-        }
-    }
+    // Every one of these was recomputed from the full session list on each
+    // access — and the timeline asks about ~50 days per body evaluation, inside
+    // a TimelineView that re-runs every minute and while rows are being created
+    // mid-scroll. Each call also allocated a fresh Session per day occurrence.
+    // They now read a prebuilt index (see rebuildIndex) and are O(1).
 
     private func shifts(on day: Date) -> [Session] {
-        let key = Formatters.isoDate.string(from: day)
-        let viewer = userManager.getCurrentUserIDUnified()
-        let email = UserDefaults.standard.string(forKey: "userEmail")
-        return sessions.compactMap { session -> Session? in
-            guard let match = session.day(onDate: key) else { return nil }
-            let occurrence = session.with(day: match)
-            if mode == .myShifts {
-                guard let viewer, occurrence.isUserAssigned(userID: viewer, userEmail: email) else { return nil }
-            }
-            return occurrence
-        }
-        .sorted { ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast) }
+        index.shiftsByDay[Formatters.isoDate.string(from: day)] ?? []
     }
 
     private func timeOffEntries(on day: Date) -> [TimeOffCalendarEntry] {
-        let calendar = Calendar.current
-        let start = calendar.startOfDay(for: day)
-        let viewer = userManager.getCurrentUserID()
-        return timeOff
-            .filter { calendar.startOfDay(for: $0.date) == start }
-            .filter { mode == .allShifts || $0.photographerId == viewer }
-            .sorted { $0.startTime < $1.startTime }
+        index.timeOffByDay[Formatters.isoDate.string(from: day)] ?? []
     }
 
     private func items(on day: Date) -> [ScheduleItem] {
-        let shiftItems = shifts(on: day).map(ScheduleItem.shift)
-        let offItems = timeOffEntries(on: day).map(ScheduleItem.timeOff)
-        return (offItems + shiftItems).sorted { $0.sortKey < $1.sortKey }
+        index.itemsByDay[Formatters.isoDate.string(from: day)] ?? []
     }
 
     private func hasItems(on day: Date) -> Bool {
-        !shifts(on: day).isEmpty || !timeOffEntries(on: day).isEmpty
+        index.itemsByDay[Formatters.isoDate.string(from: day)]?.isEmpty == false
     }
 
     /// Org-wide staffing need for a day — every session, unfiltered. This is the
     /// number behind the heat dot and the long-press breakdown.
     private func staffing(on day: Date) -> DayStaffingTotals {
-        let key = Formatters.isoDate.string(from: day)
-        var photographers = 0, posers = 0, helpers = 0
-        for session in sessions where !session.isTimeOff && session.day(onDate: key) != nil {
-            photographers += session.photographersNeeded
-            posers += session.posersNeeded
-            helpers += session.helpersNeeded
-        }
-        return DayStaffingTotals(photographers: photographers, posers: posers, helpers: helpers)
+        index.staffingByDay[Formatters.isoDate.string(from: day)]
+            ?? DayStaffingTotals(photographers: 0, posers: 0, helpers: 0)
     }
 
     private func hours(on day: Date) -> TimeInterval {
-        shifts(on: day).reduce(0.0) { total, session in
-            guard let start = session.startDate, let end = session.endDate, end > start else { return total }
-            return total + end.timeIntervalSince(start)
-        }
+        index.hoursByDay[Formatters.isoDate.string(from: day)] ?? 0
+    }
+
+    // MARK: - Index
+
+    /// Fold the session and time-off lists into per-day buckets once, whenever
+    /// the data or the My/All filter changes. Scrolling then costs dictionary
+    /// lookups instead of a full scan per day per frame.
+    private func rebuildIndex() {
+        index = ScheduleIndex.build(
+            sessions: sessions,
+            timeOff: timeOff,
+            mode: mode,
+            viewerID: userManager.getCurrentUserIDUnified(),
+            viewerEmail: UserDefaults.standard.string(forKey: "userEmail")
+        )
     }
 
     // MARK: - Week math
@@ -729,5 +725,105 @@ enum ScheduleItem: Identifiable {
             return Session.parseDateTime(date: Formatters.isoDate.string(from: entry.date),
                                          time: entry.startTime) ?? .distantPast
         }
+    }
+}
+
+// MARK: - Per-day index
+
+/// The schedule folded into per-day buckets, built once per data/filter change.
+///
+/// Before this existed, every day cell recomputed its own answer by scanning the
+/// whole session list and allocating a `Session` copy per day occurrence. The
+/// timeline asks about roughly fifty days per body evaluation, and it does that
+/// inside a minute-ticking `TimelineView` and again as lazy rows are created
+/// during a scroll — so the same scan ran hundreds of times a second while your
+/// thumb was moving. That was the scroll stutter.
+struct ScheduleIndex {
+    var shiftsByDay: [String: [Session]] = [:]
+    var timeOffByDay: [String: [TimeOffCalendarEntry]] = [:]
+    var itemsByDay: [String: [ScheduleItem]] = [:]
+    var staffingByDay: [String: DayStaffingTotals] = [:]
+    var hoursByDay: [String: TimeInterval] = [:]
+    /// A week of history that had work, today (always), then six weeks ahead.
+    var timelineDays: [Date] = []
+    /// Every visible occurrence in start order — what "next shift" reads.
+    var occurrences: [Session] = []
+
+    static func build(
+        sessions: [Session],
+        timeOff: [TimeOffCalendarEntry],
+        mode: ScheduleMode,
+        viewerID: String?,
+        viewerEmail: String?
+    ) -> ScheduleIndex {
+        var index = ScheduleIndex()
+        let formatter = Formatters.isoDate
+
+        for session in sessions {
+            // Staffing is org-wide: it counts every session on the day, whatever
+            // the My/All filter says, because it answers "how loaded is the org".
+            let dayRows = session.days.isEmpty ? [] : session.days
+            let keys: [String] = dayRows.isEmpty ? [session.date] : dayRows.map(\.date)
+            if !session.isTimeOff {
+                for key in Set(keys) {
+                    var totals = index.staffingByDay[key]
+                        ?? DayStaffingTotals(photographers: 0, posers: 0, helpers: 0)
+                    totals = DayStaffingTotals(
+                        photographers: totals.photographers + session.photographersNeeded,
+                        posers: totals.posers + session.posersNeeded,
+                        helpers: totals.helpers + session.helpersNeeded
+                    )
+                    index.staffingByDay[key] = totals
+                }
+            }
+
+            for occurrence in session.dayOccurrences() {
+                if mode == .myShifts {
+                    guard let viewerID,
+                          occurrence.isUserAssigned(userID: viewerID, userEmail: viewerEmail) else { continue }
+                }
+                index.shiftsByDay[occurrence.date, default: []].append(occurrence)
+                index.occurrences.append(occurrence)
+                if let start = occurrence.startDate, let end = occurrence.endDate, end > start {
+                    index.hoursByDay[occurrence.date, default: 0] += end.timeIntervalSince(start)
+                }
+            }
+        }
+
+        for entry in timeOff {
+            if mode == .myShifts, entry.photographerId != viewerID { continue }
+            index.timeOffByDay[formatter.string(from: entry.date), default: []].append(entry)
+        }
+
+        for key in index.shiftsByDay.keys {
+            index.shiftsByDay[key]?.sort { ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast) }
+        }
+        for key in index.timeOffByDay.keys {
+            index.timeOffByDay[key]?.sort { $0.startTime < $1.startTime }
+        }
+        index.occurrences.sort { ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast) }
+
+        for key in Set(index.shiftsByDay.keys).union(index.timeOffByDay.keys) {
+            let shifts = (index.shiftsByDay[key] ?? []).map(ScheduleItem.shift)
+            let off = (index.timeOffByDay[key] ?? []).map(ScheduleItem.timeOff)
+            index.itemsByDay[key] = (off + shifts).sorted { $0.sortKey < $1.sortKey }
+        }
+
+        // Timeline window, resolved here so the view never re-filters 49 days.
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        func hasWork(_ date: Date) -> Bool {
+            index.itemsByDay[formatter.string(from: date)]?.isEmpty == false
+        }
+        let past = (1...7)
+            .compactMap { calendar.date(byAdding: .day, value: -$0, to: today) }
+            .filter(hasWork)
+            .sorted()
+        let future = (1...42)
+            .compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
+            .filter(hasWork)
+        index.timelineDays = past + [today] + future
+
+        return index
     }
 }

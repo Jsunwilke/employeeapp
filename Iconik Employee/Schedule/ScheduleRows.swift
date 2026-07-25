@@ -470,17 +470,22 @@ struct ScheduleTimelineRow: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                ScheduleTypePills(session: session)
+                VStack(alignment: .leading, spacing: 8) {
+                    ScheduleTypePills(session: session)
 
-                if !session.photographers.isEmpty {
-                    HStack(spacing: 8) {
-                        ScheduleCrewStack(crew: session.photographers, size: 22, maxVisible: 4)
-                        Text(session.photographers.map(\.name).joined(separator: ", "))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                    if !session.photographers.isEmpty {
+                        HStack(spacing: 8) {
+                            ScheduleCrewStack(crew: session.photographers, size: 22, maxVisible: 4)
+                            Text(session.photographers.map(\.name).joined(separator: ", "))
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
+                // Desaturating only the coloured content keeps the offscreen
+                // pass small; the card's material and shadow stay untouched.
+                .grayscale(isPast ? 0.9 : 0)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -492,7 +497,6 @@ struct ScheduleTimelineRow: View {
                     .strokeBorder(borderStyle, lineWidth: isLive ? 2 : 1)
             }
             .shadow(color: isLive ? accent.opacity(0.22) : .clear, radius: 14, y: 5)
-            .grayscale(isPast ? 0.9 : 0)
             .opacity(isPast ? 0.75 : 1)
         }
     }
