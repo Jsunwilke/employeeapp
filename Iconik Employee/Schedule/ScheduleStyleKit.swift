@@ -535,19 +535,31 @@ extension View {
         } else { self }
     }
 
-    /// `navigationDestination(item:)` is iOS 17-only; this is the 16.0 form.
-    @ViewBuilder
+    /// Push an optional item.
+    ///
+    /// Uses `NavigationLink(isActive:)` — deprecated in iOS 16, but the ONLY
+    /// push API that works in both containers. The app shell hands most features
+    /// a `NavigationView` (MainEmployeeView.featureContainer, per NAV.1's one bar
+    /// per screen), and `navigationDestination` is a `NavigationStack`-only
+    /// modifier: inside a `NavigationView` it is silently ignored, so the tap
+    /// registers and nothing happens. That is exactly the bug this replaced.
+    /// SlingWeeklyView used this same pattern, which is why it worked.
     func schedulePush<Item: Identifiable, Destination: View>(
         item: Binding<Item?>,
         @ViewBuilder destination: @escaping (Item) -> Destination
     ) -> some View {
-        self.navigationDestination(
-            isPresented: Binding(
-                get: { item.wrappedValue != nil },
-                set: { if !$0 { item.wrappedValue = nil } }
+        background(
+            NavigationLink(
+                isActive: Binding(
+                    get: { item.wrappedValue != nil },
+                    set: { if !$0 { item.wrappedValue = nil } }
+                ),
+                destination: {
+                    if let value = item.wrappedValue { destination(value) }
+                },
+                label: { EmptyView() }
             )
-        ) {
-            if let value = item.wrappedValue { destination(value) }
-        }
+            .hidden()
+        )
     }
 }
