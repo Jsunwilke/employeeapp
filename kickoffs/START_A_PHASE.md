@@ -43,9 +43,15 @@ phase-naming registry as the rest of the family.
                  lab + AMB.2's specimen sheet. Awaiting operator smoke on
                  iPhone AND iPad: does the schedule still look right, and does
                  the Design Lab open from the profile menu.
-                 ← SESSION 2 NEXT: batch 1's four mockups (Equipment, home
-                 dashboard, Tasks, Chat) + the single review sitting that
-                 gates AMB.3.
+                 SESSION 2 DONE 2026-07-25: D11 palette approved + APPLIED to
+                 FeatureTheme (live: home tiles, All Features, bottom bar all
+                 changed colour), compact chosen as the density (D5 settled),
+                 home dashboard mockup at 90% company-blue wash.
+                 ← SESSION 3 NEXT: the three remaining batch-1 mockups —
+                 EQUIPMENT, TASKS, CHAT. Research for all three is written up
+                 in AMB_BATCH1_RESEARCH.md so no re-reading is needed. AMB.3
+                 MUST NOT START until Equipment's SCREEN mockup is approved —
+                 the specimen sheet's row is not the D10 gate.
         ── batch 1 ── mocked in AMB.2, reviewed in ONE sitting ──
       ⬜ AMB.3   Equipment            (34 views)  proves the compact set
       ⬜ AMB.4   Home dashboard       its shift widget disagrees with the live schedule
