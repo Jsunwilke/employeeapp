@@ -356,15 +356,69 @@ enum ScheduleLabStyle {
         return Color(hue: hue, saturation: 0.55, brightness: 0.75)
     }
 
+    /// The session's headline icon. With several types this is only the first
+    /// one — use `symbols(for:)` anywhere there's room to show the whole job.
+    @MainActor
     static func symbol(for session: Session) -> String {
-        let types = session.sessionType.joined(separator: " ").lowercased()
-        if types.contains("sport") { return "figure.basketball" }
-        if types.contains("grad") { return "graduationcap.fill" }
-        if types.contains("yearbook") { return "book.closed.fill" }
-        if types.contains("senior") { return "person.crop.square.fill" }
-        if types.contains("class") || types.contains("group") { return "person.3.fill" }
-        if types.contains("deliver") { return "shippingbox.fill" }
+        symbols(for: session).first ?? "camera.fill"
+    }
+
+    /// One icon per session type, in the order the types are stored, duplicates
+    /// collapsed. A session that is underclass AND sports gets both icons —
+    /// that combination is a real, common job and shouldn't read as one thing.
+    @MainActor
+    static func symbols(for session: Session, limit: Int = 3) -> [String] {
+        var seen: [String] = []
+        for type in session.sessionType {
+            let icon = typeSymbol(type, in: session)
+            if !seen.contains(icon) { seen.append(icon) }
+            if seen.count == limit { break }
+        }
+        return seen.isEmpty ? ["camera.fill"] : seen
+    }
+
+    /// Icon for ONE session type. Org session types are user-defined rows in the
+    /// database (`session_types`, name + colour, no icon column), so there is no
+    /// fixed enum to switch on — the icon is derived from keywords in the type's
+    /// display name. Anything unrecognised falls back to the camera, which is
+    /// always truthful for this business.
+    @MainActor
+    static func typeSymbol(_ id: String, in session: Session? = nil) -> String {
+        let name = typeName(id, in: session).lowercased()
+        if name.contains("sport") || name.contains("team") || name.contains("athlet") { return "figure.basketball" }
+        if name.contains("grad") || name.contains("commencement") { return "graduationcap.fill" }
+        if name.contains("yearbook") { return "book.closed.fill" }
+        if name.contains("senior") { return "person.crop.square.fill" }
+        if name.contains("underclass") || name.contains("student") { return "studentdesk" }
+        if name.contains("class") || name.contains("group") { return "person.3.fill" }
+        if name.contains("candid") { return "camera.viewfinder" }
+        if name.contains("retake") || name.contains("makeup") || name.contains("make-up") { return "arrow.triangle.2.circlepath" }
+        if name.contains("prom") || name.contains("dance") || name.contains("homecoming") { return "music.note" }
+        if name.contains("deliver") { return "shippingbox.fill" }
+        if name.contains("event") { return "sparkles" }
         return "camera.fill"
+    }
+
+    /// The colours of a session's types. Multi-type sessions blend these into the
+    /// card's edge, so a two-discipline job looks like two disciplines at a glance
+    /// even before you read the pills. Single-type sessions just get their accent.
+    @MainActor
+    static func typeColors(for session: Session) -> [Color] {
+        let colors = session.sessionType.map { typeColor($0) }
+        if colors.count > 1 { return colors }
+        return [accent(for: session)]
+    }
+
+    /// Edge/spine gradient for a session — one colour if single-type, a blend if not.
+    @MainActor
+    static func accentGradient(for session: Session, fadeTo opacity: Double = 0.05) -> LinearGradient {
+        let colors = typeColors(for: session)
+        if colors.count == 1 {
+            return LinearGradient(colors: [colors[0].opacity(0.45), colors[0].opacity(opacity)],
+                                  startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+        return LinearGradient(colors: colors.map { $0.opacity(0.75) },
+                              startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
     // Formatters — allocated once (see DesignTokens.Formatters for the rationale).
@@ -613,6 +667,99 @@ struct LabCrewStack: View {
     }
 }
 
+/// Wrapping row (iOS 16 `Layout`). Session types are user-defined and a job can
+/// carry several, so pills wrap to a second line rather than being cut off at an
+/// arbitrary count — you never have to open a shift to find out what it is.
+struct LabFlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, widest: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                y += lineHeight + lineSpacing
+                x = 0
+                lineHeight = 0
+            }
+            x += size.width + spacing
+            widest = max(widest, x - spacing)
+            lineHeight = max(lineHeight, size.height)
+        }
+        return CGSize(width: min(widest, maxWidth), height: y + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let maxWidth = bounds.width
+        var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.minX + maxWidth {
+                y += lineHeight + lineSpacing
+                x = bounds.minX
+                lineHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
+}
+
+/// Every session type on a job, plus its state markers, wrapped. One definition
+/// so a card, a row and the detail hero can never disagree about what a job is.
+struct LabTypePills: View {
+    let session: Session
+    var showState = true
+    var compact = false
+
+    var body: some View {
+        LabFlowLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(session.sessionType, id: \.self) { type in
+                LabBadge(text: ScheduleLabStyle.typeName(type, in: session),
+                         systemImage: compact ? nil : ScheduleLabStyle.typeSymbol(type, in: session),
+                         tint: ScheduleLabStyle.typeColor(type))
+            }
+            if showState {
+                if let label = session.multiDayLabel {
+                    LabBadge(text: label, systemImage: "square.stack.3d.up.fill",
+                             tint: ScheduleLabStyle.accent(for: session))
+                }
+                if !session.isPublished {
+                    LabBadge(text: "Draft", systemImage: "pencil", tint: .orange)
+                }
+            }
+        }
+    }
+}
+
+/// The icons for every type on a job, overlapped like a crew stack. Reads as one
+/// mark at a glance, resolves into "underclass + sports" when you look.
+struct LabTypeIcons: View {
+    let session: Session
+    var size: CGFloat = 22
+
+    var body: some View {
+        let icons = ScheduleLabStyle.symbols(for: session)
+        let colors = ScheduleLabStyle.typeColors(for: session)
+        return HStack(spacing: -size * 0.28) {
+            ForEach(Array(icons.enumerated()), id: \.offset) { index, icon in
+                Image(systemName: icon)
+                    .font(.system(size: size * 0.5, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: size, height: size)
+                    .background(Circle().fill(colors[min(index, colors.count - 1)].gradient))
+                    .overlay(Circle().strokeBorder(Color(.systemBackground).opacity(0.85), lineWidth: 1.2))
+                    .zIndex(Double(icons.count - index))
+            }
+        }
+    }
+}
+
 /// DRAFT / multi-day / time-off marker, one visual language across the lab.
 struct LabBadge: View {
     let text: String
@@ -756,10 +903,11 @@ enum ScheduleLabSampleData {
             id: "lab-tue-2", dayKey: key(2), start: "09:30", end: "13:00",
             school: "Harbor Point School", types: ["yearbook"], color: "#0891b2",
             crew: [maria], notes: nil, staffing: (1, 0, 0)))
+        // Two disciplines in one job — the case the cards have to survive.
         sessions.append(single(
             id: "lab-tue-3", dayKey: key(2), start: "13:00", end: "18:15",
-            school: "Cedar Ridge High", types: ["sports"], color: "#dc2626",
-            crew: [you, devon, sam], notes: "Fall team and individual. Bring the second backdrop.",
+            school: "Cedar Ridge High", types: ["underclass", "sports"], color: "#dc2626",
+            crew: [you, devon, sam], notes: "Underclass in the gym until 3, then fall team and individual. Bring the second backdrop.",
             staffing: (2, 1, 2)))
 
         // Wednesday–Friday — one three-day job, crew changing per day, plus a draft.
@@ -797,9 +945,10 @@ enum ScheduleLabSampleData {
             id: "lab-next-2", dayKey: key(10), start: "09:00", end: "11:30",
             school: "Harbor Point School", types: ["class_groups"], color: "#0891b2",
             crew: [priya], notes: nil, staffing: (1, 1, 0)))
+        // Three types — proves the pills wrap instead of truncating.
         sessions.append(single(
             id: "lab-next-3", dayKey: key(11), start: "10:00", end: "19:30",
-            school: "Westview Academy", types: ["graduation"], color: "#9333ea",
+            school: "Westview Academy", types: ["graduation", "class_groups", "candids"], color: "#9333ea",
             crew: [you, maria, devon, priya, sam, june],
             notes: "Graduation. Full crew. Load in at 9:00, ceremony starts at 11:00.",
             staffing: (4, 2, 2)))

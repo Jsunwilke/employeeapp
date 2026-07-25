@@ -414,10 +414,10 @@ private struct AmbientTimelineRow: View {
             .frame(width: 9)
 
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: ScheduleLabStyle.symbol(for: session))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(accent)
+                HStack(spacing: 8) {
+                    // One badge per discipline — a job that is underclass AND
+                    // sports shows both, overlapped.
+                    LabTypeIcons(session: session, size: 22)
                     Text(session.schoolName)
                         .font(.system(size: 16, weight: .semibold))
                         .lineLimit(1)
@@ -427,18 +427,7 @@ private struct AmbientTimelineRow: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                HStack(spacing: 6) {
-                    ForEach(session.sessionType.prefix(2), id: \.self) { type in
-                        LabBadge(text: ScheduleLabStyle.typeName(type, in: session),
-                                 tint: ScheduleLabStyle.typeColor(type))
-                    }
-                    if let label = session.multiDayLabel {
-                        LabBadge(text: label, systemImage: "square.stack.3d.up.fill", tint: accent)
-                    }
-                    if !session.isPublished {
-                        LabBadge(text: "Draft", systemImage: "pencil", tint: .orange)
-                    }
-                }
+                LabTypePills(session: session)
 
                 if !session.photographers.isEmpty {
                     HStack(spacing: 8) {
@@ -455,11 +444,7 @@ private struct AmbientTimelineRow: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(colors: [accent.opacity(0.4), accent.opacity(0.04)],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing),
-                        lineWidth: 1
-                    )
+                    .strokeBorder(ScheduleLabStyle.accentGradient(for: session), lineWidth: 1)
             }
         }
     }
@@ -669,26 +654,13 @@ private struct AmbientShiftRow: View {
             .frame(width: 58)
 
             VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 6) {
-                    Image(systemName: ScheduleLabStyle.symbol(for: session))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(accent)
+                HStack(spacing: 8) {
+                    LabTypeIcons(session: session, size: 24)
                     Text(session.schoolName)
                         .font(.system(size: 17, weight: .semibold))
                         .lineLimit(1)
                 }
-                HStack(spacing: 6) {
-                    ForEach(session.sessionType.prefix(2), id: \.self) { type in
-                        LabBadge(text: ScheduleLabStyle.typeName(type, in: session),
-                                 tint: ScheduleLabStyle.typeColor(type))
-                    }
-                    if let label = session.multiDayLabel {
-                        LabBadge(text: label, systemImage: "square.stack.3d.up.fill", tint: accent)
-                    }
-                    if !session.isPublished {
-                        LabBadge(text: "Draft", systemImage: "pencil", tint: .orange)
-                    }
-                }
+                LabTypePills(session: session)
                 if !session.photographers.isEmpty {
                     LabCrewStack(crew: session.photographers, size: 24, maxVisible: 5)
                 }
@@ -699,11 +671,7 @@ private struct AmbientShiftRow: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(
-                    LinearGradient(colors: [accent.opacity(0.45), accent.opacity(0.05)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    lineWidth: 1
-                )
+                .strokeBorder(ScheduleLabStyle.accentGradient(for: session), lineWidth: 1)
         }
     }
 }
@@ -771,36 +739,88 @@ struct AmbientDetailView: View {
         .tint(accent)
     }
 
-    /// Stretches on over-scroll (iOS 17+), otherwise a plain hero.
+    /// The hero carries the session's identity, not just its clock: the title,
+    /// every discipline it covers, and then when it runs. Height follows the
+    /// content so a three-type job doesn't get clipped.
     private var hero: some View {
         ZStack(alignment: .bottomLeading) {
-            LinearGradient(colors: [accent, accent.opacity(0.55)],
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            // Multi-type jobs get a blended wash instead of one flat colour.
+            LinearGradient(colors: heroColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+
             Image(systemName: ScheduleLabStyle.symbol(for: session))
                 .font(.system(size: 120, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.14))
-                .offset(x: 30, y: 30)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(shown.startDate.map { ScheduleLabStyle.longDate.string(from: $0) } ?? "")
-                    .font(.caption.weight(.semibold))
-                    .opacity(0.85)
-                Text(ScheduleLabStyle.timeRange(shown))
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                if let duration = ScheduleLabStyle.duration(shown) {
-                    Text("\(duration) on site")
-                        .font(.subheadline.weight(.medium))
-                        .opacity(0.9)
+                .offset(x: 30, y: 26)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(session.schoolName.isEmpty ? "Session" : session.schoolName)
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Every session type, on white-on-colour chips that stay legible
+                // over the wash. Wraps rather than truncating.
+                LabFlowLayout(spacing: 6, lineSpacing: 6) {
+                    ForEach(session.sessionType, id: \.self) { type in
+                        HStack(spacing: 5) {
+                            Image(systemName: ScheduleLabStyle.typeSymbol(type, in: session))
+                                .font(.system(size: 10, weight: .bold))
+                            Text(ScheduleLabStyle.typeName(type, in: session))
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(.white.opacity(0.24)))
+                    }
+                    if let label = session.multiDayLabel {
+                        Text(label)
+                            .font(.system(size: 11, weight: .bold))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(.black.opacity(0.22)))
+                    }
+                    if !session.isPublished {
+                        Text("DRAFT")
+                            .font(.system(size: 11, weight: .heavy))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(.black.opacity(0.3)))
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(shown.startDate.map { ScheduleLabStyle.longDate.string(from: $0) } ?? "")
+                        .font(.caption.weight(.semibold))
+                        .opacity(0.85)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(ScheduleLabStyle.timeRange(shown))
+                            .font(.system(size: 26, weight: .bold, design: .rounded))
+                        if let duration = ScheduleLabStyle.duration(shown) {
+                            Text(duration)
+                                .font(.subheadline.weight(.semibold))
+                                .opacity(0.9)
+                        }
+                    }
                 }
             }
             .foregroundStyle(.white)
             .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(height: 200)
+        .frame(minHeight: 200)
+        .fixedSize(horizontal: false, vertical: true)
         .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .labParallax(0.35)
         .shadow(color: accent.opacity(0.3), radius: 20, y: 10)
         .padding(.top, 6)
+    }
+
+    /// Two type colours blend; one type keeps its own light-to-dark wash.
+    private var heroColors: [Color] {
+        let colors = ScheduleLabStyle.typeColors(for: session)
+        return colors.count > 1 ? colors : [accent, accent.opacity(0.55)]
     }
 
     private var facts: some View {
