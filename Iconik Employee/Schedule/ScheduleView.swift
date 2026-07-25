@@ -54,6 +54,12 @@ struct ScheduleView: View {
     /// The timeline anchors on today once, not every time this screen re-appears.
     @State private var hasAnchored = false
     @State private var hasStarted = false
+    /// A one-minute clock. The countdown card ticks per second inside its own
+    /// TimelineView, but that never re-renders this screen — so without this the
+    /// wash and the NOW badges would stay on whatever they were when the view
+    /// last happened to redraw. One re-render a minute is cheap now that day
+    /// queries are index lookups.
+    @State private var clockTick = Date()
     @State private var index = ScheduleIndex()
 
     // Manager publishing
@@ -116,6 +122,7 @@ struct ScheduleView: View {
         }
         .onChange(of: weekOffset) { _ in loadTimeOff() }
         .onChange(of: modeRaw) { _ in rebuildIndex() }
+        .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { clockTick = $0 }
         .tint(ambientTint)
     }
 
@@ -170,31 +177,37 @@ struct ScheduleView: View {
 
     // MARK: - Ambient tint
 
-    /// In Day layout the screen takes the colour of the day you're on; in
-    /// Timeline it follows whatever is coming up next.
-    private var ambientTint: Color {
-        if layout == .day, let first = shifts(on: selectedDay).first {
-            return ScheduleStyle.accent(for: first)
-        }
-        if let focus = focusSession { return ScheduleStyle.accent(for: focus) }
-        return .indigo
-    }
-
-    /// What the countdown is about: the shift in progress, else the next one on
-    /// the selected day, else the next one anywhere.
-    private var focusSession: Session? {
-        let now = Date()
-        let day = shifts(on: layout == .day ? selectedDay : Calendar.current.startOfDay(for: now))
-        if let live = day.first(where: { session in
+    /// The shift the screen is "about" on a given day: the one in progress, else
+    /// the next one to start that day, else that day's first shift.
+    ///
+    /// The wash used to take whichever shift started EARLIEST on the selected
+    /// day, which mis-states a day carrying three different jobs — it would read
+    /// as the 8am job all the way through the evening one. Following the live or
+    /// next shift instead means the colour answers "what am I on, or what's
+    /// next", which stays true as the day moves.
+    private func focusShift(on day: Date, now: Date) -> Session? {
+        let dayShifts = shifts(on: day)
+        if let live = dayShifts.first(where: { session in
             guard let start = session.startDate, let end = session.endDate else { return false }
             return start <= now && now <= end
         }) { return live }
-        if let next = day.first(where: { ($0.startDate ?? .distantPast) > now }) { return next }
-        return nextShift(after: now) ?? day.first
+        if let next = dayShifts.first(where: { ($0.startDate ?? .distantPast) > now }) { return next }
+        return dayShifts.first
     }
 
-    /// The index keeps occurrences in start order, so this is a scan of a
-    /// prebuilt array rather than a re-expansion of every session.
+    /// What the countdown card is about — and, deliberately, what the background
+    /// is tinted by, so the two never disagree.
+    private var focusSession: Session? {
+        let now = clockTick
+        let day = layout == .day ? selectedDay : Calendar.current.startOfDay(for: now)
+        return focusShift(on: day, now: now) ?? nextShift(after: now)
+    }
+
+    private var ambientTint: Color {
+        guard let focus = focusSession else { return .indigo }
+        return ScheduleStyle.accent(for: focus)
+    }
+
     private func nextShift(after date: Date) -> Session? {
         index.occurrences.first { ($0.startDate ?? .distantPast) > date }
     }
@@ -425,7 +438,7 @@ struct ScheduleView: View {
                 switch item {
                 case .shift(let session):
                     Button { pushedSession = session } label: {
-                        ScheduleShiftRow(session: session, standing: ShiftStanding.of(session))
+                        ScheduleShiftRow(session: session, standing: ShiftStanding.of(session, now: clockTick))
                     }
                     .buttonStyle(.plain)
                     .scheduleScrollFade()
