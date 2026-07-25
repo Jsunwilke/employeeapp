@@ -38,6 +38,7 @@ import SwiftUI
 enum DesignLabMockup: String, CaseIterable, Identifiable {
     case specimens
     case palette
+    case dashboard
 
     var id: String { rawValue }
 
@@ -45,6 +46,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
+        case .dashboard: return "Home Dashboard"
         }
     }
 
@@ -54,6 +56,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
+        case .dashboard: return "AMB.4"
         }
     }
 
@@ -63,6 +66,8 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "Every Ambient primitive at every density, drawn against Equipment's real row content. This is where the density decision gets made."
         case .palette:
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
+        case .dashboard:
+            return "The most-opened screen in the app, with the company blue turned right down behind it. Its shift widget also stops disagreeing with the schedule."
         }
     }
 
@@ -70,6 +75,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
+        case .dashboard: return "house.fill"
         }
     }
 
@@ -77,6 +83,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return .purple
         case .palette: return .pink
+        case .dashboard: return AmbientStyle.brand
         }
     }
 
@@ -85,6 +92,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
+        case .dashboard: DashboardMockup()
         }
     }
 }

@@ -115,6 +115,12 @@ enum AmbientHaptics {
 /// looking at the same crew.
 enum AmbientStyle {
 
+    /// The company blue, taken from the Iconik logo (Logo.svg, the only place it
+    /// was ever written down — the app's AccentColor asset is empty, so the app
+    /// has been running on the system default blue). Used where a surface needs
+    /// to feel like THIS app rather than like one of its features.
+    static let brand = Color(hex: "#009AE2")
+
     static func initials(_ name: String) -> String {
         let parts = name.split(separator: " ").prefix(2)
         let letters = parts.compactMap { $0.first.map(String.init) }
@@ -147,13 +153,21 @@ enum AmbientStyle {
 /// so the background agrees with the content instead of being decoration.
 struct AmbientBackdrop: View {
     let tint: Color
+    /// How loud the wash is. 1.0 is the schedule's — appropriate when the tint
+    /// MEANS something and the page has few things on it.
+    ///
+    /// Turn it down for a page that carries a lot of its own colour. The home
+    /// dashboard is the case that forced this: a full-strength wash behind nine
+    /// coloured feature tiles fights every one of them, but no wash at all
+    /// leaves the cards the same colour as the page they sit on.
+    var intensity: Double = 1
 
     var body: some View {
         ZStack {
             Color(.systemBackground)
-            Circle().fill(tint.opacity(0.55)).frame(width: 420, height: 420)
+            Circle().fill(tint.opacity(0.55 * intensity)).frame(width: 420, height: 420)
                 .blur(radius: 120).offset(x: -110, y: -260)
-            Circle().fill(tint.opacity(0.28)).frame(width: 360, height: 360)
+            Circle().fill(tint.opacity(0.28 * intensity)).frame(width: 360, height: 360)
                 .blur(radius: 140).offset(x: 140, y: 120)
         }
         .ignoresSafeArea()

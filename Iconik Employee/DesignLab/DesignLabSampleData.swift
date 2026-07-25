@@ -170,3 +170,121 @@ enum DesignLabSampleData {
         .init(text: "Retired", systemImage: "xmark.circle.fill", tint: .gray),
     ]
 }
+
+// MARK: - Home dashboard (AMB.4)
+
+/// A shift as the dashboard's Upcoming Shifts widget needs it. Deliberately not
+/// a real `Session` — the lab stays clear of the schedule's service layer.
+struct LabShift: Identifiable {
+    let id: String
+    let school: String
+    let start: Date
+    let end: Date
+    /// Type name and its colour, exactly as the converted schedule draws them.
+    let types: [(name: String, hex: String)]
+    let crew: [String]
+    /// "Day 2 of 3" for a multi-day job.
+    let dayLabel: String?
+    /// The colour the SCHEDULER picked. This is the whole point of the widget
+    /// mockup: today the dashboard ignores it and paints almost every shift
+    /// blue, because it looks the colour up by a field that holds a session
+    /// TYPE and almost never matches.
+    let sessionHex: String
+
+    var accent: Color { Color(hex: sessionHex) }
+}
+
+extension DesignLabSampleData {
+
+    private static func at(_ hour: Int, _ minute: Int, dayOffset: Int = 0) -> Date {
+        let calendar = Calendar.current
+        let base = calendar.date(byAdding: .day, value: dayOffset,
+                                 to: calendar.startOfDay(for: Date())) ?? Date()
+        return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base) ?? base
+    }
+
+    /// Three upcoming shifts covering the shapes that decide the layout: a
+    /// two-discipline job with a full crew, a solo job, and one day of a
+    /// multi-day booking.
+    static var upcomingShifts: [LabShift] {
+        [
+            .init(id: "s1", school: "Lincoln High School",
+                  start: at(7, 45), end: at(14, 30),
+                  types: [("Fall Portraits", "#2563eb"), ("Class Groups", "#16a34a")],
+                  crew: ["Maria Alvarez", "Devon Wright", "Priya Nair", "Sam Okafor"],
+                  dayLabel: nil, sessionHex: "#2563eb"),
+            .init(id: "s2", school: "Maple Grove Elementary",
+                  start: at(15, 30), end: at(17, 0),
+                  types: [("Class Groups", "#16a34a")],
+                  crew: ["June Castillo"],
+                  dayLabel: nil, sessionHex: "#16a34a"),
+            .init(id: "s3", school: "Northgate Preparatory",
+                  start: at(7, 45, dayOffset: 1), end: at(15, 0, dayOffset: 1),
+                  types: [("Fall Portraits", "#ea580c")],
+                  crew: ["Maria Alvarez", "Devon Wright"],
+                  dayLabel: "Day 2 of 3", sessionHex: "#ea580c"),
+        ]
+    }
+
+    /// Numbers for the Hours and Mileage widgets, in the shapes those widgets
+    /// actually render (hours against a 40h week and an 80h period, mileage
+    /// split personal vs company per the CAR arc).
+    enum Dashboard {
+        static let weekHours: Double = 31.5
+        static let weekTarget: Double = 40
+        static let periodHours: Double = 62.25
+        static let periodTarget: Double = 80
+        static let isClockedIn = true
+        static let activeHours: Double = 2.4
+
+        static let periodMiles = 182
+        static let periodPay = "$49.04"
+        static let personalMiles = 87
+        static let companyMiles = 94
+        static let monthMiles = 182
+        static let yearMiles = 7727
+        static let yearPay = "$3,444.38"
+    }
+
+    /// The dashboard's task strip — the five most urgent assigned to you.
+    static let urgentTasks: [LabTask] = [
+        .init(id: "t1", title: "Send Lincoln proofs to the office", priority: .urgent,
+              status: .inProgress, due: "Today", overdue: false, subtasks: (1, 3)),
+        .init(id: "t2", title: "Return the 70-200 to the equipment room", priority: .high,
+              status: .todo, due: "Yesterday", overdue: true, subtasks: (0, 0)),
+        .init(id: "t3", title: "Confirm Northgate day 3 call time with Ms. Reyes",
+              priority: .medium, status: .todo, due: "Tomorrow", overdue: false,
+              subtasks: (0, 2)),
+    ]
+}
+
+struct LabTask: Identifiable {
+    enum Priority { case low, medium, high, urgent
+        var color: Color {
+            switch self {
+            case .low: return .gray
+            case .medium: return .blue
+            case .high: return .orange
+            case .urgent: return .red
+            }
+        }
+    }
+    enum Status: String { case todo = "To Do", inProgress = "In Progress", completed = "Completed"
+        var color: Color {
+            switch self {
+            case .todo: return .gray
+            case .inProgress: return .blue
+            case .completed: return .green
+            }
+        }
+    }
+
+    let id: String
+    let title: String
+    let priority: Priority
+    let status: Status
+    let due: String
+    let overdue: Bool
+    /// completed / total
+    let subtasks: (Int, Int)
+}
