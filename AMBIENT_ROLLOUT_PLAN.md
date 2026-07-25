@@ -115,28 +115,42 @@ D8  SHIP EACH PHASE TO MAIN AS IT LANDS. Operator decision 2026-07-24. No
     rather than theoretical: the app in the field is always a coherent mix of
     converted and unconverted screens, never a half-applied restyle.
 
-D10 NOTHING IS CONVERTED BEFORE THE OPERATOR HAS SEEN A MOCKUP. Operator
-    decision 2026-07-24, and it is a HARD GATE — a phase does not start writing
-    Swift until the mockup for that surface is approved.
+D10 NOTHING IS CONVERTED BEFORE THE OPERATOR HAS SEEN A MOCKUP, AND THE
+    MOCKUP IS BUILT IN SWIFTUI. Operator decision 2026-07-24, and it is a HARD
+    GATE — a phase does not touch the real screens until its mockup is approved.
 
-    What the mockup covers, per phase: the surface's primary screen, its detail
-    screen if it has one, and any state likely to be contentious (a dense list,
-    an empty state, an error). Shown against what is there today, so the change
-    is judged as a change and not in isolation.
+    THE MOCKUP IS SWIFTUI, RUNNING IN THE APP. Not HTML, not a picture. The
+    first cut of this decision proposed a shareable web page; the operator
+    rejected it on the correct grounds — this is not a web app, and HTML cannot
+    render .ultraThinMaterial, a real blur, or SwiftUI motion. Approving an
+    approximation and then seeing something different on device is worse than
+    having no gate, because it manufactures confidence that was never earned.
 
-    What it is: a shareable page the operator can open on a phone or a desktop.
-    Not an in-app prototype — AMB.1's design lab cost a session to build and its
-    prototypes could not catch the navigation bug anyway (L1), so building one
-    per phase would buy nothing that this gate does not.
+    Form: one temporary entry in the profile menu opening a gallery of the
+    proposed views with sample data. Real SwiftUI, real materials, real device,
+    real light and dark, real Dynamic Type, and tappable. This is what the AMB.1
+    design lab was, and it is why the operator could choose Ambient from
+    something they had actually used rather than from a picture.
 
-    What it CANNOT do, stated so nobody mistakes approval for verification: a
-    mockup shows structure, hierarchy, density and state. It cannot show
-    SwiftUI's materials, blur, or motion — those only look right on a device.
-    The mockup approves the DESIGN; the device smoke (D7) still approves the
-    RENDER. A phase needs both.
+    ONE CORRECTION FROM AMB.1 (L1): the mockup mounts inside the REAL shell's
+    navigation container. The design lab gave every prototype its own
+    NavigationStack, which is exactly why it could not catch the dead tap that
+    reached production. A mockup that supplies its own navigation is testing a
+    frame that will not exist.
 
-    If a mockup is rejected, it is re-cut before any code is written. Iterating a
-    page costs minutes; iterating a converted surface costs a session.
+    What each phase mocks: the surface's primary screen, its detail screen if it
+    has one, and the states that cause arguments — a dense list, an empty state,
+    an error. For AMB.2, whose deliverable is the primitives themselves, the
+    mockup is a specimen sheet: every component roomy and compact, against
+    Equipment's real row content.
+
+    Lifecycle: the mockup is SCAFFOLDING. It is deleted at the close of the
+    phase that built it, exactly as the design lab was — and never before the
+    operator has confirmed the converted screens, per the rule that a validation
+    reference outlives the port it validated.
+
+    Cost, stated honestly: roughly a third of a session per phase. Against a
+    full session of rework when a converted surface is rejected, that is cheap.
 
 D9  THE TAIL GETS CONVERTED. Operator decision 2026-07-24. AMB.12 runs;
     Settings, the manager tools, Stats and Training are converted rather than
@@ -247,13 +261,17 @@ Without the gate this arc produces the same outcome Phase 3 did.
 Each phase session runs:
 
     1  SCOPE      list the views in the surface, name what must survive
-    2  MOCK       visual mockup of the surface's key screens, against what is
-                  there today. HARD GATE (D10) — no Swift until it is approved.
-                  A rejected mockup is re-cut here, not after conversion.
+    2  MOCK       SwiftUI mockup of the surface's key screens with sample data,
+                  behind one temporary menu entry, mounted in the REAL shell's
+                  navigation container. HARD GATE (D10) — the real screens are
+                  not touched until it is approved. A rejected mockup is re-cut
+                  here, where it costs minutes, not after conversion.
     3  CONVERT    presentation only; data layer untouched; delete the old
                   presentation in the same commit, never alongside. The mockup is
-                  never committed and never ships beside the old path — it is a
-                  pre-commit artifact, so delete-first still holds.
+                  mockup is scaffolding, not a second implementation of the
+                  shipping screen, and it is deleted at the close of the phase
+                  (after the operator confirms the port) — so delete-first and
+                  the no-parallel-implementations rule both still hold.
     4  BUILD      xcodebuild clean, zero warnings from changed files
     5  REVIEW     /code-review before any push, operator-triggered
     6  SMOKE      operator on iPhone AND iPad (D7), with before/after screenshots
