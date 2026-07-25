@@ -32,26 +32,34 @@ phase-naming registry as the rest of the family.
       Plan + the 9 locked decisions: AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
 
       ✅ AMB.1   Schedule                                    DONE + PUSHED 2026-07-24
-      ⬜ AMB.2   Design system extraction + build gate + compact variants   ← NEXT
+      ⬜ AMB.2   Design system + build gate + compact variants + THE LAB    ← NEXT
+                 + batch 1's mockups. Realistically two sessions.
+        ── batch 1 ── mocked in AMB.2, reviewed in ONE sitting ──
       ⬜ AMB.3   Equipment            (34 views)  proves the compact set
-      ⬜ AMB.4   Home dashboard       (MainEmployeeView + DashboardWidgets)
-      ⬜ AMB.5   Reports family       (daily job report, custom, mine, photoshoot notes)
-      ⬜ AMB.6   Mileage + Stats
-      ⬜ AMB.7   Time off             (8 views)
-      ⬜ AMB.8   Tasks                (18 views)
-      ⬜ AMB.9   Chat                 (20 views)  the real test of the compact set
-      ⬜ AMB.10  Groups + Yearbook    (17 views)
+      ⬜ AMB.4   Home dashboard       its shift widget disagrees with the live schedule
+      ⬜ AMB.5   Tasks                (18 views)
+      ⬜ AMB.6   Chat                 (20 views)  hardest test of the compact set
+                                                 + mocks batch 2
+        ── batch 2 ──
+      ⬜ AMB.7   Reports family       (daily job report, custom, mine, photoshoot notes)
+      ⬜ AMB.8   Time off             (8 views)   + mocks batch 3
+        ── batch 3 ──
+      ⬜ AMB.9   Mileage + Stats
+      ⬜ AMB.10  Groups + Yearbook    (17 views)  + mocks batch 4
+        ── batch 4 ──
       ⬜ AMB.11  Job box / NFC        (18 views)
-      ⬜ AMB.12  Settings, Manager, Training — the tail (D9: converted, not left as a seam)
+      ⬜ AMB.12  Settings, Manager, Training — the tail (D9). Closes the arc and
+                 DELETES the lab harness + its menu entry.
       ⛔ Sports Shoot Feature is PERMANENTLY out of scope for this arc (D1) — protected
          Captura files + a live iPad shoot tool.
 
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).
-              NOTE: overlaps AMB.4 on DashboardWidgets.swift — whichever runs first wins,
-              the other rebases onto it.
+              NOTE: overlaps AMB.4 (home dashboard) on DashboardWidgets.swift — whichever
+              runs first wins, the other rebases onto it.
       DJR.1   Daily Job Report redesign (wizard, draft auto-save, offline outbox).
-              NOTE: overlaps AMB.5 on the same screens — sequence deliberately.
+              NOTE: overlaps AMB.7 (reports family) on the same screens — sequence
+              deliberately.
       ONB.1   Invite-code onboarding + sign-in hardening.
       TST.1   Tests for the money paths (TimeEntryValidator, PayPeriodService).
       GIC.1   Group-images conflict handling (version-checked, not last-write-wins).

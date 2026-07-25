@@ -230,30 +230,43 @@ other rebases onto it.
   **Outstanding:** iPad smoke not run for AMB.1 — D7 (both devices every phase) was
   adopted after this phase shipped. Worth a pass when convenient; not blocking AMB.2.
 
-- [ ] **AMB.2 Design system extraction + enforcement gate** — NEXT. Promote the
-  schedule's vocabulary into `DesignSystem/`; delete the zero-adopter `cardStyle()`;
-  add a build gate that fails on a NEWLY hand-rolled card (the existing 115 across 39
-  files are grandfathered by path until their phase converts them, so the gate starts
-  green). Also designs the compact density variants against Equipment's real code
-  (D5). No screen changes beyond the schedule repointing at the new home.
+- [ ] **AMB.2 Design system extraction + enforcement gate + the lab** — NEXT, and
+  realistically two sessions. Promote the schedule's vocabulary into `DesignSystem/`;
+  delete the zero-adopter `cardStyle()`; add a build gate that fails on a NEWLY
+  hand-rolled card (the existing 115 across 39 files are grandfathered by path, so the
+  gate starts green); design the compact density variants against Equipment's real code
+  (D5); build the arc's mockup lab — menu entry, sample data, gallery, switcher, mounted
+  in the REAL nav container (D10) — and mock BATCH 1 inside it for a single review
+  sitting. No screen changes beyond the schedule repointing at the new home.
+
+**Batch 1** — mocked in AMB.2, reviewed in one sitting, then converted:
 
 - [ ] **AMB.3 Equipment** (34 views, 5,583 lines) — first dense list; proves the compact
   variants in use and folds any corrections back into the design system.
+- [ ] **AMB.4 Home dashboard** (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines) —
+  highest traffic, and its Upcoming Shifts widget currently disagrees with the
+  already-converted schedule.
+- [ ] **AMB.5 Tasks** (18 views, 3,167 lines)
+- [ ] **AMB.6 Chat** (20 views, 4,655 lines) — long scrollbacks, the real test of the
+  compact set. Closes batch 1 and mocks batch 2.
 
-- [ ] **AMB.4 Home dashboard** (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines)
-  — highest-traffic screen, most mixed content; built on primitives that are complete
-  by this point.
+**Batch 2**
 
-- [ ] **AMB.5 Reports family** (Misc Features, 8,695 lines) — daily job report, custom
+- [ ] **AMB.7 Reports family** (Misc Features, 8,695 lines) — daily job report, custom
   reports, my reports, photoshoot notes. Form-heavy; first real input styling.
-- [ ] **AMB.6 Mileage + Stats** — number-heavy; stat tiles and charts.
-- [ ] **AMB.7 Time off** (8 views, 3,763 lines)
-- [ ] **AMB.8 Tasks** (18 views, 3,167 lines)
-- [ ] **AMB.9 Chat** (20 views, 4,655 lines) — long scrollbacks; the real test of the
-  compact variants.
-- [ ] **AMB.10 Groups + Yearbook** (17 views, 4,504 lines)
+- [ ] **AMB.8 Time off** (8 views, 3,763 lines) — closes batch 2 and mocks batch 3.
+
+**Batch 3**
+
+- [ ] **AMB.9 Mileage + Stats** — number-heavy; stat tiles and charts.
+- [ ] **AMB.10 Groups + Yearbook** (17 views, 4,504 lines) — closes batch 3 and mocks
+  batch 4.
+
+**Batch 4**
+
 - [ ] **AMB.11 Job box / NFC** (18 views, 5,198 lines)
 - [ ] **AMB.12 Settings, Manager, Training** (~6,600 lines) — the tail, converted per D9.
+  Closes the arc and deletes the lab harness + its menu entry.
 
 **Out of scope, permanently (D1):** Sports Shoot Feature (53 views, 36,352 lines) — the
 hook-protected Captura files plus a live iPad shoot tool where a restyle risks work in

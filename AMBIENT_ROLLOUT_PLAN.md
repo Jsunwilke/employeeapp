@@ -144,6 +144,31 @@ D10 NOTHING IS CONVERTED BEFORE THE OPERATOR HAS SEEN A MOCKUP, AND THE
           between designs
         each phase's mockup views mounted inside it
 
+    MOCKED IN BATCHES, NOT PER PHASE. Operator decision 2026-07-25. A design
+    language fails at the SEAMS between screens, and a per-phase review can only
+    ever show one screen at a time — so surfaces that share a design problem are
+    mocked together and reviewed in one sitting:
+
+        Batch 1  Equipment, Home dashboard, Tasks, Chat      mocked in AMB.2
+        Batch 2  Reports family, Time off                    mocked in AMB.6
+        Batch 3  Mileage + Stats, Groups + Yearbook          mocked in AMB.8
+        Batch 4  Job box/NFC, Settings, Manager, Training    mocked in AMB.10
+
+    Four sittings instead of eleven, each showing a coherent set that can be
+    judged against itself.
+
+    NOT ALL OF IT UP FRONT, though, and this is the reason: anything mocked
+    before Equipment converts is drawn against primitives the density work is
+    about to change. Mocking ten surfaces now would mean approving ten designs
+    and re-cutting most of them — the approval becomes theatre. Each batch is
+    mocked shortly before its own phases run, so approvals cannot rot.
+
+    THE HOME DASHBOARD IS IN BATCH 1, not with the other number-heavy screens.
+    Its Upcoming Shifts widget renders shift cards, and the schedule is already
+    converted and live — so that inconsistency is on the app's front door TODAY.
+    Leaving it to the back half would park the most-opened screen in the app in
+    visible disagreement with the one screen the arc has finished.
+
     ONE PROPOSAL PER SURFACE, NOT FIVE — with exceptions. The schedule lab held
     five competing directions because the design language did not exist yet;
     that was a CHOOSING exercise. Ambient is now settled, so most phases are
@@ -204,50 +229,63 @@ nothing is built on primitives that are still moving (D5).
             Design the compact density variants against Equipment's real code,
             to be proven by converting it in AMB.3. Build the arc's mockup
             harness (D10) — menu entry, sample data, gallery shell, switcher —
-            which every later phase mounts its mockups inside. No screen changes
-            beyond the schedule repointing at the new home.
+            which every later phase mounts its mockups inside. Then mock BATCH 1
+            inside it: Equipment, the home dashboard, Tasks and Chat, reviewed
+            in one sitting alongside the specimen sheet. Realistically two
+            sessions. No screen changes beyond the schedule repointing at the
+            new home.
 
-    AMB.3   Equipment                    (34 views, 5,583 lines)
+    AMB.3   Equipment                    (34 views, 5,583 lines)   BATCH 1
             The first genuinely dense, list-heavy surface, and the proof of the
             compact variants AMB.2 designed. Anything they get wrong is found
-            here and folded back into the design system before the dashboard —
-            or anything else — is built on them.
+            here and folded back into the design system before the rest of the
+            batch is built on them.
 
-    AMB.4   Home dashboard
+    AMB.4   Home dashboard                                          BATCH 1
             MainEmployeeView + DashboardWidgets, about 3,600 lines. Highest
-            traffic screen in the app and the most mixed content, so it is the
-            real proof the primitives cover more than a schedule. Runs second
+            traffic screen in the app, and the one whose Upcoming Shifts widget
+            currently disagrees with the already-converted schedule. Runs second
             rather than first only because its widgets mix dense and roomy
             content, and building it before the compact variants are proven
             would guarantee a revisit.
 
-    AMB.5   Reports family               (Misc Features, 8,695 lines)
+    AMB.5   Tasks                        (18 views, 3,167 lines)    BATCH 1
+
+    AMB.6   Chat                         (20 views, 4,655 lines)    BATCH 1
+            The hardest test of the compact set: long scrollbacks, and the most
+            likely place for material and blur to cost real frames. Closes
+            batch 1 and mocks batch 2.
+
+    AMB.7   Reports family               (Misc Features, 8,695 lines)  BATCH 2
             Daily job report, custom daily reports, my reports, photoshoot
-            notes. Form-heavy; will exercise input styling, which the schedule
+            notes. Form-heavy; first real input styling, which the schedule
             never touched.
 
-    AMB.6   Mileage + Stats              (within Misc Features + StatsView)
-            Number-heavy surfaces. Exercises the stat tile and any charts.
+    AMB.8   Time off                     (8 views, 3,763 lines)     BATCH 2
+            Closes batch 2 and mocks batch 3.
 
-    AMB.7   Time off                     (8 views, 3,763 lines)
+    AMB.9   Mileage + Stats              (Misc Features + StatsView)  BATCH 3
+            Number-heavy. Exercises the stat tile and any charts.
 
-    AMB.8   Tasks                        (18 views, 3,167 lines)
+    AMB.10  Groups + Yearbook            (17 views, 4,504 lines)    BATCH 3
+            Closes batch 3 and mocks batch 4.
 
-    AMB.9   Chat                         (20 views, 4,655 lines)
-            Second dense surface, and the one most likely to expose material
-            performance limits in long scrollbacks.
+    AMB.11  Job box / NFC                (18 views, 5,198 lines)    BATCH 4
 
-    AMB.10  Groups + Yearbook            (10 + 7 views, 4,504 lines)
+    AMB.12  Settings, Manager, Training  (about 6,600 lines)        BATCH 4
+            The tail (D9). Lowest traffic, converted last, and by this point
+            mostly inherits from the primitives with little bespoke work.
+            Closes the arc: the lab harness and its menu entry are deleted here.
 
-    AMB.11  Job box / NFC                (18 views, 5,198 lines)
+Roughly ten sessions after AMB.2, plus AMB.2 itself — which is now the design
+system, the build gate, the lab harness AND batch 1's four surfaces' mockups,
+so it is realistically TWO sessions rather than one. Said here rather than
+discovered mid-phase, where the only options would be rushing the mockups or
+quietly splitting the phase.
 
-    AMB.12  Settings, Manager, Training  (about 6,600 lines)
-            The tail. Lowest traffic, converted last, and by this point mostly
-            inherits from the primitives with little bespoke work.
-
-Roughly eleven sessions after AMB.2. That estimate assumes AI pair-coding
-pacing and that D5 lands cleanly at AMB.4; if the compact variants need a
-second pass, add one session.
+Every fourth phase carries the next batch's mockups (AMB.6, AMB.8, AMB.10), so
+those run slightly long. The estimate assumes AI pair-coding pacing and that D5
+lands cleanly at AMB.3; if the compact variants need a second pass, add one.
 
 
 ## AMB.2 in detail (the next phase)
