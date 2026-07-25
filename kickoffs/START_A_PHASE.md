@@ -22,14 +22,32 @@ phase-naming registry as the rest of the family.
   Named by arc code (ARC.N) per the family registry, FocalPointProduction/docs/PHASES.md.
   Full per-item scope + closeouts live in AUDIT_ROADMAP.md.
 
+  🎨 AMB — Ambient design language rollout   (REGISTERED ARC, in progress)
+      Restyle only: no data, service, navigation-shape or business-rule changes inside a
+      phase. Every phase smokes on iPhone AND iPad (D7) and ships to main as it lands (D8).
+      Plan + the 9 locked decisions: AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
+
+      ✅ AMB.1   Schedule                                    DONE + PUSHED 2026-07-24
+      ⬜ AMB.2   Design system extraction + build gate + compact variants   ← NEXT
+      ⬜ AMB.3   Equipment            (34 views)  proves the compact set
+      ⬜ AMB.4   Home dashboard       (MainEmployeeView + DashboardWidgets)
+      ⬜ AMB.5   Reports family       (daily job report, custom, mine, photoshoot notes)
+      ⬜ AMB.6   Mileage + Stats
+      ⬜ AMB.7   Time off             (8 views)
+      ⬜ AMB.8   Tasks                (18 views)
+      ⬜ AMB.9   Chat                 (20 views)  the real test of the compact set
+      ⬜ AMB.10  Groups + Yearbook    (17 views)
+      ⬜ AMB.11  Job box / NFC        (18 views)
+      ⬜ AMB.12  Settings, Manager, Training — the tail (D9: converted, not left as a seam)
+      ⛔ Sports Shoot Feature is PERMANENTLY out of scope for this arc (D1) — protected
+         Captura files + a live iPad shoot tool.
+
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
-      AMB.2   Ambient design system extraction + the build gate that makes hand-rolling
-              a card fail + the compact density variants. Then AMB.3 Equipment (proves
-              the compact set), AMB.4 Home dashboard, then the rest by traffic through
-              AMB.12. Plan: AMBIENT_ROLLOUT_PLAN.md; per-phase scope + closeouts:
-              AUDIT_ROADMAP.md (registered arc — AMB.1 is done and shipped).
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).
+              NOTE: overlaps AMB.4 on DashboardWidgets.swift — whichever runs first wins,
+              the other rebases onto it.
       DJR.1   Daily Job Report redesign (wizard, draft auto-save, offline outbox).
+              NOTE: overlaps AMB.5 on the same screens — sequence deliberately.
       ONB.1   Invite-code onboarding + sign-in hardening.
       TST.1   Tests for the money paths (TimeEntryValidator, PayPeriodService).
       GIC.1   Group-images conflict handling (version-checked, not last-write-wins).
@@ -38,10 +56,12 @@ phase-naming registry as the rest of the family.
 
   ✅ DONE   (closeouts in AUDIT_ROADMAP.md)
       AMB.1   Schedule converted to the Ambient design language — ScheduleView +
-              ScheduleRows + ScheduleStyleKit replace SlingWeeklyView, ShiftDetailView
-              restyled with its data layer untouched. Operator smoke PASSED on device
-              2026-07-24; 8 code-review findings all fixed. Branch schedule-design-lab,
-              NOT pushed. Plan: AMBIENT_ROLLOUT_PLAN.md.
+              ScheduleRows + ScheduleStyleKit replace SlingWeeklyView (deleted same
+              commit), ShiftDetailView restyled with its data layer untouched.
+              SHIPPED to origin/main 2026-07-24 (b3a82e1..97324a4); operator smoke
+              PASSED on iPhone; 8 code-review findings all fixed (5 were regressions
+              the arc introduced). RESIDUAL: iPad smoke never run — D7 was adopted
+              after this phase shipped. Plan: AMBIENT_ROLLOUT_PLAN.md.
       CRS.1   Captura roster save hardening — all 4 pre-existing loss paths from the
               6bf00ba post-ship review fixed 2026-07-23 (both protected editors, hook
               lifted with operator authorization + restored). 2 audits, 0 crit/high.
