@@ -313,10 +313,23 @@ struct LabEquipmentRow: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                if let assignee = item.assignee, density != .compact {
-                    Text("With \(assignee)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                // The assignee stays even at compact. AllEquipmentView passes
+                // showAssignee: true, so "who has this" is on the real row —
+                // dropping it at the dense density would be feature loss, and
+                // it is the single most useful thing on a checked-out row.
+                if let assignee = item.assignee {
+                    HStack(spacing: 4) {
+                        Image(systemName: "person.fill").font(.system(size: 8))
+                        Text(item.mine ? "You" : assignee)
+                            .lineLimit(1)
+                        if let due = item.dueLabel, item.overdue {
+                            Text("· was due \(due)")
+                                .foregroundStyle(.red)
+                                .lineLimit(1)
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(item.overdue ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
                 }
             }
 

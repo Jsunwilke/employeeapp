@@ -76,11 +76,11 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .palette:
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
         case .equipment:
-            return "Both tabs — it opens on My Kits, not the list — plus both detail screens. AMB.3 does not start until this one is approved."
+            return "The two tabs are gone: one screen leads with your gear and says what is late, with the whole inventory one row behind it. The kit detail is a packing list. AMB.3 waits on this."
         case .dashboard:
             return "The most-opened screen in the app, with the company blue turned right down behind it. Its shift widget also stops disagreeing with the schedule."
         case .tasks:
-            return "Nothing in Tasks has ever been a card. The switch at the top draws today's flat rows and the proposal side by side — that is the decision to bring back."
+            return "Grouped by when — overdue, today, this week — so you stop driving a chip bar to find out what is late. All five filters still work."
         case .chat:
             return "The hardest test of compact. Three switches inside the thread: per-message timestamps, grouping a run, and whose colour “mine” is."
         }

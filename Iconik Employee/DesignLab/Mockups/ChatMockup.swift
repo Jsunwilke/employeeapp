@@ -3,38 +3,40 @@
 //
 //  ARC SCAFFOLDING. Deleted with the rest of the lab at AMB.12.
 //
-//  THE HARDEST TEST OF COMPACT, and the plan names it as one of the two
-//  surfaces that gets variants rather than a single proposal.
+//  A REDESIGN under D12, with the parity list in AMB_BATCH1_PARITY.md.
 //
-//  WHAT MAKES A SCROLLBACK DENSE OR NOT — three levers, all of them live here:
+//  THE THREE LEVERS ON SCROLLBACK HEIGHT, all live in the thread:
+//      1. THE PER-MESSAGE TIMESTAMP. Every message in the app carries a
+//         .caption2 line under it. Nothing else costs as much height for as
+//         little. The alternative: a timestamp only when the conversation
+//         actually paused.
+//      2. GROUPING. The app has none, so a run of four messages from one person
+//         repeats their name and takes the full gap four times.
+//      3. THE BODY FONT. A message has NO font modifier at all, so it rides on
+//         the 17pt default while its own timestamp is 11pt.
 //
-//      1. THE PER-MESSAGE TIMESTAMP. Every single message in the app carries a
-//         .caption2 line under it. Nothing else in the thread costs as much
-//         height for as little. The switch offers the alternative: a timestamp
-//         only when the conversation actually paused.
-//      2. GROUPING. The app has none — consecutive messages from the same
-//         person repeat the sender name and get the full gap, so a run of four
-//         reads as four separate arrivals.
-//      3. THE BODY FONT. The message body has no font modifier at all, so it
-//         rides on the default .body at 17pt while its own timestamp is 11pt.
+//      Grouping and date separators are presentation — the data does not change
+//      — so they are inside D12 comfortably. Read receipts, typing indicators
+//      and thread avatars are genuinely absent from the feature and are NOT
+//      proposed: that would be new work wearing a redesign's clothes.
 //
-//      Grouping and date separators are PRESENTATION — nothing about the data
-//      changes — so they are inside a restyle. Read receipts, typing indicators
-//      and thread avatars are all genuinely absent from the feature and are NOT
-//      proposed here; adding them would be new work wearing a restyle's clothes.
+//  WHOSE COLOUR "MINE" IS stayed a question rather than a decision, so it is a
+//  switch. Chat's feature colour is #D6409F and under D11 that is also the wash
+//  behind the thread, so a pink bubble on a pink wash may be mush. The company
+//  blue says "you" without competing with the screen's own colour.
 //
-//  MY BUBBLE'S COLOUR IS AN OPEN QUESTION, so it is a switch rather than a
-//  decision. Chat's feature colour is #D6409F, and under D11 that is also the
-//  wash behind the whole thread — a pink bubble on a pink wash may read as mush.
-//  The alternative is the company blue, which says "you" without competing with
-//  the screen's own colour. Flip it on the device; that is the only way to know.
+//  WHAT THE PARITY PASS CAUGHT IN THE FIRST CUT OF THIS MOCKUP:
+//      SYSTEM MESSAGES were missing entirely. The app renders three of them —
+//      "X added Y to the group", "X removed Y from the group", "X left the
+//      group" — centred in a capsule with their own timestamp. There is one in
+//      the thread below now. Also missing: the "No messages yet" row, and the
+//      fact that swipe-to-delete exists for GROUPS ONLY.
 //
-//  THE CARD PRIMITIVE CANNOT DRAW A BUBBLE YET, and that is expected: the lab's
-//  job is to prototype a treatment the primitive cannot express, and `ambientCard`
-//  fills with a material, never a solid tint. If bubbles survive review, a tinted
-//  fill gets promoted INTO AmbientCard before AMB.6 converts a single real screen
-//  — it does not get hand-rolled in Chat/. The conversation LIST rows below go
-//  through `.ambientCard` normally, because those are ordinary cards.
+//  THE CARD PRIMITIVE CANNOT DRAW A BUBBLE, and that is expected — the lab's
+//  charter is to prototype treatments the primitive cannot express yet.
+//  `ambientCard` fills with a material, never a solid tint. If bubbles survive
+//  review, a tinted fill gets promoted INTO AmbientCard before AMB.6 converts a
+//  single real screen; it does not get hand-rolled in Chat/.
 
 import SwiftUI
 
@@ -47,42 +49,61 @@ struct ChatMockup: View {
     private var feature: Color { FeatureTheme.color(for: "chat") }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottomTrailing) {
             AmbientBackdrop(tint: feature, intensity: wash)
 
             VStack(spacing: 10) {
                 searchField.padding(.horizontal, 16)
 
-                ScrollView {
-                    LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
-                        labStrip.padding(.bottom, 4)
+                // A LIST, not a LazyVStack — and that is load-bearing, not a
+                // style preference. `.swipeActions` is a List-only modifier: on
+                // a row inside a LazyVStack it compiles, renders, and silently
+                // does nothing. Pin and delete are real capabilities here, so
+                // building this out of a stack would have shipped the operator a
+                // mockup whose swipes were dead — the same class of bug as
+                // AMB.1's dead tap, which is the reason the lab exists at all.
+                //
+                // The cost is having to strip List's own chrome so the ambient
+                // wash shows through: hidden scroll background, clear row
+                // backgrounds, no separators, and the insets set by hand.
+                List {
+                    labStrip.modifier(LabChatListRow())
 
-                        if visible.isEmpty {
-                            AmbientEmptyState(
-                                title: "No conversations",
-                                message: "Nothing matches “\(query)”.",
-                                systemImage: "bubble.left.and.bubble.right")
-                        } else {
-                            ForEach(visible) { conversation in
-                                Button { pushed = conversation } label: {
-                                    LabConversationRow(conversation: conversation)
-                                }
-                                .buttonStyle(.plain)
-                            }
+                    if visible.isEmpty {
+                        AmbientEmptyState(
+                            title: query.isEmpty ? "No conversations" : "Nothing found",
+                            message: query.isEmpty
+                                ? "Start a conversation with your team members."
+                                : "Nothing matches “\(query)”.",
+                            systemImage: "bubble.left.and.bubble.right")
+                            .modifier(LabChatListRow())
+                    } else {
+                        ForEach(visible) { conversation in
+                            LabConversationRow(conversation: conversation)
+                                .contentShape(Rectangle())
+                                .onTapGesture { pushed = conversation }
+                                .modifier(LabChatListRow())
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 96)
+
+                    Color.clear
+                        .frame(height: 80)
+                        .modifier(LabChatListRow())
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .environment(\.defaultMinListRowHeight, 0)
             }
             .padding(.top, 8)
+
+            newConversationButton
         }
         .ambientPush(item: $pushed) { conversation in
             ChatThreadMockup(conversation: conversation, feature: feature, wash: wash)
         }
     }
 
-    /// Pinned first, which is what the real list does.
+    /// Pinned first — the app's ordering.
     private var visible: [LabConversation] {
         let matching = DesignLabSampleData.conversations.filter { conversation in
             guard !query.isEmpty else { return true }
@@ -100,13 +121,11 @@ struct ChatMockup: View {
                 Text("Chat wash").font(.footnote.weight(.semibold))
                 Spacer()
                 Text(wash == 0 ? "off" : "\(Int(wash * 100))%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             Slider(value: $wash, in: 0...1).tint(feature)
-            Text("Open the pinned group at the top — that is the thread the density question is decided on, and the switches that matter are inside it. The wash you set here carries through.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Text("Open the pinned group at the top — that is the thread the density question is decided on, and the switches that matter are inside it. Swipe a row for pin; swipe a GROUP for delete (a direct message cannot be swiped away, which is deliberate).")
+                .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .ambientCard(density: .compact, border: .dashed(Color.primary.opacity(0.25)), fillWidth: true)
@@ -115,11 +134,9 @@ struct ChatMockup: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             TextField("Search conversations", text: $query)
-                .font(.subheadline)
-                .autocorrectionDisabled()
+                .font(.subheadline).autocorrectionDisabled()
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
@@ -129,20 +146,48 @@ struct ChatMockup: View {
         }
         .ambientCard(density: .compact, fillWidth: true)
     }
+
+    /// The app puts this in the nav bar as square.and.pencil. Kept as an
+    /// explicit affordance here because the lab's mockups have no nav bar of
+    /// their own to hang it in.
+    private var newConversationButton: some View {
+        Image(systemName: "square.and.pencil")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 52, height: 52)
+            .background(Circle().fill(feature))
+            .shadow(color: feature.opacity(0.45), radius: 10, y: 5)
+            .padding(.trailing, 20)
+            .padding(.bottom, 92)
+    }
+}
+
+/// Strips a List row back to nothing so the ambient wash shows through and the
+/// cards supply all the spacing — while keeping the row a real List row, which
+/// is what makes `.swipeActions` work.
+private struct LabChatListRow: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: AmbientDensity.compact.stackSpacing / 2,
+                                      leading: 16,
+                                      bottom: AmbientDensity.compact.stackSpacing / 2,
+                                      trailing: 16))
+    }
 }
 
 // MARK: - Conversation row
 
-/// The list row at compact. Everything the real row carries: the hashed-colour
-/// avatar, the name in bold when unread, a two-line preview with the "You: "
-/// prefix and emoji-typed media previews, a relative timestamp, an unread pill,
-/// and the pinned treatment.
+/// Everything ConversationRow carries: hashed-colour avatar, name bold when
+/// unread, a two-line preview with the "You: " prefix and emoji-typed media
+/// previews, a relative time, an unread pill and the pinned treatment.
 ///
-/// Two changes from today, both deliberate:
-///   - the avatar is 44 rather than 50, which is where the row's height goes;
-///   - pinned is an orange hairline and a pin glyph rather than a 10% orange
-///     wash across the whole row, because under D11 the page already carries a
-///     colour and a second full-row tint on top of it reads as a rendering bug.
+/// Two deliberate changes:
+///   - the avatar is 44 rather than 50, which is where the row's height goes
+///   - pinned is an orange hairline rather than a 10% orange wash over the whole
+///     row: under D11 the page already carries a colour, and a second full-row
+///     tint on top of it reads as a rendering fault rather than as emphasis
 struct LabConversationRow: View {
     let conversation: LabConversation
     var density: AmbientDensity = .compact
@@ -157,8 +202,7 @@ struct LabConversationRow: View {
                 HStack(spacing: 5) {
                     if conversation.pinned {
                         Image(systemName: "pin.fill")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.orange)
+                            .font(.system(size: 9)).foregroundStyle(.orange)
                     }
                     Text(conversation.name)
                         .font(unread ? density.titleFont.weight(.bold) : density.titleFont)
@@ -170,11 +214,19 @@ struct LabConversationRow: View {
                 }
 
                 HStack(alignment: .top, spacing: 8) {
-                    Text(conversation.previewText)
-                        .font(density.subtitleFont)
-                        .foregroundStyle(unread ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.secondary))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+                    if conversation.hasMessages {
+                        Text(conversation.previewText)
+                            .font(density.subtitleFont)
+                            .foregroundStyle(unread ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.secondary))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    } else {
+                        // The app's own wording and its italic.
+                        Text("No messages yet")
+                            .font(density.subtitleFont)
+                            .foregroundStyle(.secondary)
+                            .italic()
+                    }
 
                     Spacer(minLength: 0)
 
@@ -190,20 +242,39 @@ struct LabConversationRow: View {
             }
         }
         .ambientCard(density: density,
-                     state: .normal,
                      border: .hairline(conversation.pinned
                                        ? Color.orange.opacity(0.45)
                                        : Color.primary.opacity(0.08)))
+        // Pin on the leading edge; delete on the trailing edge for GROUPS ONLY.
+        // A direct message cannot be swiped away in the app and that asymmetry
+        // is kept.
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button { } label: {
+                Label(conversation.pinned ? "Unpin" : "Pin",
+                      systemImage: conversation.pinned ? "pin.slash" : "pin")
+            }
+            .tint(conversation.pinned ? .gray : .orange)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if conversation.isGroup {
+                Button(role: .destructive) { } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
     }
 
     private var avatar: some View {
         Group {
             if conversation.isGroup {
                 ZStack {
+                    // Seeded from the conversation id, as the app does — but
+                    // through AmbientStyle.stableHash rather than hashValue,
+                    // which is seeded per process and gives a person a
+                    // different colour after every relaunch.
                     Circle().fill(AmbientStyle.avatarColor(conversation.id).gradient)
                     Image(systemName: "person.2.fill")
-                        .font(.system(size: 15))
-                        .foregroundStyle(.white)
+                        .font(.system(size: 15)).foregroundStyle(.white)
                 }
                 .frame(width: 44, height: 44)
             } else {
@@ -220,14 +291,11 @@ struct ChatThreadMockup: View {
     let feature: Color
     let wash: Double
 
-    /// Lever 1. `everyMessage` is what ships today.
     private enum Stamps: String, CaseIterable {
         case everyMessage = "Every message"
         case whenItPauses = "When it pauses"
     }
 
-    /// Lever 3 — whose colour "mine" is. A genuinely open question, so it is a
-    /// switch rather than a decision made on the operator's behalf.
     private enum MineTint: String, CaseIterable {
         case brand = "Company blue"
         case feature = "Chat pink"
@@ -238,6 +306,7 @@ struct ChatThreadMockup: View {
     @State private var mineTint: MineTint = .brand
     @State private var draft = ""
     @State private var showControls = true
+    @State private var showAttachments = false
 
     private var bubbleTint: Color {
         mineTint == .brand ? AmbientStyle.brand : feature
@@ -254,11 +323,13 @@ struct ChatThreadMockup: View {
                     LazyVStack(spacing: 0) {
                         if showControls { controls.padding(.bottom, 12) }
 
+                        loadEarlier
+
                         ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                             if let separator = daySeparator(at: index) {
                                 dayDivider(separator)
                             }
-                            bubble(message, at: index)
+                            row(message, at: index)
                                 .padding(.top, topGap(at: index))
                         }
                     }
@@ -274,10 +345,23 @@ struct ChatThreadMockup: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    withAnimation(AmbientMotion.snappy) { showControls.toggle() }
-                } label: {
-                    Image(systemName: showControls ? "slider.horizontal.3" : "slider.horizontal.below.rectangle")
+                HStack(spacing: 14) {
+                    Button {
+                        withAnimation(AmbientMotion.snappy) { showControls.toggle() }
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    // The app's overflow: Conversation Settings, View Profile
+                    // (direct conversations only, and a TODO), Refresh Messages.
+                    Menu {
+                        Button { } label: { Label("Conversation settings", systemImage: "gear") }
+                        if !conversation.isGroup {
+                            Button { } label: { Label("View profile", systemImage: "person.circle") }
+                        }
+                        Button { } label: { Label("Refresh messages", systemImage: "arrow.clockwise") }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
                 }
             }
         }
@@ -296,7 +380,7 @@ struct ChatThreadMockup: View {
                     ForEach(Stamps.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                Text("“Every message” is what ships today — a caption line under all fifteen of these.")
+                Text("“Every message” is what ships today — a caption line under all sixteen of these.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -322,35 +406,46 @@ struct ChatThreadMockup: View {
             }
             .tint(feature)
 
-            Text("Hide this strip with the button top-right to judge the scrollback clean.")
+            Text("Hide this strip with the slider button top-right to judge the scrollback clean.")
                 .font(.caption2).foregroundStyle(.tertiary)
         }
         .ambientCard(density: .compact, border: .dashed(Color.primary.opacity(0.25)), fillWidth: true)
     }
 
+    /// Kept: the app pages older messages behind this button, with a spinner.
+    private var loadEarlier: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.up.circle").font(.caption)
+            Text("Load earlier messages").font(.caption)
+        }
+        .foregroundStyle(feature)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+    }
+
     // MARK: - Grouping rules
 
-    /// True when this message continues a run: same sender, same day, and close
-    /// enough in time that it reads as one turn rather than two.
     private func continuesRun(at index: Int) -> Bool {
         guard grouped, index > 0 else { return false }
         let previous = messages[index - 1]
         let current = messages[index]
+        // A system message never joins a run in either direction.
+        guard previous.kind != .system, current.kind != .system else { return false }
         guard previous.sender == current.sender else { return false }
         guard Calendar.current.isDate(previous.sentAt, inSameDayAs: current.sentAt) else { return false }
         return current.sentAt.timeIntervalSince(previous.sentAt) < 5 * 60
     }
 
-    /// The last message of a run — the one that carries the timestamp when
-    /// stamps are set to "when it pauses".
     private func endsRun(at index: Int) -> Bool {
         guard index + 1 < messages.count else { return true }
         return !continuesRun(at: index + 1)
     }
 
     private func showsSender(at index: Int) -> Bool {
-        // 1:1 threads never name the sender; the app names them in groups only.
-        guard conversation.isGroup, !messages[index].mine else { return false }
+        let message = messages[index]
+        guard message.kind != .system else { return false }
+        // Named in groups only, and never for your own — the app's rule.
+        guard conversation.isGroup, !message.mine else { return false }
         return !continuesRun(at: index)
     }
 
@@ -364,6 +459,7 @@ struct ChatThreadMockup: View {
     private func topGap(at index: Int) -> CGFloat {
         guard index > 0 else { return 0 }
         if daySeparator(at: index) != nil { return 0 }
+        if messages[index].kind == .system || messages[index - 1].kind == .system { return 12 }
         return continuesRun(at: index) ? 2 : 8
     }
 
@@ -378,17 +474,43 @@ struct ChatThreadMockup: View {
     private func dayDivider(_ label: String) -> some View {
         HStack(spacing: 10) {
             Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1)
-            Text(label)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
+            Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1)
         }
         .padding(.vertical, 14)
     }
 
-    // MARK: - Bubbles
+    // MARK: - Rows
 
-    private func bubble(_ message: LabMessage, at index: Int) -> some View {
+    @ViewBuilder
+    private func row(_ message: LabMessage, at index: Int) -> some View {
+        if message.kind == .system {
+            systemRow(message, at: index)
+        } else {
+            bubbleRow(message, at: index)
+        }
+    }
+
+    /// Centred, in a capsule, never in a bubble and never with a sender name.
+    /// "X added Y to the group", "X removed Y", "X left the group".
+    private func systemRow(_ message: LabMessage, at index: Int) -> some View {
+        VStack(spacing: 3) {
+            Text(message.text ?? "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Capsule().fill(.ultraThinMaterial))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06)))
+            if showsStamp(at: index) {
+                Text(Formatters.shortTime.string(from: message.sentAt))
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func bubbleRow(_ message: LabMessage, at index: Int) -> some View {
         HStack {
             if message.mine { Spacer(minLength: 60) }
 
@@ -404,8 +526,7 @@ struct ChatThreadMockup: View {
 
                 if showsStamp(at: index) {
                     Text(Formatters.shortTime.string(from: message.sentAt))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(.caption2).foregroundStyle(.tertiary)
                         .padding(.horizontal, 4)
                 }
             }
@@ -417,11 +538,11 @@ struct ChatThreadMockup: View {
     @ViewBuilder
     private func content(_ message: LabMessage) -> some View {
         switch message.kind {
-        case .text, .link, .file:
+        case .text, .link, .system:
             LabChatBubble(mine: message.mine, tint: bubbleTint) {
                 Text(message.text ?? "")
-                    // 15pt, not the default 17pt the app rides on. This is the
-                    // third lever, and the cheapest of the three.
+                    // 15pt, against the 17pt default the app rides on. The
+                    // cheapest of the three levers.
                     .font(.system(size: 15))
                     .foregroundStyle(message.mine ? AnyShapeStyle(.white) : AnyShapeStyle(Color.primary))
                     .fixedSize(horizontal: false, vertical: true)
@@ -430,12 +551,25 @@ struct ChatThreadMockup: View {
             media(label: "GIF", systemImage: "photo.stack.fill", width: 200, height: 140)
         case .image:
             media(label: "Photo", systemImage: "photo.fill", width: 220, height: 165)
+        case .file:
+            // The app shows the literal word "File" plus an Open button that is
+            // a TODO. Kept, because pretending it opens would be a lie.
+            LabChatBubble(mine: message.mine, tint: bubbleTint) {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.fill").font(.footnote)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("File").font(.caption.weight(.medium))
+                        Text(message.text ?? "").font(.caption2).lineLimit(1)
+                    }
+                }
+                .foregroundStyle(message.mine ? AnyShapeStyle(.white) : AnyShapeStyle(Color.primary))
+            }
         }
     }
 
     /// A placeholder, not a real asset. Sized to a sensible aspect rather than
-    /// the fixed 250×250 every GIF gets today regardless of its real shape —
-    /// worth seeing, because that squaring is visible in the app.
+    /// the fixed 250×250 every GIF gets today regardless of its real shape.
+    /// Tapping opens full screen in the app — that viewer is live, not dead code.
     private func media(label: String, systemImage: String,
                        width: CGFloat, height: CGFloat) -> some View {
         RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -444,8 +578,7 @@ struct ChatThreadMockup: View {
             .overlay {
                 VStack(spacing: 6) {
                     Image(systemName: systemImage)
-                        .font(.system(size: 26, weight: .light))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 26, weight: .light)).foregroundStyle(.tertiary)
                     Text(label).font(.caption2).foregroundStyle(.tertiary)
                 }
             }
@@ -456,30 +589,55 @@ struct ChatThreadMockup: View {
     // MARK: - Composer
 
     private var composer: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "plus.circle.fill")
-                .font(.system(size: 26))
-                .foregroundStyle(feature)
+        VStack(spacing: 0) {
+            if showAttachments {
+                HStack(spacing: 18) {
+                    attachmentButton("Photo", "photo.on.rectangle.angled")
+                    attachmentButton("GIF", "photo.stack.fill")
+                    attachmentButton("File", "paperclip")
+                    attachmentButton("Emoji", "face.smiling")
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 18).padding(.vertical, 12)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(AmbientMotion.snappy) { showAttachments.toggle() }
+                } label: {
+                    Image(systemName: showAttachments ? "xmark.circle.fill" : "plus.circle.fill")
+                        .font(.system(size: 26)).foregroundStyle(feature)
+                }
+                .buttonStyle(.plain)
+
                 TextField("Message", text: $draft, axis: .vertical)
                     .font(.system(size: 15))
                     .lineLimit(1...5)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(Capsule().fill(.ultraThinMaterial))
-            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(Capsule().fill(.ultraThinMaterial))
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
 
-            Image(systemName: "arrow.up.circle.fill")
-                .font(.system(size: 28))
-                .foregroundStyle(draft.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(bubbleTint))
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(draft.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(bubbleTint))
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
         .background(.regularMaterial)
         .overlay(alignment: .top) {
             Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 0.5)
+        }
+    }
+
+    private func attachmentButton(_ label: String, _ symbol: String) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.system(size: 18))
+                .foregroundStyle(feature)
+                .frame(width: 42, height: 42)
+                .background(Circle().fill(feature.opacity(0.12)))
+            Text(label).font(.caption2).foregroundStyle(.secondary)
         }
     }
 }
@@ -488,12 +646,12 @@ struct ChatThreadMockup: View {
 
 /// A message bubble.
 ///
-/// `ambientCard` fills with a material and takes its radius from a density —
-/// a bubble needs a SOLID tint for "mine" and a 16pt radius on both. That is a
-/// gap in the primitive, not a licence to hand-roll: if bubbles survive review,
-/// a tinted fill is promoted INTO AmbientCard and Chat's conversion calls it,
-/// exactly as the lab's charter says. This type exists so the gap is visible
-/// and named rather than discovered halfway through AMB.6.
+/// `ambientCard` fills with a material and takes its radius from a density — a
+/// bubble needs a SOLID tint for "mine" and 16pt on both. That is a gap in the
+/// primitive, not a licence to hand-roll: if bubbles survive review, the tinted
+/// fill is promoted INTO AmbientCard and Chat's conversion calls it. This type
+/// exists so the gap is visible and named rather than discovered halfway
+/// through AMB.6.
 ///
 /// ambient-allow: a bubble is not a card; it is the treatment AMB.6 must promote
 /// into AmbientCard before any real Chat screen is converted.

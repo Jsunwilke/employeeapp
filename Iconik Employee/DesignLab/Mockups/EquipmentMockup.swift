@@ -3,58 +3,56 @@
 //
 //  ARC SCAFFOLDING. Deleted with the rest of the lab at AMB.12.
 //
-//  THIS IS THE D10 GATE FOR AMB.3. The specimen sheet proposed Equipment's ROW;
-//  a row is not a screen, and AMB.3 does not start until the screen below has
-//  been approved on a device.
+//  THIS IS THE D10 GATE FOR AMB.3, and under D12 it is a REDESIGN with a parity
+//  constraint rather than a restyle. Every capability it must not lose is listed
+//  in AMB_BATCH1_PARITY.md, read out of the source rather than off the screen.
 //
-//  WHAT IS HERE, AND WHY BOTH TABS
-//      Equipment opens on MY KITS, not on the equipment list — that is the real
-//      default (EquipmentTabView.selectedTab = .myKits). Mocking only the list
-//      would gate AMB.3 on a screen the photographer does not actually land on,
-//      so both tabs are here, plus both detail screens they push to.
+//  THE ONE STRUCTURAL CHANGE: THE TAB BAR IS GONE.
+//      Equipment ships as two tabs — My Kit(s), which is the default, and All
+//      Equipment. But those are not two places, they are two questions, and only
+//      one of them gets asked most days: what am I holding, and is any of it
+//      late. Browsing the org's entire inventory is the rarer errand.
 //
-//  THE WASH  (D11)
-//      Equipment's feature colour, #00A2C7, straight out of FeatureTheme — the
-//      same colour as its home tile and its bottom-bar item, so the tile you tap
-//      and the screen you land on agree. Starts at full strength because nobody
-//      has judged the intensity for this screen yet; the slider is how it gets
-//      judged. The dashboard settled at 90% for comparison.
+//      So the screen leads with YOUR GEAR and carries the inventory behind one
+//      row. Nothing is lost — both destinations are one tap from the top, the
+//      same as a segmented control — and the common case stops costing a tap.
 //
-//  TWO THINGS THAT ARE DELIBERATELY NOT LIKE THE REAL SCREEN, both disclosed in
-//  the lab strip at the top so the operator is not judging a lie:
+//      What that buys, and it is the real point: a standing line at the top that
+//      says how much you have out, how much is due back, and how much is LATE.
+//      Today the only way to find out something is overdue is to read every kit
+//      card in turn.
 //
-//      1. THE QR BUTTON IS LIFTED. It sits hard at the bottom-right corner in
-//         the app; here it is raised to clear the lab's own mockup switcher,
-//         which occupies that corner. Same size, same side, wrong height.
+//  THE QR BUTTON STAYS A FAB.
+//      It was tempting to fold it into the search field as a glyph. It is the
+//      fastest route to any item in the building — scan the tape on the case —
+//      and it gets pressed with a case in the other hand. A 56pt target beats a
+//      tidy one. It is lifted here only to clear the lab's own switcher.
 //
-//      2. THE CONTAINER IS NOT THE ONE EQUIPMENT REALLY GETS. Equipment is a
-//         self-nav feature (MainEmployeeView.isSelfNavFeature) — it builds its
-//         own NavigationStack. The lab is inside the shell's NavigationView, per
-//         the rule that a mockup never supplies its own container. Everything
-//         here therefore pushes through .ambientPush(item:), which is the one
-//         form that works in BOTH, so nothing approved here can fail on the way
-//         out. AMB.3 still has to decide whether Equipment keeps its own stack.
+//  THE KIT DETAIL IS A PACKING LIST.
+//      Categories open EXPANDED, in the app's own photography workflow order
+//      (cameras, lenses, lighting, stands, bags, backdrops, power, storage,
+//      audio, accessories). Collapsed-by-default means a six-item kit opens on
+//      three headers and no equipment, which is the wrong answer to the only
+//      question anyone opens a kit to ask.
+//
+//  CONTAINER NOTE: Equipment is a self-nav feature (isSelfNavFeature), so it
+//  builds its own NavigationStack while the lab runs inside the shell's
+//  NavigationView. Everything here pushes through .ambientPush(item:), which
+//  works in both, so nothing approved can fail on the way out.
 
 import SwiftUI
 
 struct EquipmentMockup: View {
 
-    private enum Tab: String, CaseIterable {
-        case myKits = "My Kit(s)"
-        case allEquipment = "All Equipment"
-    }
-
-    /// The status filters across the top of the list. `all` is the resting state.
-    private enum Filter: String, CaseIterable {
-        case all = "All"
+    /// The status filters. Categories come from the data — see `categories`.
+    private enum StatusFilter: String, CaseIterable {
         case available = "Available"
         case checkedOut = "Checked Out"
         case needsRepair = "Needs Repair"
         case retired = "Retired"
 
-        var status: LabEquipmentStatus? {
+        var status: LabEquipmentStatus {
             switch self {
-            case .all: return nil
             case .available: return .available
             case .checkedOut: return .checkedOut
             case .needsRepair: return .needsRepair
@@ -63,31 +61,34 @@ struct EquipmentMockup: View {
         }
     }
 
-    @State private var tab: Tab = .myKits
     @State private var wash: Double = 1
     @State private var query = ""
-    @State private var filter: Filter = .all
+    @State private var browsing = false
+    @State private var category: String?
+    @State private var status: StatusFilter?
     @State private var pushedItem: LabEquipmentItem?
     @State private var pushedKit: LabKit?
 
     private var feature: Color { FeatureTheme.color(for: "equipment") }
 
+    /// Typing anywhere jumps straight into the inventory — you never have to
+    /// find the browse row first.
+    private var showingInventory: Bool {
+        browsing || !query.isEmpty || category != nil || status != nil
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             AmbientBackdrop(tint: feature, intensity: wash)
 
-            VStack(spacing: 0) {
-                Picker("View", selection: $tab) {
-                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 10)
+            VStack(spacing: 10) {
+                searchField.padding(.horizontal, 16).padding(.top, 8)
 
-                switch tab {
-                case .myKits: myKits
-                case .allEquipment: allEquipment
+                if showingInventory {
+                    filterChips
+                    inventory
+                } else {
+                    myGear
                 }
             }
 
@@ -95,25 +96,23 @@ struct EquipmentMockup: View {
         }
         .ambientPush(item: $pushedKit) { EquipmentKitDetailMockup(kit: $0, feature: feature, wash: wash) }
         .ambientPush(item: $pushedItem) { EquipmentDetailMockup(item: $0, feature: feature, wash: wash) }
+        .animation(AmbientMotion.gentle, value: showingInventory)
     }
 
     // MARK: - Lab chrome
 
-    /// Dashed, because the design system's dashed edge means "not the same KIND
-    /// of thing as the cards around it" — which is exactly what lab chrome is.
     private var labStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Circle().fill(feature).frame(width: 12, height: 12)
-                Text("Equipment wash")
-                    .font(.footnote.weight(.semibold))
+                Text("Equipment wash").font(.footnote.weight(.semibold))
                 Spacer()
                 Text(wash == 0 ? "off" : "\(Int(wash * 100))%")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             Slider(value: $wash, in: 0...1).tint(feature)
-            Text("Full strength to start — nobody has judged this screen's intensity yet. Home settled at 90%. Two things here are not like the app: the scan button is lifted to clear the lab's own switcher, and this strip does not exist.")
+            Text("The two tabs are gone: this screen leads with your gear and the whole inventory is one row down (or just start typing). The scan button is lifted to clear the lab's switcher — in the app it sits in the corner.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -121,155 +120,234 @@ struct EquipmentMockup: View {
         .ambientCard(density: .compact, border: .dashed(Color.primary.opacity(0.25)), fillWidth: true)
     }
 
-    // MARK: - My Kits  (the default tab)
+    // MARK: - Your gear  (what the default tab used to be)
 
-    private var myKits: some View {
+    private var myGear: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: AmbientDensity.compact.stackSpacing) {
-                labStrip
-                    .padding(.bottom, 4)
+                labStrip.padding(.bottom, 4)
 
-                AmbientSectionTitle("My kits", trailing: "\(DesignLabSampleData.myKits.count)")
+                standingLine
+
+                AmbientSectionTitle("Your kits", trailing: "\(DesignLabSampleData.myKits.count)")
                 ForEach(DesignLabSampleData.myKits) { kit in
                     Button { pushedKit = kit } label: { LabKitRow(kit: kit) }
                         .buttonStyle(.plain)
                 }
 
-                AmbientSectionTitle("Other equipment",
+                AmbientSectionTitle("Also checked out to you",
                                     trailing: "\(DesignLabSampleData.otherAssignedEquipment.count)")
                     .padding(.top, 10)
                 ForEach(DesignLabSampleData.otherAssignedEquipment) { item in
+                    // In the app this row's tap handler is an EMPTY COMMENT — it
+                    // looks tappable and does nothing. Wired here; that is a bug
+                    // fix AMB.3 should ship, not a redesign.
                     Button { pushedItem = item } label: { LabEquipmentRow(item: item) }
                         .buttonStyle(.plain)
                 }
+
+                browseRow.padding(.top, 14)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 96)
         }
     }
 
-    // MARK: - All Equipment
+    /// The line that does not exist today. Three numbers, and the late one is
+    /// the only one allowed to shout.
+    private var standingLine: some View {
+        let gear = DesignLabSampleData.MyGear.self
+        return HStack(spacing: 0) {
+            standingStat("\(gear.itemCount)", "items out", tint: .primary)
+            divider
+            standingStat("\(gear.dueSoonCount)", "due back", tint: .secondary)
+            divider
+            standingStat("\(gear.overdueCount)", "overdue",
+                         tint: gear.overdueCount > 0 ? .red : .secondary)
+        }
+        .ambientCard(density: .roomy,
+                     state: gear.overdueCount > 0 ? .highlighted : .normal,
+                     border: gear.overdueCount > 0
+                        ? .strong(Color.red.opacity(0.45))
+                        : .hairline(Color.primary.opacity(0.08)),
+                     fillWidth: true)
+    }
 
-    private var allEquipment: some View {
-        VStack(spacing: 10) {
-            searchField
-                .padding(.horizontal, 16)
+    private var divider: some View {
+        Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 1, height: 30)
+    }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(Filter.allCases, id: \.self) { option in
-                        filterChip(option)
-                    }
+    private func standingStat(_ value: String, _ label: String, tint: Color) -> some View {
+        VStack(spacing: 3) {
+            Text(value)
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(tint)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var browseRow: some View {
+        Button {
+            withAnimation(AmbientMotion.gentle) { browsing = true }
+            AmbientHaptics.impact(.light)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(feature)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Browse all equipment").font(.subheadline.weight(.semibold))
+                    Text("\(DesignLabSampleData.equipment.count) items · \(DesignLabSampleData.equipmentCategories.count) categories")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 16)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
             }
+            .ambientCard(density: .roomy, fillWidth: true)
+        }
+        .buttonStyle(.plain)
+    }
 
+    // MARK: - Inventory  (what All Equipment used to be)
+
+    private var inventory: some View {
+        Group {
             if filtered.isEmpty {
                 ScrollView {
                     VStack(spacing: 14) {
-                        labStrip
                         AmbientEmptyState(
                             title: "No equipment found",
                             message: "Try adjusting your search or filters.",
                             systemImage: "shippingbox")
-                        Button {
-                            query = ""
-                            filter = .all
-                        } label: {
-                            Text("Clear filters")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 20).padding(.vertical, 11)
-                                .background(Capsule().fill(feature))
+                        // The app shows Clear Filters only when something is
+                        // actually filtered. Same rule here.
+                        if isFiltered {
+                            Button { clearFilters() } label: {
+                                Text("Clear filters")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 20).padding(.vertical, 11)
+                                    .background(Capsule().fill(feature))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 96)
+                    .padding(.horizontal, 16).padding(.bottom, 96)
                 }
             } else {
                 ScrollView {
                     LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
-                        labStrip
-                            .padding(.bottom, 4)
                         ForEach(filtered) { item in
                             Button { pushedItem = item } label: { LabEquipmentRow(item: item) }
                                 .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, 16)
+                    .padding(.top, 2)
                     .padding(.bottom, 96)
                 }
             }
         }
     }
 
-    /// Live, so the empty state is reached by actually typing rather than by a
-    /// toggle that pretends. Equipment filters client-side over the whole array
-    /// in the app too — there is no pagination anywhere in the feature.
+    private var isFiltered: Bool { !query.isEmpty || category != nil || status != nil }
+
+    private func clearFilters() {
+        withAnimation(AmbientMotion.snappy) {
+            query = ""; category = nil; status = nil
+        }
+    }
+
+    /// Search matches name, category, serial AND description — the app searches
+    /// name, serial and description, and dropping category would have made the
+    /// category chips the only way to find one.
     private var filtered: [LabEquipmentItem] {
         DesignLabSampleData.equipment.filter { item in
-            let matchesStatus = filter.status.map { $0 == item.status } ?? true
-            guard matchesStatus else { return false }
+            if let status, item.status != status.status { return false }
+            if let category, item.category != category { return false }
             guard !query.isEmpty else { return true }
             let needle = query.lowercased()
             return item.name.lowercased().contains(needle)
                 || (item.category?.lowercased().contains(needle) ?? false)
                 || (item.serial?.lowercased().contains(needle) ?? false)
+                || (item.detail?.lowercased().contains(needle) ?? false)
         }
     }
 
-    /// The card primitive doing duty as a text field container — one of the
-    /// things AMB.2 wanted to know: whether `.ambientCard` covers the furniture
-    /// as well as the content. It does.
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-            TextField("Search equipment", text: $query)
-                .font(.subheadline)
-                .autocorrectionDisabled()
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
+    /// Categories AND statuses, in one scroller with a divider between them —
+    /// the app's arrangement, and the first cut of this mockup dropped the
+    /// category half entirely.
+    private var filterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(DesignLabSampleData.equipmentCategories, id: \.self) { name in
+                    chip(name, selected: category == name, dot: nil) {
+                        category = category == name ? nil : name
+                    }
                 }
-                .buttonStyle(.plain)
+
+                Rectangle().fill(Color.primary.opacity(0.12))
+                    .frame(width: 1, height: 20)
+                    .padding(.horizontal, 2)
+
+                ForEach(StatusFilter.allCases, id: \.self) { option in
+                    chip(option.rawValue, selected: status == option,
+                         dot: option.status.color) {
+                        status = status == option ? nil : option
+                    }
+                }
             }
+            .padding(.horizontal, 16)
         }
-        .ambientCard(density: .compact, fillWidth: true)
     }
 
-    private func filterChip(_ option: Filter) -> some View {
-        let selected = option == filter
-        return Button {
-            withAnimation(AmbientMotion.snappy) { filter = option }
+    private func chip(_ title: String, selected: Bool, dot: Color?,
+                      action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(AmbientMotion.snappy) { action() }
             AmbientHaptics.selection()
         } label: {
             HStack(spacing: 5) {
-                if let status = option.status {
-                    Circle().fill(status.color).frame(width: 6, height: 6)
-                }
-                Text(option.rawValue)
-                    .font(.caption.weight(.semibold))
+                if let dot { Circle().fill(dot).frame(width: 6, height: 6) }
+                Text(title).font(.caption.weight(.semibold))
             }
             .foregroundStyle(selected ? .white : .primary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 12).padding(.vertical, 7)
             .background {
-                if selected {
-                    Capsule().fill(feature)
-                } else {
-                    Capsule().fill(.ultraThinMaterial)
-                }
+                if selected { Capsule().fill(feature) }
+                else { Capsule().fill(.ultraThinMaterial) }
             }
             .overlay(Capsule().strokeBorder(Color.primary.opacity(selected ? 0 : 0.1)))
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - The scan button
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextField("Search all \(DesignLabSampleData.equipment.count) items", text: $query)
+                .font(.subheadline)
+                .autocorrectionDisabled()
+            if showingInventory {
+                Button {
+                    clearFilters()
+                    withAnimation(AmbientMotion.gentle) { browsing = false }
+                } label: {
+                    Text("Done").font(.caption.weight(.bold)).foregroundStyle(feature)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .ambientCard(density: .compact, fillWidth: true)
+    }
 
     private var qrButton: some View {
         Image(systemName: "qrcode.viewfinder")
@@ -279,17 +357,16 @@ struct EquipmentMockup: View {
             .background(Circle().fill(feature))
             .shadow(color: feature.opacity(0.45), radius: 10, y: 5)
             .padding(.trailing, 20)
-            // 92 rather than 20: the lab's mockup switcher owns this corner.
+            // 92 rather than 20: the lab's switcher owns this corner.
             .padding(.bottom, 92)
     }
 }
 
 // MARK: - Kit row
 
-/// My Kits' row, rebuilt from Ambient primitives. Drawn from what `KitCard`
-/// renders today: the tape-colour stripe, the box icon with its colour dot, the
-/// name, an optional description, the item count, and exactly one of overdue /
-/// permanent / a return date.
+/// Everything `KitCard` renders: tape stripe, box icon with its colour dot,
+/// name, description, item count, and exactly one of overdue / permanent /
+/// return date.
 struct LabKitRow: View {
     let kit: LabKit
     var density: AmbientDensity = .compact
@@ -299,9 +376,7 @@ struct LabKitRow: View {
             icon
 
             VStack(alignment: .leading, spacing: density.contentSpacing) {
-                Text(kit.name)
-                    .font(density.titleFont)
-                    .lineLimit(1)
+                Text(kit.name).font(density.titleFont).lineLimit(1)
                 if let detail = kit.detail {
                     Text(detail)
                         .font(density.subtitleFont)
@@ -311,15 +386,14 @@ struct LabKitRow: View {
                 HStack(spacing: 6) {
                     AmbientBadge(text: "\(kit.itemCount) items",
                                  systemImage: "cube.box.fill", tint: .secondary)
-                    dueBadge
+                    LabKitDueBadge(due: kit.due)
                 }
             }
 
             Spacer(minLength: 0)
 
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.tertiary)
+                .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
         }
         .ambientCard(density: density, border: .hairline(borderTint))
         .overlay(alignment: .leading) { LabKitStripe(kit: kit, density: density) }
@@ -336,23 +410,27 @@ struct LabKitRow: View {
             .frame(width: 40, height: 40)
             .overlay {
                 Image(systemName: "shippingbox.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 16)).foregroundStyle(.secondary)
             }
             .overlay(alignment: .topLeading) {
                 LabKitDot(kit: kit, size: 12).offset(x: -3, y: -3)
             }
     }
+}
 
-    @ViewBuilder
-    private var dueBadge: some View {
-        switch kit.due {
+/// Exactly one of the three, which is the rule in KitCard and KitDetailView.
+struct LabKitDueBadge: View {
+    let due: LabKitDue
+    var spelledOut = false
+
+    var body: some View {
+        switch due {
         case .permanent:
             AmbientBadge(text: "Permanent", systemImage: "infinity", tint: .blue)
         case .on(let date):
             AmbientBadge(text: "Due \(date)", systemImage: "calendar", tint: .secondary)
         case .overdue(let days):
-            AmbientBadge(text: "\(days)d overdue",
+            AmbientBadge(text: spelledOut ? "\(days) days overdue" : "\(days)d overdue",
                          systemImage: "exclamationmark.triangle.fill", tint: .red)
         }
     }
@@ -360,13 +438,11 @@ struct LabKitRow: View {
 
 // MARK: - Kit colour, including rainbow
 
-/// The tape colour as a stripe down the leading edge.
-///
 /// Rainbow is a real kit tape colour — the model has `isRainbow` and three views
-/// special-case it — so a stripe drawn as a flat `Color(hex:)` would render it
-/// as garbage. Mirrors `KitColorBorder`'s gradient, minus the endless animation:
-/// a colour that spins forever on every row of a list is a battery cost and a
-/// distraction, and this is the right place to find out whether it is missed.
+/// special-case it — so a stripe drawn as a flat `Color(hex:)` renders garbage.
+/// Mirrors `KitColorBorder`'s gradient without its endless animation: a colour
+/// spinning forever on every row is a battery cost and a distraction, and this
+/// is the right place to find out whether it is missed.
 struct LabKitStripe: View {
     let kit: LabKit
     var density: AmbientDensity = .compact
@@ -408,25 +484,41 @@ struct LabKitDot: View {
     }
 }
 
-// MARK: - Kit detail
+// MARK: - Kit detail — a packing list
 
-/// Drawn from `KitDetailView`: the big icon with its colour dot, the name, the
-/// description, the item count and return badge, the tape-colour reference line,
-/// then the items GROUPED BY CATEGORY and starting COLLAPSED — which is the part
-/// of this screen worth arguing about, because a kit of six items opens showing
-/// nothing but three category headers.
 struct EquipmentKitDetailMockup: View {
     let kit: LabKit
     let feature: Color
     let wash: Double
 
-    @State private var expanded: Set<String> = []
+    /// Starts EMPTY, meaning nothing is collapsed. The app starts with
+    /// everything collapsed, so a six-item kit opens on three headers.
+    @State private var collapsed: Set<String> = []
     @State private var pushedItem: LabEquipmentItem?
+
+    /// The app's own photography workflow order, carried over verbatim from
+    /// KitDetailView.categorySortOrder. Cameras first, accessories last,
+    /// Uncategorized dead last. Sorting these alphabetically would look
+    /// identical in a screenshot and be wrong every time anyone packs a case.
+    private static let workflowOrder: [String] = [
+        "camera", "bodies", "lens", "light", "flash", "strobe",
+        "stand", "tripod", "monopod", "bag", "case", "backdrop", "background",
+        "battery", "power", "memory", "card", "storage", "audio", "mic", "accessori",
+    ]
+
+    private static func priority(_ name: String) -> Int {
+        let lower = name.lowercased()
+        for (index, keyword) in workflowOrder.enumerated() where lower.contains(keyword) {
+            return index
+        }
+        if name == "Uncategorised" || name == "Uncategorized" { return 999 }
+        return 998
+    }
 
     private var groups: [(category: String, items: [LabEquipmentItem])] {
         Dictionary(grouping: kit.items) { $0.category ?? "Uncategorised" }
             .map { (category: $0.key, items: $0.value) }
-            .sorted { $0.category < $1.category }
+            .sorted { Self.priority($0.category) < Self.priority($1.category) }
     }
 
     var body: some View {
@@ -434,24 +526,24 @@ struct EquipmentKitDetailMockup: View {
             AmbientBackdrop(tint: feature, intensity: wash)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 14) {
                     header
 
-                    AmbientSectionTitle("Equipment in kit", trailing: "\(kit.itemCount)")
+                    AmbientSectionTitle("In this kit", trailing: "\(kit.itemCount)")
                     VStack(spacing: AmbientDensity.compact.stackSpacing) {
                         ForEach(groups, id: \.category) { group in
                             categorySection(group)
                         }
                     }
 
-                    Text("Categories open collapsed in the app, so a six-item kit lands on three headers and no equipment. Worth deciding here: open the first, open all, or leave it.")
+                    checkInButton.padding(.top, 6)
+
+                    Text("Grouped in the order a case gets packed — cameras, lenses, lighting, stands, bags — which is the app's own sort and not alphabetical. Categories open expanded here; in the app they all start closed.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 4)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
+                .padding(.horizontal, 16).padding(.vertical, 14)
             }
         }
         .navigationTitle(kit.name)
@@ -459,209 +551,226 @@ struct EquipmentKitDetailMockup: View {
         .ambientPush(item: $pushedItem) { EquipmentDetailMockup(item: $0, feature: feature, wash: wash) }
     }
 
+    /// Compact rather than the app's centred 80pt hero: same content, far less
+    /// of the fold spent before the first item you came here to look at.
     private var header: some View {
-        VStack(spacing: 12) {
+        HStack(spacing: 12) {
             ZStack {
-                Circle().fill(Color.primary.opacity(0.06)).frame(width: 80, height: 80)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+                    .frame(width: 52, height: 52)
                 Image(systemName: "shippingbox.fill")
-                    .font(.system(size: 34))
-                    .foregroundStyle(.secondary)
-                LabKitDot(kit: kit, size: 24).offset(x: 28, y: -28)
+                    .font(.system(size: 22)).foregroundStyle(.secondary)
+                LabKitDot(kit: kit, size: 16).offset(x: 20, y: -20)
             }
 
-            Text(kit.name).font(.title3.weight(.bold))
-
-            if let detail = kit.detail {
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+            VStack(alignment: .leading, spacing: 4) {
+                if let detail = kit.detail {
+                    Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 6) {
+                    AmbientBadge(text: "\(kit.itemCount) items",
+                                 systemImage: "cube.box.fill", tint: .secondary)
+                    LabKitDueBadge(due: kit.due, spelledOut: true)
+                }
+                // The tape-colour reference line, kept: it is how you find the
+                // case on a shelf.
+                HStack(spacing: 6) {
+                    LabKitDot(kit: kit, size: 12)
+                    Text(kit.isRainbow ? "Rainbow tape" : "Tape colour")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }
-
-            HStack(spacing: 8) {
-                AmbientBadge(text: "\(kit.itemCount) items",
-                             systemImage: "cube.box.fill", tint: .secondary)
-                dueBadge
-            }
-
-            HStack(spacing: 8) {
-                LabKitDot(kit: kit, size: 16)
-                Text("Tape colour, for finding it on a shelf")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.top, 2)
+            Spacer(minLength: 0)
         }
-        .ambientCard(density: .hero, state: .highlighted,
+        .ambientCard(density: .roomy, state: .highlighted,
                      border: .hairline(feature.opacity(0.3)),
-                     glow: feature, fillWidth: true, contentAlignment: .center)
-    }
-
-    @ViewBuilder
-    private var dueBadge: some View {
-        switch kit.due {
-        case .permanent:
-            AmbientBadge(text: "Permanent", systemImage: "infinity", tint: .blue)
-        case .on(let date):
-            AmbientBadge(text: "Due \(date)", systemImage: "calendar", tint: .secondary)
-        case .overdue(let days):
-            AmbientBadge(text: "\(days) days overdue",
-                         systemImage: "exclamationmark.triangle.fill", tint: .red)
-        }
+                     glow: feature, fillWidth: true)
     }
 
     private func categorySection(_ group: (category: String, items: [LabEquipmentItem])) -> some View {
-        VStack(spacing: AmbientDensity.compact.stackSpacing) {
+        let isOpen = !collapsed.contains(group.category)
+        return VStack(spacing: AmbientDensity.compact.stackSpacing) {
             Button {
                 withAnimation(AmbientMotion.snappy) {
-                    if expanded.contains(group.category) {
-                        expanded.remove(group.category)
-                    } else {
-                        expanded.insert(group.category)
-                    }
+                    if isOpen { collapsed.insert(group.category) }
+                    else { collapsed.remove(group.category) }
                 }
                 AmbientHaptics.selection()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: expanded.contains(group.category)
-                          ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 14)
-                    Text(group.category).font(AmbientDensity.compact.titleFont)
-                    Spacer(minLength: 0)
+                    Image(systemName: Self.icon(for: group.category))
+                        .font(.footnote).foregroundStyle(.secondary).frame(width: 20)
+                    Text(group.category).font(.footnote.weight(.semibold))
                     Text("\(group.items.count)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
                 }
-                .ambientCard(density: .compact, fillWidth: true)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            if expanded.contains(group.category) {
+            if isOpen {
                 ForEach(group.items) { item in
-                    Button { pushedItem = item } label: {
-                        LabEquipmentRow(item: item)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.leading, 14)
+                    Button { pushedItem = item } label: { LabEquipmentRow(item: item) }
+                        .buttonStyle(.plain)
                 }
             }
         }
     }
+
+    /// Carried over from KitDetailView.categoryIcon.
+    private static func icon(for category: String) -> String {
+        let name = category.lowercased()
+        if name.contains("camera") || name.contains("bodies") { return "camera.fill" }
+        if name.contains("lens") { return "camera.aperture" }
+        if name.contains("light") { return "light.max" }
+        if name.contains("bag") || name.contains("case") || name.contains("transport") { return "bag.fill" }
+        if name.contains("accessori") { return "gearshape.fill" }
+        if name.contains("tripod") || name.contains("stand") || name.contains("support") { return "camera.on.rectangle.fill" }
+        if name.contains("battery") || name.contains("power") { return "battery.100" }
+        if name.contains("memory") || name.contains("card") || name.contains("media") { return "sdcard.fill" }
+        if name.contains("audio") || name.contains("mic") { return "mic.fill" }
+        if name.contains("backdrop") || name.contains("background") { return "rectangle.portrait.fill" }
+        return "cube.box.fill"
+    }
+
+    private var checkInButton: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.to.line").font(.footnote.weight(.semibold))
+                Text("Check in kit").font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity).padding(.vertical, 13)
+            .background(Capsule().fill(feature))
+
+            Text("Returns all \(kit.itemCount) items in this kit")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
 }
 
-// MARK: - Equipment detail
+// MARK: - Item detail
 
-/// Drawn from `EquipmentDetailView`: a 250pt photo, a card of icon-label-value
-/// rows, the current assignment when checked out, three actions, and the
-/// assignment history.
+/// Reordered against the app, which opens with a 250pt photo. You are usually
+/// holding the object; what you cannot see by looking at it is whether it is
+/// free, who has it, and when it is due. So that leads, and the photo becomes a
+/// thumbnail beside it.
 struct EquipmentDetailMockup: View {
     let item: LabEquipmentItem
     let feature: Color
     let wash: Double
+
+    @State private var photoExpanded = false
 
     var body: some View {
         ZStack {
             AmbientBackdrop(tint: feature, intensity: wash)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    photo
-                    infoCard
-                    if let assignee = item.assignee { assignmentCard(assignee) }
+                VStack(alignment: .leading, spacing: 14) {
+                    headline
+                    if let assignee = item.assignee { assignment(assignee) }
                     actions
+                    specs
                     history
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
+                .padding(.horizontal, 16).padding(.vertical, 14)
             }
         }
         .navigationTitle(item.name)
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private var photo: some View {
-        RoundedRectangle(cornerRadius: AmbientDensity.hero.cornerRadius, style: .continuous)
-            .fill(Color.primary.opacity(0.06))
-            .frame(height: 250)
-            .overlay {
-                Image(systemName: item.hasPhoto ? "camera.fill" : "circle.dashed")
-                    .font(.system(size: 54, weight: .light))
-                    .foregroundStyle(.tertiary)
+    private var headline: some View {
+        HStack(spacing: 12) {
+            Button {
+                withAnimation(AmbientMotion.gentle) { photoExpanded.toggle() }
+            } label: {
+                photo
             }
-            .overlay(alignment: .topTrailing) {
-                AmbientBadge(text: item.status.rawValue,
-                             systemImage: item.status.symbol,
-                             tint: item.status.color)
-                    .padding(12)
-            }
-            .overlay(alignment: .bottomLeading) {
-                if item.kitColor != nil {
-                    AmbientBadge(text: "In a kit", systemImage: "shippingbox.fill", tint: .teal)
-                        .padding(12)
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(item.name)
+                    .font(.system(size: 17, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    AmbientBadge(text: item.status.rawValue,
+                                 systemImage: item.status.symbol, tint: item.status.color)
+                    AmbientBadge(text: item.condition.rawValue, tint: item.condition.color)
                 }
-            }
-    }
-
-    private var infoCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            infoRow("Category", item.category ?? "—", "square.grid.2x2")
-            Divider().opacity(0.4)
-            infoRow("Condition", item.condition.rawValue, "checkmark.seal",
-                    tint: item.condition.color)
-            Divider().opacity(0.4)
-            infoRow("Serial", item.serial ?? "—", "number")
-            Divider().opacity(0.4)
-            infoRow("Status", item.status.rawValue, item.status.symbol,
-                    tint: item.status.color)
-        }
-        .ambientCard(density: .roomy, fillWidth: true)
-    }
-
-    private func infoRow(_ label: String, _ value: String,
-                         _ symbol: String, tint: Color = .secondary) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.footnote)
-                .foregroundStyle(tint)
-                .frame(width: 20)
-            Text(label)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 12)
-            Text(value)
-                .font(.subheadline.weight(.medium))
-                .multilineTextAlignment(.trailing)
-        }
-        .padding(.vertical, 9)
-    }
-
-    private func assignmentCard(_ assignee: String) -> some View {
-        HStack(spacing: 12) {
-            AmbientAvatar(name: assignee, size: 40)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Checked out to")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(assignee).font(.subheadline.weight(.semibold))
-                Text("Since Jul 21 · due back Aug 2")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if let kitName = item.kitName {
+                    Label("In \(kitName)", systemImage: "shippingbox.fill")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 0)
         }
         .ambientCard(density: .roomy, state: .highlighted,
-                     border: .strong(item.status.color.opacity(0.5)), fillWidth: true)
+                     border: .hairline(item.status.color.opacity(0.35)),
+                     glow: item.status.color, fillWidth: true)
     }
 
+    private var photo: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.primary.opacity(0.06))
+            .frame(width: photoExpanded ? 150 : 68,
+                   height: photoExpanded ? 150 : 68)
+            .overlay {
+                VStack(spacing: 4) {
+                    Image(systemName: item.hasPhoto ? "camera.fill" : "circle.dashed")
+                        .font(.system(size: photoExpanded ? 34 : 22, weight: .light))
+                        .foregroundStyle(.tertiary)
+                    if photoExpanded && !item.hasPhoto {
+                        Text("No photo").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+    }
+
+    private func assignment(_ assignee: String) -> some View {
+        HStack(spacing: 12) {
+            AmbientAvatar(name: assignee, size: 38)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Checked out to \(assignee)")
+                    .font(.subheadline.weight(.semibold))
+                Text(item.overdue ? "Was due \(item.dueLabel ?? "—")"
+                                  : "Due back \(item.dueLabel ?? "Aug 2")")
+                    .font(.caption)
+                    .foregroundStyle(item.overdue ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+                if item.overdue {
+                    Text("Left in the studio after the Riverside job")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .ambientCard(density: .roomy,
+                     border: item.overdue ? .strong(Color.red.opacity(0.5))
+                                          : .hairline(Color.primary.opacity(0.08)),
+                     fillWidth: true)
+    }
+
+    /// CONDITIONAL, exactly as EquipmentDetailView has them. The first cut of
+    /// this mockup drew all three all the time, which is a different screen:
+    /// you cannot check out something somebody else is holding.
     private var actions: some View {
         VStack(spacing: 10) {
-            action("Check Out", systemImage: "arrow.up.right.square.fill",
-                   tint: feature, solid: true)
-            action("Request Equipment", systemImage: "hand.raised.fill",
-                   tint: feature, solid: false)
-            action("Report Damage", systemImage: "exclamationmark.triangle.fill",
+            if item.status == .available {
+                action("Check out", systemImage: "arrow.up.to.line",
+                       tint: feature, solid: true)
+            }
+            if item.status == .checkedOut && !item.mine {
+                action("Request this", systemImage: "hand.raised.fill",
+                       tint: feature, solid: false)
+            }
+            action("Report damage", systemImage: "exclamationmark.triangle.fill",
                    tint: .orange, solid: false)
         }
     }
@@ -673,33 +782,58 @@ struct EquipmentDetailMockup: View {
             Text(title).font(.subheadline.weight(.semibold))
         }
         .foregroundStyle(solid ? AnyShapeStyle(.white) : AnyShapeStyle(tint))
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 13)
+        .frame(maxWidth: .infinity).padding(.vertical, 13)
         .background {
-            if solid {
-                Capsule().fill(tint)
-            } else {
-                Capsule().fill(tint.opacity(0.14))
+            if solid { Capsule().fill(tint) } else { Capsule().fill(tint.opacity(0.14)) }
+        }
+    }
+
+    /// Every field EquipmentDetailView renders, and it renders each only when
+    /// present — so this list is short for a sparse item and long for a
+    /// well-catalogued one.
+    private var specs: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            AmbientSectionTitle("Details").padding(.bottom, 8)
+            spec("Category", item.category, "folder")
+            spec("Serial number", item.serial, "number")
+            spec("Description", item.detail, "text.alignleft")
+            spec("Notes", item.notes, "note.text")
+            spec("Purchase price", item.purchasePrice.map { String(format: "$%.2f", $0) },
+                 "dollarsign.circle")
+            spec("Purchased", item.purchaseDate, "calendar")
+        }
+        .ambientCard(density: .roomy, fillWidth: true)
+    }
+
+    @ViewBuilder
+    private func spec(_ label: String, _ value: String?, _ symbol: String) -> some View {
+        if let value {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: symbol).font(.footnote)
+                    .foregroundStyle(.secondary).frame(width: 18)
+                Text(label).font(.subheadline).foregroundStyle(.secondary)
+                Spacer(minLength: 12)
+                Text(value)
+                    .font(.subheadline.weight(.medium))
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(.vertical, 8)
         }
     }
 
     private var history: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: AmbientDensity.compact.stackSpacing) {
             AmbientSectionTitle("Assignment history")
             ForEach(DesignLabSampleData.crew.prefix(3)) { person in
                 HStack(spacing: 10) {
                     AmbientAvatar(name: person.name, size: 26)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(person.name).font(.footnote.weight(.medium))
-                        Text("Jun 14 – Jun 28")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        Text("Jun 14 – Jun 28").font(.caption2).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
-                    Text("Returned")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    Text("Returned").font(.caption2).foregroundStyle(.secondary)
                 }
                 .ambientCard(density: .compact, state: .receded, fillWidth: true)
             }

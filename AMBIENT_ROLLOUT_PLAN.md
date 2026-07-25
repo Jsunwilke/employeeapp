@@ -16,10 +16,17 @@ three unmistakable states for a shift — done, happening now, still to come.
 
 This arc carries that language through the rest of the app.
 
-It is a RESTYLE arc, not a rewrite arc. Data layers, services, navigation
-shape and business rules are out of scope inside a phase. The schedule proved
-the pattern: ShiftDetailView's presentation was replaced entirely while every
-loader, listener and calculation in it stayed byte-identical.
+It is a REDESIGN arc with a parity constraint (D12, operator 2026-07-25, and it
+SUPERSEDES the restyle-only framing this document opened with). A phase may
+change layout, information architecture and the shape of a screen, and it may
+not lose a feature. Data layers, services and business rules stay out of scope:
+the schedule proved that pattern, where ShiftDetailView's presentation was
+replaced entirely while every loader, listener and calculation in it stayed
+byte-identical. What changed on 2026-07-25 is that presentation is now allowed
+to be re-thought rather than merely re-skinned.
+
+See D12 for what that means in practice, and AMB_BATCH1_PARITY.md for how the
+"no feature lost" half is made checkable rather than promised.
 
 
 ## Why it needs a plan rather than a list of screens
@@ -281,6 +288,53 @@ D9  THE TAIL GETS CONVERTED. Operator decision 2026-07-24. AMB.12 runs;
     Settings, the manager tools, Stats and Training are converted rather than
     left as a visible seam. They are last precisely because they are lowest
     traffic and inherit most of their look from the primitives by then.
+
+D12 IT IS A REDESIGN, AND NO FEATURE MAY BE LOST. Operator decision
+    2026-07-25. This SUPERSEDES the restyle-only framing at the top of this
+    document, which was written before AMB.2's first batch of mockups made the
+    cost of it visible.
+
+    What went wrong. "Restyle only" was written to stop a design phase from
+    quietly rewriting services and business rules, which is a good rule. In
+    AMB.2's first cut of the batch-1 mockups it became something else: a
+    ceiling on the DESIGN. The Tasks mockup drew today's flat rows as a
+    switchable variant, which turns an approval into a referendum on the status
+    quo. Equipment kept a two-tab picker nobody asked whether it needed.
+    Message grouping — table stakes in every messaging app for a decade — was
+    argued for defensively as "presentation, not data". The operator's
+    correction was direct: this is supposed to be a redesign.
+
+    What is now IN scope for a phase:
+        layout, hierarchy and what leads a screen
+        information architecture — tabs, grouping, what is one screen vs two
+        the reading order of a list
+        states that do not exist and should (an error a user can see)
+
+    What stays OUT of scope, unchanged:
+        data layers, services, loaders, listeners, caching
+        business rules and permissions
+        the shared Supabase schema, RLS, PowerSync sync rules
+
+    THE PARITY CONSTRAINT IS THE HARD HALF, and it is checkable rather than
+    promised. Before a surface is redesigned, its capabilities are inventoried
+    FROM THE SOURCE — not from the screen, and not from memory — and every one
+    is marked kept, moved, added or open. Batch 1's inventory is
+    AMB_BATCH1_PARITY.md. Writing it caught five things the first cut of the
+    mockups had outright wrong, none of them stylistic, all of them feature
+    loss: Equipment's category filters were missing entirely, its three detail
+    actions are conditional rather than constant, Tasks' Urgent filter is
+    "urgent OR overdue" rather than "urgent or high", Tasks has five distinct
+    per-filter empty states rather than one, and Chat has system messages
+    ("X added Y to the group") that were not drawn at all.
+
+    A REDESIGN THAT LOOKS BETTER AND WORKS WORSE HAS FAILED. Operator, same
+    day: it has to fit the ambient style AND be functional for everyday use.
+    The worked example is in KitDetailView, which sorts a kit's categories in
+    photography workflow order — cameras, lenses, lighting, stands, bags,
+    backdrops, power, storage, audio, accessories. Somebody thought about how a
+    case is actually packed. An alphabetical sort would be indistinguishable in
+    a screenshot and worse every day of the year. Domain logic like that is a
+    feature under this decision and is carried forward explicitly.
 
 
 ## Phases

@@ -37,6 +37,19 @@ struct LabEquipmentItem: Identifiable {
     /// stripe down the leading edge.
     let kitColor: String?
     let assignee: String?
+    /// The rest of what EquipmentDetailView renders and the row does not. All
+    /// optional, all frequently absent — which is the point: the detail has to
+    /// read with two of these filled in and four missing.
+    var detail: String? = nil
+    var notes: String? = nil
+    var purchasePrice: Double? = nil
+    var purchaseDate: String? = nil
+    var kitName: String? = nil
+    /// Set on the items checked out to YOU, so the redesigned screen can lead
+    /// with what you are holding.
+    var mine: Bool = false
+    var dueLabel: String? = nil
+    var overdue: Bool = false
 
     var hasPhoto: Bool { !name.contains("Reflector") }
 }
@@ -97,13 +110,23 @@ enum DesignLabSampleData {
     /// a name far too long for one line, an item with no serial and no
     /// category, every status, every condition, and both kit and non-kit rows.
     static let equipment: [LabEquipmentItem] = [
+        // Fully catalogued — every optional field the detail can render is set,
+        // which is the LONG version of that screen.
         .init(id: "e1", name: "Canon EOS R5", category: "Camera Body", serial: "3421887065",
-              status: .checkedOut, condition: .excellent, kitColor: kitBlue, assignee: "Maria Alvarez"),
+              status: .checkedOut, condition: .excellent, kitColor: kitBlue, assignee: "Maria Alvarez",
+              detail: "Primary body. 45MP full-frame, dual card slots.",
+              notes: "Rear dial is stiff in the cold — works fine once it warms up.",
+              purchasePrice: 3899, purchaseDate: "Mar 14, 2024",
+              kitName: "Portrait Kit A", mine: true, dueLabel: "Permanent"),
         .init(id: "e2", name: "Canon RF 24-70mm f/2.8L IS USM", category: "Lens", serial: "9920114774",
-              status: .checkedOut, condition: .good, kitColor: kitBlue, assignee: "Maria Alvarez"),
+              status: .checkedOut, condition: .good, kitColor: kitBlue, assignee: "Maria Alvarez",
+              detail: "Workhorse zoom. Lives on the R5.",
+              purchasePrice: 2299, purchaseDate: "Mar 14, 2024",
+              kitName: "Portrait Kit A", mine: true, dueLabel: "Permanent"),
         .init(id: "e3", name: "Profoto B10X Plus Off-Camera Flash Head with Extended Battery Pack",
               category: "Lighting", serial: "PB10X-0042",
-              status: .available, condition: .good, kitColor: nil, assignee: nil),
+              status: .available, condition: .good, kitColor: nil, assignee: nil,
+              purchasePrice: 2195, purchaseDate: "Aug 2, 2023"),
         .init(id: "e4", name: "Westcott 43\" Deep Umbrella", category: "Modifier", serial: nil,
               status: .available, condition: .fair, kitColor: nil, assignee: nil),
         .init(id: "e5", name: "Manfrotto 055 Tripod", category: "Support", serial: "MT055XPRO3",
@@ -300,8 +323,47 @@ struct LabTask: Identifiable {
     /// False for a task assigned to someone else — the All filter shows these,
     /// the default My Tasks filter does not.
     var mine: Bool = true
+    /// Which "when" band the task falls in. An explicit field rather than a date
+    /// the mockup would have to parse back out of a display string — the real
+    /// screen computes this from `dueDate`, which it has and the lab does not.
+    var when: LabTaskWhen = .later
+    /// TaskItem carries `sessionId`, `workflowName` and `workflowStepName`, and
+    /// NOTHING in the app renders any of them — a task attached to a job cannot
+    /// show you the job. Carried here so the redesign can ask whether it should.
+    var sessionLabel: String? = nil
+    var workflowLabel: String? = nil
 
     var isCompleted: Bool { status == .completed }
+}
+
+/// The reading order the redesign groups by. Overdue first, because today the
+/// only way to find out something is late is to drive the chip bar to Urgent.
+enum LabTaskWhen: String, CaseIterable {
+    case overdue = "Overdue"
+    case today = "Today"
+    case thisWeek = "This week"
+    case later = "Later"
+    case noDate = "No date"
+
+    var symbol: String {
+        switch self {
+        case .overdue: return "exclamationmark.triangle.fill"
+        case .today: return "sun.max.fill"
+        case .thisWeek: return "calendar"
+        case .later: return "clock"
+        case .noDate: return "tray"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .overdue: return .red
+        case .today: return .orange
+        case .thisWeek: return .blue
+        case .later: return .secondary
+        case .noDate: return .secondary
+        }
+    }
 }
 
 extension DesignLabSampleData {
@@ -315,52 +377,59 @@ extension DesignLabSampleData {
               status: .inProgress, due: "Today", overdue: false, subtasks: (1, 3),
               comments: 2, assignee: "You",
               detail: "Full set from the gym plus the twelve retakes. The office wants them before the Friday cutoff so the proofs go out with the Monday mailing.",
-              type: "Delivery", estimatedHours: 1.5),
+              type: "Delivery", estimatedHours: 1.5, when: .today,
+              sessionLabel: "Lincoln High — Fall Portraits"),
         .init(id: "t2", title: "Return the 70-200 to the equipment room", priority: .high,
               status: .todo, due: "Yesterday", overdue: true, subtasks: (0, 0),
-              comments: 0, assignee: "You", type: "Equipment"),
+              comments: 0, assignee: "You", type: "Equipment", when: .overdue),
         .init(id: "t3", title: "Confirm Northgate day 3 call time with Ms. Reyes",
               priority: .medium, status: .todo, due: "Tomorrow", overdue: false,
-              subtasks: (0, 2), comments: 1, assignee: "You", type: "Scheduling"),
+              subtasks: (0, 2), comments: 1, assignee: "You", type: "Scheduling",
+              when: .thisWeek, sessionLabel: "Northgate Preparatory — Day 3"),
         // The two-line title. Nothing truncates it in the real row either — it
         // is allowed two lines and then cuts.
         .init(id: "t4", title: "Re-shoot the eleven Maple Grove kindergarten portraits flagged for eyes-closed, and pick up the class composite while you are there",
               priority: .urgent, status: .todo, due: "Friday", overdue: false,
               subtasks: (0, 4), comments: 5, assignee: "You", type: "Reshoot",
-              estimatedHours: 3),
+              estimatedHours: 3, when: .thisWeek,
+              sessionLabel: "Maple Grove Elementary", workflowLabel: "Reshoots · Step 2 of 4"),
         .init(id: "t5", title: "Chase Ms. Alvarado for the missing photo release forms",
               priority: .high, status: .inProgress, due: "Today", overdue: false,
-              subtasks: (2, 5), comments: 8, assignee: "You", type: "Paperwork"),
+              subtasks: (2, 5), comments: 8, assignee: "You", type: "Paperwork",
+              when: .today),
         // No due date at all.
         .init(id: "t6", title: "Order more gaffer tape", priority: .low,
               status: .todo, due: nil, overdue: false, subtasks: (0, 0),
-              assignee: "You", type: "Supplies"),
-        .init(id: "t7", title: "Fix the tripod head that sticks when cold", priority: .high,
-              status: .todo, due: "Tuesday", overdue: false, subtasks: (1, 2),
-              comments: 1, assignee: "You", type: "Equipment"),
+              assignee: "You", type: "Supplies", when: .noDate),
+        // Overdue but only MEDIUM priority — the case that proves grouping by
+        // when beats sorting by priority: today this sits below four urgent
+        // items that are not actually late.
+        .init(id: "t7", title: "Fix the tripod head that sticks when cold", priority: .medium,
+              status: .todo, due: "Jul 21", overdue: true, subtasks: (1, 2),
+              comments: 1, assignee: "You", type: "Equipment", when: .overdue),
         .init(id: "t8", title: "Pack the sports kit for Friday", priority: .urgent,
               status: .todo, due: "Thursday", overdue: false, subtasks: (3, 7),
-              assignee: "You", type: "Equipment", estimatedHours: 0.5),
+              assignee: "You", type: "Equipment", estimatedHours: 0.5, when: .thisWeek),
         .init(id: "t9", title: "Swap the backdrop rolls in the studio", priority: .medium,
               status: .todo, due: "Aug 4", overdue: false, subtasks: (0, 0),
-              assignee: "You", type: "Studio"),
+              assignee: "You", type: "Studio", when: .later),
         // Someone else's — visible under All, hidden under the default My Tasks.
         .init(id: "t10", title: "Review the new photographer's first day report",
               priority: .medium, status: .inProgress, due: "Today", overdue: false,
               subtasks: (0, 3), comments: 2, assignee: "Devon Wright",
-              type: "Review", mine: false),
+              type: "Review", mine: false, when: .today),
         .init(id: "t11", title: "Send the invoice for Northgate", priority: .low,
               status: .todo, due: nil, overdue: false, subtasks: (0, 0),
-              assignee: "June Castillo", type: "Billing", mine: false),
+              assignee: "June Castillo", type: "Billing", mine: false, when: .noDate),
         .init(id: "t12", title: "Upload Riverside proofs", priority: .medium,
               status: .completed, due: "Monday", overdue: false, subtasks: (4, 4),
-              comments: 3, assignee: "You", type: "Delivery"),
+              comments: 3, assignee: "You", type: "Delivery", when: .thisWeek),
         .init(id: "t13", title: "Clean the sensor on the R5 body", priority: .low,
               status: .completed, due: "Last week", overdue: false, subtasks: (0, 0),
-              assignee: "You", type: "Equipment"),
+              assignee: "You", type: "Equipment", when: .later),
         .init(id: "t14", title: "Archive last season's job boxes", priority: .low,
               status: .completed, due: "Jun 30", overdue: false, subtasks: (0, 0),
-              assignee: "You", type: "Admin"),
+              assignee: "You", type: "Admin", when: .later),
     ]
 
     /// Subtasks and comments for the one task whose detail sheet is mocked.
@@ -370,10 +439,32 @@ extension DesignLabSampleData {
         ("Upload to the office share", false),
     ]
 
-    static let sampleComments: [(author: String, text: String, when: String)] = [
-        ("Devon Wright", "Two of the retakes are the same kid — I think Row 3 got shot twice.", "Yesterday"),
-        ("You", "Good catch, I'll drop the second one before it goes over.", "Yesterday"),
+    /// Comments carry ATTACHMENTS in the app — file name, formatted size and an
+    /// image-or-document glyph. Easy to drop in a redesign and it would be
+    /// feature loss, so one of these has one.
+    static let sampleComments: [LabComment] = [
+        .init(author: "Devon Wright",
+              text: "Two of the retakes are the same kid — I think Row 3 got shot twice.",
+              when: "Yesterday",
+              attachment: .init(fileName: "row3-compare.jpg", size: "2.4 MB", isImage: true)),
+        .init(author: "You",
+              text: "Good catch, I'll drop the second one before it goes over.",
+              when: "Yesterday", attachment: nil),
     ]
+}
+
+struct LabComment: Identifiable {
+    struct Attachment {
+        let fileName: String
+        let size: String
+        let isImage: Bool
+    }
+
+    var id: String { author + when + text.prefix(12) }
+    let author: String
+    let text: String
+    let when: String
+    var attachment: Attachment? = nil
 }
 
 // MARK: - Equipment kits (AMB.3, the DEFAULT tab)
@@ -431,7 +522,47 @@ extension DesignLabSampleData {
 
     /// Items checked out to you that belong to no kit — My Kits' second section.
     static var otherAssignedEquipment: [LabEquipmentItem] {
-        equipment.filter { ["e15", "e14"].contains($0.id) }
+        equipment
+            .filter { ["e15", "e14"].contains($0.id) }
+            .map { item in
+                var copy = item
+                copy.mine = true
+                copy.dueLabel = item.id == "e14" ? "Jul 22" : "Aug 9"
+                copy.overdue = item.id == "e14"
+                return copy
+            }
+    }
+
+    /// The org's real category list, for All Equipment's category filter chips —
+    /// derived rather than typed out, because in the app these come from the
+    /// database and a hardcoded list would drift the moment anyone added one.
+    static var equipmentCategories: [String] {
+        Array(Set(equipment.compactMap(\.category))).sorted()
+    }
+
+    /// What the redesigned screen leads with: how much you are holding, how much
+    /// is due back soon, and how much is late. None of this is a single glance
+    /// today — you find out by reading every kit card.
+    enum MyGear {
+        static var itemCount: Int {
+            DesignLabSampleData.myKits.reduce(0) { $0 + $1.itemCount }
+                + DesignLabSampleData.otherAssignedEquipment.count
+        }
+
+        static var overdueCount: Int {
+            let kits = DesignLabSampleData.myKits.filter {
+                if case .overdue = $0.due { return true }
+                return false
+            }.reduce(0) { $0 + $1.itemCount }
+            return kits + DesignLabSampleData.otherAssignedEquipment.filter(\.overdue).count
+        }
+
+        static var dueSoonCount: Int {
+            DesignLabSampleData.myKits.filter {
+                if case .on = $0.due { return true }
+                return false
+            }.reduce(0) { $0 + $1.itemCount }
+        }
     }
 }
 
@@ -439,12 +570,18 @@ extension DesignLabSampleData {
 
 enum LabMessageKind {
     case text, gif, image, link, file
+    /// "X added Y to the group", "X removed Y", "X left the group". Rendered
+    /// centred in a capsule, never in a bubble, and never with a sender name.
+    /// Absent from the first cut of this mockup entirely — which would have
+    /// been feature loss, not a style choice.
+    case system
 
     /// The emoji-typed preview the conversation list shows instead of a body.
+    /// The app derives these by sniffing the URL of the last message.
     var previewLabel: String? {
         switch self {
-        case .text: return nil
-        case .gif: return "🎞 GIF"
+        case .text, .system: return nil
+        case .gif: return "🎬 GIF"
         case .image: return "📷 Photo"
         case .link: return "🔗 Link"
         case .file: return "📎 File"
@@ -464,6 +601,9 @@ struct LabConversation: Identifiable {
     let time: String
     let unread: Int
     let pinned: Bool
+    /// False for a conversation that has never had a message — the app draws
+    /// "No messages yet" in italic rather than an empty preview line.
+    var hasMessages: Bool = true
 
     var previewText: String {
         let body = previewKind.previewLabel ?? preview
@@ -515,6 +655,14 @@ extension DesignLabSampleData {
         .init(id: "c8", name: "Alex Fontaine", isGroup: false, participants: ["Alex Fontaine"],
               preview: "Thanks!", previewKind: .text,
               fromYou: false, time: "Jul 14", unread: 0, pinned: false),
+        // A conversation with NO messages. The app draws "No messages yet" in
+        // italic here rather than an empty line, and the first cut of this
+        // mockup had no such row to draw it with.
+        .init(id: "c9", name: "Riverside Middle — Retakes", isGroup: true,
+              participants: ["Priya Nair", "Sam Okafor"],
+              preview: "", previewKind: .text,
+              fromYou: false, time: "Jul 12", unread: 0, pinned: false,
+              hasMessages: false),
     ]
 
     /// The thread for the group conversation, which is the hard one: several
@@ -534,6 +682,12 @@ extension DesignLabSampleData {
             .init(id: "m4", sender: "Sam Okafor", mine: false,
                   text: "I can grab it on the way", kind: .text,
                   sentAt: at(16, 31, dayOffset: -1)),
+            // A system message. The app renders three of these — participants
+            // added, participant removed, participant left — centred in a grey
+            // capsule with their own timestamp underneath.
+            .init(id: "m4b", sender: "System", mine: false,
+                  text: "Maria Alvarez added June Castillo to the group",
+                  kind: .system, sentAt: at(17, 5, dayOffset: -1)),
             // ── day boundary ──
             .init(id: "m5", sender: "Sam Okafor", mine: false,
                   text: "Loading now", kind: .text, sentAt: at(7, 12)),
