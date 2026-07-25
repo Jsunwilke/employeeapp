@@ -144,7 +144,6 @@ struct ShiftDetailView: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         hero
-                        quickActions
                         factsRow
                         if session.dayCount > 1 { daySwitcher }
                         notesCards
@@ -346,39 +345,6 @@ struct ShiftDetailView: View {
     private var heroColors: [Color] {
         let colors = ScheduleStyle.typeColors(for: session)
         return colors.count > 1 ? colors : [accent, accent.opacity(0.55)]
-    }
-
-    // MARK: - Quick actions
-
-    private var quickActions: some View {
-        HStack(spacing: 10) {
-            if !schoolAddress.isEmpty || !(session.location ?? "").isEmpty {
-                actionTile("Directions", "car.fill") { showingMapsOptions = true }
-            }
-            actionTile("Message crew", "message.fill") { messageCoworkers() }
-            // schoolId is non-optional, so the old `!= nil` check was always true
-            // and the button showed even for a session with no school attached.
-            if !session.schoolId.isEmpty {
-                actionTile("Yearbook", "list.clipboard") { showingYearbookChecklist = true }
-            }
-        }
-    }
-
-    private func actionTile(_ title: String, _ systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                Image(systemName: systemImage).font(.system(size: 17, weight: .semibold))
-                Text(title)
-                    .font(.caption2.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .foregroundStyle(accent)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Facts
@@ -803,6 +769,20 @@ struct ShiftDetailView: View {
                     .background(.thinMaterial, in: Circle())
             }
             .buttonStyle(.plain)
+
+            // schoolId is non-optional, so the old `!= nil` test was always true
+            // and this showed even for a session with no school attached.
+            if !session.schoolId.isEmpty {
+                Button {
+                    showingYearbookChecklist = true
+                } label: {
+                    Image(systemName: "list.clipboard")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 48, height: 46)
+                        .background(.thinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
