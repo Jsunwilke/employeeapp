@@ -188,6 +188,79 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 
 ---
 
+## AMB — Ambient design language rollout (arc, registered 2026-07-24)
+
+Per-phase scope and closeouts for the AMB arc. Full plan, decisions D1–D9 and the
+lessons carried forward: `AMBIENT_ROLLOUT_PLAN.md`. Status board: the Phase menu in
+`kickoffs/START_A_PHASE.md`. Family registry row: `FocalPointProduction/docs/PHASES.md`.
+
+This arc is a RESTYLE, not a rewrite — data layers, services, navigation shape and
+business rules are out of scope inside a phase (D2). It does not overlap Phase 4's
+"decompose god files" item: DEC.1 changes structure, AMB changes presentation. Where
+they touch the same file (`DashboardWidgets.swift`), whichever runs first wins and the
+other rebases onto it.
+
+- [x] **AMB.1 Schedule** — DONE 2026-07-24, operator smoke PASSED on device (iPhone),
+  shipped to `origin/main` (`b3a82e1..97324a4`).
+  `ScheduleView` + `ScheduleRows` + `ScheduleStyleKit` replace `SlingWeeklyView`
+  (deleted same commit); `ShiftDetailView` restyled with its data layer byte-identical;
+  `SessionTypePill` deleted (old detail layout was its only caller). Chosen from five
+  prototypes built in a throwaway design lab, which was deleted once the port was
+  confirmed (`git show 9d34aea` to recover them).
+  **Carried over in full:** realtime session listener, foreground re-subscribe, time off
+  + detail sheet, My/All filter, org-wide staffing heat + long-press breakdown,
+  publish-a-day, create-session, offline/last-synced state, multi-day day-occurrences,
+  job box status, weather, travel planning, coworker + location photos, message crew,
+  yearbook, publish, edit, CREW.2 day-pinning on realtime updates.
+  **Deliberately dropped:** the week view's per-card weather fetch (keyed off
+  `session.location`, hard-coded `nil` in the model — it could never fire; weather still
+  works in the detail off school coordinates).
+  **Defects fixed that pre-dated the arc:** Yearbook button tested a non-optional for
+  `nil` so it showed for school-less sessions; Message crew failed silently when nobody
+  had a phone number and looked people up by FIRST NAME rather than user id.
+  **Review:** `/code-review` found 8, all fixed — 5 were regressions this arc
+  introduced, incl. the org listener never restarting after a pop (froze session-type
+  colours and BOTH Publish buttons for the app's lifetime) and `selectDay` chaining
+  `with(day:)` onto an already-narrowed occurrence (handed the new day the PREVIOUS
+  day's crew, which fed the coworker list and message recipients).
+  **Operator-found before that:** dead tap (`navigationDestination` is
+  NavigationStack-only; the shell supplies a `NavigationView`), duplicated action
+  surfaces, unfindable today marker, scroll stutter (per-cell scans inside a lazy stack
+  → per-day index), Message crew, timeline not landing on today.
+  **Outstanding:** iPad smoke not run for AMB.1 — D7 (both devices every phase) was
+  adopted after this phase shipped. Worth a pass when convenient; not blocking AMB.2.
+
+- [ ] **AMB.2 Design system extraction + enforcement gate** — NEXT. Promote the
+  schedule's vocabulary into `DesignSystem/`; delete the zero-adopter `cardStyle()`;
+  add a build gate that fails on a NEWLY hand-rolled card (the existing 115 across 39
+  files are grandfathered by path until their phase converts them, so the gate starts
+  green). Also designs the compact density variants against Equipment's real code
+  (D5). No screen changes beyond the schedule repointing at the new home.
+
+- [ ] **AMB.3 Equipment** (34 views, 5,583 lines) — first dense list; proves the compact
+  variants in use and folds any corrections back into the design system.
+
+- [ ] **AMB.4 Home dashboard** (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines)
+  — highest-traffic screen, most mixed content; built on primitives that are complete
+  by this point.
+
+- [ ] **AMB.5 Reports family** (Misc Features, 8,695 lines) — daily job report, custom
+  reports, my reports, photoshoot notes. Form-heavy; first real input styling.
+- [ ] **AMB.6 Mileage + Stats** — number-heavy; stat tiles and charts.
+- [ ] **AMB.7 Time off** (8 views, 3,763 lines)
+- [ ] **AMB.8 Tasks** (18 views, 3,167 lines)
+- [ ] **AMB.9 Chat** (20 views, 4,655 lines) — long scrollbacks; the real test of the
+  compact variants.
+- [ ] **AMB.10 Groups + Yearbook** (17 views, 4,504 lines)
+- [ ] **AMB.11 Job box / NFC** (18 views, 5,198 lines)
+- [ ] **AMB.12 Settings, Manager, Training** (~6,600 lines) — the tail, converted per D9.
+
+**Out of scope, permanently (D1):** Sports Shoot Feature (53 views, 36,352 lines) — the
+hook-protected Captura files plus a live iPad shoot tool where a restyle risks work in
+progress.
+
+---
+
 ## Reference: what NOT to break (verified strengths)
 
 - Firebase migration is 100% complete in live code — no dual-writes anywhere

@@ -79,12 +79,22 @@ D3  NAVIGATION STAYS AS IT IS. The shell hands most features a NavigationView
 D4  iOS 16.6 FLOOR HOLDS. Post-16 APIs go through the availability wrappers in
     the design system. No phase raises the deployment target.
 
-D5  DENSITY IS DECIDED AT AMB.4, NOT AT THE END. Ambient's glass and generous
-    spacing suit a schedule with a handful of items a day. A 200-row equipment
-    list or a chat thread in that style will feel slow and airy. Every primitive
-    therefore needs a compact variant alongside the roomy one, and that variant
-    is designed against a real dense screen early — not retrofitted after nine
-    phases have shipped assuming the roomy one.
+D5  DENSITY IS SETTLED BEFORE ANY SCREEN IS BUILT ON IT. Ambient's glass and
+    generous spacing suit a schedule with a handful of items a day. A 200-row
+    equipment list or a chat thread in that style will feel slow and airy. Every
+    primitive therefore needs a compact variant alongside the roomy one.
+
+    The compact variants are DESIGNED in AMB.2, against Equipment's real code,
+    and PROVEN in AMB.3 by converting Equipment itself. Only then does the home
+    dashboard follow.
+
+    Revised 2026-07-24, before any of it was built: the first cut of this plan
+    put the dashboard at AMB.3 and Equipment at AMB.4 while also saying density
+    was settled at AMB.4 — so the highest-traffic screen in the app would have
+    been built on primitives that were about to change, and either invented its
+    own compact treatments or been revisited. Two decisions in the same document
+    that contradicted each other. Ordering Equipment first costs the dashboard
+    one phase of waiting and removes the rework entirely.
 
 D6  MAIN STAYS SHIPPABLE. Every phase is independently shippable and
     independently revertible. There is never a long-lived conversion branch. If
@@ -114,7 +124,8 @@ D9  THE TAIL GETS CONVERTED. Operator decision 2026-07-24. AMB.12 runs;
 ## Phases
 
 Ordered by how often a photographer touches the surface, with one deliberate
-exception: the first dense list is pulled early to settle D5.
+exception: the first dense list runs BEFORE the highest-traffic screen, so that
+nothing is built on primitives that are still moving (D5).
 
     AMB.1   Schedule                                        DONE 2026-07-24
             ScheduleView + ScheduleRows + ScheduleStyleKit replace
@@ -124,18 +135,23 @@ exception: the first dense list is pulled early to settle D5.
     AMB.2   Design system extraction + enforcement gate      NEXT
             Promote the schedule's vocabulary into DesignSystem/ as the app's
             primitives. Delete the unused cardStyle(). Add the build gate.
-            No screen changes beyond the schedule repointing at the new home.
+            Design the compact density variants against Equipment's real code,
+            to be proven by converting it in AMB.3. No screen changes beyond
+            the schedule repointing at the new home.
 
-    AMB.3   Home dashboard
+    AMB.3   Equipment                    (34 views, 5,583 lines)
+            The first genuinely dense, list-heavy surface, and the proof of the
+            compact variants AMB.2 designed. Anything they get wrong is found
+            here and folded back into the design system before the dashboard —
+            or anything else — is built on them.
+
+    AMB.4   Home dashboard
             MainEmployeeView + DashboardWidgets, about 3,600 lines. Highest
             traffic screen in the app and the most mixed content, so it is the
-            real proof the primitives cover more than a schedule.
-
-    AMB.4   Equipment                    (34 views, 5,583 lines)
-            The first genuinely dense, list-heavy surface. Settles D5: the
-            compact variants of card, row, badge and avatar are designed here
-            and folded back into the design system before anything else uses
-            them.
+            real proof the primitives cover more than a schedule. Runs second
+            rather than first only because its widgets mix dense and roomy
+            content, and building it before the compact variants are proven
+            would guarantee a revisit.
 
     AMB.5   Reports family               (Misc Features, 8,695 lines)
             Daily job report, custom daily reports, my reports, photoshoot
@@ -173,7 +189,8 @@ at the start of their own session against the code as it stands then.
 
 MOVE INTO DesignSystem/, from Schedule/ScheduleStyleKit.swift:
 
-    the material card container and its compact sibling
+    the material card container and its compact sibling (the compact set is
+      designed against Equipment's real rows — see D5 — and proven in AMB.3)
     ScheduleBadge, ScheduleTypePills, ScheduleFlowLayout
     ScheduleAvatar, ScheduleCrewStack
     ScheduleSectionTitle, ScheduleStatTile, ScheduleNoteCard, ScheduleEmptyState
@@ -282,6 +299,6 @@ phase), D8 (ship to main as we go) and D9 (convert the tail). Nothing in this
 plan is awaiting an operator answer.
 
 The next decision point is not a question but a checkpoint: D5 (density) is
-settled by building it at AMB.4, against Equipment. If the compact variants
-designed there do not survive contact with Chat at AMB.9, that is a revision to
-the design system, not a re-opening of this plan.
+designed in AMB.2 and proven in AMB.3 by converting Equipment. If the compact
+variants do not survive contact with Chat at AMB.9, that is a revision to the
+design system, not a re-opening of this plan.

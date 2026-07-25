@@ -24,8 +24,10 @@ phase-naming registry as the rest of the family.
 
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
       AMB.2   Ambient design system extraction + the build gate that makes hand-rolling
-              a card fail. Then AMB.3+ convert the app surface by surface, ordered by
-              traffic. Plan: AMBIENT_ROLLOUT_PLAN.md (registered arc — AMB.1 is done).
+              a card fail + the compact density variants. Then AMB.3 Equipment (proves
+              the compact set), AMB.4 Home dashboard, then the rest by traffic through
+              AMB.12. Plan: AMBIENT_ROLLOUT_PLAN.md; per-phase scope + closeouts:
+              AUDIT_ROADMAP.md (registered arc — AMB.1 is done and shipped).
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).
       DJR.1   Daily Job Report redesign (wizard, draft auto-save, offline outbox).
       ONB.1   Invite-code onboarding + sign-in hardening.
