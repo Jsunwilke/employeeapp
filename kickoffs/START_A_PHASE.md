@@ -32,8 +32,16 @@ phase-naming registry as the rest of the family.
       Plan + the 10 locked decisions (D1-D10): AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
 
       ✅ AMB.1   Schedule                                    DONE + PUSHED 2026-07-24
-      ⬜ AMB.2   Design system + build gate + compact variants + THE LAB    ← NEXT
-                 + batch 1's mockups. Realistically two sessions.
+      🔶 AMB.2   Design system + build gate + compact variants + THE LAB
+                 SESSION 1 of 2 COMMITTED 2026-07-25 (5503385, not pushed) —
+                 DesignSystem/ primitives, cardStyle() deleted, the card-drift
+                 gate (46 files / 101 cards grandfathered, starts green), the
+                 lab + AMB.2's specimen sheet. Awaiting operator smoke on
+                 iPhone AND iPad: does the schedule still look right, and does
+                 the Design Lab open from the profile menu.
+                 ← SESSION 2 NEXT: batch 1's four mockups (Equipment, home
+                 dashboard, Tasks, Chat) + the single review sitting that
+                 gates AMB.3.
         ── batch 1 ── mocked in AMB.2, reviewed in ONE sitting ──
       ⬜ AMB.3   Equipment            (34 views)  proves the compact set
       ⬜ AMB.4   Home dashboard       its shift widget disagrees with the live schedule
