@@ -429,14 +429,19 @@ phase. Sequenced against AMB.3 because both touch `ScheduleView`'s per-day index
   schedulers, introduced by a guard added to prevent a roster wipe. Fixes written under
   audit pressure are not safer than the original code, and nobody had reviewed them.
 
+  **Two open questions raised during the build, both ruled on by the operator
+  2026-07-25 and built accordingly:**
+  - **Drafts appear in ALL SHIFTS ONLY, never in My Shifts** — for anyone, scheduler
+    included. This SUPERSEDES the plan's P6, which had them in both on the reasoning
+    that an unassigned draft cannot belong to "mine". The premise was right and the
+    conclusion backwards: it filled the one view that answers "what am I doing" with
+    the whole org's planned work. Whether a day carries unpublished work is now tracked
+    unfiltered, so the manager's publish-a-day button does not vanish with the filter.
+  - **Notes stay on a draft** (`session.notes`, `session_days.day_notes`). Raised
+    because a free-text note can name people, which is what P2 withholds. Ruled fine:
+    notes describe the WORK, which is what a draft exists to tell you. Recorded as P7.
+
   **Recorded, not fixed — for the operator:**
-  - Under P6 a photographer's "My Shifts" now shows every unpublished session in the
-    ORG, since a draft carries no assignment and so cannot be "mine". That is the plan
-    as written; in a large org it is the most visible consequence of the change.
-  - Free-text scheduler notes (`session.notes`, `session_days.day_notes`) still render
-    on a draft. The plan redacts assignments, not notes, and notes are "what work is
-    coming" — but a note can name people. Left visible deliberately; one condition to
-    reverse if the operator wants it hidden.
   - Redaction is client-side only and always was un-enforced server-side (P3): every
     authenticated employee could already read draft crew directly. Not new, recorded so
     it is never mistaken for a control.

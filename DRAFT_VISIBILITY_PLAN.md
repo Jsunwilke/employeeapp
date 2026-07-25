@@ -58,9 +58,28 @@ P5  THE TEMPERATURE GOES, FOR EVERYONE. Not just photographers — managers lose
     horizontal ScrollView whose scroll gesture also competes). The dot that
     means "you are on this day" stays.
 
-P6  DRAFTS SIT APART FROM SHIFTS. They appear in both My Shifts and All Shifts,
-    grouped and labelled as not published rather than mixed in with real shifts —
-    since with P2 they carry no assignment, they cannot belong to "mine" at all.
+P6  DRAFTS SIT APART FROM SHIFTS. They are grouped and labelled as not published
+    rather than mixed in with real shifts.
+
+    SUPERSEDED IN PART, operator decision 2026-07-25, during the build: drafts
+    appear in ALL SHIFTS ONLY, never in My Shifts, for anyone — scheduler
+    included. As originally written this decision put them in both, reasoning
+    that a draft carrying no assignment cannot belong to "mine". That premise is
+    true and the conclusion was backwards: it filled the one view whose entire
+    job is to answer "what am I doing" with the whole organisation's planned
+    work. Operator's words: "My shifts should only actually show my shifts.
+    Unpublished should not fit in there and muddle my schedule."
+
+    Consequence handled in the same change: whether a day carries unpublished
+    work is now tracked unfiltered, because "Publish this day" acts on the whole
+    day and must not appear and disappear with the My/All filter.
+
+P7  NOTES STAY ON A DRAFT. Session notes and day notes render on an unpublished
+    session as they do on a published one. Raised during the build because a
+    free-text note can name people ("waiting to hear if Sarah can cover"), which
+    is the thing P2 exists to withhold. Operator ruled 2026-07-25: notes are
+    fine. They describe the WORK, which is exactly what a draft is meant to
+    tell you.
 
 
 ## Scope

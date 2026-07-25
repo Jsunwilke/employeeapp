@@ -456,11 +456,11 @@ struct ScheduleView: View {
     private var dayHeader: some View {
         let dayShifts = shifts(on: selectedDay)
         let dayOff = timeOffEntries(on: selectedDay)
-        // Drafts are the only unpublished work on a day, and they no longer sit
-        // in `shifts`, so the publish button has to ask the drafts bucket. Reading
-        // it off `dayShifts` here would have left managers with no way to publish
-        // a day at all.
-        let unpublished = !drafts(on: selectedDay).isEmpty
+        // Not `drafts(on:)`: that bucket is empty in My Shifts, and publishing a
+        // day is an org-level action that must not vanish because of a view
+        // filter. Reading it off `dayShifts` would fail for a different reason —
+        // drafts no longer live there at all.
+        let unpublished = index.unpublishedDays.contains(Formatters.isoDate.string(from: selectedDay))
 
         return VStack(spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
@@ -900,10 +900,13 @@ struct ScheduleIndex {
     var timeOffByDay: [String: [TimeOffCalendarEntry]] = [:]
     var itemsByDay: [String: [ScheduleItem]] = [:]
     /// Unpublished work, per day, kept apart from `shiftsByDay` on purpose
-    /// (PUB.1 / P6): a draft is not a shift you have been given, so it is not
-    /// counted as one, not tinted by, not counted down to, and not filtered by
-    /// My/All for anyone who cannot see who is on it.
+    /// (PUB.1): a draft is not a shift you have been given, so it is not counted
+    /// as one, not tinted by, and not counted down to. Populated in All Shifts
+    /// only — My Shifts is what has been announced to YOU.
     var draftsByDay: [String: [Session]] = [:]
+    /// Days carrying unpublished work, whatever the My/All filter says. Drives
+    /// the manager's publish-a-day button, which acts on the whole day.
+    var unpublishedDays: Set<String> = []
     var hoursByDay: [String: TimeInterval] = [:]
     /// A week of history that had work, today (always), then six weeks ahead.
     var timelineDays: [Date] = []
@@ -927,17 +930,26 @@ struct ScheduleIndex {
             for occurrence in session.dayOccurrences() {
                 let isDraft = !occurrence.isPublished
 
-                // The My/All filter is answered from the UNREDACTED occurrence,
-                // before any crew is dropped — otherwise every draft would test
-                // as "not mine" for the very viewer the filter is for.
-                //
-                // A draft whose crew this viewer cannot see skips the filter
-                // entirely: with no assignment on it, it cannot belong to "mine"
-                // at all, and it has to reach My Shifts too or the people the
-                // change is for would never see what is coming (P6). A scheduler
-                // still sees the assignment, so their filter behaves as before.
-                let filtered = mode == .myShifts && !(isDraft && hideDraftCrew)
-                if filtered {
+                // Whether the day has unpublished work is an ORG-level question,
+                // like the old staffing total was: "Publish this day" publishes
+                // every shift on it, so the button must not appear and disappear
+                // with the My/All filter.
+                if isDraft { index.unpublishedDays.insert(occurrence.date) }
+
+                // MY SHIFTS SHOWS ONLY WHAT HAS BEEN ANNOUNCED TO YOU. A draft is
+                // not that — for anyone, scheduler included. Operator decision
+                // 2026-07-25, overriding the plan's P6, which had drafts appear in
+                // both modes on the reasoning that an unassigned draft cannot
+                // belong to "mine": true, but the conclusion was backwards. It put
+                // the whole org's planned work into the one view whose entire job
+                // is to answer "what am I doing", which muddles the schedule
+                // instead of informing it. Drafts live in All Shifts.
+                if isDraft && mode == .myShifts { continue }
+
+                // Answered from the UNREDACTED occurrence, before any crew is
+                // dropped — otherwise a draft would test as "not mine" for the
+                // very viewer the filter is for.
+                if mode == .myShifts {
                     guard let viewerID,
                           occurrence.isUserAssigned(userID: viewerID, userEmail: viewerEmail) else { continue }
                 }
