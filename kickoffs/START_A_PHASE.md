@@ -11,10 +11,17 @@ phase-naming registry as the rest of the family.
 
 # 🚀 START HERE  (you, the operator)
 
-      WHAT TO BUILD:  
+      WHAT TO BUILD:  AMB.2 session 3 — the Equipment, Tasks and Chat mockups
 
   An arc id (e.g. NAV.1) or just describe the item in plain words. That is the only
   line you fill in — the agent works out the exact phase and scope.
+
+  FOR THIS ONE, read AMB_BATCH1_RESEARCH.md FIRST — all three surfaces are already
+  researched in detail there, so do NOT re-read the features from scratch. Build the
+  three SCREEN mockups into the existing lab (Iconik Employee/DesignLab/), add them to
+  the DesignLabMockup enum, and stop. Do not touch a real screen: AMB.3 is gated on the
+  operator approving Equipment's screen on a device, and the specimen sheet's row
+  proposal does NOT satisfy that gate.
 
 
 # 📋 Phases
