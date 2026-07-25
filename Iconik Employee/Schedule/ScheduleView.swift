@@ -153,15 +153,18 @@ struct ScheduleView: View {
                 .padding(.bottom, 40)
             }
             .refreshable { await refresh() }
-            .onAppear {
-                // Only on the FIRST appearance. onAppear also fires when you pop
-                // back from a shift, and re-anchoring there yanked the timeline
-                // to today, losing the place you were reading.
-                guard !hasAnchored else { return }
-                hasAnchored = true
-                anchorOnToday(proxy, animated: false)
+            // Anchoring on today has to survive the load order: onAppear fires
+            // before the session listener has called back, so there is nothing
+            // to scroll to yet — and once the data lands, the past days are
+            // inserted ABOVE today, which pushes today off screen. So we try on
+            // appear, try again whenever the day list changes, and only stop
+            // once a scroll actually had somewhere to go.
+            .onAppear { anchorOnToday(proxy, animated: false) }
+            .onChange(of: timelineDays.count) { _ in anchorOnToday(proxy, animated: false) }
+            .onChange(of: layoutRaw) { _ in
+                hasAnchored = false
+                anchorOnToday(proxy, animated: true)
             }
-            .onChange(of: layoutRaw) { _ in anchorOnToday(proxy, animated: true) }
         }
     }
 
@@ -445,9 +448,22 @@ struct ScheduleView: View {
     /// rather than re-filtering 49 days on every render.
     private var timelineDays: [Date] { index.timelineDays }
 
+    /// Scroll the timeline so today is the first thing you see.
+    ///
+    /// `hasAnchored` is only set once there was real content to anchor to —
+    /// otherwise the first (empty) attempt would count as done and today would
+    /// never come into view. Once it has succeeded it stays put, so popping back
+    /// from a shift doesn't throw away where you were reading.
     private func anchorOnToday(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard layout == .timeline else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        guard layout == .timeline, !hasAnchored else { return }
+        // Nothing loaded yet: today is the only row, so there is nothing above
+        // it to scroll past. Wait for the data and try again.
+        guard timelineDays.count > 1 else { return }
+
+        hasAnchored = true
+        // One run-loop hop so the lazy stack has built the section carrying the
+        // anchor id before we ask to scroll to it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             if animated {
                 withAnimation(ScheduleMotion.gentle) { proxy.scrollTo(ScheduleTimeline.anchorID, anchor: .top) }
             } else {
