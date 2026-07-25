@@ -115,6 +115,29 @@ D8  SHIP EACH PHASE TO MAIN AS IT LANDS. Operator decision 2026-07-24. No
     rather than theoretical: the app in the field is always a coherent mix of
     converted and unconverted screens, never a half-applied restyle.
 
+D10 NOTHING IS CONVERTED BEFORE THE OPERATOR HAS SEEN A MOCKUP. Operator
+    decision 2026-07-24, and it is a HARD GATE — a phase does not start writing
+    Swift until the mockup for that surface is approved.
+
+    What the mockup covers, per phase: the surface's primary screen, its detail
+    screen if it has one, and any state likely to be contentious (a dense list,
+    an empty state, an error). Shown against what is there today, so the change
+    is judged as a change and not in isolation.
+
+    What it is: a shareable page the operator can open on a phone or a desktop.
+    Not an in-app prototype — AMB.1's design lab cost a session to build and its
+    prototypes could not catch the navigation bug anyway (L1), so building one
+    per phase would buy nothing that this gate does not.
+
+    What it CANNOT do, stated so nobody mistakes approval for verification: a
+    mockup shows structure, hierarchy, density and state. It cannot show
+    SwiftUI's materials, blur, or motion — those only look right on a device.
+    The mockup approves the DESIGN; the device smoke (D7) still approves the
+    RENDER. A phase needs both.
+
+    If a mockup is rejected, it is re-cut before any code is written. Iterating a
+    page costs minutes; iterating a converted surface costs a session.
+
 D9  THE TAIL GETS CONVERTED. Operator decision 2026-07-24. AMB.12 runs;
     Settings, the manager tools, Stats and Training are converted rather than
     left as a visible seam. They are last precisely because they are lowest
@@ -224,15 +247,21 @@ Without the gate this arc produces the same outcome Phase 3 did.
 Each phase session runs:
 
     1  SCOPE      list the views in the surface, name what must survive
-    2  CONVERT    presentation only; data layer untouched; delete the old
-                  presentation in the same commit, never alongside
-    3  BUILD      xcodebuild clean, zero warnings from changed files
-    4  REVIEW     /code-review before any push, operator-triggered
-    5  SMOKE      operator on device, with before/after screenshots
-    6  CLOSE OUT  AUDIT_ROADMAP.md entry + registry status line
+    2  MOCK       visual mockup of the surface's key screens, against what is
+                  there today. HARD GATE (D10) — no Swift until it is approved.
+                  A rejected mockup is re-cut here, not after conversion.
+    3  CONVERT    presentation only; data layer untouched; delete the old
+                  presentation in the same commit, never alongside. The mockup is
+                  never committed and never ships beside the old path — it is a
+                  pre-commit artifact, so delete-first still holds.
+    4  BUILD      xcodebuild clean, zero warnings from changed files
+    5  REVIEW     /code-review before any push, operator-triggered
+    6  SMOKE      operator on iPhone AND iPad (D7), with before/after screenshots
+    7  CLOSE OUT  AUDIT_ROADMAP.md entry + registry status line
 
 Acceptance criteria, every phase, no exceptions:
 
+    the mockup was approved before conversion started (D10)
     iPhone AND iPad
     light AND dark
     Dynamic Type at large accessibility sizes
