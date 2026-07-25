@@ -88,6 +88,11 @@ D5  DENSITY IS SETTLED BEFORE ANY SCREEN IS BUILT ON IT. Ambient's glass and
     and PROVEN in AMB.3 by converting Equipment itself. Only then does the home
     dashboard follow.
 
+    CHOSEN 2026-07-25 (operator, from the specimen sheet's live density
+    switch over a 24-item list): COMPACT is the density for dense lists.
+    That settles D5 — AMB.3 converts Equipment at compact, and every later
+    list surface follows unless it argues otherwise in its own mockup.
+
     SETTLED IN CODE 2026-07-25 (AMB.2), proven in AMB.3. Three densities, named
     for intent rather than numbered: hero is the one thing on the screen (18pt
     padding, 24pt radius), roomy is a browsable list of a handful of items
@@ -146,8 +151,21 @@ D11 THE WASH IS THE FEATURE'S COLOUR, AND THE SCHEDULE IS THE EXCEPTION.
     and FeatureTheme's schedule colour keeps doing its real job of tinting the
     schedule's TILE on the home screen.
 
-    Proposed and judged in AMB.2 session 2's batch-1 mockups, on a device,
-    alongside the four surfaces themselves.
+    APPROVED AND APPLIED 2026-07-25. FeatureTheme now carries 27 distinct
+    colours in ten families. The old map is kept verbatim in the lab as
+    LabPalette.legacyColor so the before and after survive the port, and the
+    Feature Colours sheet has changed job from proposal to record.
+
+    This is the first change in the arc that alters screens which have NOT
+    been converted: the home tiles, the All Features grid and the bottom bar
+    all read FeatureTheme, so their colours changed the moment this landed.
+    That was stated before it was done rather than discovered afterwards.
+
+    HOME. The dashboard is the container, not a feature, so it has no entry.
+    Operator decision the same day: home takes the COMPANY BLUE, #009AE2,
+    at 90 percent intensity. The blue came from Logo.svg, the only place it
+    was ever written down — the app's AccentColor asset is empty, so the app
+    had been running on Apple's default blue. It is now AmbientStyle.brand.
 
 D6  MAIN STAYS SHIPPABLE. Every phase is independently shippable and
     independently revertible. There is never a long-lived conversion branch. If

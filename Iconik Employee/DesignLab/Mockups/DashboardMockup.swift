@@ -9,10 +9,15 @@
 //
 //  THE WASH  (operator decision, 2026-07-25)
 //      D11 gives every screen its feature's colour, but home is not a feature —
-//      it is the container, and it already carries a stack of coloured cards.
-//      Full strength would fight all of them; none at all leaves the cards the
-//      same colour as the page behind them, which is why today's dashboard reads
-//      flat. So: the company blue from the logo, turned right down.
+//      it is the container. No wash at all leaves the cards the same colour as
+//      the page behind them, which is why today's dashboard reads flat. So:
+//      the company blue from the logo, at 90% — the operator's call, and close
+//      to the schedule's full strength, so home reads as the front door of THIS
+//      app rather than as a neutral shelf for cards.
+//
+//      The thing to watch on a device is the four coloured widget headers
+//      against it. That is the trade 90% is making, and it is why the slider
+//      stays in the mockup.
 //
 //  WHAT THIS FIXES, BESIDES THE STYLING
 //      The live widget paints its colour rail by looking up `session.position`
@@ -24,8 +29,10 @@
 import SwiftUI
 
 struct DashboardMockup: View {
-    /// So the operator can see the decision, not just the result.
-    @State private var washIntensity: Double = 0.28
+    /// 90%, operator's call 2026-07-25. Near the schedule's full strength — the
+    /// dashboard leads with the wash rather than merely hinting at it. The
+    /// slider stays so the number can still be argued with on a device.
+    @State private var washIntensity: Double = 0.9
 
     var body: some View {
         ZStack {
@@ -53,7 +60,7 @@ struct DashboardMockup: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Circle().fill(AmbientStyle.brand).frame(width: 12, height: 12)
-                Text("Company blue, turned down")
+                Text("Company blue")
                     .font(.footnote.weight(.semibold))
                 Spacer()
                 Text(washIntensity == 0 ? "off" : "\(Int(washIntensity * 100))%")
@@ -62,7 +69,7 @@ struct DashboardMockup: View {
             }
             Slider(value: $washIntensity, in: 0...1)
                 .tint(AmbientStyle.brand)
-            Text("Drag to nothing and back. The schedule runs at 100% because its colour means something; home is carrying its own colours already, so it wants far less.")
+            Text("Set to 90%, near the schedule's full strength. Drag it down and back — the thing to watch is the coloured widget headers below, which are what a strong wash competes with.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

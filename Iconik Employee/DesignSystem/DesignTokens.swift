@@ -15,36 +15,61 @@ import UIKit
 /// `MainEmployeeView`, `AllFeaturesView`, and `BottomTabBar` — e.g. the daily
 /// job report was blue in two and green in the third. Those call sites now all
 /// delegate here so a feature has exactly one color app-wide.
+/// RE-CUT IN AMB.2 (operator approved 2026-07-25) so that all 27 features are
+/// distinct. The previous map had 27 features sharing 11 colours — five of them
+/// blue — which was survivable while this only tinted a tile, and is not
+/// survivable now: under D11 a feature's colour becomes the WASH behind its
+/// whole screen, so two features sharing a colour are two screens you cannot
+/// tell apart.
+///
+/// Arranged as ten families: hues adjacent inside a family so a group reads as
+/// a group, families far apart so a wash is unmistakable. Manager tools are
+/// deliberately desaturated — they are not daily photographer work, and the
+/// palette can say so without a label.
+///
+/// The schedule keeps its own data-driven wash (the colour of the job in front
+/// of you) — the schedule entry here still tints its TILE and its bottom-bar
+/// item, which is what this map is for.
 enum FeatureTheme {
     static func color(for id: String) -> Color {
         switch id {
-        case "timeTracking": return .cyan
-        case "photoshootNotes": return .purple
-        case "dailyJobReport": return .blue
-        case "customDailyReports": return .mint
-        case "myDailyJobReports": return .green
-        case "mileageReports": return .orange
-        case "schedule": return .red
-        case "locationPhotos": return .pink
-        case "capture": return .blue
-        case "sportsShoot": return .indigo
-        case "focalPointSports": return .mint
-        case "yearbookChecklists": return .purple
-        case "classGroups": return .teal
-        case "training": return .yellow
-        case "chat": return .blue
-        case "scan": return .orange
-        case "flagUser": return .red
-        case "unflagUser": return .green
-        case "managerMileage": return .blue
-        case "stats": return .indigo
-        case "galleryCreator": return .green
-        case "jobBoxTracker": return .teal
-        case "equipment": return .cyan
-        case "tasks": return .blue
-        case "routePlanner": return .green
-        case "timeOffRequests": return .teal
-        case "timeOffApprovals": return .teal
+        // Planning
+        case "schedule": return Color(hex: "#E5484D")
+        case "flagUser": return Color(hex: "#C62A2F")
+        // On the road
+        case "routePlanner": return Color(hex: "#F76B15")
+        case "mileageReports": return Color(hex: "#E8830C")
+        // Shoot day
+        case "capture": return Color(hex: "#F5B70A")
+        case "sportsShoot": return Color(hex: "#C9A227")
+        case "focalPointSports": return Color(hex: "#A3B818")
+        // Groups & delivery
+        case "classGroups": return Color(hex: "#46A758")
+        case "yearbookChecklists": return Color(hex: "#2E9B4F")
+        case "galleryCreator": return Color(hex: "#3DB88B")
+        // Time & pay
+        case "timeTracking": return Color(hex: "#12A594")
+        case "timeOffRequests": return Color(hex: "#0D9B8A")
+        case "timeOffApprovals": return Color(hex: "#0C8577")
+        // Gear
+        case "equipment": return Color(hex: "#00A2C7")
+        case "jobBoxTracker": return Color(hex: "#0B8BA8")
+        case "scan": return Color(hex: "#2AA7D8")
+        // Paperwork
+        case "dailyJobReport": return Color(hex: "#3E63DD")
+        case "customDailyReports": return Color(hex: "#5471E0")
+        case "myDailyJobReports": return Color(hex: "#7189E8")
+        // Notes & photos
+        case "photoshootNotes": return Color(hex: "#6E56CF")
+        case "locationPhotos": return Color(hex: "#8E4EC6")
+        // People
+        case "chat": return Color(hex: "#D6409F")
+        case "tasks": return Color(hex: "#E93D82")
+        case "training": return Color(hex: "#C43B6D")
+        // Manager tools — deliberately desaturated
+        case "stats": return Color(hex: "#7A7FA6")
+        case "unflagUser": return Color(hex: "#5F8A6E")
+        case "managerMileage": return Color(hex: "#8A7A5F")
         default: return .gray
         }
     }

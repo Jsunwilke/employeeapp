@@ -9,8 +9,10 @@
 //  SOLID TILE (what the home screen and bottom bar draw today) and as a WASH
 //  (what every converted screen will draw behind it).
 //
-//  Nothing here is live. FeatureTheme is untouched until this is approved —
-//  see the header of LabPalette.swift for why that ordering is deliberate.
+//  APPROVED AND APPLIED 2026-07-25. FeatureTheme now carries these 27 colours,
+//  so this sheet has changed job: it was the proposal, and it is now the record
+//  of what changed and why. The "was" swatches come from LabPalette.legacyColor,
+//  a verbatim copy of the old map, so the before and after survive the port.
 
 import SwiftUI
 
@@ -41,7 +43,7 @@ struct PaletteMockup: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Every feature needs its own colour")
                 .font(.title3.weight(.semibold))
-            Text("The wash behind a screen is going to be its feature's colour, so two features that share a colour become two screens you cannot tell apart. Today 27 features share 11 colours.")
+            Text("The wash behind a screen is its feature's colour, so two features sharing a colour would be two screens you cannot tell apart. The old map had 27 features sharing 11 colours. All 27 are now distinct.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -66,7 +68,7 @@ struct PaletteMockup: View {
 
     private var collisions: some View {
         VStack(alignment: .leading, spacing: 10) {
-            AmbientSectionTitle("Sharing a colour today",
+            AmbientSectionTitle("What was sharing a colour",
                                 trailing: "\(LabPalette.currentCollisions.count) clashes")
             ForEach(Array(LabPalette.currentCollisions.enumerated()), id: \.offset) { _, clash in
                 HStack(alignment: .top, spacing: 10) {
@@ -110,11 +112,11 @@ struct PaletteMockup: View {
 
     private func row(_ feature: LabPalette.Feature) -> some View {
         HStack(spacing: 12) {
-            swatch(feature.currentColor, label: "now")
+            swatch(feature.legacyColor, label: "was")
             Image(systemName: "arrow.right")
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(.tertiary)
-            swatch(feature.proposedColor, label: "new")
+            swatch(feature.proposedColor, label: "now")
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(feature.title)
@@ -214,7 +216,7 @@ struct PaletteMockup: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Nothing on this screen is live. The real feature colours do not change until you approve this.")
+            Text("These colours are LIVE as of 2026-07-25 — the home tiles, the All Features grid and the bottom bar all use them now. The \"was\" swatches are a copy of the old map, kept so this stays a before-and-after.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)

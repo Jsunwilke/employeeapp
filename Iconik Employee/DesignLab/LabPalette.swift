@@ -34,8 +34,45 @@ enum LabPalette {
         let proposed: String
 
         var proposedColor: Color { Color(hex: proposed) }
-        /// What the app ships today, straight from the real source of truth.
-        var currentColor: Color { FeatureTheme.color(for: id) }
+        /// What the app shipped BEFORE this proposal was accepted. Kept so the
+        /// sheet still shows a before and an after once the palette has moved
+        /// into FeatureTheme — a reference that vanishes the moment its port
+        /// lands cannot be used to check the port.
+        var legacyColor: Color { LabPalette.legacyColor(for: id) }
+    }
+
+    /// The pre-AMB.2 FeatureTheme, verbatim. 27 features, 11 colours.
+    static func legacyColor(for id: String) -> Color {
+        switch id {
+        case "timeTracking": return .cyan
+        case "photoshootNotes": return .purple
+        case "dailyJobReport": return .blue
+        case "customDailyReports": return .mint
+        case "myDailyJobReports": return .green
+        case "mileageReports": return .orange
+        case "schedule": return .red
+        case "locationPhotos": return .pink
+        case "capture": return .blue
+        case "sportsShoot": return .indigo
+        case "focalPointSports": return .mint
+        case "yearbookChecklists": return .purple
+        case "classGroups": return .teal
+        case "training": return .yellow
+        case "chat": return .blue
+        case "scan": return .orange
+        case "flagUser": return .red
+        case "unflagUser": return .green
+        case "managerMileage": return .blue
+        case "stats": return .indigo
+        case "galleryCreator": return .green
+        case "jobBoxTracker": return .teal
+        case "equipment": return .cyan
+        case "tasks": return .blue
+        case "routePlanner": return .green
+        case "timeOffRequests": return .teal
+        case "timeOffApprovals": return .teal
+        default: return .gray
+        }
     }
 
     static let families: [Family] = [
@@ -114,13 +151,12 @@ enum LabPalette {
         allFeatures.first { $0.id == id }?.proposedColor
     }
 
-    /// Feature ids that currently share a colour with at least one other, which
-    /// is the whole reason D11 needs a re-cut. Computed from the LIVE
-    /// FeatureTheme rather than typed out, so it cannot go stale.
+    /// Feature ids that shared a colour before the re-cut — the whole reason
+    /// D11 needed one. Computed rather than typed out.
     static var currentCollisions: [(color: String, titles: [String])] {
         var buckets: [String: [String]] = [:]
         for feature in allFeatures {
-            buckets[feature.currentColor.description, default: []].append(feature.title)
+            buckets[feature.legacyColor.description, default: []].append(feature.title)
         }
         return buckets
             .filter { $0.value.count > 1 }
