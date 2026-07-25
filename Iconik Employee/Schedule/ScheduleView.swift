@@ -76,7 +76,7 @@ struct ScheduleView: View {
 
     var body: some View {
         ZStack {
-            ScheduleBackdrop(tint: ambientTint)
+            AmbientBackdrop(tint: ambientTint)
 
             if isLoading && sessions.isEmpty {
                 loadingState
@@ -86,7 +86,7 @@ struct ScheduleView: View {
                 content
             }
         }
-        .navigationTitle(layout == .day ? ScheduleStyle.relativeDayLabel(selectedDay) : "Schedule")
+        .navigationTitle(layout == .day ? Formatters.relativeDay(selectedDay) : "Schedule")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -106,7 +106,7 @@ struct ScheduleView: View {
                 onDelete: { selectedTimeOff = nil; loadTimeOff() }
             )
         }
-        .schedulePush(item: $pushedSession) { session in
+        .ambientPush(item: $pushedSession) { session in
             ShiftDetailView(session: session,
                             allSessions: sessions,
                             currentUserID: userManager.getCurrentUserID())
@@ -235,8 +235,8 @@ struct ScheduleView: View {
         HStack(spacing: 4) {
             ForEach(ScheduleLayout.allCases) { option in
                 Button {
-                    withAnimation(ScheduleMotion.gentle) { layoutRaw = option.rawValue }
-                    ScheduleHaptics.selection()
+                    withAnimation(AmbientMotion.gentle) { layoutRaw = option.rawValue }
+                    AmbientHaptics.selection()
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: option.symbol).font(.system(size: 11, weight: .semibold))
@@ -334,14 +334,14 @@ struct ScheduleView: View {
         let staffing = staffing(on: date)
 
         return Button {
-            withAnimation(ScheduleMotion.snappy) { selectedDay = date }
-            ScheduleHaptics.selection()
+            withAnimation(AmbientMotion.snappy) { selectedDay = date }
+            AmbientHaptics.selection()
         } label: {
             VStack(spacing: 3) {
-                Text(ScheduleStyle.weekdayNarrow.string(from: date))
+                Text(Formatters.weekdayNarrow.string(from: date))
                     .font(.system(size: 10, weight: .bold))
                     .opacity(0.7)
-                Text(ScheduleStyle.dayNumber.string(from: date))
+                Text(Formatters.dayNumber.string(from: date))
                     .font(.system(size: 19, weight: .bold, design: .rounded))
                 // Two independent signals, as in the old week strip: the org's
                 // staffing load for the day, and whether YOU are on it. Drawing
@@ -363,6 +363,8 @@ struct ScheduleView: View {
             .padding(.vertical, 10)
             .background {
                 if isSelected {
+                    // ambient-allow: the selected-day chip in the week strip is
+                    // a selection state on a control, not a content card.
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .fill(.thickMaterial)
                         .shadow(color: .black.opacity(0.1), radius: 6, y: 3)
@@ -381,7 +383,7 @@ struct ScheduleView: View {
         .onLongPressGesture(minimumDuration: 0.35) {
             guard staffing.total > 0 else { return }
             staffingPopoverDay = date
-            ScheduleHaptics.impact(.medium)
+            AmbientHaptics.impact(.medium)
         }
         .popover(isPresented: Binding(
             get: { staffingPopoverDay == date },
@@ -389,7 +391,7 @@ struct ScheduleView: View {
         )) {
             StaffingPopoverView(staffing: staffing, date: date)
         }
-        .accessibilityLabel(Text(ScheduleStyle.longDate.string(from: date)))
+        .accessibilityLabel(Text(Formatters.longDate.string(from: date)))
         .accessibilityValue(Text("\(shifts(on: date).count) shifts, org staffing need \(staffing.total)"))
     }
 
@@ -400,7 +402,7 @@ struct ScheduleView: View {
 
         return VStack(spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(ScheduleStyle.longDate.string(from: selectedDay))
+                Text(Formatters.longDate.string(from: selectedDay))
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Text(daySummary(shifts: dayShifts.count, timeOff: dayOff.count))
@@ -443,7 +445,7 @@ struct ScheduleView: View {
                 guard let start = session.startDate, let end = session.endDate, end > start else { return sum }
                 return sum + end.timeIntervalSince(start)
             }
-            parts.append("\(shifts) shift\(shifts == 1 ? "" : "s") · \(ScheduleStyle.durationString(total))")
+            parts.append("\(shifts) shift\(shifts == 1 ? "" : "s") · \(Formatters.duration(total))")
         }
         if timeOff > 0 { parts.append("\(timeOff) time off") }
         return parts.joined(separator: " · ")
@@ -453,11 +455,11 @@ struct ScheduleView: View {
         LazyVStack(spacing: 14) {
             let dayItems = items(on: selectedDay)
             if dayItems.isEmpty {
-                ScheduleEmptyState(title: "Clear day",
-                                   message: mode == .myShifts
-                                       ? "You have nothing scheduled."
-                                       : "Nothing scheduled for anyone.",
-                                   systemImage: "moon.stars.fill")
+                AmbientEmptyState(title: "Clear day",
+                                  message: mode == .myShifts
+                                      ? "You have nothing scheduled."
+                                      : "Nothing scheduled for anyone.",
+                                  systemImage: "moon.stars.fill")
                     .padding(.top, 10)
             }
             ForEach(dayItems) { item in
@@ -467,13 +469,13 @@ struct ScheduleView: View {
                         ScheduleShiftRow(session: session, standing: ShiftStanding.of(session, now: clockTick))
                     }
                     .buttonStyle(.plain)
-                    .scheduleScrollFade()
+                    .ambientScrollFade()
                 case .timeOff(let entry):
                     Button { selectedTimeOff = entry } label: {
                         ScheduleTimeOffRow(entry: entry)
                     }
                     .buttonStyle(.plain)
-                    .scheduleScrollFade()
+                    .ambientScrollFade()
                 }
             }
         }
@@ -511,7 +513,7 @@ struct ScheduleView: View {
                         then completion: (() -> Void)? = nil) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             if animated {
-                withAnimation(ScheduleMotion.gentle) { proxy.scrollTo(ScheduleTimeline.anchorID, anchor: .top) }
+                withAnimation(AmbientMotion.gentle) { proxy.scrollTo(ScheduleTimeline.anchorID, anchor: .top) }
             } else {
                 proxy.scrollTo(ScheduleTimeline.anchorID, anchor: .top)
             }
@@ -722,11 +724,11 @@ struct ScheduleView: View {
 
     private func weekLabel(_ week: [Date]) -> String {
         guard let first = week.first, let last = week.last else { return "" }
-        return "\(ScheduleStyle.monthDay.string(from: first)) – \(ScheduleStyle.monthDay.string(from: last))"
+        return "\(Formatters.monthDay.string(from: first)) – \(Formatters.monthDay.string(from: last))"
     }
 
     private func step(_ delta: Int) {
-        withAnimation(ScheduleMotion.snappy) {
+        withAnimation(AmbientMotion.snappy) {
             weekOffset += delta
             let candidates = week(offset: weekOffset)
             if let first = candidates.first {
@@ -734,7 +736,7 @@ struct ScheduleView: View {
                 selectedDay = candidates.indices.contains(weekday) ? candidates[weekday] : first
             }
         }
-        ScheduleHaptics.impact(.soft)
+        AmbientHaptics.impact(.soft)
     }
 }
 

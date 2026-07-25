@@ -90,41 +90,80 @@ enum Formatters {
         return f
     }
 
+    // MARK: display formatters
+
+    /// These are for text a person reads, so unlike the fixed-format formatters
+    /// above they deliberately use the DEVICE locale and calendar — a 24-hour
+    /// device shows 24-hour times. Never parse with these; never persist their
+    /// output. Moved here from ScheduleStyle in AMB.2, which had grown a second
+    /// formatter cache beside this one.
+
+    /// Time of day, e.g. "9:41 AM".
+    static let shortTime: DateFormatter = {
+        let f = DateFormatter(); f.timeStyle = .short; f.dateStyle = .none; return f
+    }()
+    /// "Mon"
+    static let weekdayShort: DateFormatter = display("EEE")
+    /// "M"
+    static let weekdayNarrow: DateFormatter = display("EEEEE")
+    /// "Monday"
+    static let weekdayFull: DateFormatter = display("EEEE")
+    /// "7"
+    static let dayNumber: DateFormatter = display("d")
+    /// "Jul 25"
+    static let monthDay: DateFormatter = display("MMM d")
+    /// "July 2026"
+    static let monthYear: DateFormatter = display("MMMM yyyy")
+    /// "Saturday, July 25, 2026"
+    static let longDate: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .full; f.timeStyle = .none; return f
+    }()
+
+    /// "Today" / "Tomorrow" / "Yesterday", else the weekday name.
+    static func relativeDay(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInTomorrow(date) { return "Tomorrow" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        return weekdayFull.string(from: date)
+    }
+
+    /// "6h 30m" / "45m" / "3h".
+    static func duration(_ seconds: TimeInterval) -> String {
+        let totalMinutes = Int(seconds.rounded() / 60)
+        let hours = totalMinutes / 60, minutes = totalMinutes % 60
+        if hours == 0 { return "\(minutes)m" }
+        if minutes == 0 { return "\(hours)h" }
+        return "\(hours)h \(minutes)m"
+    }
+
     // MARK: private
 
     private static var zonedISODate: [String: DateFormatter] = [:]
 
+    /// Fixed-format: pins `en_US_POSIX` so parsing is calendar-independent.
     private static func fixed(_ format: String) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = format
         return f
     }
-}
 
-// MARK: - Card container style
-
-/// The app's standard card container: padded, rounded, subtly shadowed on the
-/// system background. Replaces dozens of hand-rolled
-/// `.padding().background(RoundedRectangle(cornerRadius: 12)).shadow(...)` stacks.
-struct CardStyle: ViewModifier {
-    var padding: CGFloat = 16
-    var cornerRadius: CGFloat = 12
-
-    func body(content: Content) -> some View {
-        content
-            .padding(padding)
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground))
-            )
-            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
+    /// Display-format: device locale and time zone, no POSIX pin. Carried over
+    /// verbatim from ScheduleStyle in AMB.2 — a restyle phase does not get to
+    /// change what a date says, so these keep the plain `dateFormat` assignment
+    /// the schedule shipped with rather than switching to a localized template.
+    private static func display(_ format: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = format
+        return f
     }
 }
 
-extension View {
-    /// Wrap content in the standard app card container. See `CardStyle`.
-    func cardStyle(padding: CGFloat = 16, cornerRadius: CGFloat = 12) -> some View {
-        modifier(CardStyle(padding: padding, cornerRadius: cornerRadius))
-    }
-}
+// The card container used to live here as `cardStyle()`. It was deleted in AMB.2
+// along with its `CardStyle` modifier: it had ZERO call sites in the entire app
+// after being introduced in the audit roadmap's Phase 3, while 115 hand-rolled
+// cards went on being written around it. Its replacement is `.ambientCard(...)`
+// in DesignSystem/AmbientCard.swift, which ships with an enforcement gate
+// precisely because this one proved that an unenforced card modifier is
+// decoration. See AMBIENT_ROLLOUT_PLAN.md.

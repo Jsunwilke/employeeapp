@@ -230,14 +230,87 @@ other rebases onto it.
   **Outstanding:** iPad smoke not run for AMB.1 — D7 (both devices every phase) was
   adopted after this phase shipped. Worth a pass when convenient; not blocking AMB.2.
 
-- [ ] **AMB.2 Design system extraction + enforcement gate + the lab** — NEXT, and
-  realistically two sessions. Promote the schedule's vocabulary into `DesignSystem/`;
-  delete the zero-adopter `cardStyle()`; add a build gate that fails on a NEWLY
-  hand-rolled card (the existing 115 across 39 files are grandfathered by path, so the
-  gate starts green); design the compact density variants against Equipment's real code
-  (D5); build the arc's mockup lab — menu entry, sample data, gallery, switcher, mounted
-  in the REAL nav container (D10) — and mock BATCH 1 inside it for a single review
-  sitting. No screen changes beyond the schedule repointing at the new home.
+- [~] **AMB.2 Design system extraction + enforcement gate + the lab** — SESSION 1 OF 2
+  BUILT 2026-07-25, awaiting operator review. Session 2 carries batch 1's four
+  surface mockups (Equipment, home dashboard, Tasks, Chat) and the single review
+  sitting that gates AMB.3.
+
+  **Shipped in session 1:**
+  - DesignSystem/ now holds the Ambient vocabulary as app-wide primitives:
+    AmbientCard.swift (the one card container, three densities, four edge
+    styles, three states), AmbientComponents.swift (badge, pill row, avatar,
+    avatar stack, section title, note card, stat tile, empty state) and
+    AmbientFoundation.swift (density scale, motion, haptics, the ambient wash,
+    deterministic identity colours, flow layout, the iOS 16.6 wrappers).
+    ScheduleStyleKit.swift shrank 579 → 218 lines and now holds only what is
+    genuinely about a shift: session colour, per-type icons and names, shift
+    times, and ShiftStanding.
+  - cardStyle() and CardStyle DELETED in the same commit. Verified zero call
+    sites app-wide before deleting — the governing fact of this arc.
+  - **The gate:** scripts/check_card_drift.py, registered as a PreToolUse hook
+    in .claude/settings.json (checked in, travels with the repo). Blocks a
+    Write/Edit that would ADD a hand-rolled card; also runs --sweep for phase
+    verification and --list to regenerate its allowlist. Starts green BY
+    CONSTRUCTION: the allowlist is generated from the rule — 46 files, 101
+    cards, zero unlisted. It ratchets (a file may shrink, never grow) so partial
+    conversion is never blocked, and non-cards are annotated per site rather
+    than exempting a whole file. 30/30 decision-matrix cases pass, including an
+    Edit that adds only a shadow line, a card hidden behind a seven-line
+    comment, a marker with no reason, and eight fail-open robustness cases.
+    31ms on a 5,190-line file. It blocked ME twice during this phase, which is
+    the only real proof it works.
+  - **The lab (D10):** DesignLab/ — one temporary profile-menu entry, sample
+    data, a gallery, a switcher, and AMB.2's specimen sheet. Mounted by PUSHING
+    into the Home screen's real NavigationView, never a fullScreenCover with
+    its own stack — the L1 correction. Deleted whole at AMB.12.
+  - **The specimen sheet** draws every primitive at every density against
+    Equipment's REAL row content, and carries a live density switch over a
+    24-item list so D5 is decided by scrolling rather than by looking at one row.
+
+  **Four corrections this phase forced on the plan** (detail in
+  AMBIENT_ROLLOUT_PLAN.md). The first three came from measuring the codebase,
+  the fourth from an adversarial audit of the gate itself:
+  1. the stated rule detected the wrong pattern and would have missed the
+     shadowless material card — which is the Ambient idiom, and which eight of
+     the ten cards this phase converted actually are;
+  2. it would have flagged the schedule, the style it exists to promote;
+  3. path-level grandfathering alone was too coarse, so there is a per-site
+     marker and a per-file count now;
+  4. the hook's hardcoded path would have refused EVERY edit on any other
+     checkout, because a PreToolUse hook reads exit 2 as BLOCK and python3
+     exits 2 on a missing file. Committing the settings file was itself the
+     bug. Verified by reproducing it, then fixed.
+
+  **Three deliberate pixel changes in the schedule, all needing operator eyes:**
+  time-off rows gained 2pt of padding (14 → 16) to match the shift rows beside
+  them; the three stat tiles in the shift detail gained 12pt of inner horizontal
+  padding and lost 2pt vertical; and the timeline's "No shifts" chip moved to
+  compact (radius 18 → 14, 14 → 12pt horizontal). All three are components that
+  now take their spacing from the density scale instead of hand-tuned numbers.
+
+  **Two adversarial audits run before any commit**, one on the extraction and
+  one on the gate. The extraction audit confirmed the move is faithful —
+  formatters, avatars, pills, standing-to-card-state mapping, the countdown
+  card's every number, and the three-file blast radius all verified — and found
+  the two padding deviations above, which are kept deliberately. The gate audit
+  found the CRITICAL path bug and five real weaknesses; all are fixed or
+  recorded. Residuals accepted and named: a shell command that writes Swift is
+  not covered by a Write/Edit hook (the sweep is the backstop); a glow that
+  varied at runtime would change view identity (documented at the call site, no
+  such caller exists); and the ScheduleTimelineRow exception stays hand-rolled
+  on purpose, annotated in place.
+
+  **Evidence:** xcodebuild BUILD SUCCEEDED; zero warnings from every new or
+  changed AMB.2 file; app installs, launches and renders on the simulator; gate
+  sweep clean; old vocabulary re-grepped to zero app-wide.
+
+  **Not verified by me, and only the operator can:** the schedule still looks and
+  behaves as it did (it shipped 4 days ago and this phase touched all three of
+  its files), and the Design Lab opens from the profile menu and the specimen
+  sheet renders. Needs iPhone AND iPad (D7).
+
+  **Raised, not resolved:** the time-tracking surface (~2,540 lines, nine
+  screens) is named in no AMB phase. See the Open section of the plan.
 
 **Batch 1** — mocked in AMB.2, reviewed in one sitting, then converted:
 

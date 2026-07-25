@@ -605,6 +605,9 @@ struct MainEmployeeView: View {
     
     // For navigating to Settings and appearance
     @State private var showSettings = false
+    /// TEMPORARY — the AMB arc's design lab. Removed at AMB.12 along with the
+    /// lab itself. See Iconik Employee/DesignLab/.
+    @State private var showDesignLab = false
     @State private var showThemePicker = false
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -884,6 +887,14 @@ struct MainEmployeeView: View {
                 NavigationLink(destination: SettingsView(), isActive: $showSettings) {
                     EmptyView()
                 }
+
+                // TEMPORARY (AMB arc, removed at AMB.12). Pushed into THIS
+                // NavigationView on purpose: a mockup has to run inside the same
+                // navigation container its real screen will get, or it is
+                // testing a frame that does not exist. See DesignLabView.swift.
+                NavigationLink(destination: DesignLabView(), isActive: $showDesignLab) {
+                    EmptyView()
+                }
                 
                 // Theme picker sheet
                 if showThemePicker {
@@ -1010,6 +1021,10 @@ struct MainEmployeeView: View {
                         }
                         Button(action: { showThemePicker = true }) {
                             Label("Appearance", systemImage: "paintbrush")
+                        }
+                        // TEMPORARY — removed at AMB.12 with the lab itself.
+                        Button(action: { showDesignLab = true }) {
+                            Label("Design Lab", systemImage: "paintpalette")
                         }
                         Button("Logout") {
                             Task {

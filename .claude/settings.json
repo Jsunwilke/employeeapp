@@ -1,0 +1,38 @@
+{
+  "$comment": [
+    "Project settings for the Iconik Employee app. Checked in on purpose, so the",
+    "card-drift gate travels with the repo rather than living in one machine's",
+    "user config.",
+    "",
+    "check_card_drift.py blocks a Write/Edit that hand-rolls a new card (a",
+    "rounded, filled, shadowed container) anywhere outside DesignSystem/. It",
+    "exists because the previous card modifier, cardStyle(), shipped during the",
+    "audit roadmap's Phase 3 with ZERO adopters while 115 hand-rolled cards were",
+    "written around it. See scripts/check_card_drift.py and AMBIENT_ROLLOUT_PLAN.md.",
+    "",
+    "The gate fails OPEN on any error, and its allowlist is generated from the",
+    "rule itself (python3 scripts/check_card_drift.py --list), so it starts green",
+    "and only catches new drift. Each AMB phase deletes its surface's entry.",
+    "",
+    "The existence test around the command is load-bearing, not defensive habit.",
+    "PreToolUse treats exit 2 as BLOCK, and python3 exits 2 when it cannot open",
+    "the script — so a bare invocation with a missing or moved script would",
+    "refuse EVERY Write and Edit in the project, with an error that never",
+    "mentions cards. Since this file is checked in, that would happen on the",
+    "first clone. The guard makes a missing script mean 'no gate', never 'no",
+    "edits'."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"$CLAUDE_PROJECT_DIR/scripts/check_card_drift.py\" ]; then python3 \"$CLAUDE_PROJECT_DIR/scripts/check_card_drift.py\"; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

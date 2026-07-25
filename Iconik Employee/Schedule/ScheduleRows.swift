@@ -53,13 +53,10 @@ struct ScheduleCountdownCard: View {
                     .font(.footnote.weight(.bold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(18)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .strokeBorder(tint.opacity(0.25), lineWidth: 1)
-            }
-            .shadow(color: tint.opacity(0.18), radius: 18, y: 8)
+            .ambientCard(density: .hero,
+                         state: .highlighted,
+                         border: .hairline(tint.opacity(0.25)),
+                         glow: tint)
         }
     }
 }
@@ -94,7 +91,7 @@ private struct CountdownState {
             progress = max(0, min(1, elapsed / total))
         } else {
             caption = "Finished"
-            value = ScheduleStyle.time.string(from: end)
+            value = Formatters.shortTime.string(from: end)
             symbol = "checkmark"
             progress = 1
         }
@@ -124,7 +121,7 @@ struct ScheduleShiftRow: View {
         let accent = ScheduleStyle.accent(for: session)
         return HStack(spacing: 14) {
             VStack(spacing: 2) {
-                Text(session.startDate.map { ScheduleStyle.time.string(from: $0) } ?? "—")
+                Text(session.startDate.map { Formatters.shortTime.string(from: $0) } ?? "—")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .strikethrough(isPast, color: .secondary)
@@ -132,7 +129,7 @@ struct ScheduleShiftRow: View {
                     .fill(accent.opacity(0.35))
                     .frame(width: 2)
                     .frame(maxHeight: .infinity)
-                Text(session.endDate.map { ScheduleStyle.time.string(from: $0) } ?? "")
+                Text(session.endDate.map { Formatters.shortTime.string(from: $0) } ?? "")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -155,23 +152,16 @@ struct ScheduleShiftRow: View {
                 }
                 ScheduleTypePills(session: session)
                 if !session.photographers.isEmpty {
-                    ScheduleCrewStack(crew: session.photographers, size: 24, maxVisible: 5)
+                    AmbientAvatarStack(subjects: ScheduleStyle.avatarSubjects(session.photographers), size: 24, maxVisible: 5)
                 }
             }
             Spacer(minLength: 0)
         }
-        .padding(16)
-        .background(isLive ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.ultraThinMaterial),
-                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(isLive
-                              ? AnyShapeStyle(accent)
-                              : AnyShapeStyle(ScheduleStyle.accentGradient(for: session)),
-                              lineWidth: isLive ? 2 : 1)
-        }
-        .grayscale(isPast ? 0.85 : 0)
-        .opacity(isPast ? 0.7 : 1)
+        .ambientCard(density: .roomy,
+                     state: standing.cardState,
+                     border: isLive
+                         ? .strong(AnyShapeStyle(accent))
+                         : .hairline(AnyShapeStyle(ScheduleStyle.accentGradient(for: session))))
     }
 }
 
@@ -193,14 +183,9 @@ struct ScheduleTimeOffRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            ScheduleBadge(text: entry.status.displayName, tint: tint)
+            AmbientBadge(text: entry.status.displayName, tint: tint)
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(tint.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-        }
+        .ambientCard(density: .roomy, border: .dashed(tint.opacity(0.3)))
     }
 }
 
@@ -307,13 +292,13 @@ struct ScheduleTimeline: View {
         let dayHours = hours(day)
 
         return HStack(spacing: 8) {
-            Text(ScheduleStyle.weekdayShort.string(from: day).uppercased())
+            Text(Formatters.weekdayShort.string(from: day).uppercased())
                 .font(.system(size: isToday ? 13 : 12, weight: .heavy))
                 .foregroundStyle(isToday ? Color.accentColor : .secondary)
-            Text(ScheduleStyle.dayNumber.string(from: day))
+            Text(Formatters.dayNumber.string(from: day))
                 .font(.system(size: isToday ? 23 : 19, weight: .bold, design: .rounded))
                 .strikethrough(isPast, color: .secondary)
-            Text(ScheduleStyle.monthYear.string(from: day).prefix(3))
+            Text(Formatters.monthYear.string(from: day).prefix(3))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
@@ -331,7 +316,7 @@ struct ScheduleTimeline: View {
 
             Spacer()
             if dayHours > 0 {
-                Text(ScheduleStyle.durationString(dayHours))
+                Text(Formatters.duration(dayHours))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -368,14 +353,14 @@ struct ScheduleTimeline: View {
                         ScheduleTimelineRow(session: session, standing: ShiftStanding.of(session, now: now))
                     }
                     .buttonStyle(.plain)
-                    .scheduleScrollFade(minOpacity: 0.5)
+                    .ambientScrollFade(minOpacity: 0.5)
                 case .timeOff(let entry):
                     Button { onSelectTimeOff(entry) } label: {
                         ScheduleTimeOffRow(entry: entry)
                     }
                     .buttonStyle(.plain)
                     .opacity(day < Calendar.current.startOfDay(for: now) ? 0.55 : 1)
-                    .scheduleScrollFade(minOpacity: 0.5)
+                    .ambientScrollFade(minOpacity: 0.5)
                 }
             }
         }
@@ -388,9 +373,7 @@ struct ScheduleTimeline: View {
             Text("No shifts").font(.system(size: 13, weight: .medium))
         }
         .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 10).padding(.horizontal, 14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .ambientCard(density: .compact, fillWidth: true)
     }
 }
 
@@ -408,7 +391,7 @@ struct ScheduleTimelineRow: View {
         let accent = ScheduleStyle.accent(for: session)
         return HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .trailing, spacing: 2) {
-                Text(session.startDate.map { ScheduleStyle.time.string(from: $0) } ?? "—")
+                Text(session.startDate.map { Formatters.shortTime.string(from: $0) } ?? "—")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .strikethrough(isPast, color: .secondary)
@@ -418,7 +401,7 @@ struct ScheduleTimelineRow: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                 if let end = session.endDate {
-                    Text(ScheduleStyle.time.string(from: end))
+                    Text(Formatters.shortTime.string(from: end))
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                         .monospacedDigit()
@@ -475,7 +458,7 @@ struct ScheduleTimelineRow: View {
 
                     if !session.photographers.isEmpty {
                         HStack(spacing: 8) {
-                            ScheduleCrewStack(crew: session.photographers, size: 22, maxVisible: 4)
+                            AmbientAvatarStack(subjects: ScheduleStyle.avatarSubjects(session.photographers), size: 22, maxVisible: 4)
                             Text(session.photographers.map(\.name).joined(separator: ", "))
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
@@ -489,13 +472,25 @@ struct ScheduleTimelineRow: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Flat fill when past: the material would let the ambient colour wash
-            // through, which is the signal we're removing from finished work.
+            // ambient-allow: ScheduleTimelineRow deliberately stays hand-rolled.
+            // Flat fill when past — the material would let the ambient colour
+            // wash through, which is the signal we're removing from finished
+            // work — and only the coloured CONTENT is desaturated, because the
+            // timeline is a long lazy list and a whole-card greyscale pass per
+            // row costs real frames (measured in AMB.1). .ambientCard has no
+            // third fill state, and adding one for a single caller would be
+            // designing the system around its exception.
             .background(cardFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .strokeBorder(borderStyle, lineWidth: isLive ? 2 : 1)
             }
+            // ambient-allow: ScheduleTimelineRow deliberately stays hand-rolled.
+            // A past row here takes a FLAT fill rather than a desaturated
+            // material, and desaturates only its coloured content, because the
+            // timeline is a long lazy list and a whole-card greyscale pass per
+            // row costs real frames (measured in AMB.1). Folding it into
+            // .ambientCard would undo that.
             .shadow(color: isLive ? accent.opacity(0.22) : .clear, radius: 14, y: 5)
             .opacity(isPast ? 0.75 : 1)
         }

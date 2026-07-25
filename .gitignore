@@ -130,3 +130,7 @@ supabase/.temp/
 *.p12
 *.cer
 *.mobileprovision
+
+# Python bytecode (scripts/)
+__pycache__/
+*.pyc

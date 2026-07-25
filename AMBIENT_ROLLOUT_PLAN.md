@@ -88,6 +88,22 @@ D5  DENSITY IS SETTLED BEFORE ANY SCREEN IS BUILT ON IT. Ambient's glass and
     and PROVEN in AMB.3 by converting Equipment itself. Only then does the home
     dashboard follow.
 
+    SETTLED IN CODE 2026-07-25 (AMB.2), proven in AMB.3. Three densities, named
+    for intent rather than numbered: hero is the one thing on the screen (18pt
+    padding, 24pt radius), roomy is a browsable list of a handful of items
+    (16pt, 22pt — what the schedule ships), compact is a list you scan rather
+    than read (12 horizontal, 10 vertical, 14pt radius). Compact's numbers are
+    taken from Equipment's REAL row, which is horizontal 12 vertical 10 at
+    radius 12 today, so converting Equipment is a change of vocabulary and not a
+    change of size. Density also drives type scale, avatar size, the gap between
+    cards, and whether pills keep their icons.
+
+    One fact found while measuring: Equipment has no pagination and no fetch
+    limit, and filters client-side over the whole array. A real organisation's
+    list is every item it owns. That is what the specimen sheet's long list is
+    for — the density question is decided by scrolling it, not by looking at one
+    row.
+
     Revised 2026-07-24, before any of it was built: the first cut of this plan
     put the dashboard at AMB.3 and Equipment at AMB.4 while also saying density
     was settled at AMB.4 — so the highest-traffic screen in the app would have
@@ -315,14 +331,71 @@ DELETE in the same commit:
     with zero adopters. FeatureTheme and Formatters in that file are used and
     stay.
 
-THE GATE. A pre-commit or build-phase check that fails on a newly hand-rolled
-card: a RoundedRectangle fill combined with a shadow in a view file outside
+THE GATE. A check that fails on a newly hand-rolled card in a view file outside
 DesignSystem/. Modelled on the existing protect-captura-files.sh hook, which is
-the enforcement pattern this repo already trusts. The existing 115 occurrences
-are grandfathered by path until their phase converts them, so the gate starts
-green and only catches NEW drift.
+the enforcement pattern this repo already trusts. Existing occurrences are
+grandfathered by path until their phase converts them, so the gate starts green
+and only catches NEW drift.
 
 Without the gate this arc produces the same outcome Phase 3 did.
+
+CORRECTED 2026-07-25, during AMB.2, after an actual census of the codebase. The
+rule as written above was wrong in three ways, and all three would have made the
+gate worse than useless — a gate that is green for the wrong reasons is worse
+than no gate, because it manufactures confidence:
+
+  1  IT DETECTED THE WRONG PATTERN. "A RoundedRectangle fill combined with a
+     shadow" misses about fifteen real hand-rolled cards that use cornerRadius
+     instead of a RoundedRectangle shape — including Equipment's own row, the
+     very card AMB.3 converts, and Chat's message input bar. The gate now
+     detects both forms.
+
+  2  IT WOULD HAVE FLAGGED THE STYLE IT PROMOTES. The schedule's own cards are a
+     material fill in a RoundedRectangle with a shadow, so the arc's reference
+     implementation was the first thing the rule caught. Fixed properly rather
+     than by exempting the schedule: the schedule's cards now go through the
+     shared primitive, so there is nothing left to flag.
+
+  3  PATH-LEVEL GRANDFATHERING ALONE WAS TOO COARSE. Allowlisting a whole file
+     blinds the gate to every other card in it, and the two worst offenders are
+     DashboardWidgets (seven) and the NFC statistics screen (six) — exactly the
+     files where new cards are most likely to be added next. There is now also a
+     per-site marker, ambient-allow, for the things that are rounded and
+     shadowed but genuinely are not cards: a selection chip, a photo hero, a
+     drop shadow on a glyph. Schedule/ uses markers and is NOT allowlisted, so
+     it keeps full protection.
+
+The gate lives at scripts/check_card_drift.py and runs two ways: as a PreToolUse
+hook registered in .claude/settings.json (checked in, so it travels with the
+repo), and as a sweep over the whole app for the verification step of every
+phase. It fails open on any error. Its allowlist is GENERATED from the rule
+itself rather than hand-written, so the green start is a fact rather than a
+hope: 46 files, 101 hand-rolled cards, zero unlisted. That is close to the 115
+this document counted by hand, and the remainder is the difference between
+counting card BACKGROUNDS and counting card CONTAINERS.
+
+Two properties are worth stating because they are what make it survive contact
+with the arc rather than being switched off in week three:
+
+  IT RATCHETS RATHER THAN DEMANDS PERFECTION. Each grandfathered file carries
+  its CURRENT card count, and an edit is refused only if it would INCREASE that
+  file's count. So a phase can convert one card at a time without the gate
+  fighting it, while DashboardWidgets can never reach eight cards and one. A
+  clean-file rule would have blocked every partial conversion, which is how a
+  gate ends up being deleted rather than obeyed.
+
+  A NON-CARD IS ANNOTATED IN PLACE, NOT EXEMPTED WHOLESALE. A selection chip, a
+  photo hero, a keyboard key gets a reasoned marker on the line above it. That
+  keeps every other line in the file guarded, where allowlisting the file would
+  blind the gate to all of it.
+
+Third correction, 2026-07-25: the first cut hardcoded the script's absolute path
+in .claude/settings.json. Since a PreToolUse hook treats exit 2 as BLOCK and
+python3 exits 2 when it cannot open a file, that would have refused EVERY edit
+in the project on any clone where the path did not resolve — and this file is
+checked in, so the first clone would have hit it. The command now derives its
+path and tests for the script first, so a missing gate means no gate rather than
+no edits.
 
 
 ## Per-phase workflow
@@ -406,6 +479,32 @@ L6  RUN THE REVIEW BEFORE PUSHING. Post-push there is no branch delta left to
     NOT a performance arc, though L4's pattern is applied where a converted
       list needs it
     NOT adding features to converted surfaces
+
+
+## Open, raised 2026-07-25 during AMB.2
+
+TIME TRACKING IS NOT IN ANY PHASE. Building the gate's allowlist meant walking
+every surface in the app, and the clock-in and clock-out screens are named
+nowhere in the phase list above:
+
+    TimeTrackingMainView, TimeTrackingButton, TimeEntryListView,
+    TimeEntryDetailView, ActiveClockInEditView, ManualTimeEntryView,
+    EditTimeEntryView, CustomClockOutView, SessionSelectionView
+
+That is about 2,540 lines across nine screens, and photographers touch the clock
+every working day — so it is not tail traffic. It is also payroll-adjacent,
+which raises the bar on any change to it.
+
+Three ways to resolve, for the operator to pick, not for a phase to decide
+quietly mid-build:
+
+  fold it into AMB.12, which is already the tail and would simply grow;
+  give it its own phase between AMB.8 and AMB.9, near the other number-heavy
+    screens;
+  leave it unconverted on purpose and record that as a deliberate seam.
+
+Recorded here rather than resolved, because silently adding a tenth surface to
+someone else's phase is how a plan stops being the thing that governs the work.
 
 
 ## Answered, 2026-07-24

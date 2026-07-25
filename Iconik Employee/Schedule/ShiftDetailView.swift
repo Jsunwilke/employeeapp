@@ -133,7 +133,7 @@ struct ShiftDetailView: View {
     
     var body: some View {
         ZStack(alignment: .bottom) {
-            ScheduleBackdrop(tint: accent)
+            AmbientBackdrop(tint: accent)
 
             if isInitializing {
                 VStack(spacing: 16) {
@@ -160,7 +160,7 @@ struct ShiftDetailView: View {
                     .padding(.horizontal, 18)
                     .padding(.top, 6)
                 }
-                .scheduleNoBounceWhenShort()
+                .ambientNoBounceWhenShort()
 
                 actionBar
             }
@@ -254,6 +254,8 @@ struct ShiftDetailView: View {
                             .foregroundStyle(.white)
                     }
                     .padding(24)
+                    // ambient-allow: a modal loading HUD floating over a dimmed
+                    // backdrop, not a card in a list.
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
             }
@@ -290,7 +292,7 @@ struct ShiftDetailView: View {
                     .minimumScaleFactor(0.75)
                     .fixedSize(horizontal: false, vertical: true)
 
-                ScheduleFlowLayout(spacing: 6, lineSpacing: 6) {
+                AmbientFlowLayout(spacing: 6, lineSpacing: 6) {
                     ForEach(session.sessionType, id: \.self) { type in
                         HStack(spacing: 5) {
                             Image(systemName: ScheduleStyle.typeSymbol(type, in: session))
@@ -320,7 +322,7 @@ struct ShiftDetailView: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     if let start = session.startDate {
-                        Text(ScheduleStyle.longDate.string(from: start))
+                        Text(Formatters.longDate.string(from: start))
                             .font(.caption.weight(.semibold))
                             .opacity(0.85)
                     }
@@ -340,7 +342,9 @@ struct ShiftDetailView: View {
         .frame(minHeight: 200)
         .fixedSize(horizontal: false, vertical: true)
         .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .scheduleParallax(0.35)
+        .ambientParallax(0.35)
+        // ambient-allow: the detail hero is a full-bleed gradient banner that
+        // parallaxes under the nav bar, not a glass card.
         .shadow(color: accent.opacity(0.3), radius: 20, y: 10)
         .padding(.top, 6)
     }
@@ -354,12 +358,12 @@ struct ShiftDetailView: View {
 
     private var factsRow: some View {
         HStack(spacing: 10) {
-            ScheduleStatTile(value: session.photographers.count, label: "On crew",
-                             systemImage: "person.2.fill", tint: accent)
-            ScheduleStatTile(value: session.dayCount, label: session.dayCount == 1 ? "Day" : "Days",
-                             systemImage: "calendar", tint: accent)
-            ScheduleStatTile(value: session.photographersNeeded + session.posersNeeded + session.helpersNeeded,
-                             label: "Needed", systemImage: "person.badge.plus", tint: accent)
+            AmbientStatTile(value: session.photographers.count, label: "On crew",
+                            systemImage: "person.2.fill", tint: accent)
+            AmbientStatTile(value: session.dayCount, label: session.dayCount == 1 ? "Day" : "Days",
+                            systemImage: "calendar", tint: accent)
+            AmbientStatTile(value: session.photographersNeeded + session.posersNeeded + session.helpersNeeded,
+                            label: "Needed", systemImage: "person.badge.plus", tint: accent)
         }
     }
 
@@ -370,7 +374,7 @@ struct ShiftDetailView: View {
     /// from that day in the schedule would.
     private var daySwitcher: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ScheduleSectionTitle("Runs \(session.dayCount) days")
+            AmbientSectionTitle("Runs \(session.dayCount) days")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(Array(session.sortedDays.enumerated()), id: \.element.id) { index, day in
@@ -401,11 +405,11 @@ struct ShiftDetailView: View {
 
     private func selectDay(_ day: SessionDay) {
         guard day.id != activeDay?.id else { return }
-        withAnimation(ScheduleMotion.snappy) {
+        withAnimation(AmbientMotion.snappy) {
             viewedDayID = day.id
             session = occurrence(for: day)
         }
-        ScheduleHaptics.selection()
+        AmbientHaptics.selection()
         // Everything derived from the day has to be recomputed.
         travelPlan = TravelPlan()
         weatherData = nil
@@ -466,7 +470,7 @@ struct ShiftDetailView: View {
 
     private func dayShortLabel(_ day: SessionDay) -> String {
         guard let date = Session.parseDateTime(date: day.date, time: "00:00") else { return day.date }
-        return ScheduleStyle.monthDay.string(from: date)
+        return Formatters.monthDay.string(from: date)
     }
 
     /// "9:00 AM – 12:00 PM" for a day, or nil if it has no times.
@@ -475,9 +479,9 @@ struct ShiftDetailView: View {
               let start = Session.parseDateTime(date: day.date, time: startString) else { return nil }
         guard let endString = day.end_time,
               let end = Session.parseDateTime(date: day.date, time: endString) else {
-            return ScheduleStyle.time.string(from: start)
+            return Formatters.shortTime.string(from: start)
         }
-        return "\(ScheduleStyle.time.string(from: start))–\(ScheduleStyle.time.string(from: end))"
+        return "\(Formatters.shortTime.string(from: start))–\(Formatters.shortTime.string(from: end))"
     }
 
     // MARK: - Notes
@@ -485,14 +489,14 @@ struct ShiftDetailView: View {
     @ViewBuilder
     private var notesCards: some View {
         if let dayNotes = activeDay?.day_notes, !dayNotes.isEmpty {
-            ScheduleNoteCard(title: "Notes for this day", text: dayNotes, accent: accent)
+            AmbientNoteCard(title: "Notes for this day", text: dayNotes, accent: accent)
         }
         if let sessionNotes = session.notes, !sessionNotes.isEmpty {
-            ScheduleNoteCard(title: "Session notes", text: sessionNotes, accent: .secondary)
+            AmbientNoteCard(title: "Session notes", text: sessionNotes, accent: .secondary)
         }
         if let userInfo = currentUserPhotographerInfo,
            let personal = userInfo.notes, !personal.isEmpty {
-            ScheduleNoteCard(title: "Your notes", text: personal, accent: .blue)
+            AmbientNoteCard(title: "Your notes", text: personal, accent: .blue)
         }
     }
 
@@ -502,7 +506,7 @@ struct ShiftDetailView: View {
     /// you find out who has the gear without asking.
     private var crewCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ScheduleSectionTitle("Crew on this day", trailing: "\(session.photographers.count)")
+            AmbientSectionTitle("Crew on this day", trailing: "\(session.photographers.count)")
 
             if session.photographers.isEmpty {
                 Text("Nobody assigned to this day yet.")
@@ -512,9 +516,9 @@ struct ShiftDetailView: View {
 
             ForEach(session.photographers, id: \.id) { person in
                 HStack(spacing: 12) {
-                    ScheduleAvatar(
+                    AmbientAvatar(
                         name: person.name,
-                        photoURL: photoURL(for: person),
+                        imageURL: photoURL(for: person),
                         size: 40,
                         ringColor: isMatchingUser(profileName: person.name, scannedByName: latestJobBoxScannedBy)
                             ? jobBoxHighlightColor : nil
@@ -536,19 +540,17 @@ struct ShiftDetailView: View {
             let others = sameDayCoworkersAtSchool()
             if !others.isEmpty {
                 Divider().padding(.vertical, 2)
-                ScheduleSectionTitle("Also at this school today")
+                AmbientSectionTitle("Also at this school today")
                 ForEach(others, id: \.id) { person in
                     HStack(spacing: 12) {
-                        ScheduleAvatar(name: person.name, photoURL: photoURL(for: person), size: 32)
+                        AmbientAvatar(name: person.name, imageURL: photoURL(for: person), size: 32)
                         Text(person.name).font(.subheadline)
                         Spacer()
                     }
                 }
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .ambientCard(density: .roomy, fillWidth: true)
     }
 
     private func photoURL(for person: SessionPhotographer) -> String? {
@@ -564,7 +566,7 @@ struct ShiftDetailView: View {
             let step = statusToStep(latestJobBoxStatus)
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    ScheduleSectionTitle("Job box")
+                    AmbientSectionTitle("Job box")
                     if let box = jobBoxes.sorted(by: { $0.timestampDate > $1.timestampDate }).first,
                        !box.boxNumber.isEmpty {
                         Text("#\(box.boxNumber)")
@@ -626,9 +628,7 @@ struct ShiftDetailView: View {
                     }
                 }
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .ambientCard(density: .roomy, fillWidth: true)
         }
     }
 
@@ -652,7 +652,7 @@ struct ShiftDetailView: View {
     private var weatherCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                ScheduleSectionTitle("Weather")
+                AmbientSectionTitle("Weather")
                 if isLoadingWeather { ProgressView().scaleEffect(0.7) }
             }
 
@@ -674,9 +674,7 @@ struct ShiftDetailView: View {
                 .foregroundStyle(accent)
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .ambientCard(density: .roomy, fillWidth: true)
     }
 
     // MARK: - Travel
@@ -684,7 +682,7 @@ struct ShiftDetailView: View {
     private var travelCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                ScheduleSectionTitle("Getting there")
+                AmbientSectionTitle("Getting there")
                 Spacer()
                 if travelPlan.isCalculating {
                     ProgressView().scaleEffect(0.7)
@@ -703,10 +701,10 @@ struct ShiftDetailView: View {
             } else if let leave = travelPlan.suggestedLeaveTime, let arrival = travelPlan.arrivalTime {
                 VStack(spacing: 10) {
                     if let wakeup = travelPlan.suggestedWakeupTime, travelPlan.readyTime > 0, isFirstShiftOfDay() {
-                        travelRow("Wake up", ScheduleStyle.time.string(from: wakeup), "bed.double.fill", .indigo, prominent: true)
+                        travelRow("Wake up", Formatters.shortTime.string(from: wakeup), "bed.double.fill", .indigo, prominent: true)
                     }
-                    travelRow("Leave by", ScheduleStyle.time.string(from: leave), "figure.walk", .green, prominent: true)
-                    travelRow("Arrive", ScheduleStyle.time.string(from: arrival), "mappin.and.ellipse", .orange, prominent: false)
+                    travelRow("Leave by", Formatters.shortTime.string(from: leave), "figure.walk", .green, prominent: true)
+                    travelRow("Arrive", Formatters.shortTime.string(from: arrival), "mappin.and.ellipse", .orange, prominent: false)
                     travelRow("Drive time", formatDuration(travelPlan.travelDuration), "car.fill", .red, prominent: false)
                     if travelPlan.readyTime > 0 && isFirstShiftOfDay() {
                         travelRow("Getting ready", formatDuration(travelPlan.readyTime), "clock.fill", .purple, prominent: false)
@@ -724,9 +722,7 @@ struct ShiftDetailView: View {
                 .foregroundStyle(accent)
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .ambientCard(density: .roomy, fillWidth: true)
     }
 
     private func travelRow(_ label: String, _ value: String, _ systemImage: String,
@@ -753,7 +749,7 @@ struct ShiftDetailView: View {
     private var locationPhotosCard: some View {
         if !locationPhotos.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                ScheduleSectionTitle("Location photos", trailing: "\(locationPhotos.count)")
+                AmbientSectionTitle("Location photos", trailing: "\(locationPhotos.count)")
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         ForEach(locationPhotos) { photo in
@@ -788,9 +784,7 @@ struct ShiftDetailView: View {
                     }
                 }
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .ambientCard(density: .roomy, fillWidth: true)
         }
     }
 
