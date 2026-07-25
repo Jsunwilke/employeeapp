@@ -254,7 +254,10 @@ struct DashboardMockup: View {
             Image(systemName: "circle")
                 .font(.system(size: 17))
                 .foregroundStyle(.secondary)
-            Capsule().fill(task.priority.color).frame(width: 3, height: 26)
+            // Spine removed here too (operator, 2026-07-25). The dashboard's
+            // task row and the Tasks screen's card are the same object seen
+            // twice; keeping the spine on one of them is exactly the
+            // divergence the batch-1 research warned this pair would grow.
             VStack(alignment: .leading, spacing: 3) {
                 Text(task.title)
                     .font(.system(size: 14, weight: .medium))
@@ -276,6 +279,15 @@ struct DashboardMockup: View {
                 }
             }
             Spacer(minLength: 0)
+
+            // Carries what the spine used to, the same way the Tasks card does
+            // it: urgent and high only. Without this the dashboard row would
+            // have no priority signal at all, which the spine WAS providing.
+            if task.priority == .urgent || task.priority == .high {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(task.priority.color)
+            }
         }
         .ambientCard(density: .compact, border: .hairline(Color.primary.opacity(0.07)))
     }

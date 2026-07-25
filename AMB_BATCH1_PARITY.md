@@ -171,7 +171,17 @@ sort would look identical in a screenshot and be worse every single day.
 ### Row — TaskRowView
 
     KEPT   Completion checkbox, green when done
-    KEPT   Priority bar
+    MOVED  The priority spine is REMOVED (operator, 2026-07-25: it did not read
+           right on a card). Priority now reaches the row only through the
+           trailing glyph, which fires for urgent and high — so low and medium
+           are no longer distinguishable in the list. Deliberate, and the reason
+           it is acceptable: grouping by WHEN already carries the urgency the
+           spine was competing to express, the in-group sort is still by
+           priority, and the detail still badges it. Removed from the DASHBOARD
+           task row in the same pass, which gained the urgent/high glyph so it
+           is not left with no priority signal at all — those two rows are the
+           same object seen twice and the research already warned they would
+           diverge.
     KEPT   Title, two lines, struck through when completed
     KEPT   Status badge, due date (red when overdue), subtask count, comment count
     KEPT   Warning glyph for urgent and high

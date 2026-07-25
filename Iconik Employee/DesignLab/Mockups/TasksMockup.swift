@@ -381,7 +381,12 @@ struct LabTaskCard: View {
             }
             .buttonStyle(.plain)
 
-            Capsule().fill(task.priority.color).frame(width: 3, height: 30)
+            // The priority spine is GONE (operator, 2026-07-25 — it did not
+            // read right on a card). Priority now reaches the row only through
+            // the trailing glyph, which fires for urgent and high, so low and
+            // medium are no longer distinguishable here. That is acceptable
+            // because grouping by WHEN already carries the urgency the spine
+            // was competing to express, and the detail still badges priority.
 
             VStack(alignment: .leading, spacing: AmbientDensity.compact.contentSpacing) {
                 Text(task.title)
