@@ -605,7 +605,6 @@ struct MainEmployeeView: View {
     
     // For navigating to Settings and appearance
     @State private var showSettings = false
-    @State private var showScheduleDesignLab = false
     @State private var showThemePicker = false
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -885,10 +884,6 @@ struct MainEmployeeView: View {
                 NavigationLink(destination: SettingsView(), isActive: $showSettings) {
                     EmptyView()
                 }
-
-                NavigationLink(destination: ScheduleDesignLabView(), isActive: $showScheduleDesignLab) {
-                    EmptyView()
-                }
                 
                 // Theme picker sheet
                 if showThemePicker {
@@ -1012,9 +1007,6 @@ struct MainEmployeeView: View {
                     Menu {
                         Button(action: { showSettings = true }) {
                             Label("Settings", systemImage: "gear")
-                        }
-                        Button(action: { showScheduleDesignLab = true }) {
-                            Label("Schedule Design Lab", systemImage: "paintpalette")
                         }
                         Button(action: { showThemePicker = true }) {
                             Label("Appearance", systemImage: "paintbrush")

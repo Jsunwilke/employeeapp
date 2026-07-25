@@ -46,16 +46,6 @@ struct SettingsView: View {
                 }
             }
 
-            // Entry point for the schedule design prototypes. Read-only, and it
-            // replaces nothing — the shipping schedule is untouched.
-            Section {
-                NavigationLink(destination: ScheduleDesignLabView()) {
-                    Label("Schedule Design Lab", systemImage: "paintpalette")
-                }
-            } footer: {
-                Text("Five alternative designs for the week view and shift detail. Try each one, then say which to build for real.")
-            }
-
             Section {
                 TextField("e.g. Kiosk, Poser, Camera 2", text: $customDeviceName)
                     .textInputAutocapitalization(.words)
