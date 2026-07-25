@@ -29,7 +29,7 @@ phase-naming registry as the rest of the family.
       in AMB.2 (menu entry + sample data + gallery + switcher, in the real nav container),
       kept for the arc and deleted at AMB.12; each phase's own mockup views go at that
       phase's close. Smokes on iPhone AND iPad (D7); ships to main as it lands (D8).
-      Plan + the 9 locked decisions: AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
+      Plan + the 10 locked decisions (D1-D10): AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
 
       ✅ AMB.1   Schedule                                    DONE + PUSHED 2026-07-24
       ⬜ AMB.2   Design system + build gate + compact variants + THE LAB    ← NEXT
@@ -104,6 +104,14 @@ phase-naming registry as the rest of the family.
      small build choices from the plan; surface only a real safety/data-loss risk
      or a locked-decision conflict.
 
+  2b MOCK IT FIRST  (AMB arc — hard gate; skip only for non-AMB work)
+     Build the phase's views as a MOCKUP in the lab harness with sample data,
+     mounted in the REAL shell's nav container (never its own NavigationStack —
+     that is why AMB.1's lab could not catch a dead tap). Batch phases mock
+     several surfaces at once: see D10 for which batch this phase carries.
+     The operator reviews it ON A DEVICE. DO NOT TOUCH THE REAL SCREENS UNTIL
+     THEY APPROVE. A rejected mockup is re-cut here, where it costs minutes.
+
   3  BUILD IT RIGHT THE FIRST TIME
      Match existing patterns exactly. No hacks/patches — fix the root cause.
      Delete-first: the old path dies in the same commit.
@@ -128,13 +136,17 @@ phase-naming registry as the rest of the family.
        - The operator runs the changed flow (iPhone AND iPad where relevant).
          UI/nav changes REQUIRE this. If it can't run on the dev machine, say so
          and give exact test steps.
+         AMB arc: iPhone AND iPad are BOTH mandatory every phase (D7) — a phase
+         is not done when only the iPhone passes.
        - Re-grep the old pattern to confirm the change landed.
        - Live-DB changes (shared Supabase): reversible, read-back verified, nothing
          destructive without sign-off.
 
   6  HIGH-STAKES -> run the review yourself
      If it touches Supabase RLS/auth, PowerSync/offline integrity, payroll
-     (time_entries / PTO), the protected Captura roster editing, or the nav shell:
+     (time_entries / PTO), the protected Captura roster editing, the nav shell,
+     or a whole daily-use surface (an AMB conversion phase counts — AMB.1's
+     review found 8, five of them regressions the phase itself introduced):
      run the code-review skill (high/max) yourself as the final step, fix findings,
      deliver a plain-English report. Do not ask the operator to trigger it.
 
@@ -147,6 +159,10 @@ phase-naming registry as the rest of the family.
        - Report in plain English: what changed, the evidence, the one thing only
          the operator can confirm (the on-device run).
        - PUSH ONLY WHEN THE OPERATOR ASKS. Committed-but-not-pushed is the safe state.
+         EXCEPTION, standing: the AMB arc ships each phase to main as it lands
+         (D8, operator decision 2026-07-24) — push once the review and BOTH device
+         smokes pass, without asking again. This exception is per-arc and does not
+         generalize; every other arc keeps the default above.
 
 
 # 📖 Read first  (open the files — the titles are not the rules)
@@ -174,4 +190,5 @@ phase-naming registry as the rest of the family.
                 -scheme "Iconik Employee"
                 -destination "platform=iOS Simulator,name=iPhone 17 Pro"
   Branch        main
-  Commit        end with — Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Commit        end with — Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+                (was 4.8; every commit from 2026-07-24 on carries the Opus 5 trailer)
