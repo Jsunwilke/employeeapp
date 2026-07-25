@@ -12,8 +12,19 @@
 //  The choice is per-user (@AppStorage) and sticks.
 //
 //  Everything the old screen could do, this does: the realtime session listener,
-//  time off, My/All filtering, org-wide staffing heat, publish-a-day and create
-//  for managers, offline state, and per-day occurrences of multi-day jobs.
+//  time off, My/All filtering, publish-a-day and create for managers, offline
+//  state, and per-day occurrences of multi-day jobs.
+//
+//  PUB.1 (2026-07-25) changed two things about WHAT this screen shows.
+//    Drafts are visible to everyone, so a photographer can see what work is
+//    coming, grouped under their own heading and never mixed in with announced
+//    shifts. Who is on a draft is dropped before anything renders unless the
+//    viewer can edit the schedule — see DraftCrew.
+//    The staffing temperature is gone for everyone: the heat-coloured dot per
+//    day, its breakdown popover, and the long press that was supposed to open
+//    the popover but never fired — it was attached to a Button, whose own
+//    gesture wins, inside a horizontal ScrollView whose scroll gesture competes
+//    for the same touch. The dot that means "you are on this day" stays.
 //
 //  Deliberately NOT carried over: the per-card weather fetch. It was keyed off
 //  `session.location`, which is hard-coded to nil in the Session model, so it
@@ -31,6 +42,12 @@ struct ScheduleView: View {
     private let timeOffService = TimeOffService.shared
     private let userManager = UserManager.shared
     @ObservedObject private var organizationService = OrganizationService.shared
+    // Observed, not read statically: the index bakes in whether this viewer may
+    // see a draft's crew, and permissions load ASYNCHRONOUSLY after sign-in. An
+    // index built before they land would keep a scheduler's drafts redacted —
+    // and a redacted session must never reach the editor, which seeds its crew
+    // picker from exactly that array.
+    @ObservedObject private var permissionsService = PermissionsService.shared
 
     // MARK: Data
 
@@ -52,7 +69,6 @@ struct ScheduleView: View {
     @State private var pushedSession: Session?
     @State private var selectedTimeOff: TimeOffCalendarEntry?
     @State private var showCreateSession = false
-    @State private var staffingPopoverDay: Date?
     /// The timeline anchors on today once, not every time this screen re-appears.
     @State private var hasAnchored = false
     @State private var hasStarted = false
@@ -71,6 +87,9 @@ struct ScheduleView: View {
     private var layout: ScheduleLayout { ScheduleLayout(rawValue: layoutRaw) ?? .day }
     private var mode: ScheduleMode { ScheduleMode(rawValue: modeRaw) ?? .myShifts }
     private var canEdit: Bool { Permissions.has("schedule", level: .edit) }
+    /// Whether a draft's crew must be dropped before it renders. The schedulers
+    /// who can edit keep it; everyone else sees the work without the names.
+    private var hideDraftCrew: Bool { DraftCrew.isHiddenFromViewer }
 
     // MARK: - Body
 
@@ -107,9 +126,15 @@ struct ScheduleView: View {
             )
         }
         .ambientPush(item: $pushedSession) { session in
+            // `session` is already an index occurrence, so it is redacted. The
+            // supporting list is not — it is the raw feed — and the detail reads
+            // it for "other jobs at this school today", which feeds both the
+            // coworker list and the message-crew recipients. Redact it here, at
+            // the same boundary.
             ShiftDetailView(session: session,
-                            allSessions: sessions,
-                            currentUserID: userManager.getCurrentUserID())
+                            allSessions: DraftCrew.redacted(sessions, hidingDraftCrew: hideDraftCrew),
+                            currentUserID: userManager.getCurrentUserID(),
+                            crewHidden: hideDraftCrew)
                 .id(session.dayOccurrenceKey)
         }
         .onAppear(perform: start)
@@ -124,6 +149,7 @@ struct ScheduleView: View {
         }
         .onChange(of: weekOffset) { _ in loadTimeOff() }
         .onChange(of: modeRaw) { _ in rebuildIndex() }
+        .onChange(of: permissionsService.areaLevels) { _ in rebuildIndex() }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { clockTick = $0 }
         // errorMessage is only rendered as a full-screen state when there is
         // nothing to show at all; a failed refresh or publish on a populated
@@ -163,6 +189,7 @@ struct ScheduleView: View {
                         ScheduleTimeline(
                             days: timelineDays,
                             items: { items(on: $0) },
+                            drafts: { drafts(on: $0) },
                             hours: { hours(on: $0) },
                             onSelectShift: { pushedSession = $0 },
                             onSelectTimeOff: { selectedTimeOff = $0 }
@@ -358,7 +385,6 @@ struct ScheduleView: View {
         let isSelected = Calendar.current.isDate(date, inSameDayAs: selectedDay)
         let isToday = Calendar.current.isDateInToday(date)
         let mine = !shifts(on: date).isEmpty
-        let staffing = staffing(on: date)
 
         return Button {
             withAnimation(AmbientMotion.snappy) {
@@ -376,21 +402,15 @@ struct ScheduleView: View {
                     .opacity(0.7)
                 Text(Formatters.dayNumber.string(from: date))
                     .font(.system(size: 19, weight: .bold, design: .rounded))
-                // Two independent signals, as in the old week strip: the org's
-                // staffing load for the day, and whether YOU are on it. Drawing
-                // one in place of the other meant the heat map never appeared on
-                // any day that had shifts.
-                HStack(spacing: 3) {
-                    Circle()
-                        .fill(getHeatMapColor(total: staffing.total))
-                        .frame(width: 5, height: 5)
-                        .opacity(staffing.total > 0 ? 1 : 0)
-                    Circle()
-                        .fill(Color.primary.opacity(isSelected ? 0.9 : 0.55))
-                        .frame(width: 5, height: 5)
-                        .opacity(mine ? 1 : 0)
-                }
-                .frame(height: 5)
+                // One signal: whether YOU are on this day. The org's staffing
+                // load used to sit beside it as a heat-coloured dot; PUB.1
+                // removed it for everyone, managers included, since there is no
+                // second copy of this strip on iOS.
+                Circle()
+                    .fill(Color.primary.opacity(isSelected ? 0.9 : 0.55))
+                    .frame(width: 5, height: 5)
+                    .opacity(mine ? 1 : 0)
+                    .frame(height: 5)
             }
             // Fixed, not maxWidth: .infinity. The old seven-across HStack divided
             // the screen between exactly seven capsules, so .infinity was right
@@ -418,32 +438,37 @@ struct ScheduleView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onLongPressGesture(minimumDuration: 0.35) {
-            guard staffing.total > 0 else { return }
-            staffingPopoverDay = date
-            AmbientHaptics.impact(.medium)
-        }
-        .popover(isPresented: Binding(
-            get: { staffingPopoverDay == date },
-            set: { if !$0 { staffingPopoverDay = nil } }
-        )) {
-            StaffingPopoverView(staffing: staffing, date: date)
-        }
         .accessibilityLabel(Text(Formatters.longDate.string(from: date)))
-        .accessibilityValue(Text("\(shifts(on: date).count) shifts, org staffing need \(staffing.total)"))
+        // The strip draws drafts nowhere — they are not shifts and they are not
+        // yours — but a day carrying only drafts would otherwise read as empty
+        // to VoiceOver as well as by eye, so the count is spoken.
+        .accessibilityValue(Text(capsuleAccessibilityValue(for: date)))
+    }
+
+    private func capsuleAccessibilityValue(for date: Date) -> String {
+        let shiftCount = shifts(on: date).count
+        let draftCount = drafts(on: date).count
+        var parts = ["\(shiftCount) shifts"]
+        if draftCount > 0 { parts.append("\(draftCount) not published") }
+        return parts.joined(separator: ", ")
     }
 
     private var dayHeader: some View {
         let dayShifts = shifts(on: selectedDay)
         let dayOff = timeOffEntries(on: selectedDay)
-        let unpublished = dayShifts.contains { !$0.isPublished }
+        // Drafts are the only unpublished work on a day, and they no longer sit
+        // in `shifts`, so the publish button has to ask the drafts bucket. Reading
+        // it off `dayShifts` here would have left managers with no way to publish
+        // a day at all.
+        let unpublished = !drafts(on: selectedDay).isEmpty
 
         return VStack(spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(Formatters.longDate.string(from: selectedDay))
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Text(daySummary(shifts: dayShifts.count, timeOff: dayOff.count))
+                Text(daySummary(shifts: dayShifts.count, timeOff: dayOff.count,
+                                drafts: drafts(on: selectedDay).count))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
@@ -475,8 +500,8 @@ struct ScheduleView: View {
         .padding(.horizontal, 18)
     }
 
-    private func daySummary(shifts: Int, timeOff: Int) -> String {
-        if shifts == 0 && timeOff == 0 { return "Clear" }
+    private func daySummary(shifts: Int, timeOff: Int, drafts: Int) -> String {
+        if shifts == 0 && timeOff == 0 && drafts == 0 { return "Clear" }
         var parts: [String] = []
         if shifts > 0 {
             let total = self.shifts(on: selectedDay).reduce(0.0) { sum, session in
@@ -486,13 +511,18 @@ struct ScheduleView: View {
             parts.append("\(shifts) shift\(shifts == 1 ? "" : "s") · \(Formatters.duration(total))")
         }
         if timeOff > 0 { parts.append("\(timeOff) time off") }
+        // Counted apart from shifts, and never folded into their hours: a draft
+        // is not work you have been given, so a day of nothing but drafts must
+        // not read "1 shift" — and must not read "Clear" either.
+        if drafts > 0 { parts.append("\(drafts) not published") }
         return parts.joined(separator: " · ")
     }
 
     private var dayList: some View {
         LazyVStack(spacing: 14) {
             let dayItems = items(on: selectedDay)
-            if dayItems.isEmpty {
+            let dayDrafts = drafts(on: selectedDay)
+            if dayItems.isEmpty && dayDrafts.isEmpty {
                 AmbientEmptyState(title: "Clear day",
                                   message: mode == .myShifts
                                       ? "You have nothing scheduled."
@@ -511,6 +541,17 @@ struct ScheduleView: View {
                 case .timeOff(let entry):
                     Button { selectedTimeOff = entry } label: {
                         ScheduleTimeOffRow(entry: entry)
+                    }
+                    .buttonStyle(.plain)
+                    .ambientScrollFade()
+                }
+            }
+            if !dayDrafts.isEmpty {
+                ScheduleDraftHeading(count: dayDrafts.count)
+                    .padding(.top, dayItems.isEmpty ? 4 : 6)
+                ForEach(dayDrafts, id: \.dayOccurrenceKey) { session in
+                    Button { pushedSession = session } label: {
+                        ScheduleShiftRow(session: session, standing: ShiftStanding.of(session, now: clockTick))
                     }
                     .buttonStyle(.plain)
                     .ambientScrollFade()
@@ -628,7 +669,10 @@ struct ScheduleView: View {
         sessionService.startListeningToSessions(
             subscriptionId: subscriptionId,
             organizationID: orgID,
-            includeUnpublished: canEdit
+            // Everyone, not just schedulers (PUB.1 / P1). Drafts are what is
+            // coming; the app decides what of a draft may be SHOWN, and it does
+            // that in DraftCrew, not by refusing to fetch.
+            includeUnpublished: true
         ) { incoming in
             DispatchQueue.main.async {
                 self.sessions = incoming
@@ -665,7 +709,7 @@ struct ScheduleView: View {
         do {
             let fresh = try await sessionService.fetchSessions(
                 organizationID: orgID,
-                includeUnpublished: canEdit,
+                includeUnpublished: true,
                 forceRefresh: true
             )
             await MainActor.run {
@@ -719,15 +763,11 @@ struct ScheduleView: View {
         index.itemsByDay[Formatters.isoDate.string(from: day)] ?? []
     }
 
-    private func hasItems(on day: Date) -> Bool {
-        index.itemsByDay[Formatters.isoDate.string(from: day)]?.isEmpty == false
-    }
-
-    /// Org-wide staffing need for a day — every session, unfiltered. This is the
-    /// number behind the heat dot and the long-press breakdown.
-    private func staffing(on day: Date) -> DayStaffingTotals {
-        index.staffingByDay[Formatters.isoDate.string(from: day)]
-            ?? DayStaffingTotals(photographers: 0, posers: 0, helpers: 0)
+    /// A day's unpublished work. Kept in its own bucket rather than mixed into
+    /// `items` so it can be grouped under its own heading, left out of the
+    /// countdown and the day's hours, and never counted as a shift.
+    private func drafts(on day: Date) -> [Session] {
+        index.draftsByDay[Formatters.isoDate.string(from: day)] ?? []
     }
 
     private func hours(on day: Date) -> TimeInterval {
@@ -745,7 +785,8 @@ struct ScheduleView: View {
             timeOff: timeOff,
             mode: mode,
             viewerID: userManager.getCurrentUserIDUnified(),
-            viewerEmail: UserDefaults.standard.string(forKey: "userEmail")
+            viewerEmail: UserDefaults.standard.string(forKey: "userEmail"),
+            hideDraftCrew: hideDraftCrew
         )
     }
 
@@ -858,11 +899,17 @@ struct ScheduleIndex {
     var shiftsByDay: [String: [Session]] = [:]
     var timeOffByDay: [String: [TimeOffCalendarEntry]] = [:]
     var itemsByDay: [String: [ScheduleItem]] = [:]
-    var staffingByDay: [String: DayStaffingTotals] = [:]
+    /// Unpublished work, per day, kept apart from `shiftsByDay` on purpose
+    /// (PUB.1 / P6): a draft is not a shift you have been given, so it is not
+    /// counted as one, not tinted by, not counted down to, and not filtered by
+    /// My/All for anyone who cannot see who is on it.
+    var draftsByDay: [String: [Session]] = [:]
     var hoursByDay: [String: TimeInterval] = [:]
     /// A week of history that had work, today (always), then six weeks ahead.
     var timelineDays: [Date] = []
     /// Every visible occurrence in start order — what "next shift" reads.
+    /// Published only: the countdown card is about YOUR next call time and must
+    /// never count something that has not been announced.
     var occurrences: [Session] = []
 
     static func build(
@@ -870,38 +917,42 @@ struct ScheduleIndex {
         timeOff: [TimeOffCalendarEntry],
         mode: ScheduleMode,
         viewerID: String?,
-        viewerEmail: String?
+        viewerEmail: String?,
+        hideDraftCrew: Bool
     ) -> ScheduleIndex {
         var index = ScheduleIndex()
         let formatter = Formatters.isoDate
 
         for session in sessions {
-            // Staffing is org-wide: it counts every session on the day, whatever
-            // the My/All filter says, because it answers "how loaded is the org".
-            let dayRows = session.days.isEmpty ? [] : session.days
-            let keys: [String] = dayRows.isEmpty ? [session.date] : dayRows.map(\.date)
-            if !session.isTimeOff {
-                for key in Set(keys) {
-                    var totals = index.staffingByDay[key]
-                        ?? DayStaffingTotals(photographers: 0, posers: 0, helpers: 0)
-                    totals = DayStaffingTotals(
-                        photographers: totals.photographers + session.photographersNeeded,
-                        posers: totals.posers + session.posersNeeded,
-                        helpers: totals.helpers + session.helpersNeeded
-                    )
-                    index.staffingByDay[key] = totals
-                }
-            }
-
             for occurrence in session.dayOccurrences() {
-                if mode == .myShifts {
+                let isDraft = !occurrence.isPublished
+
+                // The My/All filter is answered from the UNREDACTED occurrence,
+                // before any crew is dropped — otherwise every draft would test
+                // as "not mine" for the very viewer the filter is for.
+                //
+                // A draft whose crew this viewer cannot see skips the filter
+                // entirely: with no assignment on it, it cannot belong to "mine"
+                // at all, and it has to reach My Shifts too or the people the
+                // change is for would never see what is coming (P6). A scheduler
+                // still sees the assignment, so their filter behaves as before.
+                let filtered = mode == .myShifts && !(isDraft && hideDraftCrew)
+                if filtered {
                     guard let viewerID,
                           occurrence.isUserAssigned(userID: viewerID, userEmail: viewerEmail) else { continue }
                 }
-                index.shiftsByDay[occurrence.date, default: []].append(occurrence)
-                index.occurrences.append(occurrence)
-                if let start = occurrence.startDate, let end = occurrence.endDate, end > start {
-                    index.hoursByDay[occurrence.date, default: 0] += end.timeIntervalSince(start)
+
+                let shown = DraftCrew.redacted(occurrence, hidingDraftCrew: hideDraftCrew)
+
+                if isDraft {
+                    index.draftsByDay[shown.date, default: []].append(shown)
+                    continue
+                }
+
+                index.shiftsByDay[shown.date, default: []].append(shown)
+                index.occurrences.append(shown)
+                if let start = shown.startDate, let end = shown.endDate, end > start {
+                    index.hoursByDay[shown.date, default: 0] += end.timeIntervalSince(start)
                 }
             }
         }
@@ -913,6 +964,9 @@ struct ScheduleIndex {
 
         for key in index.shiftsByDay.keys {
             index.shiftsByDay[key]?.sort { ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast) }
+        }
+        for key in index.draftsByDay.keys {
+            index.draftsByDay[key]?.sort { ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast) }
         }
         for key in index.timeOffByDay.keys {
             index.timeOffByDay[key]?.sort { $0.startTime < $1.startTime }
@@ -928,8 +982,13 @@ struct ScheduleIndex {
         // Timeline window, resolved here so the view never re-filters 49 days.
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
+        // A day of nothing but drafts is still a day with something on it —
+        // dropping it here would take the timeline back to hiding exactly the
+        // work this change exists to show.
         func hasWork(_ date: Date) -> Bool {
-            index.itemsByDay[formatter.string(from: date)]?.isEmpty == false
+            let key = formatter.string(from: date)
+            return index.itemsByDay[key]?.isEmpty == false
+                || index.draftsByDay[key]?.isEmpty == false
         }
         let past = (1...7)
             .compactMap { calendar.date(byAdding: .day, value: -$0, to: today) }

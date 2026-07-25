@@ -114,8 +114,15 @@ struct ScheduleShiftRow: View {
     let session: Session
     var standing: ShiftStanding = .upcoming
 
-    private var isPast: Bool { standing == .past }
-    private var isLive: Bool { standing == .live }
+    /// A draft is never drawn as finished — no strikethrough, no receded card.
+    /// "Done" is a false statement about work nobody was ever given, and a draft
+    /// dated in the past is far more likely to be a plan that slipped than a job
+    /// that happened.
+    private var isPast: Bool { standing == .past && session.isPublished }
+    /// A draft is never drawn as "happening now" either. It is provisional work,
+    /// and the loud live treatment would say the opposite.
+    private var isLive: Bool { standing == .live && session.isPublished }
+    private var isDraft: Bool { !session.isPublished }
 
     var body: some View {
         let accent = ScheduleStyle.accent(for: session)
@@ -158,10 +165,51 @@ struct ScheduleShiftRow: View {
             Spacer(minLength: 0)
         }
         .ambientCard(density: .roomy,
-                     state: standing.cardState,
-                     border: isLive
-                         ? .strong(AnyShapeStyle(accent))
-                         : .hairline(AnyShapeStyle(ScheduleStyle.accentGradient(for: session))))
+                     state: isDraft ? .normal : standing.cardState,
+                     border: draftAwareBorder(accent: accent))
+    }
+
+    /// A draft carries the dashed edge the design system reserves for a card that
+    /// is not the same KIND of thing as the ones around it. That is exactly what
+    /// a draft is among announced shifts, and it reads before any label does.
+    private func draftAwareBorder(accent: Color) -> AmbientCardBorder {
+        if isDraft { return .dashed(accent.opacity(0.55)) }
+        if isLive { return .strong(AnyShapeStyle(accent)) }
+        return .hairline(AnyShapeStyle(ScheduleStyle.accentGradient(for: session)))
+    }
+}
+
+// MARK: - Draft group heading
+
+/// The heading that separates unpublished work from announced shifts (PUB.1 / P6).
+/// Drafts are never interleaved with real shifts — they sit under this, in both
+/// layouts, so "what is coming" and "what I have been given" are never read as
+/// the same thing.
+struct ScheduleDraftHeading: View {
+    let count: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
+                Image(systemName: "pencil.and.outline")
+                    .font(.system(size: 11, weight: .bold))
+                Text("Not published yet")
+                    .font(.footnote.weight(.semibold))
+                    .textCase(.uppercase)
+                Spacer()
+                Text("\(count)")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.secondary)
+
+            Text("Planned work — it can still change, and it hasn't been announced to anyone yet.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -197,6 +245,9 @@ struct ScheduleTimeOffRow: View {
 struct ScheduleTimeline: View {
     let days: [Date]
     let items: (Date) -> [ScheduleItem]
+    /// A day's unpublished work, asked for separately because it is drawn as its
+    /// own group under the day's announced shifts rather than mixed into them.
+    let drafts: (Date) -> [Session]
     let hours: (Date) -> TimeInterval
     let onSelectShift: (Session) -> Void
     let onSelectTimeOff: (TimeOffCalendarEntry) -> Void
@@ -345,7 +396,8 @@ struct ScheduleTimeline: View {
     private func body(for day: Date, now: Date) -> some View {
         VStack(spacing: 10) {
             let dayItems = items(day)
-            if dayItems.isEmpty { clearDayRow }
+            let dayDrafts = drafts(day)
+            if dayItems.isEmpty && dayDrafts.isEmpty { clearDayRow }
             ForEach(dayItems) { item in
                 switch item {
                 case .shift(let session):
@@ -360,6 +412,22 @@ struct ScheduleTimeline: View {
                     }
                     .buttonStyle(.plain)
                     .opacity(day < Calendar.current.startOfDay(for: now) ? 0.55 : 1)
+                    .ambientScrollFade(minOpacity: 0.5)
+                }
+            }
+
+            if !dayDrafts.isEmpty {
+                ScheduleDraftHeading(count: dayDrafts.count)
+                    // Indented to clear the time gutter and the spine, so the
+                    // heading lines up with the cards it introduces rather than
+                    // with the clock.
+                    .padding(.leading, 77)
+                    .padding(.top, dayItems.isEmpty ? 0 : 4)
+                ForEach(dayDrafts, id: \.dayOccurrenceKey) { session in
+                    Button { onSelectShift(session) } label: {
+                        ScheduleTimelineRow(session: session, standing: ShiftStanding.of(session, now: now))
+                    }
+                    .buttonStyle(.plain)
                     .ambientScrollFade(minOpacity: 0.5)
                 }
             }
@@ -384,8 +452,12 @@ struct ScheduleTimelineRow: View {
     let session: Session
     let standing: ShiftStanding
 
-    private var isPast: Bool { standing == .past }
-    private var isLive: Bool { standing == .live }
+    /// The same rule the day row applies, so one draft cannot read as provisional
+    /// in Day view and as a struck-through "DONE" job in Timeline.
+    private var isPast: Bool { standing == .past && session.isPublished }
+    /// As in the day row: unpublished work is never drawn as "happening now".
+    private var isLive: Bool { standing == .live && session.isPublished }
+    private var isDraft: Bool { !session.isPublished }
 
     var body: some View {
         let accent = ScheduleStyle.accent(for: session)
@@ -481,10 +553,7 @@ struct ScheduleTimelineRow: View {
             // third fill state, and adding one for a single caller would be
             // designing the system around its exception.
             .background(cardFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(borderStyle, lineWidth: isLive ? 2 : 1)
-            }
+            .overlay { edge }
             // ambient-allow: ScheduleTimelineRow deliberately stays hand-rolled.
             // A past row here takes a FLAT fill rather than a desaturated
             // material, and desaturates only its coloured content, because the
@@ -501,7 +570,20 @@ struct ScheduleTimelineRow: View {
         return isLive ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.ultraThinMaterial)
     }
 
+    /// The same dashed edge the day row gives a draft, drawn by hand because this
+    /// row is deliberately outside `.ambientCard` (see the note on its background).
+    @ViewBuilder
+    private var edge: some View {
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        if isDraft {
+            shape.strokeBorder(borderStyle, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+        } else {
+            shape.strokeBorder(borderStyle, lineWidth: isLive ? 2 : 1)
+        }
+    }
+
     private var borderStyle: AnyShapeStyle {
+        if isDraft { return AnyShapeStyle(ScheduleStyle.accent(for: session).opacity(0.55)) }
         if isLive { return AnyShapeStyle(ScheduleStyle.accent(for: session)) }
         if isPast { return AnyShapeStyle(Color.primary.opacity(0.07)) }
         return AnyShapeStyle(ScheduleStyle.accentGradient(for: session))

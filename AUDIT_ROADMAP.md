@@ -347,6 +347,102 @@ progress.
 
 ---
 
+## PUB — draft visibility on the iOS schedule (arc, registered 2026-07-25)
+
+Plan and the six decisions P1–P6: `DRAFT_VISIBILITY_PLAN.md`. Family registry row:
+`FocalPointProduction/docs/PHASES.md`. One phase.
+
+Deliberately NOT part of the AMB arc, whose D2 forbids behaviour changes inside a
+phase. Sequenced against AMB.3 because both touch `ScheduleView`'s per-day index.
+
+- [x] **PUB.1 Draft visibility** — DONE 2026-07-25. Committed to `main`, NOT pushed;
+  operator device smoke (iPhone AND iPad) is the one remaining gate.
+
+  **What changed.** The schedule now fetches unpublished sessions for everyone
+  (`includeUnpublished: true`, was `canEdit`), so a photographer can see what work is
+  coming. A draft never shows who is on it — not other people's assignment, not the
+  viewer's own — for anyone without schedule-edit rights. Drafts sit in their own
+  bucket under a "Not published yet" heading in BOTH layouts, carry a dashed border
+  and the existing Draft pill, and are kept out of the countdown card, the ambient
+  tint, the day's hours and the shift count. The staffing temperature is gone for
+  everyone: heat dot, breakdown popover, and the long-press that never fired (a
+  gesture on a Button inside a horizontal ScrollView). `HeatMapUtils.swift` deleted in
+  the same commit that orphaned it.
+
+  **One redaction point (P4).** `DraftCrew.swift` empties the crew — including every
+  `session_days` row's crew, because `Session.with(day:)` rebuilds an occurrence from a
+  day-row and would otherwise put it straight back. Applied where a session crosses
+  into the view layer: the schedule's index, the array handed to the detail, and the
+  detail's OWN realtime listener (a second store that would otherwise un-redact within
+  a second of opening a draft).
+
+  **Found by audit and fixed in the same phase (none of these were in the plan):**
+  - permissions load asynchronously, so an index built before they landed kept a
+    scheduler's drafts redacted while the detail's live permission check offered Edit —
+    which seeds its crew picker from exactly that emptied array, a roster-loss path on
+    the shared DB. `ScheduleView` rebuilds on permission change; the detail carries a
+    `crewHidden` fact about the data it holds rather than re-deriving it, AND restarts
+    its listener on a permission change — without that last part the guard became a
+    permanent Edit/Publish LOCKOUT for a scheduler, because the view's identity
+    (`.id(dayOccurrenceKey)`) does not change when permissions do, so a re-passed init
+    value never lands. Caught by the third audit, on the second fix round.
+  - the job box's "Last scanned by <name>" is keyed on session id, not crew — the one
+    place a name reached a draft without going through `photographers`.
+  - a past draft read as a struck-through "DONE" job in Timeline while Day view drew it
+    as provisional. Both rows now refuse the finished treatment for a draft.
+  - the offline cache was one unlabelled file shared by callers with different scopes,
+    so a published-only fetch landing last would DELETE every draft from it. The cache
+    now records two separate facts — whether it carries drafts, and whether those
+    drafts are a complete current snapshot — and a narrower save keeps drafts it was
+    never told about without claiming they are up to date. **This code is currently
+    DORMANT: see the pre-existing bug below.**
+
+  **PRE-EXISTING BUG FOUND, DELIBERATELY NOT FIXED HERE — the offline schedule cache
+  has never worked, since 2026-02-11 (`7289909`).** `ScheduleCacheManager.saveSessions`
+  encodes metadata with `.iso8601`, but `loadMetadata()` decodes with a bare
+  `JSONDecoder()` (`.deferredToDate`, which expects a Double). Verified by running the
+  round trip: `typeMismatch ... Expected to decode Double but found a string instead`.
+  `loadMetadata()` therefore always returns nil, so `loadSessions` bails at its first
+  guard and NO offline schedule data is ever served — no instant cached first paint, no
+  "Offline · last synced" state, and `loadFromOfflineCache` throws instead. The fix is
+  one line (`decoder.dateDecodingStrategy = .iso8601`). Left for the operator to
+  schedule because it switches on a persistence path that has never once run in
+  production, for every user, and that deserves its own smoke rather than riding along
+  inside a phase about draft visibility. It also means this phase's cache work is
+  correct but unexercised, and the "drafts vanish offline" risk it was written against
+  could not actually have occurred.
+
+  **Unchanged and verified so:** the shared Supabase database (no schema, policy, RPC
+  or write change — one `.eq` dropped from one client query); `EditSessionView`;
+  publishing; every other session consumer (dashboard, time tracking, ICS export,
+  reports), all still published-only.
+
+  **Evidence.** Build clean, zero new warnings (the one warning in a changed file was
+  proved pre-existing by stashing and rebuilding). Card-drift gate green. THREE
+  adversarial audits — two on the build, one on the fix round, which found a CRITICAL
+  and a HIGH in the fix round itself and was worth its cost. Plus `/security-review`:
+  no HIGH or MEDIUM findings, org predicate intact, server-side writes still
+  independently enforced. `/code-review` was not available as a skill in this session.
+
+  **Lesson for the next phase: audit the fix round too.** The second round of fixes was
+  where the worst defect of the whole phase lived — a permanent Edit/Publish lockout for
+  schedulers, introduced by a guard added to prevent a roster wipe. Fixes written under
+  audit pressure are not safer than the original code, and nobody had reviewed them.
+
+  **Recorded, not fixed — for the operator:**
+  - Under P6 a photographer's "My Shifts" now shows every unpublished session in the
+    ORG, since a draft carries no assignment and so cannot be "mine". That is the plan
+    as written; in a large org it is the most visible consequence of the change.
+  - Free-text scheduler notes (`session.notes`, `session_days.day_notes`) still render
+    on a draft. The plan redacts assignments, not notes, and notes are "what work is
+    coming" — but a note can name people. Left visible deliberately; one condition to
+    reverse if the operator wants it hidden.
+  - Redaction is client-side only and always was un-enforced server-side (P3): every
+    authenticated employee could already read draft crew directly. Not new, recorded so
+    it is never mistaken for a control.
+
+---
+
 ## Reference: what NOT to break (verified strengths)
 
 - Firebase migration is 100% complete in live code — no dual-writes anywhere

@@ -915,7 +915,11 @@ struct MainEmployeeView: View {
                         destination: ShiftDetailView(
                             session: session,
                             allSessions: viewModel.allSessions, // Pass ALL sessions, not just the upcoming ones
-                            currentUserID: UserManager.shared.getCurrentUserID()
+                            currentUserID: UserManager.shared.getCurrentUserID(),
+                            // This screen's listener asks for published sessions
+                            // only, so nothing here is ever a draft and nothing
+                            // has been redacted on the way in.
+                            crewHidden: false
                         )
                         .id(session.id), // Force SwiftUI to create fresh view for each session
                         isActive: Binding(

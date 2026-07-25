@@ -141,8 +141,10 @@ class SessionService: ObservableObject {
             cachedIncludeUnpublished = includeUnpublished
             lastCacheUpdate = Date()
 
-            // Save to persistent cache for offline use
-            await persistentCache.saveSessions(sessions, organizationId: organizationID)
+            // Save to persistent cache for offline use, labelled with the scope it
+            // was fetched at — several callers share this one file.
+            await persistentCache.saveSessions(sessions, organizationId: organizationID,
+                                               includesUnpublished: includeUnpublished)
 
             // Update sync status
             isUsingOfflineData = false
@@ -179,18 +181,16 @@ class SessionService: ObservableObject {
         return nil
     }
 
-    /// Load sessions from offline cache. The persistent cache can hold unpublished
-    /// sessions (a manager view may have saved them), so a published-only caller is
-    /// served a filtered copy — the in-memory cache is populated with the full set
-    /// but tagged with its true scope so `cacheSatisfying` guards later reads.
+    /// Load sessions from offline cache. The persistent cache may or may not hold
+    /// unpublished sessions, and it now says which — so the in-memory cache is
+    /// tagged with the file's TRUE scope rather than an optimistic `true`. That
+    /// claim used to be a lie whenever a published-only fetch had written the file
+    /// last, and `cacheSatisfying` would then hand a draft-less set to a caller
+    /// that had asked for drafts, as though it were complete.
     private func loadFromOfflineCache(organizationID: String, includeUnpublished: Bool) async throws -> [Session] {
         if let cached = await persistentCache.loadSessions(organizationId: organizationID) {
             print("📱 SessionService: Using offline cache (\(cached.sessions.count) sessions)")
-            sessionsCache = cached.sessions
-            cachedIncludeUnpublished = true  // persistent cache may include unpublished
-            lastCacheUpdate = cached.lastSync
-            isUsingOfflineData = true
-            lastSyncTime = cached.lastSync
+            adoptOfflineCache(cached)
             return includeUnpublished ? cached.sessions : cached.sessions.filter { $0.is_published }
         }
 
@@ -201,14 +201,25 @@ class SessionService: ObservableObject {
     private func loadFromOfflineCacheIfAvailable(organizationID: String, includeUnpublished: Bool) async -> [Session]? {
         if let cached = await persistentCache.loadSessions(organizationId: organizationID) {
             print("📱 SessionService: Falling back to offline cache after network error")
-            sessionsCache = cached.sessions
-            cachedIncludeUnpublished = true  // persistent cache may include unpublished
-            lastCacheUpdate = cached.lastSync
-            isUsingOfflineData = true
-            lastSyncTime = cached.lastSync
+            adoptOfflineCache(cached)
             return includeUnpublished ? cached.sessions : cached.sessions.filter { $0.is_published }
         }
         return nil
+    }
+
+    /// Take a loaded offline cache as the in-memory one, keeping its real scope.
+    private func adoptOfflineCache(
+        _ cached: (sessions: [Session], lastSync: Date, isFresh: Bool, unpublishedComplete: Bool)
+    ) {
+        sessionsCache = cached.sessions
+        // Only a cache whose drafts are known CURRENT may be served to a
+        // draft-wanting caller without a refetch. One that merely holds drafts is
+        // still handed over offline — a stale draft beats a blank week — but it
+        // does not get to satisfy `cacheSatisfying` and suppress a fresh fetch.
+        cachedIncludeUnpublished = cached.unpublishedComplete
+        lastCacheUpdate = cached.lastSync
+        isUsingOfflineData = true
+        lastSyncTime = cached.lastSync
     }
 
     /// Start listening to sessions with Supabase Realtime
@@ -251,11 +262,8 @@ class SessionService: ObservableObject {
         // This eliminates the loading spinner for users who have cached data
         if let cached = await persistentCache.loadSessions(organizationId: organizationID) {
             print("📅 SessionService: Showing \(cached.sessions.count) cached sessions immediately")
-            sessionsCache = cached.sessions
-            cachedIncludeUnpublished = true  // persistent cache may include unpublished
-            lastCacheUpdate = cached.lastSync
+            adoptOfflineCache(cached)
             isUsingOfflineData = !isConnected  // Only mark as offline if actually offline
-            lastSyncTime = cached.lastSync
             // A published-only subscriber must not see unpublished rows the cache holds.
             onChange(includeUnpublished ? cached.sessions : cached.sessions.filter { $0.is_published })
         }
@@ -297,7 +305,8 @@ class SessionService: ObservableObject {
                         print("📡 SessionService: Fetched \(sessions.count) sessions after realtime update")
 
                         // Save to persistent cache on realtime updates
-                        await self.persistentCache.saveSessions(sessions, organizationId: organizationID)
+                        await self.persistentCache.saveSessions(sessions, organizationId: organizationID,
+                                                               includesUnpublished: includeUnpublished)
 
                         self.isUsingOfflineData = false
                         self.lastSyncTime = Date()

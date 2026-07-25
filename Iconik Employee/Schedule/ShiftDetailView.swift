@@ -49,11 +49,23 @@ struct ShiftDetailView: View {
     /// re-apply it on every update, so a multi-day shoot opened on day 2 stays on day 2.
     @State private var viewedDayID: String?
 
+    /// Whether the session this view is HOLDING had its crew dropped (PUB.1).
+    ///
+    /// A fact about the data, passed in by whoever redacted it and refreshed by the
+    /// listener that redacts it again — deliberately NOT a fresh read of
+    /// `Permissions`. Those two answers can disagree: permissions load
+    /// asynchronously, so a screen built moments earlier can be holding a redacted
+    /// session while a live permission check now says this viewer is a scheduler.
+    /// Trusting the live check there would offer Edit on a session whose crew array
+    /// is empty, and the editor seeds its crew picker from that array.
+    @State private var crewHidden: Bool
+
     // Primary initializer for Session
-    init(session: Session, allSessions: [Session], currentUserID: String?) {
+    init(session: Session, allSessions: [Session], currentUserID: String?, crewHidden: Bool) {
         self._session = State(initialValue: session)
         self._allSessions = State(initialValue: allSessions)
         self._viewedDayID = State(initialValue: Self.dayID(matching: session))
+        self._crewHidden = State(initialValue: crewHidden)
         self.currentUserID = currentUserID
     }
 
@@ -92,6 +104,13 @@ struct ShiftDetailView: View {
     @State private var employeeProfile: CoworkerProfile? = nil
     @State private var isPublishing = false
     @ObservedObject private var organizationService = OrganizationService.shared
+    // Observed so this screen can RECOVER when permissions arrive. `crewHidden` is
+    // seeded once from init and re-asserted from a value the listener captured
+    // once, and this view's identity (`.id(dayOccurrenceKey)`) does not change
+    // when permissions do — so without this, a scheduler who opened a draft
+    // before their permissions loaded would have Edit and Publish hidden for the
+    // whole life of the pushed screen, with no way back but leaving it.
+    @ObservedObject private var permissionsService = PermissionsService.shared
     @State private var locationPhotos: [LocationPhoto] = []
     @State private var weatherData: WeatherData?
     @State private var weatherErrorMessage: String?
@@ -170,7 +189,11 @@ struct ShiftDetailView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 12) {
-                    if Permissions.has("schedule", level: .edit) {
+                    // `!isRedactedDraft` as well as the permission check: Edit
+                    // seeds its crew picker from `session.photographers`, so
+                    // opening it on a session whose crew was dropped would let a
+                    // save write that empty crew over the real one.
+                    if Permissions.has("schedule", level: .edit) && !isRedactedDraft {
                         if organizationService.organizationHasPublishing && !session.isPublished {
                             Button(action: publishSession) {
                                 if isPublishing {
@@ -200,6 +223,13 @@ struct ShiftDetailView: View {
             NotificationCenter.default.removeObserver(self)
         }
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+            startSessionListener()
+        }
+        // Restarting the listener is the recovery, not just flipping `crewHidden`:
+        // the session this view holds may have had its crew dropped, and no local
+        // flag can put that back. The restart re-fetches, so the session and the
+        // fact of whether it was redacted are replaced together, as everywhere else.
+        .onChange(of: permissionsService.areaLevels) { _ in
             startSessionListener()
         }
         .alert(isPresented: .constant(!errorMessage.isEmpty)) {
@@ -265,6 +295,14 @@ struct ShiftDetailView: View {
     // MARK: - Presentation helpers
 
     private var accent: Color { ScheduleStyle.accent(for: session) }
+
+    /// This shift is unpublished AND this viewer may not see who is on it — so
+    /// the screen shows the work without the people (PUB.1). A scheduler opening
+    /// the same draft gets the ordinary screen, crew and all, because they are
+    /// the ones who have to staff it.
+    private var isRedactedDraft: Bool {
+        !session.isPublished && crewHidden
+    }
 
     /// The day-row being shown. Multi-day jobs can be switched between days
     /// in-place; everything derived from the day (crew, notes, weather, travel)
@@ -358,8 +396,15 @@ struct ShiftDetailView: View {
 
     private var factsRow: some View {
         HStack(spacing: 10) {
-            AmbientStatTile(value: session.photographers.count, label: "On crew",
-                            systemImage: "person.2.fill", tint: accent)
+            // "On crew" is a count of PEOPLE, and on a redacted draft it would
+            // read 0 — which is not "hidden", it's a false statement about who
+            // is staffed. The tile is dropped rather than zeroed. The other two
+            // are counts of NEED, not of people, so they stay on a draft: they
+            // are the useful part of knowing what is coming.
+            if !isRedactedDraft {
+                AmbientStatTile(value: session.photographers.count, label: "On crew",
+                                systemImage: "person.2.fill", tint: accent)
+            }
             AmbientStatTile(value: session.dayCount, label: session.dayCount == 1 ? "Day" : "Days",
                             systemImage: "calendar", tint: accent)
             AmbientStatTile(value: session.photographersNeeded + session.posersNeeded + session.helpersNeeded,
@@ -504,7 +549,31 @@ struct ShiftDetailView: View {
 
     /// This day's crew. Anyone who scanned the job box is ringed, which is how
     /// you find out who has the gear without asking.
+    ///
+    /// On a draft this viewer may not staff, the whole card is replaced rather
+    /// than emptied: an empty crew list reads "nobody is assigned", which is a
+    /// different — and probably false — statement from "not announced yet". The
+    /// "also at this school today" list goes with it, since it is the same
+    /// question asked sideways.
+    @ViewBuilder
     private var crewCard: some View {
+        if isRedactedDraft { draftCrewCard } else { staffedCrewCard }
+    }
+
+    private var draftCrewCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            AmbientSectionTitle("Crew")
+            Text("Not announced yet")
+                .font(.subheadline.weight(.semibold))
+            Text("This shift hasn't been published, so who is working it isn't set. You'll see the crew — and your own assignment — once it is.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .ambientCard(density: .roomy, fillWidth: true)
+    }
+
+    private var staffedCrewCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             AmbientSectionTitle("Crew on this day", trailing: "\(session.photographers.count)")
 
@@ -615,7 +684,12 @@ struct ShiftDetailView: View {
                     }
                 }
 
-                if !latestJobBoxScannedBy.isEmpty {
+                // The job box is tracked by SESSION id, not by crew, so this line
+                // is the one place a person's name reaches a draft without going
+                // anywhere near `photographers` — and the whole point of the
+                // redaction is that no name is attached to unannounced work. The
+                // box's progress itself is about equipment and stays.
+                if !latestJobBoxScannedBy.isEmpty && !isRedactedDraft {
                     HStack(spacing: 4) {
                         Text("Last scanned by")
                             .font(.caption).foregroundStyle(.secondary)
@@ -806,15 +880,20 @@ struct ShiftDetailView: View {
             .disabled(schoolAddress.isEmpty && (session.location ?? "").isEmpty)
             .opacity(schoolAddress.isEmpty && (session.location ?? "").isEmpty ? 0.4 : 1)
 
-            Button {
-                messageCoworkers()
-            } label: {
-                Image(systemName: "message.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 48, height: 46)
-                    .background(.thinMaterial, in: Circle())
+            // No message action on a draft this viewer cannot see the crew of.
+            // This is the loudest of the five crew readers: it would text people
+            // about a shoot that has not been announced to anyone.
+            if !isRedactedDraft {
+                Button {
+                    messageCoworkers()
+                } label: {
+                    Image(systemName: "message.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 48, height: 46)
+                        .background(.thinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
             // schoolId is non-optional, so the old `!= nil` test was always true
             // and this showed even for a session with no school attached.
@@ -1023,10 +1102,17 @@ struct ShiftDetailView: View {
     
     private func isFirstShiftOfDay() -> Bool {
         guard let currentShiftDate = session.startDate else { return false }
-        
+
+        // This keys on the employee NAME, so it needs one to key on. A shift
+        // with no crew on it — a draft whose crew this viewer can't see, or any
+        // unstaffed session — would otherwise match every other nameless shift
+        // that day and pick an arbitrary one as "first". Fall back to the same
+        // answer the function already gives when it can't tell.
+        guard !session.employeeName.isEmpty else { return true }
+
         let calendar = Calendar.current
         let _ = calendar.startOfDay(for: currentShiftDate)
-        
+
         // Find all sessions for the same employee on the same day
         let employeeSessions = allSessions.filter { evt in
             guard let eventDate = evt.startDate,
@@ -2019,14 +2105,26 @@ struct ShiftDetailView: View {
             return
         }
 
+        // Captured out here, not read inside the callback: this is the SECOND
+        // place a session enters the view layer, and the feed it listens to is
+        // the raw one. Without redacting here, opening a draft would show no
+        // crew for a moment and then have the listener put it straight back.
+        let hideDraftCrew = DraftCrew.isHiddenFromViewer
+
         sessionService.startListeningToSessions(
             subscriptionId: subscriptionId,
             organizationID: organizationID,
-            includeUnpublished: true  // Admin/manager views should see all sessions
+            // Everyone, since PUB.1 — a draft has to keep updating while you are
+            // looking at it, whether or not you are allowed to see its crew.
+            includeUnpublished: true
         ) { sessions in
             DispatchQueue.main.async {
                 // Filter for the specific session we're viewing
-                if let updatedSession = sessions.first(where: { $0.id == self.session.id }) {
+                if let raw = sessions.first(where: { $0.id == self.session.id }) {
+                    let updatedSession = DraftCrew.redacted(raw, hidingDraftCrew: hideDraftCrew)
+                    // The session we hold and the fact of whether it was redacted
+                    // are replaced together — they must never drift apart.
+                    self.crewHidden = hideDraftCrew
                     // Re-apply the day this view was opened on (CREW.2). The feed carries
                     // the WHOLE session — the first day's date/time and every day's crew
                     // unioned — so assigning it straight through would silently move the

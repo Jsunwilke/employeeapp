@@ -11,7 +11,7 @@ phase-naming registry as the rest of the family.
 
 # 🚀 START HERE  (you, the operator)
 
-      WHAT TO BUILD:  PUB.1
+      WHAT TO BUILD:  
 
   An arc id (e.g. NAV.1) or just describe the item in plain words. That is the only
   line you fill in — the agent works out the exact phase and scope.
@@ -66,12 +66,6 @@ phase-naming registry as the rest of the family.
          Captura files + a live iPad shoot tool.
 
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
-      PUB.1   Draft visibility: photographers see UNPUBLISHED sessions (so they know what
-              is coming) with NO assignment shown on a draft — not others', not their own;
-              staffing temperature removed from the week strip for everyone. REGISTERED
-              arc, one phase. Plan: DRAFT_VISIBILITY_PLAN.md. Not part of AMB (that arc's
-              D2 forbids behaviour changes) — sequence it against AMB.3 since both touch
-              ScheduleView's index.
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).
               NOTE: overlaps AMB.4 (home dashboard) on DashboardWidgets.swift — whichever
               runs first wins, the other rebases onto it.
@@ -85,6 +79,17 @@ phase-naming registry as the rest of the family.
               LAN TLS) — folds into the existing family SEC arc, not a new code.
 
   ✅ DONE   (closeouts in AUDIT_ROADMAP.md)
+      PUB.1   Draft visibility — photographers see UNPUBLISHED sessions, grouped under
+              their own "Not published yet" heading, with NO assignment shown on a draft
+              (not others', not their own) for anyone without schedule-edit rights;
+              staffing temperature deleted for everyone. BUILT 2026-07-25, committed to
+              main, NOT PUSHED — operator smoke on iPhone AND iPad is the last gate,
+              and it closes the arc. Client-only: one .eq dropped from one query, no
+              schema/policy/write change; /security-review no HIGH or MEDIUM. Three
+              audit-found defects fixed in-phase that the plan never anticipated — the
+              offline cache silently dropping every draft, an async-permissions race
+              that could have let a manager save an empty roster, and the job box
+              naming a person on a draft. Plan: DRAFT_VISIBILITY_PLAN.md.
       AMB.1   Schedule converted to the Ambient design language — ScheduleView +
               ScheduleRows + ScheduleStyleKit replace SlingWeeklyView (deleted same
               commit), ShiftDetailView restyled with its data layer untouched.
