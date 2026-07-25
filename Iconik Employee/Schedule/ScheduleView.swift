@@ -25,7 +25,9 @@ import SwiftUI
 struct ScheduleView: View {
     // MARK: Services
 
-    private let sessionService = SessionService.shared
+    // @ObservedObject, not a plain let: the offline / last-synced banner reads
+    // this service's @Published connectivity state and has to be invalidated by it.
+    @ObservedObject private var sessionService = SessionService.shared
     private let timeOffService = TimeOffService.shared
     private let userManager = UserManager.shared
     @ObservedObject private var organizationService = OrganizationService.shared
@@ -123,6 +125,17 @@ struct ScheduleView: View {
         .onChange(of: weekOffset) { _ in loadTimeOff() }
         .onChange(of: modeRaw) { _ in rebuildIndex() }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { clockTick = $0 }
+        // errorMessage is only rendered as a full-screen state when there is
+        // nothing to show at all; a failed refresh or publish on a populated
+        // screen would otherwise be silent.
+        .alert("Something went wrong", isPresented: Binding(
+            get: { !errorMessage.isEmpty && !sessions.isEmpty },
+            set: { if !$0 { errorMessage = "" } }
+        )) {
+            Button("OK", role: .cancel) { errorMessage = "" }
+        } message: {
+            Text(errorMessage)
+        }
         .tint(ambientTint)
     }
 
@@ -171,6 +184,10 @@ struct ScheduleView: View {
             .onChange(of: layoutRaw) { _ in
                 hasAnchored = false
                 anchorOnToday(proxy, animated: true)
+                // The two layouts read different date ranges: switching to
+                // Timeline without this showed six weeks of shifts against one
+                // week of time off, and dropped time-off-only days entirely.
+                loadTimeOff()
             }
         }
     }
@@ -326,12 +343,21 @@ struct ScheduleView: View {
                     .opacity(0.7)
                 Text(ScheduleStyle.dayNumber.string(from: date))
                     .font(.system(size: 19, weight: .bold, design: .rounded))
-                // Org-wide staffing load, the heat map the schedulers rely on.
-                Circle()
-                    .fill(mine ? Color.primary.opacity(isSelected ? 0.9 : 0.5)
-                               : getHeatMapColor(total: staffing.total))
-                    .frame(width: 5, height: 5)
-                    .opacity(mine || staffing.total > 0 ? 1 : 0)
+                // Two independent signals, as in the old week strip: the org's
+                // staffing load for the day, and whether YOU are on it. Drawing
+                // one in place of the other meant the heat map never appeared on
+                // any day that had shifts.
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(getHeatMapColor(total: staffing.total))
+                        .frame(width: 5, height: 5)
+                        .opacity(staffing.total > 0 ? 1 : 0)
+                    Circle()
+                        .fill(Color.primary.opacity(isSelected ? 0.9 : 0.55))
+                        .frame(width: 5, height: 5)
+                        .opacity(mine ? 1 : 0)
+                }
+                .frame(height: 5)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
@@ -473,15 +499,23 @@ struct ScheduleView: View {
         // it to scroll past. Wait for the data and try again.
         guard timelineDays.count > 1 else { return }
 
-        hasAnchored = true
-        // One run-loop hop so the lazy stack has built the section carrying the
-        // anchor id before we ask to scroll to it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        // Two attempts: the lazy stack may not have realized today's pinned
+        // header on the first hop, and scrollTo to an unrealized id silently does
+        // nothing. hasAnchored is only set after the second, so a miss still
+        // leaves the onChange(timelineDays) retry armed.
+        scroll(proxy, animated: animated, after: 0.15)
+        scroll(proxy, animated: animated, after: 0.45) { hasAnchored = true }
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, animated: Bool, after delay: TimeInterval,
+                        then completion: (() -> Void)? = nil) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             if animated {
                 withAnimation(ScheduleMotion.gentle) { proxy.scrollTo(ScheduleTimeline.anchorID, anchor: .top) }
             } else {
                 proxy.scrollTo(ScheduleTimeline.anchorID, anchor: .top)
             }
+            completion?()
         }
     }
 
@@ -519,18 +553,21 @@ struct ScheduleView: View {
     // MARK: - Data
 
     private func start() {
-        // Re-entrant: onAppear fires again on every pop back from a shift.
-        defer { hasStarted = true }
-        guard !hasStarted else {
-            if !isListening { loadSessions() }
-            return
-        }
+        // onDisappear always stops the org listener, so it has to be restarted on
+        // EVERY appear — the previous once-only guard meant that after Schedule →
+        // shift → back, session-type colours and organizationHasPublishing (which
+        // gates both Publish buttons) stopped updating for the app's lifetime.
         userManager.initializeOrganizationID()
         let orgID = userManager.getCachedOrganizationID()
         if !orgID.isEmpty {
             organizationService.startListeningToOrganization(organizationID: orgID)
         }
         if sessions.isEmpty || !isListening { loadSessions() }
+
+        // The rest is first-run only: re-fetching time off on every pop back from
+        // a shift is wasted work.
+        guard !hasStarted else { return }
+        hasStarted = true
         loadTimeOff()
     }
 

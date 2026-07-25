@@ -403,7 +403,7 @@ struct ShiftDetailView: View {
         guard day.id != activeDay?.id else { return }
         withAnimation(ScheduleMotion.snappy) {
             viewedDayID = day.id
-            session = session.with(day: day)
+            session = occurrence(for: day)
         }
         ScheduleHaptics.selection()
         // Everything derived from the day has to be recomputed.
@@ -413,6 +413,55 @@ struct ShiftDetailView: View {
         loadCoworkerPhotos()
         loadWeatherData()
         calculateTravelPlan()
+    }
+
+    /// Build the occurrence for a day WITHOUT chaining off the current one.
+    ///
+    /// `session` is already narrowed to a single day, so its `photographers` are
+    /// that day's crew. `Session.with(day:)` falls back to the receiver's crew
+    /// when a day-row carries none — chaining it therefore handed the NEW day the
+    /// PREVIOUS day's crew, which then fed the coworker list and the message-crew
+    /// recipients. Rebuilding against the union of every day's crew matches what
+    /// decoding a full session produces, so switching days in place and opening
+    /// the same day from the schedule now agree.
+    private func occurrence(for day: SessionDay) -> Session {
+        if day.photographers != nil { return session.with(day: day) }
+
+        var seen = Set<String>()
+        var union: [SessionPhotographer] = []
+        for person in session.days.flatMap({ $0.photographers ?? [] }) where !seen.contains(person.id) {
+            seen.insert(person.id)
+            union.append(person)
+        }
+        let fallbackCrew = union.isEmpty ? session.photographers : union
+
+        return Session(
+            id: session.id,
+            organization_id: session.organization_id,
+            school_id: session.school_id,
+            school_name: session.school_name,
+            date: day.date,
+            start_time: day.start_time ?? "",
+            end_time: day.end_time ?? "",
+            days: session.days,
+            session_types: session.session_types,
+            custom_session_type: session.custom_session_type,
+            photographers: fallbackCrew,
+            notes: session.notes,
+            status: session.status,
+            session_color: session.session_color,
+            is_published: session.is_published,
+            is_time_off: session.is_time_off,
+            has_class_group_job: session.has_class_group_job,
+            has_class_candids: session.has_class_candids,
+            has_sports_job: session.has_sports_job,
+            photographers_needed: session.photographers_needed,
+            posers_needed: session.posers_needed,
+            helpers_needed: session.helpers_needed,
+            created_at: session.created_at,
+            updated_at: session.updated_at,
+            created_by: session.created_by
+        )
     }
 
     private func dayShortLabel(_ day: SessionDay) -> String {

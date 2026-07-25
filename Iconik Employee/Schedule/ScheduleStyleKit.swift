@@ -60,7 +60,7 @@ enum ScheduleStyle {
         if let definition = OrganizationService.shared.getSessionType(by: id) {
             return Color(hex: definition.color)
         }
-        let hue = Double(abs(id.lowercased().hashValue % 360)) / 360
+        let hue = Double(ScheduleStyle.stableHash(id) % 360) / 360
         return Color(hue: hue, saturation: 0.55, brightness: 0.75)
     }
 
@@ -164,10 +164,24 @@ enum ScheduleStyle {
         return letters.isEmpty ? "?" : letters.joined().uppercased()
     }
 
-    /// Deterministic avatar tint, so a person is the same colour everywhere.
+    /// Deterministic avatar tint, so a person is the same colour everywhere —
+    /// including across launches and between two devices looking at the same
+    /// crew. `String.hashValue` is seeded per process, so it could not deliver
+    /// that; this is a plain FNV-1a over the bytes.
     static func avatarColor(_ seed: String) -> Color {
         let palette: [Color] = [.blue, .indigo, .purple, .pink, .teal, .green, .orange, .mint]
-        return palette[abs(seed.lowercased().hashValue) % palette.count]
+        return palette[Int(stableHash(seed) % UInt64(palette.count))]
+    }
+
+    /// FNV-1a. Stable across processes and devices, and never negative — so no
+    /// `abs()` trap on Int.min either.
+    static func stableHash(_ string: String) -> UInt64 {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in string.lowercased().utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        return hash
     }
 }
 
