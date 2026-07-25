@@ -303,6 +303,15 @@ struct ScheduleView: View {
 
     // MARK: - Day layout
 
+    /// A continuously scrolling strip of days, centred on the one you're looking
+    /// at — three weeks of them, so you can drift a few days either way without
+    /// paging and without losing the week you came from.
+    ///
+    /// Restored to the lab's behaviour 2026-07-25. AMB.1 shipped a fixed
+    /// seven-day HStack with chevrons instead: the capsules were the lab's, but
+    /// the interaction was not, and the operator noticed. The chevrons stay as a
+    /// fast jump for moving whole weeks at a time; scrolling is for the days
+    /// either side of the one in front of you.
     private var weekStrip: some View {
         let week = week(offset: weekOffset)
         return VStack(spacing: 8) {
@@ -318,13 +327,31 @@ struct ScheduleView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 26)
 
-            HStack(spacing: 8) {
-                ForEach(week, id: \.self) { date in
-                    dayCapsule(date)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(selectableDays, id: \.self) { date in
+                            dayCapsule(date).id(date)
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    .ambientScrollTargets()
+                }
+                .ambientCarousel(margin: 18)
+                .onAppear { proxy.scrollTo(selectedDay, anchor: .center) }
+                .onChange(of: selectedDay) { day in
+                    withAnimation(AmbientMotion.gentle) { proxy.scrollTo(day, anchor: .center) }
+                }
+                .onChange(of: weekOffset) { _ in
+                    withAnimation(AmbientMotion.gentle) { proxy.scrollTo(selectedDay, anchor: .center) }
                 }
             }
-            .padding(.horizontal, 18)
         }
+    }
+
+    /// Three weeks around the visible one — the week concept without a pager.
+    private var selectableDays: [Date] {
+        (-1...1).flatMap { week(offset: weekOffset + $0) }
     }
 
     private func dayCapsule(_ date: Date) -> some View {
@@ -334,7 +361,13 @@ struct ScheduleView: View {
         let staffing = staffing(on: date)
 
         return Button {
-            withAnimation(AmbientMotion.snappy) { selectedDay = date }
+            withAnimation(AmbientMotion.snappy) {
+                selectedDay = date
+                // The strip scrolls into the weeks either side, so tapping there
+                // has to move the window too — otherwise the header's week label
+                // describes a week you are no longer looking at.
+                weekOffset = weekOffset(containing: date)
+            }
             AmbientHaptics.selection()
         } label: {
             VStack(spacing: 3) {
@@ -720,6 +753,16 @@ struct ScheduleView: View {
         guard let sunday = calendar.date(byAdding: .day, value: -(weekday - 1), to: today),
               let start = calendar.date(byAdding: .day, value: 7 * offset, to: sunday) else { return [] }
         return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    /// Which week offset a date falls in, relative to the current week.
+    private func weekOffset(containing date: Date) -> Int {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let weekday = calendar.component(.weekday, from: today)
+        guard let sunday = calendar.date(byAdding: .day, value: -(weekday - 1), to: today) else { return 0 }
+        let days = calendar.dateComponents([.day], from: sunday, to: calendar.startOfDay(for: date)).day ?? 0
+        return Int(floor(Double(days) / 7.0))
     }
 
     private func weekLabel(_ week: [Date]) -> String {

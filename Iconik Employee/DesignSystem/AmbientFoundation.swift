@@ -238,6 +238,29 @@ extension View {
         if #available(iOS 16.4, *) { self.scrollBounceBehavior(.basedOnSize) } else { self }
     }
 
+    /// Snap-to-cell horizontal carousel with inset content (iOS 17+). Below 17 the
+    /// scroll is free rather than snapping, which reads fine — the cells are the
+    /// same width either way.
+    ///
+    /// Restored to the design system 2026-07-25: the schedule's day strip needs it,
+    /// and so will any horizontally paged row Equipment or Chat grows. It existed in
+    /// the design lab and was lost when the vocabulary was promoted.
+    @ViewBuilder
+    func ambientCarousel(margin: CGFloat) -> some View {
+        if #available(iOS 17.0, *) {
+            self.scrollTargetBehavior(.viewAligned)
+                .contentMargins(.horizontal, margin, for: .scrollContent)
+        } else {
+            self.padding(.horizontal, margin)
+        }
+    }
+
+    /// Marks the cells a carousel snaps to (iOS 17+).
+    @ViewBuilder
+    func ambientScrollTargets() -> some View {
+        if #available(iOS 17.0, *) { self.scrollTargetLayout() } else { self }
+    }
+
     /// Stretch on over-scroll (iOS 17+).
     @ViewBuilder
     func ambientParallax(_ amount: CGFloat) -> some View {
