@@ -37,12 +37,14 @@ import SwiftUI
 /// batch, and delete them once their screens are converted and confirmed.
 enum DesignLabMockup: String, CaseIterable, Identifiable {
     case specimens
+    case palette
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .specimens: return "Specimen Sheet"
+        case .palette: return "Feature Colours"
         }
     }
 
@@ -51,6 +53,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     var phase: String {
         switch self {
         case .specimens: return "AMB.2"
+        case .palette: return "AMB.2 · D11"
         }
     }
 
@@ -58,18 +61,22 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens:
             return "Every Ambient primitive at every density, drawn against Equipment's real row content. This is where the density decision gets made."
+        case .palette:
+            return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
         }
     }
 
     var symbol: String {
         switch self {
         case .specimens: return "square.grid.3x3.square"
+        case .palette: return "paintpalette.fill"
         }
     }
 
     var tint: Color {
         switch self {
         case .specimens: return .purple
+        case .palette: return .pink
         }
     }
 
@@ -77,6 +84,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     var view: some View {
         switch self {
         case .specimens: SpecimenSheetMockup()
+        case .palette: PaletteMockup()
         }
     }
 }
