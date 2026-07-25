@@ -25,9 +25,10 @@ phase-naming registry as the rest of the family.
   🎨 AMB — Ambient design language rollout   (REGISTERED ARC, in progress)
       Restyle only: no data, service, navigation-shape or business-rule changes inside a
       phase. Every phase SHOWS A RUNNING SWIFTUI MOCKUP FOR OPERATOR APPROVAL BEFORE THE
-      REAL SCREENS ARE TOUCHED (D10 — hard gate; in-app, sample data, mounted in the real
-      nav container, deleted at phase close), smokes on iPhone AND iPad (D7), and ships to
-      main as it lands (D8).
+      REAL SCREENS ARE TOUCHED (D10 — hard gate). The mockups live in ONE lab harness built
+      in AMB.2 (menu entry + sample data + gallery + switcher, in the real nav container),
+      kept for the arc and deleted at AMB.12; each phase's own mockup views go at that
+      phase's close. Smokes on iPhone AND iPad (D7); ships to main as it lands (D8).
       Plan + the 9 locked decisions: AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
 
       ✅ AMB.1   Schedule                                    DONE + PUSHED 2026-07-24

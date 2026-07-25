@@ -126,11 +126,32 @@ D10 NOTHING IS CONVERTED BEFORE THE OPERATOR HAS SEEN A MOCKUP, AND THE
     approximation and then seeing something different on device is worse than
     having no gate, because it manufactures confidence that was never earned.
 
-    Form: one temporary entry in the profile menu opening a gallery of the
-    proposed views with sample data. Real SwiftUI, real materials, real device,
-    real light and dark, real Dynamic Type, and tappable. This is what the AMB.1
-    design lab was, and it is why the operator could choose Ambient from
-    something they had actually used rather than from a picture.
+    Form: THE LAB, rebuilt once and kept for the arc. AMB.1's design lab was the
+    right instrument — in-app, real SwiftUI, sample data covering the hard cases,
+    a gallery with a switcher, and the operator judging it on a device. That is
+    how Ambient got chosen from something actually used rather than a picture.
+
+    ONE HARNESS FOR THE WHOLE ARC, not one per phase. The first cut of this
+    decision had each phase building and deleting its own scaffolding eleven
+    times, which re-invents the sample data every phase and throws away the part
+    that was actually valuable. AMB.2 builds the harness once:
+
+        one temporary entry in the profile menu
+        the sample dataset, extended per phase as new surfaces need shapes
+          (the schedule's set already covers overlaps, multi-day, drafts,
+          time off, a six-person crew and an empty day)
+        a gallery shell with the switcher pattern the operator used to flip
+          between designs
+        each phase's mockup views mounted inside it
+
+    ONE PROPOSAL PER SURFACE, NOT FIVE — with exceptions. The schedule lab held
+    five competing directions because the design language did not exist yet;
+    that was a CHOOSING exercise. Ambient is now settled, so most phases are
+    APPLYING it and a single proposal is the honest amount of work. Where a
+    surface poses a real open question, it gets 2–3 variants and the switcher:
+    known candidates are AMB.3 (how a dense equipment list should read — compact
+    rows vs cards vs grid, which also settles D5 for the whole arc) and AMB.9
+    (chat, long scrollbacks).
 
     ONE CORRECTION FROM AMB.1 (L1): the mockup mounts inside the REAL shell's
     navigation container. The design lab gave every prototype its own
@@ -144,13 +165,21 @@ D10 NOTHING IS CONVERTED BEFORE THE OPERATOR HAS SEEN A MOCKUP, AND THE
     mockup is a specimen sheet: every component roomy and compact, against
     Equipment's real row content.
 
-    Lifecycle: the mockup is SCAFFOLDING. It is deleted at the close of the
-    phase that built it, exactly as the design lab was — and never before the
-    operator has confirmed the converted screens, per the rule that a validation
-    reference outlives the port it validated.
+    Lifecycle, at two levels, because they expire at different times:
+      - A PHASE'S MOCKUP VIEWS are deleted at the close of that phase, once the
+        operator has confirmed the converted screens — never before, per the
+        rule that a validation reference outlives the port it validated.
+      - THE HARNESS ITSELF (menu entry, sample data, gallery shell) lives for
+        the arc and is deleted at the close of AMB.12, along with its menu
+        entry. It is arc-level scaffolding, and the arc is what it serves.
+        If the arc is abandoned early, the harness goes with the last phase
+        that ran.
 
-    Cost, stated honestly: roughly a third of a session per phase. Against a
-    full session of rework when a converted surface is rejected, that is cheap.
+    Cost, stated honestly: the harness is most of a session ONCE, inside AMB.2;
+    each phase's mockup views are then a fraction of a session because the data,
+    the shell and the switcher already exist. Against a full session of rework
+    when a converted surface is rejected, that is cheap — and it is cheaper than
+    the per-phase scaffolding this decision originally called for.
 
 D9  THE TAIL GETS CONVERTED. Operator decision 2026-07-24. AMB.12 runs;
     Settings, the manager tools, Stats and Training are converted rather than
@@ -173,8 +202,10 @@ nothing is built on primitives that are still moving (D5).
             Promote the schedule's vocabulary into DesignSystem/ as the app's
             primitives. Delete the unused cardStyle(). Add the build gate.
             Design the compact density variants against Equipment's real code,
-            to be proven by converting it in AMB.3. No screen changes beyond
-            the schedule repointing at the new home.
+            to be proven by converting it in AMB.3. Build the arc's mockup
+            harness (D10) — menu entry, sample data, gallery shell, switcher —
+            which every later phase mounts its mockups inside. No screen changes
+            beyond the schedule repointing at the new home.
 
     AMB.3   Equipment                    (34 views, 5,583 lines)
             The first genuinely dense, list-heavy surface, and the proof of the
