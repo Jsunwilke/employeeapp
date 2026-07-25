@@ -66,6 +66,21 @@ phase-naming registry as the rest of the family.
          Captura files + a live iPad shoot tool.
 
   ⚪ NOT STARTED   (proposed codes — each is registered in PHASES.md when you start it)
+      OFF.1   The offline schedule. The schedule's disk cache has NEVER worked, on any
+              device, since the file was written: loadMetadata decodes with a bare
+              JSONDecoder while the save side writes ISO-8601 text, so every read
+              concludes there is no cache. Same bug in TimeEntryCacheManager. So: no
+              cached first paint, the "Offline - last synced" banner can never appear,
+              and offline the schedule throws instead of showing anything. PowerSync was
+              considered and REJECTED (O1) — read-only need, and adding sessions costs a
+              shared-DB schema change plus a sync-rule deploy that hits the live web app.
+              Scope is both decoders, a bounded window applied at the cache WRITE (never
+              the query — 8 callers share it), failure visibility (O5: a failed read must
+              not look like an empty cache — that is why a typo survived 5 months), and
+              round-trip proofs. REGISTERED arc. Plan: OFFLINE_SCHEDULE_PLAN.md.
+      OFF.2   The shift detail offline — SchoolService reads schools from PowerSync
+              instead of Supabase, so address and travel work with no signal. The data is
+              ALREADY on the device; nothing reads it. Weather stays online by choice.
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).
               NOTE: overlaps AMB.4 (home dashboard) on DashboardWidgets.swift — whichever
               runs first wins, the other rebases onto it.
