@@ -92,15 +92,14 @@ struct AmbientScheduleView: View {
                         .padding(.top, 6)
                         .padding(.bottom, 40)
                     }
+                    .onAppear {
+                        // Opening the timeline lands on today, not on the top of a
+                        // week already worked. The list is built with today always
+                        // present, so this anchor always exists.
+                        anchorOnToday(proxy, animated: false)
+                    }
                     .onChange(of: layoutRaw) { _ in
-                        // Landing in Timeline should land you on today, not at the
-                        // top of a month you've already worked.
-                        guard layout == .timeline else { return }
-                        DispatchQueue.main.async {
-                            withAnimation(LabAnim.gentle) {
-                                proxy.scrollTo(AmbientTimeline.anchorID, anchor: .top)
-                            }
-                        }
+                        anchorOnToday(proxy, animated: true)
                     }
                 }
             }
@@ -116,12 +115,33 @@ struct AmbientScheduleView: View {
         .tint(ambientTint)
     }
 
-    /// Four weeks forward from the start of this week, empty days dropped — the
-    /// timeline is for reading ahead, so blank days are noise.
+    /// The timeline is centred on today: a week of recent history above it (so
+    /// you can check what you already shot), today always present even when it's
+    /// clear, then six weeks ahead. Empty days either side are dropped — blank
+    /// rows are noise — but today never is, because it's the anchor.
     private var timelineDays: [Date] {
-        (0..<4)
-            .flatMap { store.week(offset: $0) }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let past = (1...7)
+            .compactMap { calendar.date(byAdding: .day, value: -$0, to: today) }
             .filter { store.hasItems(on: $0) }
+            .sorted()
+        let future = (1...42)
+            .compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
+            .filter { store.hasItems(on: $0) }
+        return past + [today] + future
+    }
+
+    private func anchorOnToday(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard layout == .timeline else { return }
+        // One run-loop hop so the lazy stack has built its sections first.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            if animated {
+                withAnimation(LabAnim.gentle) { proxy.scrollTo(AmbientTimeline.anchorID, anchor: .top) }
+            } else {
+                proxy.scrollTo(AmbientTimeline.anchorID, anchor: .top)
+            }
+        }
     }
 
     private var layoutSwitch: some View {
@@ -278,52 +298,130 @@ private struct AmbientTimeline: View {
     let days: [Date]
     let onSelect: (Session) -> Void
 
-    /// Scroll target for "today" (or the first day shown, if today is clear).
+    /// Scroll target for today.
     static let anchorID = "ambient-timeline-anchor"
 
-    private var anchorDay: Date? {
-        days.first { Calendar.current.isDateInToday($0) } ?? days.first
+    /// Where a shift sits relative to right now. Drives every past/future cue in
+    /// the timeline, so "done" and "coming" can never disagree between the day
+    /// header and the rows under it.
+    enum Standing {
+        case past, live, upcoming
+
+        static func of(_ session: Session, now: Date) -> Standing {
+            guard let start = session.startDate else { return .upcoming }
+            let end = session.endDate ?? start
+            if now > end { return .past }
+            if now >= start { return .live }
+            return .upcoming
+        }
+    }
+
+    private func standing(ofDay day: Date, now: Date) -> Standing {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(day) { return .live }
+        return day < calendar.startOfDay(for: now) ? .past : .upcoming
     }
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
-            if days.isEmpty {
-                LabEmptyDay(title: "Nothing ahead",
-                            message: "No shifts in the next four weeks.",
-                            systemImage: "moon.stars.fill")
-                    .padding(.top, 20)
-            }
-            ForEach(days, id: \.self) { day in
-                Section {
-                    VStack(spacing: 10) {
-                        ForEach(store.items(on: day)) { item in
-                            row(item, on: day)
-                        }
+        // Re-evaluated each minute so a shift crosses from upcoming to live to
+        // past while you're looking at it, without a manual refresh.
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let now = context.date
+            LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
+                ForEach(Array(days.enumerated()), id: \.element) { index, day in
+                    // The line between what's done and what's coming.
+                    if isFirstNonPast(index: index, now: now) {
+                        todayDivider
                     }
-                    .padding(.horizontal, 18)
-                } header: {
-                    header(day)
-                        .id(Calendar.current.isDate(day, inSameDayAs: anchorDay ?? .distantPast)
-                            ? AmbientTimeline.anchorID : "day-\(day.timeIntervalSince1970)")
+
+                    Section {
+                        VStack(spacing: 10) {
+                            let items = store.items(on: day)
+                            if items.isEmpty {
+                                clearDayRow
+                            }
+                            ForEach(items) { item in
+                                row(item, on: day, now: now)
+                            }
+                        }
+                        .padding(.horizontal, 18)
+                    } header: {
+                        header(day, now: now)
+                            .id(Calendar.current.isDateInToday(day)
+                                ? AmbientTimeline.anchorID
+                                : "day-\(day.timeIntervalSince1970)")
+                    }
                 }
             }
         }
     }
 
+    private func isFirstNonPast(index: Int, now: Date) -> Bool {
+        guard index > 0 else { return false }
+        let calendar = Calendar.current
+        let startOfToday = calendar.startOfDay(for: now)
+        return days[index] >= startOfToday && days[index - 1] < startOfToday
+    }
+
+    /// The boundary marker. Everything above it is behind you.
+    private var todayDivider: some View {
+        HStack(spacing: 10) {
+            Rectangle()
+                .fill(LinearGradient(colors: [.clear, Color.accentColor.opacity(0.6)],
+                                     startPoint: .leading, endPoint: .trailing))
+                .frame(height: 1.5)
+            Text("NOW")
+                .font(.system(size: 10, weight: .heavy))
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.4)))
+            Rectangle()
+                .fill(LinearGradient(colors: [Color.accentColor.opacity(0.6), .clear],
+                                     startPoint: .leading, endPoint: .trailing))
+                .frame(height: 1.5)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 4)
+    }
+
+    private var clearDayRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 12, weight: .semibold))
+            Text("No shifts")
+                .font(.system(size: 13, weight: .medium))
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
     // MARK: header
 
-    private func header(_ day: Date) -> some View {
+    private func header(_ day: Date, now: Date) -> some View {
         let isToday = Calendar.current.isDateInToday(day)
+        let dayStanding = standing(ofDay: day, now: now)
+        let isPast = dayStanding == .past
         let count = store.shifts(on: day).count
+
         return HStack(spacing: 8) {
             Text(ScheduleLabStyle.weekdayShort.string(from: day).uppercased())
                 .font(.system(size: 12, weight: .heavy))
                 .foregroundStyle(isToday ? Color.accentColor : .secondary)
             Text(ScheduleLabStyle.dayNumber.string(from: day))
                 .font(.system(size: 19, weight: .bold, design: .rounded))
+                // Past days are struck through — unmistakable at a glance, and it
+                // survives greyscale, dark mode and colour-blindness where a
+                // dimmer grey would not.
+                .strikethrough(isPast, color: .secondary)
             Text(ScheduleLabStyle.monthYear.string(from: day).prefix(3))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
+
             if isToday {
                 Text("TODAY")
                     .font(.system(size: 9, weight: .heavy))
@@ -331,7 +429,12 @@ private struct AmbientTimeline: View {
                     .padding(.vertical, 3)
                     .background(Capsule().fill(Color.accentColor))
                     .foregroundStyle(.white)
+            } else if isPast {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
             }
+
             Spacer()
             if count > 0 {
                 Text(dayHoursLabel(day))
@@ -342,8 +445,12 @@ private struct AmbientTimeline: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(Capsule().fill(.regularMaterial))
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.07)))
+        .background(Capsule().fill(isPast ? AnyShapeStyle(.thinMaterial) : AnyShapeStyle(.regularMaterial)))
+        .overlay(Capsule().strokeBorder(isToday
+                                        ? Color.accentColor.opacity(0.45)
+                                        : Color.primary.opacity(0.07),
+                                        lineWidth: isToday ? 1.5 : 1))
+        .opacity(isPast ? 0.65 : 1)
         .padding(.horizontal, 18)
         .padding(.vertical, 4)
     }
@@ -360,24 +467,32 @@ private struct AmbientTimeline: View {
     // MARK: rows
 
     @ViewBuilder
-    private func row(_ item: ScheduleLabItem, on day: Date) -> some View {
+    private func row(_ item: ScheduleLabItem, on day: Date, now: Date) -> some View {
         switch item {
         case .shift(let session):
             Button { onSelect(session) } label: {
-                AmbientTimelineRow(session: session)
+                AmbientTimelineRow(session: session, standing: Standing.of(session, now: now))
             }
             .buttonStyle(.plain)
             .labScrollFade(minOpacity: 0.5)
         case .timeOff(let entry):
             AmbientTimelineTimeOffRow(entry: entry)
+                .opacity(standing(ofDay: day, now: now) == .past ? 0.55 : 1)
                 .labScrollFade(minOpacity: 0.5)
         }
     }
 }
 
 /// The gutter row: time on the left against a spine, glass card on the right.
+/// Carries three states — done, happening now, still to come — each signalled
+/// more than one way (weight, fill, strikethrough, a word) so it survives dark
+/// mode, greyscale and colour-blindness instead of leaning on a dimmer grey.
 private struct AmbientTimelineRow: View {
     let session: Session
+    let standing: AmbientTimeline.Standing
+
+    private var isPast: Bool { standing == .past }
+    private var isLive: Bool { standing == .live }
 
     var body: some View {
         let accent = ScheduleLabStyle.accent(for: session)
@@ -387,6 +502,8 @@ private struct AmbientTimelineRow: View {
                 Text(session.startDate.map { ScheduleLabStyle.time.string(from: $0) } ?? "—")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .monospacedDigit()
+                    .strikethrough(isPast, color: .secondary)
+                    .foregroundStyle(isPast ? Color.secondary : .primary)
                 Text(ScheduleLabStyle.duration(session) ?? "")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -400,14 +517,22 @@ private struct AmbientTimelineRow: View {
             }
             .frame(width: 58, alignment: .trailing)
 
-            // Spine with a node at the shift's start.
+            // Spine: solid node ahead, hollow node behind, ringed while live.
             VStack(spacing: 0) {
-                Circle()
-                    .fill(accent)
-                    .frame(width: 9, height: 9)
-                    .padding(.top, 5)
+                ZStack {
+                    Circle()
+                        .fill(isPast ? Color.clear : accent)
+                        .overlay(Circle().strokeBorder(isPast ? Color.secondary : accent, lineWidth: 2))
+                        .frame(width: 9, height: 9)
+                    if isLive {
+                        Circle()
+                            .stroke(accent.opacity(0.35), lineWidth: 4)
+                            .frame(width: 18, height: 18)
+                    }
+                }
+                .padding(.top, 5)
                 Rectangle()
-                    .fill(accent.opacity(0.25))
+                    .fill(isPast ? Color.secondary.opacity(0.18) : accent.opacity(0.25))
                     .frame(width: 2)
                     .frame(maxHeight: .infinity)
             }
@@ -419,8 +544,23 @@ private struct AmbientTimelineRow: View {
                     // sports shows both, overlapped.
                     LabTypeIcons(session: session, size: 22)
                     Text(session.schoolName)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 16, weight: isPast ? .medium : .semibold))
                         .lineLimit(1)
+                    if isLive {
+                        Text("NOW")
+                            .font(.system(size: 9, weight: .heavy))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(accent))
+                            .foregroundStyle(.white)
+                    } else if isPast {
+                        Text("DONE")
+                            .font(.system(size: 9, weight: .heavy))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.secondary.opacity(0.16)))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .bold))
@@ -441,12 +581,23 @@ private struct AmbientTimelineRow: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(isLive ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.ultraThinMaterial),
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(ScheduleLabStyle.accentGradient(for: session), lineWidth: 1)
+                    .strokeBorder(borderStyle, lineWidth: isLive ? 2 : 1)
             }
+            .shadow(color: isLive ? accent.opacity(0.22) : .clear, radius: 14, y: 5)
+            // Finished work recedes: still readable, no longer competing.
+            .opacity(isPast ? 0.62 : 1)
+            .saturation(isPast ? 0.55 : 1)
         }
+    }
+
+    private var borderStyle: AnyShapeStyle {
+        if isLive { return AnyShapeStyle(ScheduleLabStyle.accent(for: session)) }
+        if isPast { return AnyShapeStyle(Color.primary.opacity(0.07)) }
+        return AnyShapeStyle(ScheduleLabStyle.accentGradient(for: session))
     }
 }
 
