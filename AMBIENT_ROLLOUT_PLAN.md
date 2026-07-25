@@ -112,6 +112,43 @@ D5  DENSITY IS SETTLED BEFORE ANY SCREEN IS BUILT ON IT. Ambient's glass and
     that contradicted each other. Ordering Equipment first costs the dashboard
     one phase of waiting and removes the rework entirely.
 
+D11 THE WASH IS THE FEATURE'S COLOUR, AND THE SCHEDULE IS THE EXCEPTION.
+    Operator decision 2026-07-25, in answer to the right question: on the
+    schedule the ambient wash means something — it is the colour of the job in
+    front of you, picked by whoever scheduled it — and nothing else in the app
+    has a natural colour like that. So what tints the wash everywhere else?
+
+    Decided: every converted screen takes its wash from ITS FEATURE'S COLOUR.
+    The schedule keeps its data-driven tint as a deliberate, documented
+    exception, because a shift genuinely has a colour and an equipment list does
+    not.
+
+    The source is FeatureTheme.color(for:) in DesignSystem/DesignTokens.swift.
+    That is already the single source of truth for the home tiles and the bottom
+    bar, so the tile you tap and the wash behind the screen you land on agree —
+    which is the whole reason to prefer it over a per-screen invention.
+
+    THE PALETTE MUST BE RE-CUT FIRST, and the operator asked for exactly that.
+    As it stands the map is not unique: five features are blue (Tasks, Chat,
+    Daily Job Report, Capture, Manager Mileage), four are teal, four are green,
+    and several more pair up. Batch 1 alone would give Tasks and Chat the same
+    wash, which makes the signal meaningless the first time it is used.
+
+    ONE CONSEQUENCE TO GO IN WITH EYES OPEN: FeatureTheme has three live
+    consumers TODAY — MainEmployeeView, AllFeaturesView and BottomTabBar. Re-
+    cutting the palette therefore changes the home screen's tile colours and the
+    bottom bar immediately, on screens that have not been converted yet. That is
+    not a reason to avoid it, but it means the palette lands as a visible change
+    in its own right and gets its own line in a closeout.
+
+    Also note the schedule's own row in that map says red, while its wash is the
+    job's colour. That is not a contradiction to fix — it is D11's exception,
+    and FeatureTheme's schedule colour keeps doing its real job of tinting the
+    schedule's TILE on the home screen.
+
+    Proposed and judged in AMB.2 session 2's batch-1 mockups, on a device,
+    alongside the four surfaces themselves.
+
 D6  MAIN STAYS SHIPPABLE. Every phase is independently shippable and
     independently revertible. There is never a long-lived conversion branch. If
     the arc is abandoned after any phase, the app is coherent — some screens

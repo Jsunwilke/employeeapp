@@ -29,7 +29,11 @@ phase-naming registry as the rest of the family.
       in AMB.2 (menu entry + sample data + gallery + switcher, in the real nav container),
       kept for the arc and deleted at AMB.12; each phase's own mockup views go at that
       phase's close. Smokes on iPhone AND iPad (D7); ships to main as it lands (D8).
-      Plan + the 10 locked decisions (D1-D10): AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
+      Plan + the 11 locked decisions (D1-D11): AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
+      D11 (2026-07-25): the ambient wash takes each screen's FEATURE colour; the schedule
+      keeps its data-driven tint as the exception. FeatureTheme's palette must be re-cut to
+      be unique first (5 blues today) — proposed in AMB.2 session 2's mockups. Re-cutting it
+      also changes the home tiles + bottom bar, which are live.
 
       ✅ AMB.1   Schedule                                    DONE + PUSHED 2026-07-24
       🔶 AMB.2   Design system + build gate + compact variants + THE LAB
