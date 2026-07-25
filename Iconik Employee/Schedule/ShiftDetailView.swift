@@ -81,6 +81,9 @@ struct ShiftDetailView: View {
     // State properties
     @State private var coworkerProfiles: [CoworkerProfile] = []
     @State private var coworkerContacts: [CoworkerContactInfo] = []
+    /// Crew on this shift with no phone number on file — named in the composer
+    /// rather than silently dropped.
+    @State private var crewWithoutNumbers: [String] = []
     @State private var isShowingMessageComposer = false
     @State private var messageBody: String = ""
     @State private var isLoadingContacts = false
@@ -793,55 +796,82 @@ struct ShiftDetailView: View {
 
     // MARK: - Message composer
 
+    /// Three outcomes, each stated plainly. Previously two of them showed
+    /// nothing at all — the sheet only opened when a number was found.
     private var messageComposerView: some View {
-        VStack(spacing: 20) {
-            if MFMessageComposeViewController.canSendText() {
+        Group {
+            if !coworkerContacts.isEmpty && MFMessageComposeViewController.canSendText() {
                 MessageComposeView(
                     recipients: coworkerContacts.map { $0.phoneNumber },
                     body: messageBody,
                     isShowing: $isShowingMessageComposer
                 )
             } else {
-                Text("Messaging is not available on this device")
-                    .font(.headline)
-                    .padding(.top, 30)
-
-                if coworkerContacts.isEmpty {
-                    Text("No coworker phone numbers found")
-                        .foregroundStyle(.secondary)
-                        .padding()
-                } else {
-                    Text("Coworker phone numbers")
-                        .font(.subheadline)
-                        .padding(.top, 10)
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(coworkerContacts) { contact in
-                                HStack {
-                                    Text(contact.name).font(.body)
-                                    Spacer()
-                                    Text(contact.phoneNumber)
-                                        .font(.system(.body, design: .monospaced))
-                                        .foregroundStyle(.blue)
-                                }
-                                .padding(.horizontal, 20)
-                                Divider()
-                            }
-                        }
-                        .padding(.vertical)
-                    }
-                    .frame(height: 200)
-                }
-
-                Button("Close") { isShowingMessageComposer = false }
-                    .padding(.horizontal, 50)
-                    .padding(.vertical, 12)
-                    .background(Color.blue, in: Capsule())
-                    .foregroundStyle(.white)
-                    .padding(.top, 20)
+                composerFallback
             }
         }
-        .padding()
+    }
+
+    private var composerFallback: some View {
+        NavigationView {
+            List {
+                if coworkerContacts.isEmpty && crewWithoutNumbers.isEmpty {
+                    Section {
+                        Label("You're the only one on this shift", systemImage: "person.fill")
+                            .font(.headline)
+                    } footer: {
+                        Text("There's nobody else scheduled at \(session.schoolName) on this day, so there's no one to message.")
+                    }
+                } else if coworkerContacts.isEmpty {
+                    Section {
+                        ForEach(crewWithoutNumbers, id: \.self) { name in
+                            Label(name, systemImage: "person.crop.circle.badge.exclamationmark")
+                        }
+                    } header: {
+                        Text("No phone numbers on file")
+                    } footer: {
+                        Text("These coworkers are on the shift but have no phone number saved on their profile, so they can't be texted from here.")
+                    }
+                } else {
+                    Section {
+                        ForEach(coworkerContacts) { contact in
+                            HStack {
+                                Text(contact.name)
+                                Spacer()
+                                Text(contact.phoneNumber)
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: {
+                        Text("Crew")
+                    } footer: {
+                        Text(MFMessageComposeViewController.canSendText()
+                             ? ""
+                             : "This device can't send texts, so the numbers are listed instead.")
+                    }
+
+                    if !crewWithoutNumbers.isEmpty {
+                        Section {
+                            ForEach(crewWithoutNumbers, id: \.self) { name in
+                                Label(name, systemImage: "person.crop.circle.badge.exclamationmark")
+                                    .foregroundStyle(.secondary)
+                            }
+                        } header: {
+                            Text("No number on file")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Message crew")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { isShowingMessageComposer = false }
+                }
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
     }
 
     // MARK: - Job box step mapping
@@ -1657,53 +1687,59 @@ struct ShiftDetailView: View {
     }
     
     // Message coworkers implementation
+    /// Open the composer. It ALWAYS presents now: the old version only showed
+    /// the sheet when it managed to find at least one phone number, so a shift
+    /// with no coworkers — or a crew whose numbers aren't on file — looked like
+    /// a dead button. The sheet itself explains which of those it is.
     private func messageCoworkers() {
-        // Set up the message text first
-        let messageText = createMessageText()
-        messageBody = messageText
-        
-        // Check if we need to load contacts
-        if coworkerContacts.isEmpty {
-            // Show loading state
-            isLoadingContacts = true
-            
-            // Load real contacts from Supabase
-            loadCoworkerPhoneNumbers { success in
-                DispatchQueue.main.async {
-                    self.isLoadingContacts = false
-                    // Only show the sheet after contacts are loaded
-                    if success || !self.coworkerContacts.isEmpty {
-                        self.isShowingMessageComposer = true
-                    }
-                }
-            }
-        } else {
-            // We already have contacts, just show the composer
+        messageBody = createMessageText()
+
+        guard coworkerContacts.isEmpty else {
             isShowingMessageComposer = true
+            return
+        }
+
+        isLoadingContacts = true
+        loadCoworkerPhoneNumbers { _ in
+            DispatchQueue.main.async {
+                self.isLoadingContacts = false
+                self.isShowingMessageComposer = true
+            }
         }
     }
-    
+
     // Helper to create the message text
     private func createMessageText() -> String {
         return "Hey crew, "
     }
     
-    // Load phone numbers from Supabase with completion handler
-    private func loadCoworkerPhoneNumbers(completion: @escaping (Bool) -> Void = { _ in }) {
-        coworkerContacts = [] // Reset the array
-
-        // Get all coworkers on this shoot
-        let coworkerNames = otherEmployeesSameJob()
-
-        if coworkerNames.isEmpty {
-            completion(false)
-            return // No coworkers to message
+    /// The people this shift can message: this day's crew plus anyone working
+    /// another job at the same school today, minus yourself, deduped by id.
+    private func messagingCrew() -> [SessionPhotographer] {
+        var seen = Set<String>()
+        var crew: [SessionPhotographer] = []
+        for person in session.photographers + sameDayCoworkersAtSchool() {
+            guard person.id != currentUserID, !seen.contains(person.id) else { continue }
+            seen.insert(person.id)
+            crew.append(person)
         }
+        return crew
+    }
 
-        // Get organization ID to comply with security rules
-        let orgID = UserManager.shared.getCachedOrganizationID()
-        guard !orgID.isEmpty else {
-            print("🔐 Cannot load coworker contacts: no organization ID found")
+    /// Look phone numbers up by USER ID.
+    ///
+    /// This used to query `users` by first name — one round trip per coworker,
+    /// matching `first_name == "Jason"` — so a nickname, a casing difference or
+    /// two people sharing a first name silently produced no recipient. The
+    /// session already carries each photographer's user id, which is exact, so
+    /// it's one query keyed on that. Anyone without a number on file is recorded
+    /// and named in the composer instead of vanishing.
+    private func loadCoworkerPhoneNumbers(completion: @escaping (Bool) -> Void = { _ in }) {
+        coworkerContacts = []
+        crewWithoutNumbers = []
+
+        let crew = messagingCrew()
+        guard !crew.isEmpty else {
             completion(false)
             return
         }
@@ -1711,51 +1747,47 @@ struct ShiftDetailView: View {
         Task {
             do {
                 let supabase = SupabaseManager.shared.client
-                var foundPhoneNumber = false
 
                 struct UserContact: Decodable {
                     let id: String
-                    let first_name: String?
                     let phone: String?
                 }
 
-                for fullName in coworkerNames {
-                    let queryName = firstName(from: fullName)
+                let ids = crew.map { $0.id }
+                let users: [UserContact] = try await supabase
+                    .from("users")
+                    .select("id, phone")
+                    .in("id", values: ids)
+                    .execute()
+                    .value
 
-                    let users: [UserContact] = try await supabase
-                        .from("users")
-                        .select("id, first_name, phone")
-                        .eq("organization_id", value: orgID)
-                        .eq("first_name", value: queryName)
-                        .limit(1)
-                        .execute()
-                        .value
+                let phonesByID = Dictionary(uniqueKeysWithValues: users.map { ($0.id.lowercased(), $0.phone) })
 
-                    if let user = users.first, let phone = user.phone, !phone.isEmpty {
-                        await MainActor.run {
-                            let contact = CoworkerContactInfo(
-                                id: user.id,
-                                name: fullName,
-                                phoneNumber: phone
-                            )
-                            self.coworkerContacts.append(contact)
-                        }
-                        foundPhoneNumber = true
+                var contacts: [CoworkerContactInfo] = []
+                var missing: [String] = []
+                for person in crew {
+                    if let phone = phonesByID[person.id.lowercased()] ?? nil, !phone.isEmpty {
+                        contacts.append(CoworkerContactInfo(id: person.id, name: person.name, phoneNumber: phone))
+                    } else {
+                        missing.append(person.name)
                     }
                 }
 
                 await MainActor.run {
-                    completion(foundPhoneNumber)
+                    self.coworkerContacts = contacts
+                    self.crewWithoutNumbers = missing
+                    completion(!contacts.isEmpty)
                 }
             } catch {
                 print("⚠️ Coworker contacts unavailable: \(error.localizedDescription)")
                 await MainActor.run {
+                    self.crewWithoutNumbers = crew.map { $0.name }
                     completion(false)
                 }
             }
         }
     }
-    
+
     // Action Methods
     
     private func openInAppleMaps() {
@@ -1826,38 +1858,6 @@ struct ShiftDetailView: View {
         }.flatMap { $0.photographers }
     }
 
-    func otherEmployeesSameJob() -> [String] {
-        // Photographers on THIS day of this session (the view holds a day occurrence,
-        // so `session.photographers` is already this day's crew — CREW.2).
-        var coworkerNames: [String] = []
-        
-        // First, get all photographers from the current session (excluding current user)
-        let sessionPhotographers = session.getPhotographerNames()
-        if let currentUserInfo = currentUserPhotographerInfo {
-            // Exclude current user from the list
-            for photographerName in sessionPhotographers {
-                if photographerName != currentUserInfo.name {
-                    coworkerNames.append(photographerName)
-                }
-            }
-        } else {
-            // If we can't identify current user, include all photographers except the first one
-            coworkerNames = Array(sessionPhotographers.dropFirst())
-        }
-        
-        // Also check other sessions on the same day at the same school (for different session types)
-        let otherSessionCoworkers = sameDayCoworkersAtSchool().map { $0.name }
-
-        // Add unique names from other sessions
-        for name in otherSessionCoworkers {
-            if !coworkerNames.contains(name) {
-                coworkerNames.append(name)
-            }
-        }
-        
-        return coworkerNames
-    }
-    
     // Check if a user profile name matches the job box scanner name
     private func isMatchingUser(profileName: String, scannedByName: String) -> Bool {
         // Don't attempt to match if scannedByName is empty
