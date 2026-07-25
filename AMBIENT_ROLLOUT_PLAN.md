@@ -414,6 +414,10 @@ Each phase session runs:
                   shipping screen, and it is deleted at the close of the phase
                   (after the operator confirms the port) — so delete-first and
                   the no-parallel-implementations rule both still hold.
+    3b MATCH      put the converted screen beside the approved mockup and
+                  account for every difference — interaction, frames, spacing,
+                  states. A frame correct in the mockup's container can be wrong
+                  in the real one. Restore it, or name it as a deliberate change.
     4  BUILD      xcodebuild clean, zero warnings from changed files
     5  REVIEW     /code-review before any push, operator-triggered
     6  SMOKE      operator on iPhone AND iPad (D7), with before/after screenshots
@@ -422,6 +426,7 @@ Each phase session runs:
 Acceptance criteria, every phase, no exceptions:
 
     the mockup was approved before conversion started (D10)
+    the built screen was diffed back against that mockup (workflow step 3b)
     iPhone AND iPad
     light AND dark
     Dynamic Type at large accessibility sizes
@@ -463,6 +468,15 @@ L5  RESTYLING SURFACES PRE-EXISTING BUGS. The schedule's weather fetch had been
     a phone number on file. Expect one or two per surface. Fix them if they are
     inside the surface, name them in the closeout, and do not let them expand
     the phase.
+
+L7  APPROVING A MOCKUP IS NOT VERIFYING THE BUILD. AMB.1 shipped a static
+    seven-day day strip where the lab scrolled continuously, and when that was
+    restored, shipped it at the wrong capsule width — the capsules kept a
+    maxWidth: .infinity that was correct in the old seven-across HStack and
+    collapses to content width inside a horizontal ScrollView. Both reached the
+    operator. Neither was caught by the build, the review, or the mockup gate,
+    because nothing compared the built screen to the approved one. Hence
+    workflow step 3b.
 
 L6  RUN THE REVIEW BEFORE PUSHING. Post-push there is no branch delta left to
     bundle. This is the CRS.1 lesson and it held again here: the review found

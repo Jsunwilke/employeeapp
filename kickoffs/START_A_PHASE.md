@@ -138,6 +138,19 @@ phase-naming registry as the rest of the family.
        - Server-side auth goes through role_permissions + has_permission()
          (see the rls-remediation memory).
 
+  3b MATCH THE MOCKUP  (AMB arc — do not skip; this is where two defects got out)
+     Put the converted screen next to the approved mockup and account for EVERY
+     difference. Not "does it look similar" — walk the list:
+       - interaction: does it scroll / page / snap the way the mockup did?
+       - frames: a .frame that was right in the mockup's container can be wrong
+         in the real one (maxWidth: .infinity in an HStack collapses to content
+         width inside a horizontal ScrollView).
+       - spacing, sizes, states, empty cases.
+     Anything that differs is either restored or named to the operator as a
+     deliberate change with a reason. AMB.1 shipped a static seven-day strip
+     where the lab scrolled, then shipped it scrolling but at the wrong capsule
+     width — both reached the operator, neither was caught by build or review.
+
   4  AUDIT  (parallel agents)
        - Code: correctness, edge cases, Swift concurrency + SwiftUI lifecycle.
        - Security: Supabase RLS/auth on the SHARED DB, PII, secrets, blast radius
