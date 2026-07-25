@@ -327,24 +327,36 @@ private struct AmbientTimeline: View {
         // past while you're looking at it, without a manual refresh.
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let now = context.date
-            LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
-                ForEach(Array(days.enumerated()), id: \.element) { index, day in
-                    // The line between what's done and what's coming.
-                    if isFirstNonPast(index: index, now: now) {
-                        todayDivider
-                    }
+            let startOfToday = Calendar.current.startOfDay(for: now)
+            let past = days.filter { $0 < startOfToday }
+            let ahead = days.filter { $0 >= startOfToday }
 
-                    Section {
-                        VStack(spacing: 10) {
-                            let items = store.items(on: day)
-                            if items.isEmpty {
-                                clearDayRow
-                            }
-                            ForEach(items) { item in
-                                row(item, on: day, now: now)
+            LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
+                // Everything already worked sits inside one flat grey band, edge
+                // to edge — the colour drains out of the page above the NOW line,
+                // so "behind me" is a property of the whole region, not something
+                // you have to read off each row. Past headers aren't pinned;
+                // there's nothing to keep track of back there.
+                if !past.isEmpty {
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(past, id: \.self) { day in
+                            VStack(alignment: .leading, spacing: 10) {
+                                header(day, now: now)
+                                dayBody(day, now: now)
                             }
                         }
-                        .padding(.horizontal, 18)
+                    }
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(pastBand)
+                    .padding(.bottom, 2)
+
+                    todayDivider
+                }
+
+                ForEach(ahead, id: \.self) { day in
+                    Section {
+                        dayBody(day, now: now)
                     } header: {
                         header(day, now: now)
                             .id(Calendar.current.isDateInToday(day)
@@ -356,11 +368,33 @@ private struct AmbientTimeline: View {
         }
     }
 
-    private func isFirstNonPast(index: Int, now: Date) -> Bool {
-        guard index > 0 else { return false }
-        let calendar = Calendar.current
-        let startOfToday = calendar.startOfDay(for: now)
-        return days[index] >= startOfToday && days[index - 1] < startOfToday
+    /// The grey zone behind finished days, with a hairline where it ends.
+    private var pastBand: some View {
+        Rectangle()
+            .fill(Color(.systemGray5).opacity(0.5))
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color(.separator).opacity(0.6))
+                    .frame(height: 0.5)
+            }
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color(.separator).opacity(0.6))
+                    .frame(height: 0.5)
+            }
+    }
+
+    private func dayBody(_ day: Date, now: Date) -> some View {
+        VStack(spacing: 10) {
+            let items = store.items(on: day)
+            if items.isEmpty {
+                clearDayRow
+            }
+            ForEach(items) { item in
+                row(item, on: day, now: now)
+            }
+        }
+        .padding(.horizontal, 18)
     }
 
     /// The boundary marker. Everything above it is behind you.
@@ -445,12 +479,16 @@ private struct AmbientTimeline: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(Capsule().fill(isPast ? AnyShapeStyle(.thinMaterial) : AnyShapeStyle(.regularMaterial)))
+        // Flat grey inside the past band, glass everywhere else.
+        .background(Capsule().fill(isPast
+                                   ? AnyShapeStyle(Color(.systemBackground).opacity(0.5))
+                                   : AnyShapeStyle(.regularMaterial)))
         .overlay(Capsule().strokeBorder(isToday
                                         ? Color.accentColor.opacity(0.45)
                                         : Color.primary.opacity(0.07),
                                         lineWidth: isToday ? 1.5 : 1))
-        .opacity(isPast ? 0.65 : 1)
+        .grayscale(isPast ? 0.9 : 0)
+        .opacity(isPast ? 0.8 : 1)
         .padding(.horizontal, 18)
         .padding(.vertical, 4)
     }
@@ -581,17 +619,25 @@ private struct AmbientTimelineRow: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isLive ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.ultraThinMaterial),
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            // Past cards are a FLAT grey, not glass: the material would let the
+            // ambient colour wash through, which is exactly the signal we're
+            // trying to remove from work that's already done.
+            .background(cardFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .strokeBorder(borderStyle, lineWidth: isLive ? 2 : 1)
             }
             .shadow(color: isLive ? accent.opacity(0.22) : .clear, radius: 14, y: 5)
-            // Finished work recedes: still readable, no longer competing.
-            .opacity(isPast ? 0.62 : 1)
-            .saturation(isPast ? 0.55 : 1)
+            // Finished work drains to near-monochrome: still readable, no longer
+            // competing with anything you still have to do.
+            .grayscale(isPast ? 0.9 : 0)
+            .opacity(isPast ? 0.75 : 1)
         }
+    }
+
+    private var cardFill: AnyShapeStyle {
+        if isPast { return AnyShapeStyle(Color(.systemBackground).opacity(0.5)) }
+        return isLive ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.ultraThinMaterial)
     }
 
     private var borderStyle: AnyShapeStyle {
