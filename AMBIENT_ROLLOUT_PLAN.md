@@ -91,6 +91,25 @@ D6  MAIN STAYS SHIPPABLE. Every phase is independently shippable and
     the arc is abandoned after any phase, the app is coherent — some screens
     converted, some not, nothing half-done.
 
+D7  EVERY PHASE VERIFIES ON iPHONE AND iPAD. Operator decision 2026-07-24.
+    Not one iPad sweep at the end — each phase smokes on both devices before it
+    closes. Several surfaces in this arc have genuinely different iPad layouts
+    (Equipment, Chat, Groups, the manager tools), and a single sweep at the end
+    would find eleven phases' worth of iPad defects at once, with no way to tell
+    which phase caused which. Practical consequence: phase scoping must budget
+    for the second device, and a phase is NOT done when only the iPhone passes.
+
+D8  SHIP EACH PHASE TO MAIN AS IT LANDS. Operator decision 2026-07-24. No
+    accumulation branch for the arc. Each phase merges to main and pushes once
+    its review and both device smokes pass. This is what makes D6 load-bearing
+    rather than theoretical: the app in the field is always a coherent mix of
+    converted and unconverted screens, never a half-applied restyle.
+
+D9  THE TAIL GETS CONVERTED. Operator decision 2026-07-24. AMB.12 runs;
+    Settings, the manager tools, Stats and Training are converted rather than
+    left as a visible seam. They are last precisely because they are lowest
+    traffic and inherit most of their look from the primitives by then.
+
 
 ## Phases
 
@@ -256,16 +275,13 @@ L6  RUN THE REVIEW BEFORE PUSHING. Post-push there is no branch delta left to
     NOT adding features to converted surfaces
 
 
-## Open questions for the operator
+## Answered, 2026-07-24
 
-Q1  iPad. The schedule was converted and verified on iPhone. Several of these
-    surfaces have distinct iPad layouts. Does each phase verify on both devices
-    (slower, safer), or does iPad get its own sweep at the end?
+The three questions this plan opened with are now decisions D7 (iPad every
+phase), D8 (ship to main as we go) and D9 (convert the tail). Nothing in this
+plan is awaiting an operator answer.
 
-Q2  Rollout. Ship each phase to main as it lands, or accumulate the arc on a
-    branch and ship in batches? D6 assumes each phase is shippable either way;
-    this is about how often you want to update the field.
-
-Q3  The tail. AMB.12 covers low-traffic surfaces that mostly inherit from the
-    primitives. Worth a session, or leave them un-converted and accept a
-    visible seam in Settings and the manager tools?
+The next decision point is not a question but a checkpoint: D5 (density) is
+settled by building it at AMB.4, against Equipment. If the compact variants
+designed there do not survive contact with Chat at AMB.9, that is a revision to
+the design system, not a re-opening of this plan.
