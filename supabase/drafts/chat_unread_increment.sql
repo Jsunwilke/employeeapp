@@ -55,9 +55,7 @@
 CREATE OR REPLACE FUNCTION public.increment_conversation_unread(conversation_id text, sender_id text)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
-  v_parts  jsonb;
-  v_unread jsonb;
-  pid      text;
+  v_parts jsonb;
 BEGIN
   -- NULL-SAFE, and that is not pedantry. Written first as
   --   IF lower(sender_id) <> lower((auth.uid())::text)
@@ -77,30 +75,49 @@ BEGIN
     RAISE EXCEPTION 'Not authorized';
   END IF;
 
-  SELECT participants, coalesce(unread_counts, '{}'::jsonb)
-    INTO v_parts, v_unread
-    FROM conversations
-   WHERE id = conversation_id;
+  SELECT participants INTO v_parts FROM conversations WHERE id = conversation_id;
 
   IF v_parts IS NULL THEN RAISE EXCEPTION 'Conversation not found'; END IF;
   IF NOT (v_parts @> to_jsonb((auth.uid())::text)) THEN RAISE EXCEPTION 'Not a participant'; END IF;
 
-  -- Every participant except the sender. The comparison is lower()ed on both
-  -- sides: this project stores lowercase UUIDs but Swift generates uppercase,
-  -- and the web app's equivalent uses a case-SENSITIVE compare, which would
-  -- increment the sender's own count on a mixed-case id.
-  FOR pid IN SELECT jsonb_array_elements_text(v_parts) LOOP
-    IF lower(pid) <> lower(sender_id) THEN
-      v_unread := jsonb_set(
-        v_unread,
-        array[pid],
-        to_jsonb(coalesce((v_unread ->> pid)::int, 0) + 1),
-        true
-      );
-    END IF;
-  END LOOP;
-
-  UPDATE conversations SET unread_counts = v_unread WHERE id = conversation_id;
+  -- ONE STATEMENT, which is the whole point of this function.
+  --
+  -- The first version SELECTed unread_counts into a local, looped in plpgsql,
+  -- and UPDATEd the blob back — the exact read-modify-write this file's header
+  -- criticises the web app for, just with a shorter window. An audit caught the
+  -- contradiction between the header and the body. Two senders landing together
+  -- would still lose an increment, and it would still clobber a concurrent
+  -- mark_conversation_read.
+  --
+  -- Now the new value is computed INSIDE the UPDATE from the row being written,
+  -- so the read and the write are the same statement and the row lock covers
+  -- both.
+  --
+  -- The comparison is lower()ed on both sides: this project stores lowercase
+  -- UUIDs but Swift generates uppercase, and the web app's equivalent uses a
+  -- case-SENSITIVE compare, which would increment the sender's own count on a
+  -- mixed-case id.
+  --
+  -- jsonb_typeof guards the cast: unread_counts is writable directly by any
+  -- participant under the conversations RLS policy, so a non-integer value
+  -- would otherwise raise "invalid input syntax for type integer" on every
+  -- subsequent send and permanently kill badging for that conversation. A
+  -- non-integer is treated as 0 rather than aborting.
+  UPDATE conversations c
+     SET unread_counts = coalesce(
+       (SELECT jsonb_object_agg(
+                 p,
+                 CASE WHEN lower(p) = lower(sender_id)
+                      THEN coalesce(c.unread_counts -> p, '0'::jsonb)
+                      ELSE to_jsonb(
+                             CASE WHEN jsonb_typeof(c.unread_counts -> p) = 'number'
+                                  THEN (c.unread_counts ->> p)::int
+                                  ELSE 0
+                             END + 1)
+                 END)
+          FROM jsonb_array_elements_text(c.participants) AS p),
+       '{}'::jsonb)
+   WHERE c.id = conversation_id;
 END $$;
 
 -- Lock down + expose to the app role, matching fix_chat_rpcs.sql.

@@ -329,9 +329,13 @@ class ChatManager: ObservableObject {
 
     /// Returns whether the message reached the server, so the composer can keep
     /// the user's text on failure instead of throwing it away.
+    /// `into` pins the destination. Callers that do slow work before sending
+    /// (an attachment upload) MUST pass the conversation they started with,
+    /// because `activeConversation` can change underneath them.
     @discardableResult
-    func sendMessage(text: String, type: ChatMessage.MessageType = .text, fileUrl: String? = nil) async -> Bool {
-        guard let conversation = activeConversation,
+    func sendMessage(text: String, type: ChatMessage.MessageType = .text, fileUrl: String? = nil,
+                     into destination: Conversation? = nil) async -> Bool {
+        guard let conversation = destination ?? activeConversation,
               let currentUserId = UserManager.shared.getCurrentUserIDUnified(),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
@@ -373,9 +377,15 @@ class ChatManager: ObservableObject {
                 left_user_name: nil
             )
 
-            // Add optimistic message immediately
-            pendingMessageIds.insert(messageId)
-            messages = merge([optimisticMessage], into: messages)
+            // Add optimistic message immediately — but ONLY if it belongs to the
+            // thread currently on screen. An attachment send that finished after
+            // the user moved on would otherwise drop a bubble into whatever
+            // conversation they are now looking at.
+            let showsOnScreen = activeConversation?.id == conversation.id
+            if showsOnScreen {
+                pendingMessageIds.insert(messageId)
+                messages = merge([optimisticMessage], into: messages)
+            }
 
             try await supabaseChatService.sendMessage(
                 messageId: messageId,
@@ -403,6 +413,12 @@ class ChatManager: ObservableObject {
             // Remove ONLY this message. Other sends may still be in flight.
             pendingMessageIds.remove(messageId)
             messages.removeAll { $0.id == messageId }
+            // The optimistic copy is dropped from the CACHE too. Without this a
+            // realtime event landing between the optimistic merge and this
+            // failure could persist a message that never existed — which then
+            // reloads on next launch, can never be evicted (the merge is
+            // union-only), and silently shifts every paging offset by one.
+            cacheService.setCachedMessages(conversationId: conversation.id, messages: messages)
             errorMessage = "Failed to send message: \(error.localizedDescription)"
 
             isSendingMessage = false
@@ -628,23 +644,40 @@ class ChatManager: ObservableObject {
 
     // MARK: - Cleanup
 
+    /// NEITHER OF THESE USED TO UNSUBSCRIBE ANYTHING, and de1eed5 is what made
+    /// that matter: this type is `@MainActor` and both functions are
+    /// synchronous, so the `Task` body could not begin until the function had
+    /// already returned — by which point the properties were nil and
+    /// `await channel?.unsubscribe()` was a no-op on nil. Deterministically.
+    ///
+    /// It went unnoticed because `cleanup()` had never once been called (its
+    /// call site compared a value against itself). Fixing that call site turned
+    /// a dormant no-op into a live leak: the SDK caches channels by topic and
+    /// re-registering `postgresChange` on an already-subscribed channel is
+    /// refused, so every re-opened conversation kept an orphaned fetch loop.
+    ///
+    /// The channels are captured into locals BEFORE the properties are cleared,
+    /// so the detached task holds real references.
     func cleanup() {
-        Task {
-            await conversationsChannel?.unsubscribe()
-            await messagesChannel?.unsubscribe()
-        }
+        let conversations = conversationsChannel
+        let messages = messagesChannel
         conversationsChannel = nil
         messagesChannel = nil
+
+        Task {
+            await conversations?.unsubscribe()
+            await messages?.unsubscribe()
+        }
 
         // Prune old cache
         cacheService.pruneOldCache()
     }
 
     func cleanupMessageListener() {
-        Task {
-            await messagesChannel?.unsubscribe()
-        }
+        let channel = messagesChannel
         messagesChannel = nil
+
+        Task { await channel?.unsubscribe() }
     }
 
     func clearMessagesCache(for conversationId: String) {
@@ -693,6 +726,14 @@ class ChatManager: ObservableObject {
         )
     }
 
+    /// The conversation is pinned for the WHOLE operation.
+    ///
+    /// This used to capture `activeConversation` for the upload and then call
+    /// `sendMessage`, which re-read `activeConversation` afterwards — with a
+    /// multi-second upload in between. Leaving the thread mid-upload therefore
+    /// filed the message against a DIFFERENT conversation than the one the file
+    /// was uploaded into, and since the storage policy scopes reads per
+    /// conversation, nobody in the destination could open it.
     private func sendAttachment(data: Data, fileExtension: String, contentType: String, caption: String) async -> Bool {
         guard let conversation = activeConversation else { return false }
         guard let organizationId = currentUserOrganizationId else {
@@ -713,8 +754,8 @@ class ChatManager: ObservableObject {
 
             // The STORAGE PATH goes in file_url, not a signed URL — a signed URL
             // stored in the row expires and leaves the message pointing at
-            // nothing. ChatAttachmentURL signs it at render time instead.
-            return await sendMessage(text: caption, type: .file, fileUrl: path)
+            // nothing. ChatAttachment signs it at render time instead.
+            return await sendMessage(text: caption, type: .file, fileUrl: path, into: conversation)
         } catch {
             errorMessage = "Couldn't upload attachment: \(error.localizedDescription)"
             return false
