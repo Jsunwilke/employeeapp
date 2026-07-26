@@ -74,7 +74,7 @@ struct Conversation: Codable, Identifiable {
         default_name = try container.decodeIfPresent(String.self, forKey: .default_name)
         created_at = try container.decode(Date.self, forKey: .created_at)
         last_activity = try container.decode(Date.self, forKey: .last_activity)
-        last_message = try container.decodeIfPresent(LastMessage.self, forKey: .last_message)
+        last_message = Conversation.decodeLastMessage(from: container, fallbackTimestamp: last_activity)
         unread_counts = try container.decodeIfPresent([String: Int].self, forKey: .unread_counts) ?? [:]
         pinned_by = try container.decodeIfPresent([String].self, forKey: .pinned_by)
         resolvedDisplayName = nil
@@ -89,6 +89,68 @@ struct Conversation: Codable, Identifiable {
         case unread_counts
         case pinned_by
     }
+
+    /// `conversations.last_message` is a TEXT column, and the two apps that write
+    /// it disagree about what goes in it. This app writes the bare message text;
+    /// the web app writes a `{text, sender_id, timestamp}` object. Decoding only
+    /// the object shape is what made this a whole-screen failure rather than a
+    /// cosmetic one: `Decodable` fails an array ATOMICALLY, so a single row
+    /// written by this app threw `typeMismatch` for the entire fetch, which
+    /// `subscribeToUserConversations` catches by publishing an EMPTY list. The
+    /// conversation list went blank and said nothing.
+    ///
+    /// So decode every shape the column can actually hold, and never throw —
+    /// a preview line is not worth losing the screen over.
+    private static func decodeLastMessage(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        fallbackTimestamp: Date
+    ) -> LastMessage? {
+        // 1. A real JSON object — what the web app writes, and what this app
+        //    writes back into its own cache.
+        if let object = try? container.decodeIfPresent(LastMessage.self, forKey: .last_message) {
+            return object
+        }
+
+        guard let text = try? container.decodeIfPresent(String.self, forKey: .last_message),
+              !text.isEmpty else {
+            return nil
+        }
+
+        // 2. An object that reached a text column and came back as its own JSON
+        //    source. Reparse rather than showing the user a brace.
+        if text.hasPrefix("{"), let data = text.data(using: .utf8),
+           let object = try? embeddedJSONDecoder.decode(LastMessage.self, from: data) {
+            return object
+        }
+
+        // 3. Plain text — this app's own writes. The sender is genuinely not
+        //    recorded in the column, so it stays empty rather than being guessed;
+        //    the row's "You:" prefix is suppressed for an unknown sender instead
+        //    of being wrong half the time. `last_activity` is written in the SAME
+        //    statement as `last_message`, so it is the correct timestamp here.
+        return LastMessage(text: text, sender_id: "", timestamp: fallbackTimestamp)
+    }
+
+    /// Only for case 2 above — an object that came back as a JSON string. The web
+    /// app writes its timestamp with `toISOString()`, which carries fractional
+    /// seconds; the same two-step fallback the rest of this app uses for Supabase
+    /// timestamps (see Models.swift and Schedule/Session.swift).
+    private static let embeddedJSONDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: text) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: text) { return date }
+            throw DecodingError.dataCorruptedError(
+                in: try decoder.singleValueContainer(),
+                debugDescription: "Unparseable last_message timestamp: \(text)"
+            )
+        }
+        return decoder
+    }()
 
     // Custom encoding to exclude resolvedDisplayName
     func encode(to encoder: Encoder) throws {

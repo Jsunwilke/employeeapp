@@ -26,7 +26,18 @@ class ChatManager: ObservableObject {
     // Supabase realtime channels
     private var conversationsChannel: RealtimeChannelV2?
     private var messagesChannel: RealtimeChannelV2?
-    private var currentMessageOffset = 0
+
+    /// True once the user has paged back into history, after which the newest-page
+    /// fetch stops being allowed to answer `hasMoreMessages`.
+    private var hasPagedBack = false
+    /// One "Load earlier" in flight at a time; two concurrent taps would both
+    /// compute the same offset and fetch the same page.
+    private var isLoadingMoreMessages = false
+    /// Ids of optimistic messages that the server has not confirmed yet. They are
+    /// excluded from the paging offset, and a failed send removes exactly its own
+    /// id — the previous code removed EVERY unconfirmed message on any failure,
+    /// so one failed send erased other sends still in flight.
+    private var pendingMessageIds: Set<String> = []
 
     // Debouncing
     private var messageUpdateDebouncer = Debouncer(delay: 0.1)
@@ -109,25 +120,37 @@ class ChatManager: ObservableObject {
         // 2. Set up real-time listener using Supabase.
         // Unsubscribe any previous channel first to avoid leaking it on reload.
         await conversationsChannel?.unsubscribe()
-        conversationsChannel = supabaseChatService.subscribeToUserConversations(userId: userId) { [weak self] updatedConversations in
+        conversationsChannel = supabaseChatService.subscribeToUserConversations(userId: userId) { [weak self] result in
             guard let self = self else { return }
 
-            // Resolve names and sort conversations
-            let resolvedConversations = self.resolveConversationNames(updatedConversations)
-            self.conversations = self.sortConversations(resolvedConversations)
-            self.isLoading = false
-            self.updateTotalUnreadCount()
+            switch result {
+            case .success(let updatedConversations):
+                // Resolve names and sort conversations
+                let resolvedConversations = self.resolveConversationNames(updatedConversations)
+                self.conversations = self.sortConversations(resolvedConversations)
+                self.isLoading = false
+                self.errorMessage = nil
+                self.updateTotalUnreadCount()
 
-            // Cache the updated data (without resolved names to keep cache clean)
-            self.cacheService.setCachedConversations(updatedConversations)
+                // Cache the updated data (without resolved names to keep cache clean)
+                self.cacheService.setCachedConversations(updatedConversations)
 
-            // Record reads
-            self.readCounter.recordRead(
-                operation: "subscribeToUserConversations",
-                collection: "conversations",
-                component: "ChatManager",
-                count: updatedConversations.count
-            )
+                // Record reads
+                self.readCounter.recordRead(
+                    operation: "subscribeToUserConversations",
+                    collection: "conversations",
+                    component: "ChatManager",
+                    count: updatedConversations.count
+                )
+
+            case .failure(let error):
+                // Keep whatever is already on screen — a failed fetch is not the
+                // same as having no conversations, and treating it as such is how
+                // this list used to blank itself silently. Still clear isLoading,
+                // or the spinner runs forever.
+                self.isLoading = false
+                self.errorMessage = "Couldn't load conversations: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -159,13 +182,24 @@ class ChatManager: ObservableObject {
     }
 
     func selectConversation(_ conversation: Conversation, markAsRead: Bool = true) async {
-        self.activeConversation = conversation
         await loadMessages(for: conversation)
 
         // Mark messages as read only if requested (i.e., user is actively viewing the conversation)
         if markAsRead, let userId = currentUserId {
+            // Zero it locally too. The server call only reached the UI via a
+            // realtime round trip, so opening a conversation left its unread pill
+            // and the tab bar badge sitting there until the echo arrived.
+            if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+                conversations[index].unread_counts[userId] = 0
+                updateTotalUnreadCount()
+            }
+
             Task {
-                try? await supabaseChatService.markMessagesAsRead(conversationId: conversation.id, userId: userId)
+                do {
+                    try await supabaseChatService.markMessagesAsRead(conversationId: conversation.id, userId: userId)
+                } catch {
+                    print("⚠️ mark-as-read failed for \(conversation.id): \(error)")
+                }
             }
         }
     }
@@ -173,10 +207,20 @@ class ChatManager: ObservableObject {
     // MARK: - Message Management
 
     func loadMessages(for conversation: Conversation) async {
+        let isSameConversation = activeConversation?.id == conversation.id
+
         self.activeConversation = conversation
         self.messagesLoading = true
-        self.currentMessageOffset = 0
-        self.hasMoreMessages = true
+        self.hasPagedBack = false
+
+        // Opening a DIFFERENT conversation clears the thread first. This array is
+        // shared across every chat screen, and it used to survive the switch — so
+        // the new conversation opened showing the PREVIOUS one's messages until
+        // its own fetch landed. Harmless-looking until a redesign draws a count
+        // from it, at which point the number is simply wrong.
+        if !isSameConversation {
+            self.messages = []
+        }
 
         // 1. Load from cache first for immediate display
         let cachedMessages = cacheService.getCachedMessages(conversationId: conversation.id)
@@ -194,45 +238,69 @@ class ChatManager: ObservableObject {
         // switching conversations leaks a channel each time and stale
         // callbacks keep firing.
         await messagesChannel?.unsubscribe()
-        messagesChannel = supabaseChatService.subscribeToConversationMessages(conversationId: conversation.id) { [weak self] updatedMessages in
+        messagesChannel = supabaseChatService.subscribeToConversationMessages(conversationId: conversation.id) { [weak self] result in
             guard let self = self else { return }
 
-            // Remove any temporary messages
-            self.messages.removeAll { $0.id.hasSuffix("_temp") }
+            // A late callback from a conversation the user has already left must
+            // not write into the thread they are now looking at.
+            guard self.activeConversation?.id == conversation.id else { return }
 
-            self.messages = updatedMessages
-            self.messagesLoading = false
+            switch result {
+            case .success(let page):
+                // MERGE rather than replace. Replacing threw away everything
+                // "Load earlier" had paged in, on every single realtime event.
+                self.messages = self.merge(page.messages, into: self.messages)
+                self.messagesLoading = false
 
-            // Cache the updated messages
-            self.cacheService.setCachedMessages(conversationId: conversation.id, messages: updatedMessages)
+                // Only the first page may answer "is there older history?". Once
+                // the user has paged back, `loadMoreMessages` owns that answer —
+                // otherwise reaching the very beginning of a thread and then
+                // receiving any message would re-offer "Load earlier" forever.
+                if !self.hasPagedBack {
+                    self.hasMoreMessages = page.hasMore
+                }
 
-            self.readCounter.recordRead(
-                operation: "subscribeToConversationMessages",
-                collection: "messages",
-                component: "ChatManager",
-                count: updatedMessages.count
-            )
+                // Cache the updated messages
+                self.cacheService.setCachedMessages(conversationId: conversation.id, messages: self.messages)
+
+                self.readCounter.recordRead(
+                    operation: "subscribeToConversationMessages",
+                    collection: "messages",
+                    component: "ChatManager",
+                    count: page.messages.count
+                )
+
+            case .failure(let error):
+                self.messagesLoading = false
+                self.errorMessage = "Couldn't load messages: \(error.localizedDescription)"
+            }
         }
     }
 
     func loadMoreMessages() async {
-        guard let conversation = activeConversation, hasMoreMessages else { return }
+        guard let conversation = activeConversation, hasMoreMessages, !isLoadingMoreMessages else { return }
+
+        isLoadingMoreMessages = true
+        defer { isLoadingMoreMessages = false }
 
         do {
-            currentMessageOffset += 30
+            // The offset is the number of CONFIRMED messages already loaded, not a
+            // page counter. Optimistic sends are excluded because they do not
+            // exist server-side and would shift every subsequent page by one.
+            let loadedCount = messages.filter { !pendingMessageIds.contains($0.id) }.count
+
             let result = try await supabaseChatService.getConversationMessages(
                 conversationId: conversation.id,
-                limit: 30,
-                offset: currentMessageOffset
+                limit: SupabaseChatService.messagePageSize,
+                offset: loadedCount
             )
 
-            // Prepend older messages
-            let allMessages = result.messages + messages
-            messages = allMessages
+            hasPagedBack = true
+            messages = merge(result.messages, into: messages)
             hasMoreMessages = result.hasMore
 
             // Update cache
-            cacheService.setCachedMessages(conversationId: conversation.id, messages: allMessages)
+            cacheService.setCachedMessages(conversationId: conversation.id, messages: messages)
 
             readCounter.recordRead(
                 operation: "loadMoreMessages",
@@ -245,13 +313,36 @@ class ChatManager: ObservableObject {
         }
     }
 
-    func sendMessage(text: String, type: ChatMessage.MessageType = .text, fileUrl: String? = nil) async {
+    /// Union by id, ordered oldest to newest. The server's copy of a message wins
+    /// over a local optimistic one, which is what retires an optimistic send now
+    /// that both carry the SAME id.
+    private func merge(_ incoming: [ChatMessage], into existing: [ChatMessage]) -> [ChatMessage] {
+        var byId: [String: ChatMessage] = [:]
+        for message in existing { byId[message.id] = message }
+        for message in incoming { byId[message.id] = message }
+
+        return byId.values.sorted {
+            if $0.timestamp == $1.timestamp { return $0.id < $1.id }
+            return $0.timestamp < $1.timestamp
+        }
+    }
+
+    /// Returns whether the message reached the server, so the composer can keep
+    /// the user's text on failure instead of throwing it away.
+    @discardableResult
+    func sendMessage(text: String, type: ChatMessage.MessageType = .text, fileUrl: String? = nil) async -> Bool {
         guard let conversation = activeConversation,
               let currentUserId = UserManager.shared.getCurrentUserIDUnified(),
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
         isSendingMessage = true
         errorMessage = nil
+
+        // The id is minted HERE and handed to the insert, so the optimistic
+        // message and the row the server stores are the same message. The merge
+        // then retires the optimistic copy by id instead of the old approach of
+        // deleting everything whose id ended in "_temp".
+        let messageId = UUID().uuidString.lowercased()
 
         do {
             // Get current user info from cache or fetch
@@ -259,7 +350,7 @@ class ChatManager: ObservableObject {
 
             // Create optimistic message for immediate display
             let optimisticMessage = ChatMessage(
-                id: UUID().uuidString + "_temp",
+                id: messageId,
                 sender_id: currentUserId,
                 sender_name: senderName,
                 text: text.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -283,9 +374,11 @@ class ChatManager: ObservableObject {
             )
 
             // Add optimistic message immediately
-            messages.append(optimisticMessage)
+            pendingMessageIds.insert(messageId)
+            messages = merge([optimisticMessage], into: messages)
 
-            _ = try await supabaseChatService.sendMessage(
+            try await supabaseChatService.sendMessage(
+                messageId: messageId,
                 conversationId: conversation.id,
                 senderId: currentUserId,
                 text: text.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -294,6 +387,8 @@ class ChatManager: ObservableObject {
                 senderName: senderName
             )
 
+            pendingMessageIds.remove(messageId)
+
             // Note: Real-time listener will update with the actual message
             readCounter.recordRead(
                 operation: "sendMessage",
@@ -301,13 +396,18 @@ class ChatManager: ObservableObject {
                 component: "ChatManager",
                 count: 1
             )
-        } catch {
-            // Remove optimistic message on error
-            messages.removeAll { $0.id.hasSuffix("_temp") }
-            errorMessage = "Failed to send message: \(error.localizedDescription)"
-        }
 
-        isSendingMessage = false
+            isSendingMessage = false
+            return true
+        } catch {
+            // Remove ONLY this message. Other sends may still be in flight.
+            pendingMessageIds.remove(messageId)
+            messages.removeAll { $0.id == messageId }
+            errorMessage = "Failed to send message: \(error.localizedDescription)"
+
+            isSendingMessage = false
+            return false
+        }
     }
 
     // MARK: - User Management
@@ -557,34 +657,88 @@ class ChatManager: ObservableObject {
         // Clear cache for this conversation
         cacheService.clearMessagesCache(conversationId: conversation.id)
 
-        // Reset pagination
-        currentMessageOffset = 0
-        hasMoreMessages = true
+        // Drop the loaded history so the refresh genuinely starts from the newest
+        // page. `hasMoreMessages` is deliberately NOT forced true here — the
+        // reload's own first page answers that now.
+        messages = []
+        pendingMessageIds.removeAll()
+        hasPagedBack = false
 
         // Reload messages
         await loadMessages(for: conversation)
     }
 
-    // MARK: - File Upload Methods
+    // MARK: - Attachments
 
-    func uploadImage(data: Data) async -> String? {
-        // Image upload not yet implemented for Supabase Chat
-        errorMessage = "Image upload not yet implemented"
-        return nil
+    /// Upload an image and post it as a message.
+    ///
+    /// This replaces `uploadImage`, which set "Image upload not yet implemented"
+    /// and returned nil. Note the caller ALSO threw the result away, so even a
+    /// working upload would not have posted anything — the two halves were
+    /// broken independently.
+    @discardableResult
+    func sendImageMessage(data: Data) async -> Bool {
+        await sendAttachment(data: data, fileExtension: "jpg", contentType: "image/jpeg", caption: "📷 Photo")
     }
 
-    func uploadFile(data: Data, fileName: String) async -> String? {
-        // File upload not yet implemented for Supabase Chat
-        errorMessage = "File upload not yet implemented"
-        return nil
+    /// Upload a file and post it as a message.
+    @discardableResult
+    func sendFileMessage(data: Data, fileName: String) async -> Bool {
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        return await sendAttachment(
+            data: data,
+            fileExtension: ext.isEmpty ? "dat" : ext,
+            contentType: Self.contentType(forExtension: ext),
+            caption: fileName
+        )
     }
 
-    deinit {
-        Task {
-            await conversationsChannel?.unsubscribe()
-            await messagesChannel?.unsubscribe()
+    private func sendAttachment(data: Data, fileExtension: String, contentType: String, caption: String) async -> Bool {
+        guard let conversation = activeConversation else { return false }
+        guard let organizationId = currentUserOrganizationId else {
+            errorMessage = "No organization found — can't attach files."
+            return false
+        }
+
+        errorMessage = nil
+
+        do {
+            let path = try await supabaseChatService.uploadAttachment(
+                organizationId: organizationId,
+                conversationId: conversation.id,
+                data: data,
+                fileExtension: fileExtension,
+                contentType: contentType
+            )
+
+            // The STORAGE PATH goes in file_url, not a signed URL — a signed URL
+            // stored in the row expires and leaves the message pointing at
+            // nothing. ChatAttachmentURL signs it at render time instead.
+            return await sendMessage(text: caption, type: .file, fileUrl: path)
+        } catch {
+            errorMessage = "Couldn't upload attachment: \(error.localizedDescription)"
+            return false
         }
     }
+
+    private static func contentType(forExtension ext: String) -> String {
+        switch ext {
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        case "heic": return "image/heic"
+        case "pdf": return "application/pdf"
+        case "txt": return "text/plain"
+        default: return "application/octet-stream"
+        }
+    }
+
+    // No deinit. This is a `static let shared` singleton, so deinit is
+    // unreachable — the one that used to be here captured self in a Task that
+    // outlives deinit (a Swift 6 error) to do teardown that could never run.
+    // Teardown happens in `cleanup()`, which now actually fires: see the
+    // previousTab comparison in MainEmployeeView's tab-change handler.
 }
 
 // MARK: - Chat Errors

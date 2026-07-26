@@ -331,9 +331,8 @@ struct MessageThreadView: View {
                 return
             }
             
-            // Send image through Stream Chat (handles upload internally)
-            _ = await chatManager.uploadImage(data: compressedData)
-            
+            await chatManager.sendImageMessage(data: compressedData)
+
             isUploadingMedia = false
         } catch {
             print("Error handling photo selection: \(error)")
@@ -362,9 +361,8 @@ struct MessageThreadView: View {
                     let data = try Data(contentsOf: url)
                     let fileName = url.lastPathComponent
                     
-                    // Send file through Stream Chat (handles upload internally)
-                    _ = await chatManager.uploadFile(data: data, fileName: fileName)
-                    
+                    await chatManager.sendFileMessage(data: data, fileName: fileName)
+
                     isUploadingMedia = false
                 } catch {
                     print("Error reading file: \(error)")

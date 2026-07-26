@@ -567,6 +567,10 @@ struct MainEmployeeView: View {
     @StateObject private var chatManager = ChatManager.shared
     @ObservedObject private var authService = SupabaseAuthService.shared
 
+    /// The tab we are leaving. `onChange` sees the observed object already holding
+    /// the NEW value, so the outgoing tab has to be tracked here.
+    @State private var previousTab: String = TabBarManager.shared.selectedTab
+
     // Fixed manager features
     let managerFeatures: [FeatureItem] = [
         FeatureItem(id: "timeOffApprovals", title: "Time Off Approvals", systemImage: "checkmark.circle.fill", description: "Approve or deny time off requests"),
@@ -654,10 +658,18 @@ struct MainEmployeeView: View {
             }
         }
         .onChange(of: tabBarManager.selectedTab) { newTab in
-            // Clean up chat if we're leaving it
-            if tabBarManager.selectedTab == "chat" && newTab != "chat" {
+            // Clean up chat if we're leaving it.
+            //
+            // This compared `tabBarManager.selectedTab` against `newTab`, but by
+            // the time onChange runs the observed object ALREADY holds the new
+            // value — so the test read "newTab == chat && newTab != chat" and
+            // could never be true. cleanup() had therefore never run once, which
+            // also meant the chat cache was never pruned. `previousTab` is
+            // captured explicitly rather than read back off the manager.
+            if previousTab == "chat" && newTab != "chat" {
                 ChatManager.shared.cleanup()
             }
+            previousTab = newTab
             // Leaving home tears down its NavigationView but NOT this state, so
             // a destination left set here re-pushed itself the next time home
             // was selected — tap a shift, switch to Tasks, come back, and the

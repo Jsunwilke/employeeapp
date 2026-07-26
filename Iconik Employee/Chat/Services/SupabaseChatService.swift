@@ -3,6 +3,11 @@ import Supabase
 
 // MARK: - Supabase Chat Service Protocol
 
+/// `@MainActor` because the only conformer is, and every completion it hands back
+/// mutates `@Published` state on `ChatManager`. Without it the conformance
+/// "crosses into main actor-isolated code", which is a warning today and an error
+/// in Swift 6.
+@MainActor
 protocol SupabaseChatServiceProtocol {
     // Conversation Management
     func createConversation(participants: [String], type: Conversation.ConversationType, customName: String?) async throws -> String
@@ -10,13 +15,13 @@ protocol SupabaseChatServiceProtocol {
     func updateConversationName(conversationId: String, newName: String) async throws
 
     // Messaging
-    func sendMessage(conversationId: String, senderId: String, text: String, type: ChatMessage.MessageType, fileUrl: String?, senderName: String) async throws -> String
+    func sendMessage(messageId: String, conversationId: String, senderId: String, text: String, type: ChatMessage.MessageType, fileUrl: String?, senderName: String) async throws -> String
     func getConversationMessages(conversationId: String, limit: Int, offset: Int) async throws -> (messages: [ChatMessage], hasMore: Bool)
     func markMessagesAsRead(conversationId: String, userId: String) async throws
 
     // Real-time Listeners
-    func subscribeToUserConversations(userId: String, completion: @escaping ([Conversation]) -> Void) -> RealtimeChannelV2
-    func subscribeToConversationMessages(conversationId: String, completion: @escaping ([ChatMessage]) -> Void) -> RealtimeChannelV2
+    func subscribeToUserConversations(userId: String, completion: @escaping (Result<[Conversation], Error>) -> Void) -> RealtimeChannelV2
+    func subscribeToConversationMessages(conversationId: String, completion: @escaping (Result<(messages: [ChatMessage], hasMore: Bool), Error>) -> Void) -> RealtimeChannelV2
 
     // User Management
     func getOrganizationUsers(organizationId: String) async throws -> [ChatUser]
@@ -118,9 +123,11 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
 
     // MARK: - Messaging
 
-    func sendMessage(conversationId: String, senderId: String, text: String, type: ChatMessage.MessageType, fileUrl: String?, senderName: String) async throws -> String {
-        let messageId = UUID().uuidString.lowercased()
-
+    /// `messageId` is supplied by the caller so the optimistic message shown in
+    /// the thread and the row stored here are the same message, and the merge can
+    /// retire the optimistic copy by id.
+    @discardableResult
+    func sendMessage(messageId: String, conversationId: String, senderId: String, text: String, type: ChatMessage.MessageType, fileUrl: String?, senderName: String) async throws -> String {
         struct MessageInsert: Encodable {
             let id: String
             let conversation_id: String
@@ -167,28 +174,65 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
             .eq("id", value: conversationId)
             .execute()
 
-        // Increment unread counts for other participants
-        // Note: This requires a PostgreSQL function or RPC call
-        // For now, we'll handle this on the client side when marking as read
+        // Raise everyone else's unread count. Without this a message sent from
+        // this app never moved anyone's badge — only web-sent messages did.
+        //
+        // It goes through an RPC rather than the web app's read-modify-write of
+        // the whole jsonb blob, because that pattern loses an increment whenever
+        // two people send at once (both read the same counts, both write back
+        // their own +1, last writer wins). The RPC does it in one statement with
+        // jsonb_set, matching the five chat RPCs already applied to this DB.
+        //
+        // A failure here must not fail the SEND — the message is already stored.
+        do {
+            struct IncrementParams: Encodable {
+                let conversation_id: String
+                let sender_id: String
+            }
+            try await supabase.rpc(
+                "increment_conversation_unread",
+                params: IncrementParams(conversation_id: conversationId, sender_id: senderId)
+            ).execute()
+        } catch {
+            print("⚠️ Unread increment failed (message was still sent): \(error)")
+        }
 
         return messageId
     }
 
+    /// Page BACKWARD from the newest message.
+    ///
+    /// This used to order ascending and range forward, which meant `offset: 0`
+    /// returned the hundred OLDEST messages in the conversation. In any thread
+    /// longer than a page the recent messages were unreachable and a message you
+    /// had just sent never appeared, because every refresh re-fetched the same
+    /// ancient rows. "Load earlier" made it worse by advancing the offset, which
+    /// under ascending order fetches NEWER messages, and then prepending them.
+    ///
+    /// A thread opens on the most recent messages and pages back into history, so
+    /// the query is ordered DESCENDING and the offset counts backward from the
+    /// newest row. The page is reversed before returning, because the view still
+    /// renders oldest-to-newest.
+    ///
+    /// `offset` must be the number of messages already loaded — not a page
+    /// counter — or pages overlap when the first page and later pages differ in
+    /// size. `range` is inclusive at both ends, so asking for `limit` more rows
+    /// than needed is the has-more probe; no separate `.limit` is used, because
+    /// `range` overrides it.
     func getConversationMessages(conversationId: String, limit: Int = 50, offset: Int = 0) async throws -> (messages: [ChatMessage], hasMore: Bool) {
-        let messages: [ChatMessage] = try await supabase
+        let page: [ChatMessage] = try await supabase
             .from("messages")
             .select()
             .eq("conversation_id", value: conversationId)
-            .order("timestamp", ascending: true)
-            .limit(limit + 1) // Fetch one extra to check if there are more
-            .range(from: offset, to: offset + limit)
+            .order("timestamp", ascending: false)
+            .range(from: offset, to: offset + limit) // limit + 1 rows: the extra is the probe
             .execute()
             .value
 
-        let hasMore = messages.count > limit
-        let resultMessages = hasMore ? Array(messages.prefix(limit)) : messages
+        let hasMore = page.count > limit
+        let window = hasMore ? Array(page.prefix(limit)) : page
 
-        return (resultMessages, hasMore)
+        return (window.reversed(), hasMore)
     }
 
     func markMessagesAsRead(conversationId: String, userId: String) async throws {
@@ -209,7 +253,14 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
 
     // MARK: - Real-time Listeners
 
-    func subscribeToUserConversations(userId: String, completion: @escaping ([Conversation]) -> Void) -> RealtimeChannelV2 {
+    /// Reports FAILURE rather than an empty list. Publishing `[]` on a failed
+    /// fetch is exactly how the conversation list went blank: one row whose
+    /// `last_message` did not match the model threw, `Decodable` fails an array
+    /// atomically, and the whole screen emptied with nothing but a console print.
+    /// The decode is tolerant now (see `Conversation.decodeLastMessage`), but the
+    /// reporting stays honest — a failure must never be presentable as "you have
+    /// no conversations".
+    func subscribeToUserConversations(userId: String, completion: @escaping (Result<[Conversation], Error>) -> Void) -> RealtimeChannelV2 {
         let channelKey = "conversations-user-\(userId)"
         let channel = supabase.realtimeV2.channel(channelKey)
 
@@ -226,25 +277,12 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
             // Initial fetch — hop to the main actor like the change-stream
             // path below, since completion mutates @Published state on
             // ChatManager (@MainActor).
-            do {
-                let conversations = try await getUserConversations(userId: userId)
-                await MainActor.run { completion(conversations) }
-            } catch {
-                print("❌ Error on initial conversations fetch: \(error)")
-                await MainActor.run { completion([]) }
-            }
+            await fetchConversations(userId: userId, completion: completion, context: "initial")
 
             // Listen for changes
             Task {
                 for await _ in changes {
-                    do {
-                        let conversations = try await self.getUserConversations(userId: userId)
-                        await MainActor.run {
-                            completion(conversations)
-                        }
-                    } catch {
-                        print("❌ Error fetching conversations after realtime update: \(error)")
-                    }
+                    await self.fetchConversations(userId: userId, completion: completion, context: "realtime")
                 }
             }
         }
@@ -252,7 +290,34 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
         return channel
     }
 
-    func subscribeToConversationMessages(conversationId: String, completion: @escaping ([ChatMessage]) -> Void) -> RealtimeChannelV2 {
+    private func fetchConversations(
+        userId: String,
+        completion: @escaping (Result<[Conversation], Error>) -> Void,
+        context: String
+    ) async {
+        do {
+            let conversations = try await getUserConversations(userId: userId)
+            await MainActor.run { completion(.success(conversations)) }
+        } catch {
+            print("❌ Error on \(context) conversations fetch: \(error)")
+            await MainActor.run { completion(.failure(error)) }
+        }
+    }
+
+    /// One page size for the whole feature. The initial load and "Load earlier"
+    /// MUST agree on it: they used to be 100 and 30, so the first "Load earlier"
+    /// asked for rows 30-60 of an already-loaded 100 and returned duplicates.
+    static let messagePageSize = 50
+
+    /// The completion carries `hasMore` as well, because `hasMoreMessages` used to
+    /// be forced true on every load and only ever corrected by "Load earlier" —
+    /// so a two-message conversation offered to load earlier ones.
+    ///
+    /// It reports FAILURE rather than an empty page. Publishing `[]` on a failed
+    /// fetch is what made a decode error look like an empty conversation, and a
+    /// caller that is never told cannot clear its loading flag — the permanent
+    /// spinner AMB.4 shipped twice.
+    func subscribeToConversationMessages(conversationId: String, completion: @escaping (Result<(messages: [ChatMessage], hasMore: Bool), Error>) -> Void) -> RealtimeChannelV2 {
         let channelKey = "messages-\(conversationId)"
         let channel = supabase.realtimeV2.channel(channelKey)
 
@@ -268,30 +333,81 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
 
             // Initial fetch — hop to the main actor like the change-stream
             // path below (completion mutates @Published state on ChatManager).
-            do {
-                let (messages, _) = try await getConversationMessages(conversationId: conversationId, limit: 100, offset: 0)
-                await MainActor.run { completion(messages) }
-            } catch {
-                print("❌ Error on initial messages fetch: \(error)")
-                await MainActor.run { completion([]) }
-            }
+            await fetchNewestPage(conversationId: conversationId, completion: completion, context: "initial")
 
             // Listen for changes
             Task {
                 for await _ in changes {
-                    do {
-                        let (messages, _) = try await self.getConversationMessages(conversationId: conversationId, limit: 100, offset: 0)
-                        await MainActor.run {
-                            completion(messages)
-                        }
-                    } catch {
-                        print("❌ Error fetching messages after realtime update: \(error)")
-                    }
+                    await self.fetchNewestPage(conversationId: conversationId, completion: completion, context: "realtime")
                 }
             }
         }
 
         return channel
+    }
+
+    /// Always the NEWEST page. The caller merges it into whatever history is
+    /// already on screen rather than replacing — a realtime event used to
+    /// overwrite the whole array, which threw away everything "Load earlier" had
+    /// paged in.
+    private func fetchNewestPage(
+        conversationId: String,
+        completion: @escaping (Result<(messages: [ChatMessage], hasMore: Bool), Error>) -> Void,
+        context: String
+    ) async {
+        do {
+            let page = try await getConversationMessages(
+                conversationId: conversationId,
+                limit: Self.messagePageSize,
+                offset: 0
+            )
+            await MainActor.run { completion(.success(page)) }
+        } catch {
+            print("❌ Error on \(context) messages fetch: \(error)")
+            await MainActor.run { completion(.failure(error)) }
+        }
+    }
+
+    // MARK: - Attachments
+
+    /// Bucket created by supabase/drafts/chat_attachments_bucket.sql.
+    static let attachmentsBucket = "chat-attachments"
+
+    /// Uploads an attachment and returns its STORAGE PATH.
+    ///
+    /// The path, not a URL — matching how Equipment stores photos, which is the
+    /// newer of the two conventions in this app and the only one that survives a
+    /// bucket staying private. (The older convention, used by the daily-report
+    /// screens, bakes a one-year signed URL into the database row; when that year
+    /// is up the row points at nothing.)
+    ///
+    /// The layout is {organization_id}/{conversation_id}/{uuid}.{ext} because the
+    /// bucket's read policy checks BOTH segments — org membership and
+    /// participation in that conversation. Changing this layout without changing
+    /// that policy will make every upload fail the WITH CHECK.
+    func uploadAttachment(
+        organizationId: String,
+        conversationId: String,
+        data: Data,
+        fileExtension: String,
+        contentType: String
+    ) async throws -> String {
+        let fileName = "\(UUID().uuidString.lowercased()).\(fileExtension)"
+        let path = "\(organizationId)/\(conversationId)/\(fileName)"
+
+        try await supabase.storage
+            .from(Self.attachmentsBucket)
+            .upload(path, data: data, options: FileOptions(contentType: contentType))
+
+        return path
+    }
+
+    /// Signs a stored attachment path for display. One hour, matching
+    /// SupabaseImageView and the equipment photo path.
+    func signedAttachmentURL(path: String) async throws -> URL {
+        try await supabase.storage
+            .from(Self.attachmentsBucket)
+            .createSignedURL(path: path, expiresIn: 3600)
     }
 
     // MARK: - User Management
