@@ -95,13 +95,35 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
         return conversationId
     }
 
+    /// THIS QUERY HAS NEVER SUCCEEDED, and it is why chat has been dead since
+    /// September 2025 — not the decode, which was a real but secondary bug behind
+    /// this one.
+    ///
+    /// It was `.contains("participants", value: [userId])`. `contains` interpolates
+    /// `value.rawValue`, and a Swift ARRAY's raw value is a POSTGRES ARRAY literal:
+    /// `participants=cs.{4e37ab31-…}`. But `participants` is JSONB, so Postgres
+    /// tried to parse `{4e37ab31-…}` as JSON and answered
+    ///
+    ///     invalid input syntax for type json — Token "4e37ab31" is invalid
+    ///
+    /// every single time. jsonb containment needs a JSON array: `["4e37ab31-…"]`.
+    /// Verified both forms against the live database, and the correct one matches
+    /// six real conversations for the operator's own id.
+    ///
+    /// The failure was invisible because the subscribe path caught it and published
+    /// an EMPTY list, so the screen showed "No conversations" rather than an error.
+    /// It only surfaced when this phase made a failed fetch say so.
+    ///
+    /// `filter` is used rather than `contains` deliberately: it takes the value as
+    /// a verbatim String, so what is written here is exactly what is sent, with no
+    /// raw-value conversion in between to get this wrong again.
     func getUserConversations(userId: String) async throws -> [Conversation] {
-        // Query conversations where user is a participant
-        // Note: Supabase doesn't have array-contains, so we use a PostgreSQL function or filter client-side
+        let participantJSON = "[\"\(userId)\"]"
+
         let response: [Conversation] = try await supabase
             .from("conversations")
             .select()
-            .contains("participants", value: [userId])
+            .filter("participants", operator: "cs", value: participantJSON)
             .order("last_activity", ascending: false)
             .execute()
             .value
@@ -270,11 +292,21 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
         let channelKey = "conversations-user-\(userId)"
         let channel = supabase.realtimeV2.channel(channelKey)
 
+        // NO FILTER, deliberately. This carried `participants=cs.{\(userId)}` — the
+        // same malformed jsonb containment as getUserConversations above, AND `cs`
+        // is not an operator Realtime supports at all (its filter grammar is
+        // eq/neq/gt/gte/lt/lte/in). A binding the server rejects means no
+        // conversation change ever arrives, which is the other half of why this
+        // screen never updated.
+        //
+        // Subscribing unfiltered is safe and correct here: RLS already restricts
+        // conversations rows to participants, and the callback re-fetches the whole
+        // list on any event rather than reading the payload, so a broader trigger
+        // costs one query on a table this user can see a handful of rows in.
         let changes = channel.postgresChange(
             AnyAction.self,
             schema: "public",
-            table: "conversations",
-            filter: "participants=cs.{\(userId)}" // Contains filter
+            table: "conversations"
         )
 
         Task {
