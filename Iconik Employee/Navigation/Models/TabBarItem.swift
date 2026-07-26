@@ -229,13 +229,6 @@ class TabBarManager: ObservableObject {
         }
     }
     
-    func getQuickAccessItems() -> [TabBarItem] {
-        return configuration.items
-            .filter { $0.isQuickAccess }
-            .sorted { $0.order < $1.order }
-            .prefix(7) // Allow up to 7 items total
-            .map { $0 }
-    }
     
     func getQuickAccessItemsExcludingScan() -> [TabBarItem] {
         let maxItems = getMaxItemsForDevice()
@@ -251,11 +244,4 @@ class TabBarManager: ObservableObject {
         return UIDevice.current.userInterfaceIdiom == .pad ? 10 : 6
     }
     
-    func getScanItem() -> TabBarItem? {
-        // Don't return scan item on iPad since they don't have NFC
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            return nil
-        }
-        return configuration.items.first { $0.id == "scan" }
-    }
 }

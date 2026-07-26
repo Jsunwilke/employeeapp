@@ -3,9 +3,13 @@
 //
 //  A FLOATING GLASS CAPSULE, converted 2026-07-25 from the opaque full-width slab
 //  this had been since NAV.1. The design was approved on a device after four
-//  rounds of operator feedback; the mockup it was ported from is
-//  DesignLab/Mockups/TabBarMockup.swift and STAYS until the port is confirmed on
-//  both devices, because a validation reference outlives the phase, not the port.
+//  rounds of operator feedback.
+//
+//  The mockup it was ported from (DesignLab/Mockups/TabBarMockup.swift) was
+//  DELETED at the phase's close, once the operator had confirmed both device
+//  smokes — a validation reference outlives its VALIDATION, and that validation is
+//  complete. It is in git history at b5cac33's parent if this ever needs diffing
+//  against the design that was approved.
 //
 //  WHY THIS FILE WAS THE LAST THING IN THE APP TO BE CONVERTED, which is the part
 //  worth remembering: it belonged to NO PHASE. The AMB arc's phase list is
@@ -89,6 +93,28 @@ enum TabBarMetrics {
     static var clearance: CGFloat { height + bottomInset + 10 }
 }
 
+// MARK: - Clearance
+//
+// THE RULE, because three separate rounds of operator smokes and two code reviews
+// all found the same mistake in different places:
+//
+//   A safe-area inset only insets THE VIEW IT IS APPLIED TO. It does not travel
+//   into a navigation container from outside, and it does not travel out of one
+//   into the screens that container pushes.
+//
+// So every screen that can be covered by the floating bar needs its own clearance,
+// and it must be applied INSIDE its own navigation container:
+//
+//   shell-wrapped feature   the shell does it (MainEmployeeView.featureContainer)
+//   self-nav feature        the feature does it, inside its own NavigationView
+//   PUSHED screen           the pushed screen does it — a container's root inset
+//                           is not inherited by what it pushes
+//   bottom-anchored chrome   plain bottom padding, not an inset, or it fights
+//                           whatever ignoresSafeArea it already has
+//
+// Getting this wrong is SILENT: the screen looks fine until something sits at the
+// bottom of it. Every wrong version of it in this phase built cleanly.
+
 extension View {
     /// Leaves room at the bottom for the floating bar, so a screen's last row can
     /// be scrolled clear of it while content still travels underneath.
@@ -159,8 +185,11 @@ struct BottomTabBar: View {
 
     private var items: [TabBarItem] { tabBarManager.getQuickAccessItemsExcludingScan() }
 
-    /// Scan on iPhone, Home on iPad — never both. iPads have no NFC, which is why
-    /// `getScanItem()` returns nil there, so the centre slot goes to Home instead.
+    /// Scan on iPhone, Home on iPad — never both. iPads have no NFC, so Scan does
+    /// not exist there at all and the centre slot goes to Home instead. That rule
+    /// used to live in `TabBarManager.getScanItem()`, which returned nil on iPad;
+    /// this view decides it directly now, and that method was deleted with its
+    /// last caller.
     private var centreID: String { isIPad ? "home" : "scan" }
 
     private var centreSymbol: String {

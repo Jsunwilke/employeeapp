@@ -910,7 +910,18 @@ struct ShiftDetailView: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.top, 12)
+        // Room for the app's floating tab bar (AMB.4), which overlays every screen
+        // including a pushed one. The clearance goes on the CONTENT rather than the
+        // container: the bar's material still runs to the bottom of the screen (it
+        // ignores the safe area on purpose), but the buttons sit above the capsule
+        // instead of underneath it.
+        //
+        // It cannot come from the shell. `tabBarClearance` insets a navigation
+        // container's ROOT, and this is a PUSHED screen — the root's safe area is
+        // not this view's. Any pushed screen with something anchored to the bottom
+        // has to ask for this itself.
+        .padding(.bottom, 12 + TabBarMetrics.clearance)
         .background(.ultraThinMaterial)
         .clipShape(TopRoundedRectangle(radius: 24))
         .ignoresSafeArea(edges: .bottom)

@@ -129,6 +129,11 @@ struct AllFeaturesView: View {
             }
         }
         .listStyle(InsetGroupedListStyle())
+        // Room for the floating tab bar (AMB.4). Needed here because this is a
+        // PUSHED screen: the shell's clearance insets a navigation container's root,
+        // and a pushed view does not inherit it — without this the last row of the
+        // list cannot be scrolled clear of the capsule.
+        .tabBarClearance()
         .navigationTitle("All Features")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

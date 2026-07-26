@@ -75,9 +75,18 @@ class MainEmployeeViewModel: ObservableObject {
     @Published var upcomingShifts: [Session] = []
     @Published var allSessions: [Session] = [] // Store all sessions for coworker data
     @Published var isLoadingSchedule: Bool = false
-    /// Distinct from `isLoadingSchedule`, which blanks the widget for its first
-    /// paint. A refresh keeps the rows on screen and only holds the pull control.
+    /// Holds the PULL CONTROL only. Distinct from `isLoadingSchedule`, which blanks
+    /// the widget for its first paint — a refresh keeps the rows on screen.
+    ///
+    /// The listener clears this when data lands, and it cannot double as the mutex
+    /// for that exact reason: the listener fires on ANY realtime delivery, so an
+    /// unrelated edit somewhere in the org would clear it and re-open the guard
+    /// mid-refresh, allowing the concurrent re-subscribe that leaks a channel.
     @Published var isRefreshing: Bool = false
+
+    /// The mutex. Only `refreshUpcomingEvents` touches it, and only via `defer`, so
+    /// nothing outside that function can re-open the guard while it is running.
+    private var refreshInFlight = false
 
     // Weather service and data
     private let weatherService = WeatherService()
@@ -487,9 +496,13 @@ class MainEmployeeViewModel: ObservableObject {
         // before the first has recorded one, then overwrite it. The first
         // channel is then never unsubscribed and its change loop lives for the
         // rest of the process, refetching the whole org on every edit.
-        guard !isRefreshing else { return }
+        guard !refreshInFlight else { return }
+        refreshInFlight = true
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            refreshInFlight = false
+            isRefreshing = false
+        }
 
         // Drop the guard flag ONLY — do not call cleanup() here. cleanup()
         // enqueues its unsubscribe on a detached Task while fetchUpcomingEvents

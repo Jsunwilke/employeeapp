@@ -1040,11 +1040,6 @@ struct CapturaSportsView: View {
                     iPadView
                 }
             }
-        // Room for the app's floating bar. Needed now that this screen no longer
-        // hides it, and it has to be applied here rather than by the shell: the
-        // NavigationView belongs to this feature, and a safe-area inset applied from
-        // outside one does nothing.
-        .tabBarClearance()
         .onAppear {
             isViewVisible = true
             // The tab bar is NO LONGER HIDDEN HERE (AMB.4, 2026-07-26, with the
@@ -2049,6 +2044,11 @@ struct CapturaSportsView: View {
                 }
             }
         }
+        // Room for the app's floating bar, INSIDE this feature's own navigation
+        // container. It was applied outside it, which was wrong twice: a no-op on
+        // iPad (this screen, the one that just stopped hiding the bar), and a
+        // doubled inset on iPhone where the shell already supplies one.
+        .tabBarClearance()
         .navigationViewStyle(DoubleColumnNavigationViewStyle())
         .onAppear {
             isViewVisible = true

@@ -210,10 +210,6 @@ private struct DesignLabRunner: View {
     }
 
     var body: some View {
-        // The switcher normally lives bottom-right, which is out of the way for a
-        // scrolling mockup and directly ON TOP of one whose whole subject is
-        // anchored to the bottom edge. The tab-bar mockup could not be seen at
-        // all underneath it. Bottom-anchored mockups move it to the top instead.
         ZStack(alignment: .bottomTrailing) {
             current.view
                 .id(current)

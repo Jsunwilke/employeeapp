@@ -1333,11 +1333,6 @@ struct FPSportsRosterView_iPad: View {
                     iPadView
                 }
             }
-        // Room for the app's floating bar. Now that this screen no longer hides the
-        // bar, its bottom strip would otherwise sit under the capsule — and the
-        // shell cannot supply this, because the NavigationView belongs to this
-        // feature and an inset applied from outside one does nothing.
-        .tabBarClearance()
         .onAppear {
             isViewVisible = true
             // The tab bar is NO LONGER HIDDEN HERE (AMB.4, operator-authorised
@@ -2643,6 +2638,11 @@ struct FPSportsRosterView_iPad: View {
                 }
             }
         }
+        // Room for the app's floating bar, INSIDE this feature's own navigation
+        // container. It was applied outside it, which was wrong twice: a no-op on
+        // iPad (this screen, the one that just stopped hiding the bar), and a
+        // doubled inset on iPhone where the shell already supplies one.
+        .tabBarClearance()
         .navigationViewStyle(DoubleColumnNavigationViewStyle())
         .onAppear {
             isViewVisible = true
