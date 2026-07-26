@@ -514,9 +514,41 @@ taken:
       under the button, none outside the bar, no overlaps, and the pill inside the
       capsule for every selection.
 
-      SIZE: the capsule is 64pt (KeepUp's is 60) so the button can be 52pt with
-      6pt clear above and below, and its glyph is 40pt against 17pt for every
-      other icon — well over twice the size.
+      SIZE, after a third round ("larger by at least 30%"): the glyph is 52pt
+      against 17pt for every other icon — three times the size — in a 56pt disc
+      inside a 76pt slot. The capsule grew to 68pt (KeepUp's is 60) to contain it
+      with 6pt clear above and below, because it has to stay centred INSIDE the
+      glass rather than breaking its edge.
+
+      FROST IS 50% (operator, 2026-07-25). It was first shipped as a fixed
+      `.glassEffect(.regular)`, which was too much; rather than guess again the
+      mockup got a slider and the operator returned a number. The base is the
+      clearest glass each OS gives and the dial adds diffusion behind it, so the
+      value transfers between iOS 26 and the pre-26 fallback. It becomes a
+      constant in the real bar — no control ships.
+
+      THE TWO BARS ARE NOW ONE BAR (operator, 2026-07-25: "the ipad bar should be
+      exactly like the iphone except the scan button is a home button"). Today they
+      are genuinely different — different icon sizes, a notched hairline on iPad, a
+      centre Home on one and a centre Scan on the other. In the proposal they share
+      the capsule, the height, the cell maths, the 17pt icons, the 52pt centre
+      glyph and the frost. What remains different is only what the app's behaviour
+      requires:
+        - the centre button's DESTINATION (Scan on iPhone, Home on iPad — iPads
+          have no NFC, which is why Scan does not exist there);
+        - its colour: Home takes the company blue because it is the container
+          rather than a feature, exactly as the dashboard's wash does;
+        - the item cap the device allows (6 vs 10, from getMaxItemsForDevice);
+        - a 560pt width cap on iPad so the row stays phone-sized instead of
+          sprawling across a 13-inch screen. That is KeepUp's own number and it
+          lands in the same place: ten items on iPad give 45.6pt cells against
+          45.2pt for six items on a 375pt iPhone, so the two bars are the same
+          DENSITY and not merely the same design.
+      One deliberate symbol swap to make them match: the iPad centre uses
+      `house.circle.fill` rather than the live `house.fill`. Scan's symbol is a
+      filled circle that fills its disc at 52pt; a plain house at that size is a
+      wide, short glyph that would either clip or float, and the buttons would not
+      read alike. One line to revert.
       ONE CONSEQUENCE, named: today's Scan glyph is 60pt on a 50pt circle, a
       deliberate overrun that worked because the button stood proud of the bar.
       Centred inside the capsule an overrun would spill past the glass, so the

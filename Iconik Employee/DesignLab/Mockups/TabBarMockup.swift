@@ -71,9 +71,20 @@
 
 import SwiftUI
 
-/// The two genuinely different bars this app ships. Not a reflow of each other:
-/// iPhone has a permanent centre Scan and no Home; iPad has a centre Home and no
-/// Scan at all.
+/// Which device's bar is being previewed.
+///
+/// TODAY these are two genuinely different bars — not a reflow of each other. The
+/// iPhone has a permanent centre Scan and no Home at all; the iPad has a
+/// prominent centre Home, no Scan (no NFC), different icon sizes, and a top
+/// hairline notched around the circle.
+///
+/// IN THE PROPOSAL THEY ARE THE SAME BAR (operator, 2026-07-25: "the ipad bar
+/// should be exactly like the iphone except the scan button is a home button").
+/// Same capsule, same 68pt height, same cell maths, same 17pt icons, same 52pt
+/// centre glyph, same frost. The only differences left are the ones the app's own
+/// behaviour requires: which destination the centre button goes to, its colour
+/// (Home is the container, not a feature, so it takes the brand blue), the item
+/// cap the device allows, and a width cap that keeps the iPad row phone-sized.
 enum TabBarMockupLayout: String, CaseIterable, Identifiable {
     case iPhone, iPad
     var id: String { rawValue }
@@ -91,9 +102,10 @@ struct TabBarMockup: View {
     @State private var selected = "chat"
     @State private var unread = 3
     @State private var clockedIn = true
-    /// Starts near the middle so there is room to go either way. The fixed
-    /// `.regular` the operator called too frosted sits at about 1.0.
-    @State private var frost: Double = 0.45
+    /// SETTLED AT 50% (operator, 2026-07-25). Left as a slider only so the value
+    /// can be sanity-checked alongside the other changes in the same sitting; the
+    /// real bar gets a constant.
+    @State private var frost: Double = 0.5
 
     /// Real feature ids, so `FeatureTheme` returns the colour the converted bar
     /// would actually use — including the ones that fall through to blue today.
@@ -252,7 +264,7 @@ struct TabBarMockup: View {
             .font(.caption2)
             .foregroundStyle(.tertiary)
 
-            Text("Scroll the page while you drag it — frost only shows its worth against something moving underneath. TELL ME THE NUMBER and I will bake it in as a constant; the slider does not ship. For reference, the version you called too frosted was about 100%.")
+            Text("SETTLED AT 50%. The slider stays only so you can sanity-check it while judging the rest; the real bar gets a constant, not a control. Drag it if you want to revisit — otherwise leave it.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -309,14 +321,27 @@ private struct GlassTabBarPreview: View {
     let clockedIn: Bool
     let frost: Double
 
-    /// iPad caps the row rather than sprawling across a 13-inch screen — KeepUp
-    /// does the same at 560 for six items; this allows up to ten.
-    private var maxWidth: CGFloat { layout == .iPad ? 720 : .infinity }
+    /// EXACTLY LIKE THE iPHONE, which is why the iPad row is capped rather than
+    /// spread across a 13-inch screen (operator, 2026-07-25 — the iPad bar should
+    /// be the iPhone's with Home in place of Scan).
+    ///
+    /// 560 is KeepUp's own number, chosen there so its items "stay phone-sized
+    /// instead of sprawling". It works out identical here: at the iPad's maximum
+    /// of ten items a cell is 45.6pt, against 45.2pt on a 375pt iPhone at its
+    /// maximum of six. So the two bars are the same density, not merely the same
+    /// design. Say the word if you want it wider on a big iPad.
+    private var maxWidth: CGFloat { layout == .iPad ? 560 : .infinity }
 
     /// The centre button that straddles the capsule: Scan on iPhone, Home on
     /// iPad. Never both — iPads have no NFC, so Scan does not exist there.
     private var centreID: String { layout == .iPad ? "home" : "scan" }
-    private var centreSymbol: String { layout == .iPad ? "house.fill" : "wave.3.right.circle.fill" }
+    /// Both are the `.circle.fill` variant on purpose. Scan's symbol is a filled
+    /// circle, so at 52pt it reads as a solid disc that fills the button; a plain
+    /// `house.fill` at the same size is a wide, short glyph that would either clip
+    /// the disc or float inside it, and the two bars would not match. The live iPad
+    /// bar uses `house.fill`; this is a deliberate swap for parity, and it is one
+    /// line to put back.
+    private var centreSymbol: String { layout == .iPad ? "house.circle.fill" : "wave.3.right.circle.fill" }
 
     /// Home is the container, not a feature, so it takes the brand colour; Scan
     /// takes its palette colour like any other feature.
@@ -519,7 +544,8 @@ private struct GlassTabBarPreview: View {
                     // live bar's 60pt glyph on a 50pt circle, without overrunning
                     // it, since centred inside the capsule an overrun would spill
                     // past the glass.
-                    .font(.system(size: layout == .iPad ? 40 : 52, weight: .semibold))
+                    // Identical on both bars — see `centreSymbol`.
+                    .font(.system(size: 52, weight: .semibold))
                     .foregroundStyle(isSelected ? Color.white : centreTint)
             }
             // Centred in its slot, vertically and horizontally.
