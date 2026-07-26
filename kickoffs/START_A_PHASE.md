@@ -11,17 +11,15 @@ phase-naming registry as the rest of the family.
 
 # 🚀 START HERE  (you, the operator)
 
-      WHAT TO BUILD:  AMB.2 session 3 — the Equipment, Tasks and Chat mockups
+      WHAT TO BUILD:  AMB.4
 
   An arc id (e.g. NAV.1) or just describe the item in plain words. That is the only
   line you fill in — the agent works out the exact phase and scope.
 
-  FOR THIS ONE, read AMB_BATCH1_RESEARCH.md FIRST — all three surfaces are already
-  researched in detail there, so do NOT re-read the features from scratch. Build the
-  three SCREEN mockups into the existing lab (Iconik Employee/DesignLab/), add them to
-  the DesignLabMockup enum, and stop. Do not touch a real screen: AMB.3 is gated on the
-  operator approving Equipment's screen on a device, and the specimen sheet's row
-  proposal does NOT satisfy that gate.
+  KEEP THIS BLOCK EMPTY unless there is something the roadmap does not already say.
+  It went stale during AMB.3 — it still described mockup work that had been built and
+  approved two sessions earlier, which sent that session hunting for finished work.
+  The phase list below and AUDIT_ROADMAP.md are the sources of truth; this line is not.
 
 
 # 📋 Phases
@@ -30,38 +28,52 @@ phase-naming registry as the rest of the family.
   Full per-item scope + closeouts live in AUDIT_ROADMAP.md.
 
   🎨 AMB — Ambient design language rollout   (REGISTERED ARC, in progress)
-      Restyle only: no data, service, navigation-shape or business-rule changes inside a
-      phase. Every phase SHOWS A RUNNING SWIFTUI MOCKUP FOR OPERATOR APPROVAL BEFORE THE
-      REAL SCREENS ARE TOUCHED (D10 — hard gate). The mockups live in ONE lab harness built
-      in AMB.2 (menu entry + sample data + gallery + switcher, in the real nav container),
-      kept for the arc and deleted at AMB.12; each phase's own mockup views go at that
-      phase's close. Smokes on iPhone AND iPad (D7); ships to main as it lands (D8).
-      Plan + the 11 locked decisions (D1-D11): AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
+      IT IS A REDESIGN WITH A PARITY CONSTRAINT (D12, operator 2026-07-25 — this
+      SUPERSEDES the "restyle only" framing this file used to carry). IN scope: layout,
+      hierarchy, information architecture, the reading order of a list, states that
+      should exist and do not. OUT of scope, unchanged: data layers, services, loaders,
+      caching, business rules and permissions, the shared Supabase schema/RLS/PowerSync.
+      NO FEATURE MAY BE LOST, and that is checkable rather than promised — inventory the
+      surface's capabilities FROM THE SOURCE before redesigning it (AMB_BATCH1_PARITY.md
+      is the worked example; it caught eight feature losses across AMB.2 and AMB.3,
+      three of them inside a design the operator had already approved).
+      Every phase SHOWS A RUNNING SWIFTUI MOCKUP FOR OPERATOR APPROVAL BEFORE THE
+      REAL SCREENS ARE TOUCHED (D10 — hard gate), and the approval must be ON A DEVICE.
+      The mockups live in ONE lab harness built in AMB.2 (menu entry + sample data +
+      gallery + switcher, in the real nav container), kept for the arc and deleted at
+      AMB.12; each phase's own mockup views go at that phase's close. Smokes on iPhone
+      AND iPad (D7); ships to main as it lands (D8).
+      Plan + the 12 locked decisions (D1-D12): AMBIENT_ROLLOUT_PLAN.md. Scope/closeouts: AUDIT_ROADMAP.md.
       D11 (2026-07-25): the ambient wash takes each screen's FEATURE colour; the schedule
       keeps its data-driven tint as the exception. FeatureTheme's palette must be re-cut to
       be unique first (5 blues today) — proposed in AMB.2 session 2's mockups. Re-cutting it
       also changes the home tiles + bottom bar, which are live.
 
       ✅ AMB.1   Schedule                                    DONE + PUSHED 2026-07-24
-      🔶 AMB.2   Design system + build gate + compact variants + THE LAB
-                 SESSION 1 of 2 COMMITTED 2026-07-25 (5503385, not pushed) —
-                 DesignSystem/ primitives, cardStyle() deleted, the card-drift
-                 gate (46 files / 101 cards grandfathered, starts green), the
-                 lab + AMB.2's specimen sheet. Awaiting operator smoke on
-                 iPhone AND iPad: does the schedule still look right, and does
-                 the Design Lab open from the profile menu.
-                 SESSION 2 DONE 2026-07-25: D11 palette approved + APPLIED to
-                 FeatureTheme (live: home tiles, All Features, bottom bar all
-                 changed colour), compact chosen as the density (D5 settled),
-                 home dashboard mockup at 90% company-blue wash.
-                 ← SESSION 3 NEXT: the three remaining batch-1 mockups —
-                 EQUIPMENT, TASKS, CHAT. Research for all three is written up
-                 in AMB_BATCH1_RESEARCH.md so no re-reading is needed. AMB.3
-                 MUST NOT START until Equipment's SCREEN mockup is approved —
-                 the specimen sheet's row is not the D10 gate.
+      ✅ AMB.2   Design system + build gate + compact variants + THE LAB
+                 DONE + PUSHED 2026-07-25 (3 sessions). DesignSystem/ primitives,
+                 cardStyle() deleted, the card-drift gate, the lab, the D11 palette
+                 (27 distinct feature colours — LIVE on home tiles, All Features and
+                 the bottom bar), compact chosen as the density (D5), and all six
+                 batch-1 mockups. Operator approved the batch-1 designs ON A DEVICE,
+                 iPhone AND iPad — closing D10 and D7 for the batch.
         ── batch 1 ── mocked in AMB.2, reviewed in ONE sitting ──
-      ⬜ AMB.3   Equipment            (34 views)  proves the compact set
-      ⬜ AMB.4   Home dashboard       its shift widget disagrees with the live schedule
+      ✅ AMB.3   Equipment            DONE + PUSHED 2026-07-25, smoked iPhone + iPad.
+                 One screen replaced the two-tab container. Proved the compact set.
+                 LESSON FOR EVERY REMAINING PHASE: an approved mockup is a design
+                 decision, NOT a capability inventory — the parity walk caught three
+                 feature losses inside the design the operator had already signed off.
+                 Check the redesign against the SOURCE, including approved parts.
+                 RULE: one .ambientPush per view; two push targets means an enum
+                 destination (two stacked NavigationLink(isActive:) is the AMB.1
+                 dead-tap shape).
+      ⬜ AMB.4   Home dashboard       ← NEXT. its shift widget disagrees with the live schedule
+                 Mockup ALREADY APPROVED and in the lab (90% company-blue wash), so
+                 there is no new D10 gate to clear. Touches MainEmployeeView, which is
+                 the NAV SHELL — higher stakes than Equipment; run the review gate.
+                 Its two drift-allowlist entries to delete: DashboardWidgets.swift (8
+                 cards, the highest-drift file in the app) and MainEmployeeView (2).
+                 OVERLAPS DEC.1 on DashboardWidgets.swift — decide the order first.
       ⬜ AMB.5   Tasks                (18 views)
       ⬜ AMB.6   Chat                 (20 views)  hardest test of the compact set
                                                  + mocks batch 2
@@ -107,6 +119,19 @@ phase-naming registry as the rest of the family.
               LAN TLS) — folds into the existing family SEC arc, not a new code.
 
   ✅ DONE   (closeouts in AUDIT_ROADMAP.md)
+      AMB.3   Equipment — the two tabs became ONE screen: your gear leads under a
+              standing line saying what is out, due back and LATE (the app could only
+              tell you by reading every kit card), the inventory is one row down or one
+              keystroke away, the kit detail is a packing list opening EXPANDED in the
+              app's own photography workflow order, and the item detail leads with
+              status/holder/due instead of a 250pt photo. Six files deleted in the same
+              commit. THREE dead controls fixed (an "Other Equipment" tap handler that
+              was an empty comment; a "Browse Equipment" button posting a notification
+              nothing observed; a malformed user id falling back to a random UUID).
+              /code-review run by the operator BEFORE the push: 4 findings, 3 fixed, 1
+              REFUSED with a reason (overdue-at-midnight is a business rule, not a
+              restyle's to change — fixed afterwards as its own commit, pinned by 9
+              tests). Operator smoke PASSED iPhone + iPad. SHIPPED 2026-07-25.
       PUB.1   Draft visibility — photographers see UNPUBLISHED sessions, grouped under
               their own "Not published yet" heading, with NO assignment shown on a draft
               (not others', not their own) for anyone without schedule-edit rights;
