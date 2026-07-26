@@ -779,6 +779,49 @@ HoursMeter, the day-boundary overdue rework and its tests, and the Codable chang
 `TabBarConfiguration` (an older saved config still decodes).
 
 
+## Second code review — seven findings, all fixed
+
+Run by the operator 2026-07-26 over the full range, after the first review's fixes.
+Three of the seven were THE SAME MISTAKE I had already made twice, in three new
+places, so the rule now lives in BottomTabBar.swift rather than in a closeout nobody
+will read while writing a screen:
+
+    A SAFE-AREA INSET ONLY INSETS THE VIEW IT IS APPLIED TO. It does not travel into
+    a navigation container from outside, and it does not travel out of one into the
+    screens that container pushes.
+
+  1. PUSHED SCREENS had no clearance at all — ShiftDetailView's action bar and
+     AllFeaturesView's last row sat under the capsule. The shell insets a container's
+     ROOT; a pushed view does not inherit it. The action bar takes plain bottom
+     padding rather than an inset, because it deliberately ignores the bottom safe
+     area and the two would fight each other.
+  2+3. BOTH SPORTS ROSTERS had it applied outside their own NavigationView — a no-op
+     on iPad, the very screen that had just stopped hiding the bar, and a DOUBLED
+     inset on iPhone where the shell already supplies one. Moved inside.
+
+  4. THE REFRESH FLAG WAS DOING TWO JOBS. `isRefreshing` served as both the mutex and
+     the "data landed" signal, and the listener clears it on ANY realtime delivery —
+     so an unrelated edit elsewhere in the org would end the pull early AND re-open
+     the guard mid-refresh, permitting exactly the concurrent re-subscribe the code's
+     own comment describes as leaking a channel. Now a private mutex plus a separate
+     signal.
+
+  5. Two manager methods orphaned by the bar conversion survived while their siblings
+     were deleted. Removed; getScanItem's real contribution (iPads have no NFC, so
+     Scan does not exist there) carried into the comment that now decides it.
+
+  6+7. Two comments that outlived their facts: the bar's header still said the mockup
+     "STAYS until confirmed on both devices" after it had been correctly deleted, and
+     the lab still described a switcher branch that went with the tab-bar mockup.
+
+WHAT TO TAKE FROM THIS PHASE, beyond the fixes. EVERY WRONG VERSION OF THE CLEARANCE
+BUILT CLEANLY. The failure is silent until something is anchored to the bottom of a
+screen, which is why it took four operator smokes and two reviews to flush out, and
+why I kept "fixing" it in one place while leaving it broken in the next. When a
+mechanism is what makes another change safe, enumerate every place it has to hold
+BEFORE shipping any of them — a green build says nothing about it, and neither does
+one screen looking right.
+
 ## Step 3b — the converted screen against the approved mockup
 
 The arc's workflow requires this pass by name, because it is where two defects
