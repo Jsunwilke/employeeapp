@@ -992,7 +992,7 @@ struct MainEmployeeView: View {
         case "jobBoxTracker":
             ManagerJobBoxTrackerView()
         case "tasks":
-            TasksMainView()
+            TasksView()
         case "equipment":
             EquipmentView()
         case "routePlanner":

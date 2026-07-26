@@ -232,7 +232,11 @@ struct TaskItem: Identifiable, Codable {
     // MARK: - Initializer
 
     init(
-        id: String = UUID().uuidString,
+        // Lowercased, like Subtask's default and like duplicate(). Postgres
+        // normalises a uuid on store and Swift string comparison does not, so an
+        // uppercase id here can never string-match the row that comes back —
+        // which is why the repo's hard rule is lowercase on both sides.
+        id: String = UUID().uuidString.lowercased(),
         organizationID: String,
         createdBy: String,
         title: String,

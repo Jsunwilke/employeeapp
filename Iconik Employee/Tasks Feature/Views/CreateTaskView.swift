@@ -2,7 +2,19 @@
 //  CreateTaskView.swift
 //  Iconik Employee
 //
-//  View for creating a new task
+//  View for creating a new task.
+//
+//  AMB.5 RESTYLED THIS IN PLACE, AND DELIBERATELY DID NOT REDESIGN IT.
+//      This screen was never mocked — AMB_BATCH1_PARITY.md recorded that at the
+//      time — and D10 is a hard gate: nothing is redesigned before the operator
+//      has approved a running mockup of it. So the change here is the minimum that
+//      stops a plain grouped Form opening over a washed, glass screen and reading
+//      as a different app: the ambient wash behind it, a transparent Form scroll
+//      background so the wash shows, and the shared priority colours.
+//
+//      Every section, control, bound value, validation and label is untouched.
+//      Real input design — fields, pickers, form rhythm — is AMB.7's, which the
+//      plan already names as the arc's first form-heavy phase.
 //
 
 import SwiftUI
@@ -10,6 +22,8 @@ import SwiftUI
 struct CreateTaskView: View {
     @Environment(\.presentationMode) var presentationMode
     let onTaskCreated: (TaskItem) -> Void
+
+    private var feature: Color { FeatureTheme.color(for: "tasks") }
 
     @State private var title: String = ""
     @State private var description: String = ""
@@ -30,6 +44,35 @@ struct CreateTaskView: View {
 
     var body: some View {
         NavigationView {
+            // Same shape AMB.3 settled on for every Equipment form: the wash
+            // behind, the Form's own grouped background hidden, the feature colour
+            // as the tint for controls.
+            ZStack {
+                AmbientBackdrop(tint: feature, intensity: 0.7)
+                form.scrollContentBackground(.hidden)
+            }
+            .navigationTitle("New Task")
+            .navigationBarTitleDisplayMode(.inline)
+            .tint(feature)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Create") {
+                        createTask()
+                    }
+                    .disabled(title.isEmpty)
+                }
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+    }
+
+    private var form: some View {
             Form {
                 Section(header: Text("Basic Information")) {
                     TextField("Task Title", text: $title)
@@ -55,7 +98,7 @@ struct CreateTaskView: View {
                                 Text(priority.displayName)
                                 Spacer()
                                 Circle()
-                                    .fill(priorityColor(priority))
+                                    .fill(priority.tint)
                                     .frame(width: 12, height: 12)
                             }
                             .tag(priority)
@@ -128,23 +171,6 @@ struct CreateTaskView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            .navigationTitle("New Task")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Create") {
-                        createTask()
-                    }
-                    .disabled(title.isEmpty)
-                }
-            }
-        }
     }
 
     private func createTask() {
@@ -173,15 +199,6 @@ struct CreateTaskView: View {
 
     private func deleteSubtask(_ subtask: Subtask) {
         subtasks.removeAll { $0.id == subtask.id }
-    }
-
-    private func priorityColor(_ priority: TaskPriority) -> Color {
-        switch priority {
-        case .low: return .gray
-        case .medium: return .blue
-        case .high: return .orange
-        case .urgent: return .red
-        }
     }
 }
 

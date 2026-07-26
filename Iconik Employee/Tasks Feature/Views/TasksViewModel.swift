@@ -2,8 +2,30 @@
 //  TasksViewModel.swift
 //  Iconik Employee
 //
-//  ViewModel for TasksMainView
-//  Implements cache-first loading with real-time updates
+//  ViewModel for TasksView (AMB.5) and for the home dashboard's TasksWidget,
+//  which uses the same object.
+//
+//  Cache-first loading with real-time updates. The loading strategy, the service
+//  calls and the filter semantics are unchanged by AMB.5 — D12 keeps data layers
+//  out of a redesign phase. What AMB.5 added is on top of them:
+//
+//    - arrange(), which does ONE filter-and-sort pass and buckets the result into
+//      the reading bands the redesign groups by. The old screen called
+//      filteredTasks twice per body pass and taskCount five more times, so a
+//      single keystroke in the search field ran seven full passes over the whole
+//      array. That is L4 in the plan — fold the data into an index once per
+//      change — and it is the pattern for any converted list.
+//    - assignee names, resolved through TeamService (see AMB5_TASKS_PARITY.md
+//      finding 4 for why that is a presentation join and not a new data path).
+//    - the error surface the failure banner reads. The error was already
+//      published and already set in four places; no view had ever read it.
+//
+//  And one defect fixed, because the redesign made it unavoidable rather than
+//  optional: every call to fetchAllTasks used to open ANOTHER subscription to
+//  TaskService.$tasks without cancelling the last one. Refresh, Clear Cache,
+//  creating a task and ticking a checkbox all route through fetchAllTasks, so
+//  after ten toggles in one visit there were eleven live sinks, and each realtime
+//  delivery ran the merge and wrote the whole task list to disk eleven times.
 //
 
 import Foundation
@@ -16,9 +38,22 @@ class TasksViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var error: Error?
 
+    /// Lowercased user id to full name, for the assignee line. Empty until the
+    /// team loads; every reader falls back to the model's own
+    /// `assignmentDisplayText`, so the line degrades to "3 assignees" rather than
+    /// to blank.
+    @Published private(set) var memberNames: [String: String] = [:]
+
     private let taskService = TaskService.shared
     private let cacheService = TaskCacheService.shared
-    private var cancellables = Set<AnyCancellable>()
+
+    /// The ONE subscription to the service's task stream. Held on its own rather
+    /// than in a bag, so re-subscribing replaces it instead of stacking on it.
+    private var taskStreamSubscription: AnyCancellable?
+
+    /// Guards the team fetch so it runs once per organization rather than on
+    /// every appearance.
+    private var loadedTeamForOrganization: String?
 
     private var currentUserId: String {
         return (UserManager.shared.getCurrentUserIDUnified() ?? "").lowercased()
@@ -69,6 +104,8 @@ class TasksViewModel: ObservableObject {
     }
 
     private func loadTasksWithOrgId(_ orgId: String) {
+        loadTeamIfNeeded(orgId: orgId)
+
         // Step 1: Load from cache immediately
         if let cachedTasks = cacheService.getCachedTasks(userId: currentUserId, orgId: orgId) {
             self.tasks = cachedTasks
@@ -82,6 +119,57 @@ class TasksViewModel: ObservableObject {
             // No cache - fetch all tasks
             fetchAllTasks()
         }
+    }
+
+    // MARK: - Assignee names
+    //
+    // TaskItem carries assignedTo as user ids. TeamService already exists,
+    // already reads users filtered by organization_id, and is already used by
+    // other screens in this app — so this is a presentation join over a service
+    // the app owns, not a new data path. No schema, RLS or PowerSync change.
+
+    private func loadTeamIfNeeded(orgId: String) {
+        guard !orgId.isEmpty, loadedTeamForOrganization != orgId else { return }
+        loadedTeamForOrganization = orgId
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let members = try await TeamService.shared.getTeamMembers(organizationID: orgId)
+                var names: [String: String] = [:]
+                for member in members {
+                    // Lowercased on both sides, always — Supabase stores lowercase
+                    // and Swift string comparison is case sensitive.
+                    names[member.id.lowercased()] = member.fullName
+                }
+                self.memberNames = names
+            } catch {
+                // A missing name is not a failure worth putting on screen: every
+                // reader falls back to assignmentDisplayText. Let the team fetch
+                // be retried on the next organization change.
+                self.loadedTeamForOrganization = nil
+            }
+        }
+    }
+
+    /// Who a task is assigned to, in words.
+    ///
+    /// Falls back to the model's own `assignmentDisplayText` whenever a name
+    /// cannot be resolved, so the line reads "Unassigned", "1 assignee" or
+    /// "3 assignees" rather than going blank.
+    func assigneeLabel(for task: TaskItem) -> String? {
+        guard !task.assignedTo.isEmpty else { return task.assignmentDisplayText }
+
+        let names = task.assignedTo.compactMap { memberNames[$0.lowercased()] }
+        guard let first = names.first else { return task.assignmentDisplayText }
+
+        if task.assignedTo.count == 1 { return first }
+        return "\(first) +\(task.assignedTo.count - 1)"
+    }
+
+    func isAssignedToCurrentUser(_ task: TaskItem) -> Bool {
+        let userId = currentUserId
+        return task.assignedTo.contains { $0.lowercased() == userId }
     }
 
     // MARK: - Fetch All Tasks
@@ -100,6 +188,12 @@ class TasksViewModel: ObservableObject {
 
                 self.tasks = fetchedTasks
 
+                // A load that worked clears the failure banner. Without this the
+                // banner is permanent for the life of the screen: nothing but the
+                // user's own Retry or Dismiss ever cleared `error`, so one failed
+                // fetch left a warning sitting over data that had since arrived.
+                self.error = nil
+
                 // Cache the fetched tasks
                 self.cacheService.setCachedTasks(fetchedTasks, userId: self.currentUserId, orgId: self.currentOrganizationId)
 
@@ -117,8 +211,12 @@ class TasksViewModel: ObservableObject {
         // Start listening to real-time updates
         taskService.startListening(organizationID: currentOrganizationId)
 
-        // Subscribe to task updates
-        taskService.$tasks
+        // ONE subscription. Cancelling first is the whole point: every path into
+        // fetchAllTasks lands here, and without this each Refresh, Clear Cache,
+        // created task and ticked checkbox added another live sink that re-ran the
+        // merge and rewrote the disk cache on every realtime delivery.
+        taskStreamSubscription?.cancel()
+        taskStreamSubscription = taskService.$tasks
             .sink { [weak self] newTasks in
                 guard let self = self else { return }
 
@@ -131,7 +229,6 @@ class TasksViewModel: ObservableObject {
                     self.cacheService.setCachedTasks(merged, userId: self.currentUserId, orgId: self.currentOrganizationId)
                 }
             }
-            .store(in: &cancellables)
     }
 
     // MARK: - Stop Listening
@@ -139,13 +236,27 @@ class TasksViewModel: ObservableObject {
     nonisolated func stopListening() {
         Task { @MainActor in
             taskService.stopListening()
-            cancellables.removeAll()
+            taskStreamSubscription?.cancel()
+            taskStreamSubscription = nil
         }
     }
 
     // MARK: - Refresh Tasks
 
     func refreshTasks() {
+        fetchAllTasks()
+    }
+
+    // MARK: - Failure surface
+
+    func clearError() {
+        error = nil
+    }
+
+    /// What the failure banner's Retry does. Clearing first means the banner goes
+    /// as the retry starts, and comes back only if the retry also fails.
+    func retryAfterFailure() {
+        error = nil
         fetchAllTasks()
     }
 
@@ -162,7 +273,7 @@ class TasksViewModel: ObservableObject {
     func createTask(_ task: TaskItem) {
         Task {
             do {
-                let createdTask = try await taskService.createTask(task)
+                _ = try await taskService.createTask(task)
 
                 // Clear cache to force refresh (prevents ghost tasks)
                 self.cacheService.clearOrganizationCache(orgId: self.currentOrganizationId)
@@ -282,29 +393,91 @@ class TasksViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Arrangement (AMB.5)
+
+    /// The filtered, sorted, grouped result the list renders — produced in ONE
+    /// pass and consumed by the empty check, the rows AND the chip counts.
+    struct Arrangement {
+        /// Populated for the four active filters.
+        let groups: [TaskGroup]
+        /// Populated for Completed, which is not banded.
+        let flat: [TaskItem]
+        let grouped: Bool
+        /// Live count per chip. `.all` is deliberately ABSENT rather than zero —
+        /// the old screen's taskCount(for: .all) returned nil so the All chip shows
+        /// no count, and a missing key is how that survives a dictionary.
+        let counts: [TaskFilter: Int]
+
+        var isEmpty: Bool { grouped ? groups.isEmpty : flat.isEmpty }
+    }
+
+    /// Filter, sort, then bucket into reading bands.
+    ///
+    /// COMPLETED IS NOT BANDED, on purpose. The bands say what is late and what is
+    /// due, and neither means anything for finished work — a done task with a date
+    /// last month would sit under a header reading "Overdue". Completed stays a
+    /// flat list in the same sort the rest of the screen uses.
+    func arrange(searchText: String, filter: TaskFilter,
+                 status: TaskStatus?, priority: TaskPriority?) -> Arrangement {
+        // The calendar and the clock are read ONCE for the whole call — the counts
+        // and the bands must agree with each other, and both must agree with the
+        // red styling on a row, which reads TaskItem.isOverdue against Date().
+        let calendar = Calendar.current
+        let now = Date()
+
+        let counts = countsForChips(calendar: calendar, now: now)
+
+        let sorted = filteredTasks(searchText: searchText, filter: filter,
+                                   status: status, priority: priority)
+
+        guard filter != .completed else {
+            return Arrangement(groups: [], flat: sorted, grouped: false, counts: counts)
+        }
+
+        // One walk, preserving the sort inside each band.
+        var buckets: [TaskWhen: [TaskItem]] = [:]
+        for task in sorted {
+            let band = TaskWhen.band(for: task.dueDate, calendar: calendar, now: now)
+            buckets[band, default: []].append(task)
+        }
+
+        // allCases order IS the reading order — overdue first.
+        let groups = TaskWhen.allCases.compactMap { when -> TaskGroup? in
+            guard let bucket = buckets[when], !bucket.isEmpty else { return nil }
+            return TaskGroup(when: when, tasks: bucket)
+        }
+
+        return Arrangement(groups: groups, flat: [], grouped: true, counts: counts)
+    }
+
     // MARK: - Task Counts
 
-    func taskCount(for filter: TaskFilter) -> Int? {
-        switch filter {
-        case .all:
-            return nil  // Don't show count for "all"
-        case .myTasks:
-            return tasks.filter { task in
-                task.assignedTo.contains { $0.lowercased() == currentUserId } &&
-                task.status != .completed
-            }.count
-        case .today:
-            return tasks.filter { task in
-                guard let dueDate = task.dueDate else { return false }
-                return Calendar.current.isDateInToday(dueDate) && task.status != .completed
-            }.count
-        case .urgent:
-            return tasks.filter {
-                ($0.priority == .urgent || $0.isOverdue) &&
-                $0.status != .completed
-            }.count
-        case .completed:
-            return tasks.filter { $0.status == .completed }.count
+    /// One walk over `tasks` filling every chip's count, instead of the five
+    /// separate walks the old screen triggered from its body. `.all` is left out so
+    /// its chip shows none.
+    ///
+    /// COMPUTED PER ARRANGEMENT, NOT CACHED ON A tasks CHANGE. Two of these counts
+    /// read the clock — "Today" and the overdue half of "Urgent" — so a cached
+    /// value goes stale at midnight and after an overnight resume, and the chips
+    /// would then disagree with the list they filter. One walk per render is the
+    /// price of the chips telling the truth; it still replaces seven.
+    private func countsForChips(calendar: Calendar, now: Date) -> [TaskFilter: Int] {
+        let userId = currentUserId
+        var mine = 0, today = 0, urgent = 0, completed = 0
+
+        for task in tasks {
+            if task.status == .completed {
+                completed += 1
+                continue
+            }
+
+            if task.assignedTo.contains(where: { $0.lowercased() == userId }) { mine += 1 }
+            if let dueDate = task.dueDate, calendar.isDateInToday(dueDate) { today += 1 }
+            // Matches filteredTasks(.urgent): urgent priority OR overdue.
+            let isOverdue = (task.dueDate.map { $0 < now }) ?? false
+            if task.priority == .urgent || isOverdue { urgent += 1 }
         }
+
+        return [.myTasks: mine, .today: today, .urgent: urgent, .completed: completed]
     }
 }
