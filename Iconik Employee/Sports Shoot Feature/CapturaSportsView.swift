@@ -1040,12 +1040,25 @@ struct CapturaSportsView: View {
                     iPadView
                 }
             }
+        // Room for the app's floating bar. Needed now that this screen no longer
+        // hides it, and it has to be applied here rather than by the shell: the
+        // NavigationView belongs to this feature, and a safe-area inset applied from
+        // outside one does nothing.
+        .tabBarClearance()
         .onAppear {
             isViewVisible = true
-            // Hide tab bar when in roster view (iPad) to maximize vertical space
-            if UIDevice.current.userInterfaceIdiom == .pad {
-                TabBarManager.shared.isFullScreenOverlayActive = true
-            }
+            // The tab bar is NO LONGER HIDDEN HERE (AMB.4, 2026-07-26, with the
+            // operator's explicit authorization to change the Sports views).
+            //
+            // It used to be removed on iPad "to maximize vertical space", which left
+            // the app's largest iPad tool with no bottom navigation at all — and on
+            // iPad the bottom bar is the ONLY route home, because HomeToolbarButton
+            // is iPhone-only. The bar is now a floating capsule the user can SWIPE
+            // AWAY by hand, leaving a handle to bring it back, so the vertical space
+            // is still available on demand without the app taking navigation away.
+            //
+            // The photo viewer below still hides it outright, which is a genuine
+            // full-screen overlay and a different thing.
 
             // Initialize LockManager with current user
             if let userId = SupabaseManager.shared.client.auth.currentUser?.id {
@@ -1061,10 +1074,10 @@ struct CapturaSportsView: View {
         }
         .onDisappear {
             isViewVisible = false
-            // Restore tab bar when leaving roster view
-            if UIDevice.current.userInterfaceIdiom == .pad {
-                TabBarManager.shared.isFullScreenOverlayActive = false
-            }
+            // Nothing to restore — this view no longer hides the bar. Kept
+            // unconditional as a safety net for the photo-viewer flag, in case the
+            // view goes away while the viewer is still up.
+            TabBarManager.shared.isFullScreenOverlayActive = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Re-load shoots list and roster for currently-selected shoot when returning to foreground.
