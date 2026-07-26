@@ -33,13 +33,34 @@
 
 import SwiftUI
 
-/// A pushable reference to an equipment item.
-///
-/// The detail screen loads its own item by id (unchanged), and both a row tap and a
-/// QR scan produce nothing but an id — so one wrapper serves both and the screen has
-/// a single push path rather than two.
+/// A pushable reference to an equipment item, for a screen whose only push target
+/// IS an item — the kit detail. The detail screen loads its own item by id, so an id
+/// is the whole of what a row tap needs to carry.
 struct EquipmentReference: Identifiable {
     let id: UUID
+}
+
+/// Everywhere this screen can push to, as ONE value.
+///
+/// It would read more naturally as two `@State` optionals with an `.ambientPush`
+/// each, and that is how the lab mockup was written. But `ambientPush` is built on
+/// `NavigationLink(isActive:)` — the only push API that works both inside the
+/// shell's `NavigationView` and inside a real `NavigationStack` — and stacking two
+/// of those on one view means two simultaneously-live links competing for one
+/// stack. Equipment is the first Ambient surface to run inside an actual
+/// NavigationStack, so it is the first place that combination would be exercised,
+/// and a push that silently does nothing is precisely the defect AMB.1 shipped.
+/// One link cannot have that problem.
+enum EquipmentDestination: Identifiable {
+    case kit(UserKitAssignment)
+    case item(UUID)
+
+    var id: String {
+        switch self {
+        case .kit(let kit): return "kit-\(kit.id.uuidString)"
+        case .item(let id): return "item-\(id.uuidString)"
+        }
+    }
 }
 
 struct EquipmentView: View {
@@ -55,8 +76,7 @@ struct EquipmentView: View {
     @State private var selectedCategory: EquipmentCategory?
     @State private var selectedStatus: EquipmentStatus?
 
-    @State private var pushedKit: UserKitAssignment?
-    @State private var pushedEquipment: EquipmentReference?
+    @State private var destination: EquipmentDestination?
 
     @State private var showQRScanner = false
     @State private var showAdminKits = false
@@ -140,11 +160,13 @@ struct EquipmentView: View {
                     CreateEquipmentView()
                 }
             }
-            .ambientPush(item: $pushedKit) { kit in
-                EquipmentKitDetailView(kitAssignment: kit)
-            }
-            .ambientPush(item: $pushedEquipment) { reference in
-                EquipmentDetailView(equipmentId: reference.id)
+            .ambientPush(item: $destination) { destination in
+                switch destination {
+                case .kit(let kit):
+                    EquipmentKitDetailView(kitAssignment: kit)
+                case .item(let equipmentId):
+                    EquipmentDetailView(equipmentId: equipmentId)
+                }
             }
             .animation(AmbientMotion.gentle, value: showingInventory)
         }
@@ -170,7 +192,7 @@ struct EquipmentView: View {
                         if !assignedKits.isEmpty {
                             AmbientSectionTitle("Your kits", trailing: "\(assignedKits.count)")
                             ForEach(assignedKits) { kit in
-                                Button { pushedKit = kit } label: { EquipmentKitRow(kit: kit) }
+                                Button { destination = .kit(kit) } label: { EquipmentKitRow(kit: kit) }
                                     .buttonStyle(.plain)
                             }
                         }
@@ -184,7 +206,7 @@ struct EquipmentView: View {
                                 // COMMENT — it looked tappable and did nothing.
                                 // Wired here; a bug fix AMB.3 ships, not a redesign.
                                 Button {
-                                    pushedEquipment = EquipmentReference(id: entry.item.id)
+                                    destination = .item(entry.item.id)
                                 } label: {
                                     EquipmentRow(item: entry.item,
                                                  kitColorHex: nil,
@@ -325,7 +347,7 @@ struct EquipmentView: View {
                 LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
                     ForEach(filteredEquipment) { item in
                         Button {
-                            pushedEquipment = EquipmentReference(id: item.id)
+                            destination = .item(item.id)
                         } label: {
                             EquipmentRow(item: item,
                                          kitColorHex: equipmentKitColors[item.id],
@@ -530,7 +552,7 @@ struct EquipmentView: View {
 
         let idString = code.hasPrefix("EQ-") ? String(code.dropFirst(3)) : code
         if let uuid = UUID(uuidString: idString) {
-            pushedEquipment = EquipmentReference(id: uuid)
+            destination = .item(uuid)
         }
     }
 

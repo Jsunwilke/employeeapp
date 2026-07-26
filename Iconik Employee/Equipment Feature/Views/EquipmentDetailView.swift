@@ -92,7 +92,9 @@ struct EquipmentDetailView: View {
 
                 actions(for: equipment)
 
-                specs(for: equipment)
+                if hasSpecs(equipment) {
+                    specs(for: equipment)
+                }
 
                 if !assignmentHistory.isEmpty {
                     history
@@ -280,6 +282,26 @@ struct EquipmentDetailView: View {
     }
 
     // MARK: - Specs
+
+    /// True when the Details card has at least one row to draw.
+    ///
+    /// The card is skipped entirely otherwise. The app's equivalent section always
+    /// had content because the status and condition badges lived inside it; those
+    /// moved up into the headline here, so on a sparse item — a name and nothing
+    /// else, which is what an item created from a QR scan looks like — the card
+    /// would have rendered empty but for its own "DETAILS" heading.
+    private func hasSpecs(_ equipment: EquipmentItem) -> Bool {
+        func present(_ value: String?) -> Bool {
+            guard let value else { return false }
+            return !value.isEmpty
+        }
+        return present(equipment.category?.name)
+            || present(equipment.serial_number)
+            || present(equipment.description)
+            || present(equipment.notes)
+            || equipment.purchase_price != nil
+            || equipment.purchase_date != nil
+    }
 
     /// Every field the app rendered, and each only when present — so this list is
     /// short for a sparse item and long for a well-catalogued one.

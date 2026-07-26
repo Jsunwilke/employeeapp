@@ -788,16 +788,12 @@ class EquipmentService: ObservableObject {
         return result
     }
 
-    /// Load all data for My Kits view
-    func loadMyKitsData(userId: UUID, organizationId: String) async throws -> [UserKitAssignment] {
-        async let assignmentsTask = getUserAssignments(userId: userId, organizationId: organizationId)
-        async let equipmentTask = getEquipmentItems(organizationId: organizationId)
-        async let kitsTask = getKitTemplates(organizationId: organizationId)
-
-        let (assignments, equipmentItems, kits) = try await (assignmentsTask, equipmentTask, kitsTask)
-
-        return groupAssignmentsByKit(assignments: assignments, equipmentItems: equipmentItems, kitTemplates: kits)
-    }
+    // `loadMyKitsData` was deleted in AMB.3 along with its only caller, MyKitsView.
+    // It fetched equipment and kit templates a THIRD time beside loadAllEquipmentData
+    // and returned the kit templates without publishing them, which is why the one
+    // screen that replaced both tabs calls loadAllEquipmentData + getUserAssignments
+    // and groups them with `groupAssignmentsByKit` below — one fetch of each table
+    // instead of two, and `kitTemplates` populated for everything that reads it.
 
     /// Load all equipment data (for browse view)
     func loadAllEquipmentData(organizationId: String) async throws {

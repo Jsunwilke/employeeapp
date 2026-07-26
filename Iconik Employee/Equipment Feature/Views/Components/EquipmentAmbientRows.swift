@@ -116,11 +116,19 @@ struct KitTapeDot: View {
 enum KitDueState {
     case permanent
     case on(Date)
-    case overdue(days: Int)
+    /// `days` is nil when the count is not a whole day yet, or when the assignment
+    /// is flagged overdue by status with no return date to measure from.
+    case overdue(days: Int?)
 
     init(_ kit: UserKitAssignment) {
         if kit.isOverdue {
-            self = .overdue(days: kit.daysOverdue ?? 0)
+            // NOT `?? 0`. `daysOverdue` returns 0 on the due date itself and nil for
+            // a status-flagged assignment with no return date, so a plain default
+            // renders "0D OVERDUE" — which the badge this replaced never did: the
+            // old OverdueBadge guarded `days > 0` and drew nothing at all. Neither
+            // is right, so a sub-day overdue now says "OVERDUE" with no number.
+            let days = kit.daysOverdue
+            self = .overdue(days: (days ?? 0) > 0 ? days : nil)
         } else if kit.isPermanent {
             self = .permanent
         } else if let date = kit.expectedReturnDate {
@@ -144,9 +152,15 @@ struct KitDueBadge: View {
             AmbientBadge(text: "Due \(Formatters.monthDay.string(from: date))",
                          systemImage: "calendar", tint: .secondary)
         case .overdue(let days):
-            AmbientBadge(text: spelledOut ? "\(days) days overdue" : "\(days)d overdue",
+            AmbientBadge(text: overdueText(days),
                          systemImage: "exclamationmark.triangle.fill", tint: .red)
         }
+    }
+
+    private func overdueText(_ days: Int?) -> String {
+        guard let days else { return "Overdue" }
+        if spelledOut { return "\(days) day\(days == 1 ? "" : "s") overdue" }
+        return "\(days)d overdue"
     }
 }
 
