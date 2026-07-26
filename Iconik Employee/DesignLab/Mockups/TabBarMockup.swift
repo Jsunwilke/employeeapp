@@ -171,6 +171,16 @@ struct TabBarMockup: View {
         ZStack {
             AmbientBackdrop(tint: AmbientStyle.brand, intensity: 0.9)
 
+            // Stands in for the app's top-left Home button, which is how you leave a
+            // feature on iPhone. The real one cannot be used here: the lab is pushed
+            // inside Home's own nav stack, so its top bar carries a Back button
+            // rather than a Home button.
+            VStack(spacing: 0) {
+                simulatedTopBar
+                Spacer(minLength: 0)
+            }
+            .zIndex(2)
+
             // Content BEHIND the bar. It exists so the glass has something real to
             // refract — judging a glass bar over a flat page tells you nothing,
             // which is part of why the first cut read as "not really different".
@@ -183,7 +193,7 @@ struct TabBarMockup: View {
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                    .padding(.top, 48)
                     // Room for the floating capsule, so the last card can clear it.
                     .padding(.bottom, floats ? 96 : 20)
                 }
@@ -224,6 +234,45 @@ struct TabBarMockup: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+    }
+
+    private var simulatedTopBar: some View {
+        HStack(spacing: 10) {
+            Button(action: goHome) {
+                Image(systemName: "house.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(AmbientStyle.brand)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Home")
+
+            Text("top-left Home — tuck the bar, then tap this")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(.thinMaterial)
+    }
+
+    /// Going Home brings the bar back out (operator, 2026-07-25).
+    ///
+    /// The real rule is broader than the button: the bar un-tucks whenever the
+    /// SELECTED TAB changes, and `HomeToolbarButton` works by setting
+    /// `selectedTab = "home"`. So the same rule also covers a dashboard widget's
+    /// "View all", or anything else that navigates — a tuck is a momentary "get out
+    /// of my way", not a setting that outlives the screen it was made on.
+    ///
+    /// Home also selects nothing IN the bar, because on iPhone Home is not a bar
+    /// item at all (Scan holds the centre). The pill therefore has to disappear
+    /// rather than sit on the first cell.
+    private func goHome() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+            tucked = false
+            selected = "home"
+        }
+        AmbientHaptics.impact(.light)
     }
 
     /// Far enough to clear the widest screen this app runs on.
@@ -585,10 +634,19 @@ private struct GlassTabBarPreview: View {
                     .overlay(Capsule().strokeBorder(.white.opacity(0.55), lineWidth: 1))
                     .frame(width: pillWidth, height: geo.size.height - 10)
                     .offset(x: pillX)
-                    // Hidden, not removed, while the centre button owns the
-                    // selection — so it slides back from where it left rather
-                    // than reappearing at cell zero.
-                    .opacity(onCentre ? 0 : 1)
+                    // Hidden, not removed, when nothing in the row is selected —
+                    // so it slides back from where it left rather than
+                    // reappearing at cell zero.
+                    //
+                    // TWO CASES, and the second is a real defect this mockup had.
+                    // One: the centre button owns the selection. Two: THE CURRENT
+                    // SCREEN IS NOT IN THE BAR AT ALL, which is the common case
+                    // rather than an edge — the app has 27 features and the bar
+                    // holds at most six, so any of the other twenty-one, and Home
+                    // itself on iPhone, leaves nothing here selected. Without this
+                    // the pill parked on the first cell and confidently pointed at
+                    // the wrong screen.
+                    .opacity(onCentre || selectedIndex == nil ? 0 : 1)
 
                 // Everything is placed from `cellOrigins`, the same numbers the
                 // pill uses, so the highlight can never land off its cell. Laying

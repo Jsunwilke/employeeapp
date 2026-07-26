@@ -601,6 +601,30 @@ hide-on-scroll is the whole point: the app never takes navigation away, the pers
 puts it away deliberately, and the way back is always on screen. That answers the
 NAV.1 objection instead of arguing with it.
 
+GOING HOME BRINGS IT BACK (operator, 2026-07-25: "if i use the home button from
+the top tab bar, it should auto slide back out"). The rule is broader than the
+button: the bar un-tucks whenever the SELECTED TAB CHANGES, and
+`HomeToolbarButton` works by setting `selectedTab = "home"`. So the same rule
+covers a dashboard widget's "View all" or anything else that navigates. A tuck is a
+momentary "get out of my way", not a setting that outlives the screen it was made on.
+
+AN ASYMMETRY THAT MAKES THE HANDLE LOAD-BEARING ON iPAD, found while checking that
+button rather than assumed. `HomeToolbarButton` is iPHONE ONLY — its own comment
+says so, because on iPad Home is the bottom bar's prominent centre button and a
+top-nav Home would be redundant. Consequence: on iPad, from any feature screen,
+THE BOTTOM BAR IS THE ONLY ROUTE HOME. Tuck it and the handle is not a convenience,
+it is the sole navigation. So the handle can never be dismissible, can never be
+covered by a sheet, and has to be comfortably hittable one-handed — and that is
+doubly true of the Sports idea below, where the whole point is working with the bar
+tucked for long stretches.
+
+A REAL DEFECT THE HOME BUTTON EXPOSED, fixed in the mockup: the sliding pill parked
+on the FIRST CELL whenever the current screen was not in the bar. That is the common
+case rather than an edge — the app has 27 features and the bar holds at most six, so
+any of the other twenty-one, plus Home itself on iPhone, leaves nothing in the row
+selected. The pill was confidently pointing at the wrong screen. It now hides when
+nothing matches, which the conversion has to carry.
+
 ### THE BAR IS ABSENT FROM THE SPORTS ROSTER ON iPAD, and that is what makes the
 ### tuck worth having
 
