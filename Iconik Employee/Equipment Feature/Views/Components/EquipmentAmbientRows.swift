@@ -122,11 +122,13 @@ enum KitDueState {
 
     init(_ kit: UserKitAssignment) {
         if kit.isOverdue {
-            // NOT `?? 0`. `daysOverdue` returns 0 on the due date itself and nil for
-            // a status-flagged assignment with no return date, so a plain default
-            // renders "0D OVERDUE" — which the badge this replaced never did: the
-            // old OverdueBadge guarded `days > 0` and drew nothing at all. Neither
-            // is right, so a sub-day overdue now says "OVERDUE" with no number.
+            // NOT `?? 0`. `daysOverdue` is nil for an assignment flagged overdue by
+            // STATUS with no return date to measure from, and a plain default
+            // renders that as "0D OVERDUE" — which the badge this replaced never
+            // did: the old OverdueBadge guarded `days > 0` and drew nothing at all.
+            // Neither is right, so an unmeasurable overdue says "OVERDUE" with no
+            // number. (It also used to return 0 on the due date itself; that case
+            // is gone since `isOverdue` was corrected to wait for the day to pass.)
             let days = kit.daysOverdue
             self = .overdue(days: (days ?? 0) > 0 ? days : nil)
         } else if kit.isPermanent {

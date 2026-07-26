@@ -222,7 +222,8 @@ struct SubjectCommandBuilderTests {
 
     // MARK: - SubjectSyncService.insertRowDictionary
 
-    @Test func insertRowDictionary_carriesEditableFieldsInSnakeCase() throws {
+    // SubjectSyncService is @MainActor; these four reach into it directly.
+    @MainActor @Test func insertRowDictionary_carriesEditableFieldsInSnakeCase() throws {
         let subject = FPSubject(
             galleryId: "g1",
             organizationId: "org1",
@@ -254,7 +255,8 @@ struct SubjectCommandBuilderTests {
         #expect(row["image_numbers"] as? String == "12;13;14")
     }
 
-    @Test func insertRowDictionary_excludesForbiddenStructuralKeys() throws {
+    // SubjectSyncService is @MainActor; these four reach into it directly.
+    @MainActor @Test func insertRowDictionary_excludesForbiddenStructuralKeys() throws {
         let subject = FPSubject(galleryId: "g1", organizationId: "org1", firstName: "A", lastName: "B")
         let row = SubjectSyncService.insertRowDictionary(from: subject)
         // The receiver force-overrides gallery_id from cmd.gallery_id and
@@ -270,7 +272,8 @@ struct SubjectCommandBuilderTests {
 
     // MARK: - SubjectSyncService.fieldsFromFullSubject
 
-    @Test func fieldsFromFullSubject_carriesEverySubjectSyncField() throws {
+    // SubjectSyncService is @MainActor; these four reach into it directly.
+    @MainActor @Test func fieldsFromFullSubject_carriesEverySubjectSyncField() throws {
         let subject = FPSubject(
             galleryId: "g1",
             organizationId: "org1",
@@ -300,7 +303,8 @@ struct SubjectCommandBuilderTests {
         #expect(fields.position == "PG")
     }
 
-    @Test func fieldsFromFullSubject_isInverseOfApplyFieldsToSubject() throws {
+    // SubjectSyncService is @MainActor; these four reach into it directly.
+    @MainActor @Test func fieldsFromFullSubject_isInverseOfApplyFieldsToSubject() throws {
         let original = FPSubject(
             galleryId: "g1",
             organizationId: "org1",

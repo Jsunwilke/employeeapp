@@ -800,6 +800,12 @@ class EquipmentService: ObservableObject {
         isLoading = true
         errorMessage = nil
 
+        // `defer`, not a trailing assignment: this method rethrows, so the old
+        // `isLoading = false` on the last line was skipped on every failure and the
+        // flag stayed true for the rest of the app's life. Any view driven by it
+        // would have shown a spinner behind the error alert with no way back.
+        defer { isLoading = false }
+
         do {
             async let equipmentTask = getEquipmentItems(organizationId: organizationId)
             async let categoriesTask = getCategories(organizationId: organizationId)
@@ -814,7 +820,5 @@ class EquipmentService: ObservableObject {
             errorMessage = error.localizedDescription
             throw error
         }
-
-        isLoading = false
     }
 }

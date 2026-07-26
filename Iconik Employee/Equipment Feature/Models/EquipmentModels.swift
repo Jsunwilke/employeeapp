@@ -383,18 +383,51 @@ struct EquipmentAssignment: Decodable, Identifiable, Hashable {
         expected_return_date == nil
     }
 
+    /// Late only once the due DAY has passed.
+    ///
+    /// This used to read `Date() > startOfDay(expected_return_date)`, which made an
+    /// item due today "overdue" from midnight of the day it was due — you had until
+    /// 00:00 on the morning you were meant to bring it back. It also excluded that
+    /// item from "due back", so the one day it was actually due was the one day it
+    /// never appeared as due. Corrected 2026-07-25 (found by /code-review during
+    /// AMB.3, fixed after the operator asked for it as a separate change, because
+    /// what counts as "late" is a business rule and not a restyle's to decide).
+    ///
+    /// Comparing start-of-day to start-of-day rather than adding a day to the due
+    /// date keeps this right whether `expected_return_date` is stored as a date or
+    /// as a timestamp, and keeps it on the device's calendar and time zone.
+    ///
+    /// A server-set `status == "overdue"` still wins outright — the web app and
+    /// Captura share this table, and this client does not get to overrule a state
+    /// they wrote.
     var isOverdue: Bool {
-        status == "overdue" || (isActive && expected_return_date != nil && Date() > Calendar.current.startOfDay(for: expected_return_date!))
+        if status == "overdue" { return true }
+        guard isActive, let expectedReturn = expected_return_date else { return false }
+        let calendar = Calendar.current
+        return calendar.startOfDay(for: Date()) > calendar.startOfDay(for: expectedReturn)
     }
 
+    /// Whole days late, counted between calendar days.
+    ///
+    /// Measured from the raw timestamps this returned 0 for an item due yesterday
+    /// at 17:00 when read this morning — under 24 hours elapsed, but a day late by
+    /// any reading a person would give it.
     var daysOverdue: Int? {
         guard isOverdue, let expectedReturn = expected_return_date else { return nil }
-        return Calendar.current.dateComponents([.day], from: expectedReturn, to: Date()).day
+        let calendar = Calendar.current
+        return calendar.dateComponents([.day],
+                                       from: calendar.startOfDay(for: expectedReturn),
+                                       to: calendar.startOfDay(for: Date())).day
     }
 
+    /// Whole days remaining; 0 means it is due today. Counted between calendar days
+    /// for the same reason as `daysOverdue`.
     var daysUntilDue: Int? {
         guard let expectedReturn = expected_return_date, !isOverdue, isActive else { return nil }
-        return Calendar.current.dateComponents([.day], from: Date(), to: expectedReturn).day
+        let calendar = Calendar.current
+        return calendar.dateComponents([.day],
+                                       from: calendar.startOfDay(for: Date()),
+                                       to: calendar.startOfDay(for: expectedReturn)).day
     }
 
     /// Extract kit name from checkin_notes if this assignment was part of a kit checkout

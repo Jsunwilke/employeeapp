@@ -332,13 +332,12 @@ struct EquipmentView: View {
 
     @ViewBuilder
     private var inventory: some View {
-        // Deliberately this view's own `isLoading` rather than the service's.
-        // `EquipmentService.loadAllEquipmentData` sets `isLoading = true`, and on a
-        // thrown error it rethrows BEFORE resetting it — so the service's flag stays
-        // true forever after one failed load, and a view driven by it would show a
-        // spinner behind the error alert with no way back. That flag is a service
-        // bug and fixing it is a data-layer change AMB.3 does not make; not reading
-        // it is free.
+        // This view's own `isLoading`, not the service's — still, now for a plainer
+        // reason than when it was written. The service's flag used to stick true
+        // forever after a failed load (it rethrew before resetting it); that is
+        // fixed with a `defer`. But this screen loads TWO things, the inventory and
+        // your assignments, and only the first of them is what the service's flag
+        // describes. One flag covering the whole load is the honest one.
         if isLoading && equipmentService.equipment.isEmpty {
             VStack(spacing: 16) {
                 ProgressView()

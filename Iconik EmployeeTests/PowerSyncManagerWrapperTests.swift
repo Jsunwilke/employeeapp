@@ -26,6 +26,12 @@
 //
 
 import Testing
+// UUID is Foundation's. Without this the whole test TARGET fails to build, which
+// takes every other test down with it — the sibling files that use Foundation
+// types (CommandQueueTests, SubscriptionCacheTests) already import it. The header
+// below predates the project moving to synchronized file groups: the file is no
+// longer missing from the target, it is compiled, and that is what surfaced this.
+import Foundation
 @testable import Iconik_Employee
 
 @MainActor
