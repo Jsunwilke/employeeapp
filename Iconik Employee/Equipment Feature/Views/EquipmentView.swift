@@ -189,6 +189,10 @@ struct EquipmentView: View {
                     } else {
                         standingLine
 
+                        if assignedKits.isEmpty && looseItems.isEmpty {
+                            unmatchedGearNote
+                        }
+
                         if !assignedKits.isEmpty {
                             AmbientSectionTitle("Your kits", trailing: "\(assignedKits.count)")
                             ForEach(assignedKits) { kit in
@@ -242,6 +246,33 @@ struct EquipmentView: View {
                      border: overdueCount > 0
                         ? .strong(Color.red.opacity(0.45))
                         : .hairline(Color.primary.opacity(0.08)),
+                     fillWidth: true)
+    }
+
+    /// Shown when you have assignments but not one of them resolved to an
+    /// equipment record, so the standing line has numbers and there is nothing to
+    /// list under it.
+    ///
+    /// The two halves of this screen come from different queries: the counts are
+    /// assignments, the rows are equipment. `groupAssignmentsByKit` drops an
+    /// assignment's item silently when it is not in the fetched inventory — which
+    /// happens if the equipment row was deleted, or belongs to another org — so the
+    /// count survives and the row does not. Without this, that state renders as
+    /// three numbers above blank space with no explanation, which reads as a broken
+    /// screen rather than as missing data. Same lesson as PUB.1's O5: a failed
+    /// match must not be indistinguishable from having nothing.
+    private var unmatchedGearNote: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Equipment records missing", systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.orange)
+            Text("\(assignedItemCount) item\(assignedItemCount == 1 ? " is" : "s are") checked out to you, but none of them could be matched to an item in the inventory. They may have been removed. Pull down to refresh, or contact your administrator.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .ambientCard(density: .roomy,
+                     border: .hairline(Color.orange.opacity(0.45)),
                      fillWidth: true)
     }
 
