@@ -442,6 +442,73 @@ the one file nobody assigned to a phase. Converting the bar closes it.
            counter that turns red at the cap, "Scan is always included" note on
            iPhone, saves immediately on every change
 
+### The first mockup was REJECTED, and it deserved to be
+
+Operator, 2026-07-25: "hate it. not really any different. why not do a real glass
+ios 26 design? or better yet, look at the bottom bar from my keepup app on the
+desktop. its a custom glass bar that can hold more than the official glass bar."
+
+They were right, and the diagnosis matters more than the rejection. The first cut
+swapped an opaque background for a material and changed NOTHING ELSE — same
+full-bleed rectangle welded to the bottom edge, same fixed-width cells, same
+underline. It restyled a shape nobody had questioned. That is exactly the failure
+D12 was written about: I had a scope rule about code and turned it into a ceiling
+on the design, on the one surface in the app that is visible from every screen.
+
+The second cut is PORTED FROM THE OPERATOR'S OWN APP —
+~/Desktop/KeepUP/KeepUp/App/GlassSegmentedTabBar.swift, read end to end rather
+than described from its name. What it actually does:
+
+    A FLOATING CAPSULE, inset 14pt from the sides and 6pt off the bottom, 60pt
+      tall, with a real shadow under it — not a bar welded to the screen edge.
+    REAL LIQUID GLASS on iOS 26: .glassEffect(.clear, in: Capsule()).
+    A PILL IT ANIMATES ITSELF, and this is the load-bearing detail: A MATERIAL
+      OR A GLASS EFFECT CANNOT ANIMATE ITS POSITION, so a glass pill that slides
+      cannot be got from the system at all. KeepUp hand-builds it — accent at
+      30%, a top-down white sheen for specular depth, a bright white rim — and
+      slides it with an explicit ease. Their file records that they tried the
+      native UISegmentedControl indicator first: it slides, but its indicator is
+      a flat solid fill with no glass, its timing is not tunable, and its UIKit
+      host composited OVER the SwiftUI pill at rest.
+    NEIGHBOURS PART around the selection, by 7/distance, decaying outward.
+    WIDTH DIVIDED BY COUNT — which is the operator's "holds more than the
+      official glass bar". The system TabView caps at five; this divides the
+      capsule by however many items there are. It also removes the 438pt
+      overflow, because cells stop being a fixed 50pt.
+
+Adapted rather than copied, and each one is a decision this app has already
+taken:
+
+    THE PILL TAKES THE SELECTED FEATURE'S COLOUR. KeepUp has one amber; this app
+      has 27 distinct feature colours since AMB.2, and under D11 a feature's
+      colour means something. So the pill changes hue as it travels and agrees
+      with the tile that was tapped to get there.
+    SCAN AND iPAD HOME SURVIVE as raised circles straddling the capsule's top
+      edge. NAV.1 made Scan permanent and prominent on iPhone and gave the iPad
+      a centre Home instead, because iPads have no NFC. Flattening either into an
+      ordinary cell would discard a navigation decision, not a style.
+    THE iOS 16.6 FLOOR IS HONOURED (D4). Real Liquid Glass is iOS 26 only, so
+      below it the capsule is custom glass — material, sheen, rim — written to
+      stand on its own rather than as a degraded afterthought. The toolchain is
+      Xcode 26.6 with the iOS 26.5 SDK, so the API compiles; KeepUp's own floor
+      is 17.0, which is why it needs no equivalent fallback.
+
+### THE DECISION THE MOCKUP EXISTS TO SETTLE, and it is not a style question
+
+A floating bar means content scrolls UNDER it. That is what gives glass something
+to refract and is the entire reason the look works — a glass bar over a flat page
+is a tinted panel. It also means THE BAR STOPS PARTICIPATING IN LAYOUT.
+
+Today the shell is `VStack { mainContent; BottomTabBar }`, so the bar occupies its
+own space and no screen has to think about it. Floating it makes the bar an
+overlay, and every screen then needs its own bottom inset or its last row hides
+behind the capsule. That is roughly twenty screens, NINE OF THEM NOT YET
+CONVERTED — so the risk lands on surfaces this phase is not otherwise touching.
+
+The mockup carries a toggle for it and states the cost of each on screen, because
+this is a shell-wide architectural choice wearing a visual disguise, and it is the
+operator's to make rather than one to settle quietly mid-build.
+
 ### Defects found while inventorying — REPORTED, not yet fixed
 
     1. THE iPHONE BAR OVERFLOWS THE SCREEN AT ITS OWN MAXIMUM.

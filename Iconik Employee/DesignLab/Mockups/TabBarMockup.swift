@@ -1,57 +1,60 @@
 //  TabBarMockup.swift
-//  Iconik Employee — AMB.4's third mockup
+//  Iconik Employee — AMB.4's third mockup, second cut
 //
 //  ARC SCAFFOLDING. Deleted with the rest of the lab at AMB.12.
 //
-//  WHY IT EXISTS
-//      The operator asked why the bottom bar had not been redesigned, and the
-//      answer was that it belonged to no phase: the arc's phase list is organised
-//      by FEATURE, and the bar is nav-shell furniture from NAV.1 that sits on
-//      every screen. The card-drift gate could not have caught it either — a
-//      full-width bar is not a rounded-and-filled container, so the rule driving
-//      this arc's conversions is blind to it by construction.
+//  THE FIRST CUT WAS REJECTED, and the operator was right: "hate it, not really
+//  any different". It swapped an opaque slab for a material and kept every other
+//  decision the 2023 bar had made — same fixed-width cells, same underline, same
+//  full-bleed rectangle. A restyle of a shape nobody had questioned.
 //
-//      Operator decision, 2026-07-25: it joins AMB.4, with the main screen, and
-//      before any other feature.
+//  THIS CUT IS PORTED FROM KeepUp's GlassSegmentedTabBar (the operator's own app,
+//  ~/Desktop/KeepUP/KeepUp/App/GlassSegmentedTabBar.swift), read end to end
+//  rather than described from memory. What it actually does:
 //
-//  THE ONE THING TO LOOK AT
-//      The REAL bar is on screen right now, underneath this page — it is on every
-//      screen. So the proposed bar below sits directly above the live one, and
-//      the comparison is immediate. That is the whole point of mocking this
-//      surface in situ rather than in isolation.
+//    A FLOATING CAPSULE, not a bar welded to the bottom edge. Inset 14pt from the
+//      sides, 6pt off the bottom, 60pt tall, with a real drop shadow under it.
+//    REAL LIQUID GLASS on iOS 26 — .glassEffect(.clear, in: Capsule()).
+//    A SELECTION PILL IT ANIMATES ITSELF, and the reason is the load-bearing
+//      part: a material or a glassEffect CANNOT ANIMATE ITS POSITION, so a
+//      glass pill that slides is impossible to get from the system. KeepUp
+//      hand-builds the pill — accent fill at 30%, a top-down white sheen for
+//      specular depth, a bright white rim — and slides it with an explicit ease.
+//      They tried the native UISegmentedControl indicator first; it slides, but
+//      its indicator is a flat solid fill with no glass, its timing is not
+//      tunable, and its UIKit host composited OVER the SwiftUI pill at rest.
+//    NEIGHBOURS MOVE. Icons either side of the selection nudge away from it by
+//      7/distance, decaying outward, so the pill appears to part the row.
+//    WIDTH DIVIDED BY COUNT. This is the operator's "holds more than the
+//      official glass bar": the system TabView caps at five, this divides the
+//      capsule by however many items there are.
 //
-//  WHAT CHANGES, AND WHY EACH ONE
-//      1. MATERIAL INSTEAD OF AN OPAQUE SLAB. Today the bar is a solid
-//         systemBackground with a drop shadow, so the ambient wash stops dead at
-//         its top edge. It becomes glass over a top-rounded shape, which is what
-//         TopRoundedRectangle in the design system was built for and has had no
-//         caller until now.
-//      2. THE REAL FEATURE COLOURS. The live bar does NOT read FeatureTheme —
-//         TabBarButton.accentColor is a fourth hardcoded map covering seven ids
-//         and defaulting everything else to blue. So the tile you tap and the bar
-//         item you land on disagree for nearly every feature. Fixing it means two
-//         VISIBLE colour changes worth saying out loud rather than slipping in:
-//         Scan goes from orange to the palette's #2AA7D8, and Time goes from a
-//         flat cyan to the palette's teal. Everything currently falling through
-//         to blue takes its own colour for the first time.
-//      3. ITEMS THAT FLEX. Buttons are a fixed 50pt today and the spacers are
-//         minimums, so at the six items the customise screen allows the bar is
-//         438pt wide — wider than any iPhone. Flexible widths remove the cliff.
-//      4. THE iPAD HOME CIRCLE takes the company blue rather than Apple's default
-//         blue, matching the dashboard's wash. Home is the container, not a
-//         feature, so it takes the brand colour (D11).
+//  WHAT IS ADAPTED FOR THIS APP RATHER THAN COPIED
+//    THE PILL TAKES THE SELECTED FEATURE'S COLOUR, not one fixed accent. KeepUp
+//      has a single amber; this app has 27 distinct feature colours since AMB.2,
+//      and D11 makes a feature's colour mean something. So the pill changes hue
+//      as it travels, and it agrees with the tile you tapped to get there.
+//    SCAN AND iPAD HOME SURVIVE AS RAISED CIRCLES straddling the capsule's top
+//      edge. NAV.1 made Scan permanent and prominent on iPhone, and gave the
+//      iPad a big centre Home instead (iPads have no NFC). Flattening either
+//      into an ordinary cell would lose a deliberate navigation decision.
+//    DIVIDING BY COUNT ALSO FIXES A REAL BUG: today's cells are a fixed 50pt
+//      with minimum-length spacers, so at the six items the customise screen
+//      allows the bar is 438pt wide against 393pt on an iPhone 16.
 //
-//  WHAT DOES NOT CHANGE
-//      Both device layouts and everything that makes them different: Scan stays a
-//      permanent centre button on iPhone and stays absent on iPad; the iPad keeps
-//      its prominent centre Home, its upward overflow, and the notch in the top
-//      hairline. The sliding underline, the badges, the haptics and the labels
-//      all stay.
+//  THE DECISION THIS MOCKUP EXISTS TO SETTLE — see the "Reserves its space"
+//  toggle. A floating bar means content scrolls UNDER it, which is what gives
+//  glass something to refract and is the whole point of the look. It also means
+//  the bar stops participating in layout, so every screen needs its own bottom
+//  inset or its last row hides behind the capsule. This app has twenty-odd
+//  screens and nine of them are unconverted. The toggle shows both, and the cost
+//  of each is stated on screen.
 
 import SwiftUI
 
-/// The two genuinely different bars. Shared with `LabTabBar` so the mockup and
-/// the thing it draws cannot disagree about which layout is which.
+/// The two genuinely different bars this app ships. Not a reflow of each other:
+/// iPhone has a permanent centre Scan and no Home; iPad has a centre Home and no
+/// Scan at all.
 enum TabBarMockupLayout: String, CaseIterable, Identifiable {
     case iPhone, iPad
     var id: String { rawValue }
@@ -62,114 +65,130 @@ struct TabBarMockup: View {
 
     @State private var layout: Layout =
         UIDevice.current.userInterfaceIdiom == .pad ? .iPad : .iPhone
-    @State private var itemCount: Double = 4
+    @State private var itemCount: Double = 5
     @State private var showLabels = true
+    @State private var floats = true
+    @State private var showToday = false
     @State private var selected = "chat"
     @State private var unread = 3
     @State private var clockedIn = true
 
-    /// The features a bar can carry, in the order the default configuration uses
-    /// them. Ids are the REAL feature ids, so FeatureTheme returns the colour the
-    /// converted bar would actually use.
-    private let catalogue: [(id: String, title: String, symbol: String)] = [
-        ("timeTracking", "Time", "clock.fill"),
-        ("chat", "Chat", "bubble.left.and.bubble.right.fill"),
-        ("photoshootNotes", "Notes", "note.text"),
-        ("schedule", "Schedule", "calendar"),
-        ("equipment", "Equipment", "camera.fill"),
-        ("tasks", "Tasks", "checklist"),
+    /// Real feature ids, so `FeatureTheme` returns the colour the converted bar
+    /// would actually use — including the ones that fall through to blue today.
+    private let catalogue: [LabTabItem] = [
+        .init(id: "timeTracking", title: "Time", symbol: "clock.fill"),
+        .init(id: "chat", title: "Chat", symbol: "bubble.left.and.bubble.right.fill"),
+        .init(id: "schedule", title: "Schedule", symbol: "calendar"),
+        .init(id: "photoshootNotes", title: "Notes", symbol: "note.text"),
+        .init(id: "equipment", title: "Equipment", symbol: "camera.fill"),
+        .init(id: "tasks", title: "Tasks", symbol: "checklist"),
+        .init(id: "classGroups", title: "Groups", symbol: "person.3"),
+        .init(id: "mileageReports", title: "Mileage", symbol: "car.fill"),
+        .init(id: "timeOffRequests", title: "Time Off", symbol: "calendar.badge.plus"),
+        .init(id: "sportsShoot", title: "Sports", symbol: "sportscourt"),
     ]
 
-    private var items: [(id: String, title: String, symbol: String)] {
-        Array(catalogue.prefix(Int(itemCount)))
-    }
+    private var items: [LabTabItem] { Array(catalogue.prefix(Int(itemCount))) }
+
+    private var maxItems: Double { layout == .iPad ? 10 : 6 }
 
     var body: some View {
         ZStack {
             AmbientBackdrop(tint: AmbientStyle.brand, intensity: 0.9)
 
-            VStack(spacing: 14) {
-                ScrollView {
-                    VStack(spacing: 14) {
-                        controls
-                        comparison
-                        colourNote
+            // Content BEHIND the bar. It exists so the glass has something real to
+            // refract — judging a glass bar over a flat page tells you nothing,
+            // which is part of why the first cut read as "not really different".
+            ScrollView {
+                VStack(spacing: 12) {
+                    controls
+                    ForEach(0..<8, id: \.self) { index in
+                        filler(index)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 20)
                 }
-
-                // The proposal, in the position it really occupies. The live bar
-                // is immediately below it.
-                VStack(spacing: 6) {
-                    Text("PROPOSED — the live bar is directly below this")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.secondary)
-                    proposedBar
-                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                // Room for the floating capsule, so the last card can clear it.
+                .padding(.bottom, floats ? 96 : 20)
             }
+
+            VStack(spacing: 10) {
+                Spacer()
+                if showToday {
+                    VStack(spacing: 4) {
+                        Text("TODAY")
+                            .font(.system(size: 9, weight: .black))
+                            .foregroundStyle(.secondary)
+                        LegacyTabBarPreview(items: items, layout: layout,
+                                            selected: $selected, showLabels: showLabels,
+                                            unread: unread, clockedIn: clockedIn)
+                    }
+                }
+                GlassTabBarPreview(items: items, layout: layout, selected: $selected,
+                                   showLabels: showLabels, unread: unread,
+                                   clockedIn: clockedIn)
+            }
+            // A bar that reserves its space sits flush; a floating one is inset.
+            .padding(.bottom, floats ? 6 : 0)
         }
     }
 
     // MARK: - Controls
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Picker("Layout", selection: $layout) {
                 ForEach(Layout.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
-
-            Text("Both layouts render on whichever device you are holding, because they are genuinely different bars and you should be able to judge each one on both screens.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack {
-                Text("Items besides Scan")
-                    .font(.footnote.weight(.semibold))
-                Spacer()
-                Text("\(Int(itemCount))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(Int(itemCount) >= 5 ? .orange : .secondary)
+            .onChange(of: layout) { _ in
+                if itemCount > maxItems { itemCount = maxItems }
             }
-            Slider(value: $itemCount, in: 2...6, step: 1)
-                .tint(AmbientStyle.brand)
 
-            Text("Six is what the customise screen allows today. Drag to six on the iPhone layout and compare the two bars below: the live one runs off the screen edge, the proposal does not.")
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Items")
+                        .font(.footnote.weight(.semibold))
+                    Spacer()
+                    Text("\(Int(itemCount)) of \(Int(maxItems))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $itemCount, in: 2...maxItems, step: 1)
+                    .tint(AmbientStyle.brand)
+                Text("Drag it to the maximum. The cells divide the capsule, so it never runs off the edge — today's bar is fixed 50pt cells and is 438pt wide at six items, against 393pt on an iPhone 16. This is also what \"holds more than the official glass bar\" means: the system tab bar stops at five.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider().opacity(0.4)
+
+            Toggle("Floats over the content", isOn: $floats)
+                .font(.footnote.weight(.semibold))
+                .tint(AmbientStyle.brand)
+            Text(floats
+                 ? "Content scrolls UNDER the glass, which is what makes it read as glass. THE COST: the bar stops participating in layout, so every screen needs its own bottom inset — about twenty screens here, nine of them not yet converted. Scroll this page and watch the cards pass beneath it."
+                 : "The bar reserves its own space, exactly as it does today, so no other screen has to change. THE COST: nothing ever passes behind the glass, so it has little to refract and reads closer to a tinted panel.")
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(floats ? .orange : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Divider().opacity(0.4)
 
             Toggle("Show labels", isOn: $showLabels)
                 .font(.footnote.weight(.semibold))
                 .tint(AmbientStyle.brand)
-            Toggle("Clocked in (green dot on Time)", isOn: $clockedIn)
+            Toggle("Show today's bar above it", isOn: $showToday)
                 .font(.footnote.weight(.semibold))
                 .tint(AmbientStyle.brand)
-
-            Stepper("Unread messages: \(unread)", value: $unread, in: 0...120)
+            Toggle("Clocked in", isOn: $clockedIn)
                 .font(.footnote.weight(.semibold))
-        }
-        .ambientCard(density: .compact, fillWidth: true)
-    }
+                .tint(AmbientStyle.brand)
+            Stepper("Unread: \(unread)", value: $unread, in: 0...120)
+                .font(.footnote.weight(.semibold))
 
-    // MARK: - Before and after
-
-    private var comparison: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            AmbientSectionTitle("Today", trailing: "opaque")
-            LabTabBar(items: items, layout: layout, selected: $selected,
-                      showLabels: showLabels, unread: unread,
-                      clockedIn: clockedIn, ambient: false)
-
-            AmbientSectionTitle("Proposed", trailing: "glass")
-            LabTabBar(items: items, layout: layout, selected: $selected,
-                      showLabels: showLabels, unread: unread,
-                      clockedIn: clockedIn, ambient: true)
-
-            Text("Tap items in either bar — the underline travels between them, which is behaviour the live bar loses every time a message arrives (it rebuilds itself on the unread count).")
+            Text(glassNote)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -177,145 +196,285 @@ struct TabBarMockup: View {
         .ambientCard(density: .compact, fillWidth: true)
     }
 
-    private var colourNote: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            AmbientSectionTitle("The two colours that visibly change")
-            ForEach(["scan", "timeTracking"], id: \.self) { id in
-                HStack(spacing: 10) {
-                    Circle().fill(id == "scan" ? Color.orange : Color.cyan)
-                        .frame(width: 18, height: 18)
-                    Image(systemName: "arrow.right")
-                        .font(.caption2).foregroundStyle(.tertiary)
-                    Circle().fill(FeatureTheme.color(for: id))
-                        .frame(width: 18, height: 18)
-                    Text(id == "scan" ? "Scan" : "Time")
-                        .font(.footnote.weight(.medium))
-                    Spacer()
-                    Text(id == "scan" ? "orange → palette blue" : "flat cyan → palette teal")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
+    private var glassNote: String {
+        if #available(iOS 26.0, *) {
+            return "This device is on iOS 26, so the capsule is REAL Liquid Glass (.glassEffect). The sliding pill is hand-built either way — a material cannot animate its position, which is why KeepUp draws its own."
+        } else {
+            return "This device is below iOS 26, so you are seeing the custom-glass fallback: material, a white sheen and a bright rim. The app's floor is iOS 16.6, so this path has to look right on its own — the real Liquid Glass only appears on 26."
+        }
+    }
+
+    private func filler(_ index: Int) -> some View {
+        HStack(spacing: 12) {
+            Circle()
+                .fill(FeatureTheme.color(for: catalogue[index % catalogue.count].id).gradient)
+                .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Something on the screen behind the bar")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Scroll so this row passes under the capsule")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Everything else that currently falls through to blue — Schedule, Tasks, Groups and the rest — takes its own colour for the first time, matching its home tile.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
         .ambientCard(density: .compact, fillWidth: true)
-    }
-
-    private var proposedBar: some View {
-        LabTabBar(items: items, layout: layout, selected: $selected,
-                  showLabels: showLabels, unread: unread,
-                  clockedIn: clockedIn, ambient: true)
     }
 }
 
-// MARK: - The bar itself
+// MARK: - Item
 
-/// Draws the bar either as it is today (`ambient: false`) or as proposed
-/// (`ambient: true`), from the same structure, so the two are genuinely
-/// comparable rather than two separate drawings that drifted.
-private struct LabTabBar: View {
-    let items: [(id: String, title: String, symbol: String)]
+struct LabTabItem: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let symbol: String
+}
+
+// MARK: - The proposal
+
+/// The floating glass bar, ported from KeepUp's `GlassSegmentedTabBar`.
+///
+/// Structure is theirs: a capsule of real glass on iOS 26, cells that divide the
+/// width, and a pill this view positions and animates itself because the system
+/// cannot animate a material's position. The pill's colour is this app's addition
+/// — it takes the selected feature's colour so the bar agrees with the tile.
+private struct GlassTabBarPreview: View {
+    let items: [LabTabItem]
     let layout: TabBarMockupLayout
     @Binding var selected: String
     let showLabels: Bool
     let unread: Int
     let clockedIn: Bool
-    let ambient: Bool
+
+    /// iPad caps the row rather than sprawling across a 13-inch screen — KeepUp
+    /// does the same at 560 for six items; this allows up to ten.
+    private var maxWidth: CGFloat { layout == .iPad ? 720 : .infinity }
+
+    /// The centre button that straddles the capsule: Scan on iPhone, Home on
+    /// iPad. Never both — iPads have no NFC, so Scan does not exist there.
+    private var centreID: String { layout == .iPad ? "home" : "scan" }
+    private var centreSymbol: String { layout == .iPad ? "house.fill" : "wave.3.right.circle.fill" }
+
+    /// Home is the container, not a feature, so it takes the brand colour; Scan
+    /// takes its palette colour like any other feature.
+    private var centreTint: Color {
+        layout == .iPad ? AmbientStyle.brand : FeatureTheme.color(for: "scan")
+    }
+
+    private var accent: Color {
+        selected == centreID ? centreTint : FeatureTheme.color(for: selected)
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            capsuleBar
+            centreButton
+                // Straddles the top edge, so it reads as sitting ON the glass
+                // rather than inside it.
+                .offset(y: -22)
+        }
+        .frame(maxWidth: maxWidth)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 14)
+        // The shadow is what makes it read as floating rather than painted on.
+        .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 5)
+        // Six labels cannot render at the largest accessibility sizes; KeepUp
+        // bounds its bar's own text for the same reason while leaving content
+        // fully scalable.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+    }
+
+    private var capsuleBar: some View {
+        GeometryReader { geo in
+            let count = max(items.count, 1)
+            let cellWidth = geo.size.width / CGFloat(count)
+            let index = CGFloat(items.firstIndex(where: { $0.id == selected }) ?? 0)
+            // Wider than a cell so a long label fits, then clamped so it can never
+            // slide past the capsule's rounded ends.
+            let pillWidth = cellWidth + 8
+            let idealPillX = cellWidth * index - 4
+            let pillX = min(max(idealPillX, 0), max(geo.size.width - pillWidth, 0))
+            // How far the clamp moved it. The selected icon shifts by the same
+            // amount so it stays centred IN the pill on the end cells.
+            let pillShift = pillX - idealPillX
+            let onCentre = selected == centreID
+
+            ZStack(alignment: .leading) {
+                // Hand-built glass pill. NOT a material: a material cannot animate
+                // its position, and without the slide this is just a highlight.
+                Capsule()
+                    .fill(accent.opacity(0.30))
+                    .overlay(
+                        Capsule().fill(
+                            .linearGradient(colors: [.white.opacity(0.5), .white.opacity(0.0)],
+                                            startPoint: .top, endPoint: .bottom)
+                        )
+                    )
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.55), lineWidth: 1))
+                    .frame(width: pillWidth, height: geo.size.height - 10)
+                    .offset(x: pillX)
+                    // Hidden, not removed, while the centre button owns the
+                    // selection — so it slides back from where it left rather
+                    // than reappearing at cell zero.
+                    .opacity(onCentre ? 0 : 1)
+
+                HStack(spacing: 0) {
+                    ForEach(items) { item in
+                        cell(item, pillShift: pillShift, isSelected: item.id == selected)
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+            }
+        }
+        .frame(height: 60)
+        .modifier(GlassCapsule())
+    }
+
+    private func cell(_ item: LabTabItem, pillShift: CGFloat, isSelected: Bool) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.4)) { selected = item.id }
+            AmbientHaptics.impact(.light)
+        } label: {
+            VStack(spacing: 3) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: item.symbol)
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(height: 18)
+                    badge(for: item)
+                }
+                if showLabels {
+                    Text(item.title)
+                        .font(.system(size: 9, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                }
+            }
+            .foregroundStyle(isSelected ? FeatureTheme.color(for: item.id) : Color.secondary)
+            // The selected icon rides the clamped pill; the others part around it,
+            // strongest next to the selection and decaying outward. Visual only —
+            // the tappable cell does not move.
+            .offset(x: isSelected ? pillShift : pushOffset(for: item))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    @ViewBuilder
+    private func badge(for item: LabTabItem) -> some View {
+        if item.id == "chat", unread > 0 {
+            Text(unread > 99 ? "99+" : "\(unread)")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5).padding(.vertical, 1.5)
+                .background(Capsule().fill(Color.red))
+                .offset(x: 13, y: -7)
+        } else if item.id == "timeTracking", clockedIn {
+            Circle().fill(Color.green)
+                .frame(width: 7, height: 7)
+                .overlay(Circle().strokeBorder(.white.opacity(0.7), lineWidth: 0.5))
+                .offset(x: 10, y: -5)
+        }
+    }
+
+    /// Nudge away from the selection, strongest for the immediate neighbours and
+    /// decaying with distance. Ported verbatim.
+    private func pushOffset(for item: LabTabItem) -> CGFloat {
+        guard let selectedIndex = items.firstIndex(where: { $0.id == selected }),
+              let itemIndex = items.firstIndex(of: item) else { return 0 }
+        let distance = itemIndex - selectedIndex
+        guard distance != 0 else { return 0 }
+        return (distance > 0 ? 1 : -1) * 7 / CGFloat(abs(distance))
+    }
+
+    private var centreButton: some View {
+        let isSelected = selected == centreID
+        return Button {
+            withAnimation(.easeInOut(duration: 0.4)) { selected = centreID }
+            AmbientHaptics.impact(.medium)
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(isSelected ? AnyShapeStyle(centreTint.gradient)
+                                     : AnyShapeStyle(.ultraThinMaterial))
+                    .overlay(Circle().strokeBorder(.white.opacity(isSelected ? 0.55 : 0.35),
+                                                   lineWidth: 1))
+                    .frame(width: 56, height: 56)
+                Image(systemName: centreSymbol)
+                    // Scan's glyph deliberately overruns its circle today and the
+                    // code says so on purpose; a house at that size would clip,
+                    // which is why the iPad draws its own.
+                    .font(.system(size: layout == .iPad ? 26 : 40, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.white : centreTint)
+            }
+            .shadow(color: centreTint.opacity(isSelected ? 0.4 : 0.15), radius: 10, y: 4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(layout == .iPad ? "Home" : "Scan")
+    }
+}
+
+/// Real Liquid Glass on iOS 26; a custom-glass capsule below it, because this
+/// app's floor is iOS 16.6 and the fallback has to stand on its own rather than
+/// being a degraded afterthought (AMB plan, D4).
+private struct GlassCapsule: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.clear, in: Capsule())
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(
+                    Capsule().fill(
+                        .linearGradient(colors: [.white.opacity(0.28), .white.opacity(0.0)],
+                                        startPoint: .top, endPoint: .bottom)
+                    )
+                    .allowsHitTesting(false)
+                )
+                .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.8))
+        }
+    }
+}
+
+// MARK: - Today, for comparison
+
+/// Today's bar, reproduced faithfully — opaque slab, fixed 50pt cells, the
+/// hardcoded colour map with its fall-through to blue, and the underline. Drawn
+/// so the before/after is honest rather than flattering.
+private struct LegacyTabBarPreview: View {
+    let items: [LabTabItem]
+    let layout: TabBarMockupLayout
+    @Binding var selected: String
+    let showLabels: Bool
+    let unread: Int
+    let clockedIn: Bool
 
     @Namespace private var namespace
 
     var body: some View {
-        content
-            .padding(.top, 7)
-            .padding(.horizontal, 4)
-            .padding(.bottom, ambient ? 10 : 10)
-            .background(background)
-            .overlay(topEdge, alignment: .top)
-            .clipped()
-    }
-
-    @ViewBuilder
-    private var background: some View {
-        if ambient {
-            // Glass, so the ambient wash carries under the bar instead of
-            // stopping at its top edge. TopRoundedRectangle has been in the
-            // design system since AMB.2 for exactly this and had no caller.
-            TopRoundedRectangle(radius: 22)
-                .fill(.ultraThinMaterial)
-        } else {
-            // ambient-allow: this is the BEFORE half of a before/after, drawn to
-            // match the live bar exactly (opaque slab + upward drop shadow).
-            Color(.systemBackground)
-                .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: -5)
+        HStack(spacing: 0) {
+            ForEach(items) { item in
+                cell(item)
+                    // Fixed width — the thing that makes it overflow at six.
+                    .frame(width: layout == .iPad ? 60 : 50)
+            }
+        }
+        .padding(.top, 7)
+        .padding(.horizontal, 4)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity)
+        // ambient-allow: the BEFORE half of a before/after. Deliberately the live
+        // bar's opaque slab and upward shadow, so the comparison is truthful.
+        .background(Color(.systemBackground).shadow(color: .black.opacity(0.1),
+                                                    radius: 10, x: 0, y: -5))
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color(.separator)).frame(height: 0.5)
         }
     }
 
-    @ViewBuilder
-    private var topEdge: some View {
-        let line = Color(.separator).opacity(ambient ? 0.45 : 1)
-        if layout == .iPad {
-            // The notch around the centre Home circle. NAV.1 shipped this and it
-            // survives the conversion.
-            HStack(spacing: 0) {
-                Rectangle().fill(line).frame(height: 0.5)
-                Color.clear.frame(width: 92, height: 0.5)
-                Rectangle().fill(line).frame(height: 0.5)
-            }
-        } else {
-            Rectangle().fill(line).frame(height: 0.5)
-        }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        if layout == .iPad {
-            HStack(alignment: .bottom, spacing: 0) {
-                let mid = (items.count + 1) / 2
-                HStack(spacing: 0) {
-                    ForEach(Array(items.prefix(mid)), id: \.id) { item in
-                        button(item).frame(maxWidth: .infinity)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-
-                homeCircle
-
-                HStack(spacing: 0) {
-                    ForEach(Array(items.dropFirst(mid)), id: \.id) { item in
-                        button(item).frame(maxWidth: .infinity)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-            }
-        } else {
-            HStack(spacing: 0) {
-                let mid = (items.count + 1) / 2
-                ForEach(Array(items.prefix(mid)), id: \.id) { item in
-                    // Flexible on the proposal, the live bar's fixed 50pt on the
-                    // "today" side — which is what makes it overflow at six.
-                    button(item).modifier(ItemWidth(flexible: ambient, width: 50))
-                }
-
-                scanButton
-                    .modifier(ItemWidth(flexible: ambient, width: 70))
-
-                ForEach(Array(items.dropFirst(mid)), id: \.id) { item in
-                    button(item).modifier(ItemWidth(flexible: ambient, width: 50))
-                }
-            }
-        }
-    }
-
-    // MARK: pieces
-
-    private func tint(_ id: String) -> Color {
-        // The proposal reads the single source of truth. "Today" reproduces
-        // TabBarButton.accentColor verbatim, including its fall-through to blue,
-        // so the before/after shows the real disagreement rather than a flattering
-        // version of it.
-        if ambient { return FeatureTheme.color(for: id) }
+    /// TabBarButton.accentColor, verbatim — seven ids and blue for everything else.
+    private func legacyTint(_ id: String) -> Color {
         switch id {
         case "timeTracking": return .cyan
         case "chat": return .blue
@@ -328,20 +487,17 @@ private struct LabTabBar: View {
         }
     }
 
-    private func button(_ item: (id: String, title: String, symbol: String)) -> some View {
+    private func cell(_ item: LabTabItem) -> some View {
         let isSelected = selected == item.id
-        let accent = tint(item.id)
+        let accent = legacyTint(item.id)
         return Button {
-            withAnimation(AmbientMotion.snappy) { selected = item.id }
-            AmbientHaptics.impact(.light)
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { selected = item.id }
         } label: {
             VStack(spacing: 2) {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: item.symbol)
-                        .font(.system(size: layout == .iPad ? 30 : 24))
-                        .foregroundStyle(isSelected ? accent : Color.secondary)
+                        .font(.system(size: 24))
                         .scaleEffect(isSelected ? 1.1 : 1)
-
                     if item.id == "chat", unread > 0 {
                         Text(unread > 99 ? "99+" : "\(unread)")
                             .font(.system(size: 11, weight: .bold))
@@ -350,26 +506,24 @@ private struct LabTabBar: View {
                             .background(Capsule().fill(Color.red))
                             .offset(x: 12, y: -8)
                     } else if item.id == "timeTracking", clockedIn {
-                        Circle().fill(Color.green)
-                            .frame(width: 8, height: 8)
+                        Circle().fill(Color.green).frame(width: 8, height: 8)
                             .offset(x: 10, y: -6)
                     }
                 }
-                .frame(width: layout == .iPad ? 60 : 44, height: layout == .iPad ? 45 : 32)
+                .frame(width: 44, height: 32)
+                .foregroundStyle(isSelected ? accent : Color.gray)
 
                 if showLabels {
                     Text(item.title)
-                        .font(.system(size: layout == .iPad ? 12 : 10))
-                        .foregroundStyle(isSelected ? accent : Color.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .font(.system(size: 10))
+                        .foregroundStyle(isSelected ? accent : Color.gray)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                 }
-
                 if isSelected {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(accent)
                         .frame(width: 20, height: 3)
-                        .matchedGeometryEffect(id: "tabSelection", in: namespace)
+                        .matchedGeometryEffect(id: "legacyTabSelection", in: namespace)
                 } else {
                     Color.clear.frame(width: 20, height: 3)
                 }
@@ -378,71 +532,4 @@ private struct LabTabBar: View {
         }
         .buttonStyle(.plain)
     }
-
-    private var scanButton: some View {
-        let isSelected = selected == "scan"
-        let accent = tint("scan")
-        return Button {
-            withAnimation(AmbientMotion.snappy) { selected = "scan" }
-            AmbientHaptics.impact(.medium)
-        } label: {
-            VStack(spacing: 2) {
-                ZStack {
-                    Circle()
-                        .fill(isSelected ? accent : Color.gray.opacity(0.2))
-                        .frame(width: 50, height: 50)
-                    // The glyph deliberately overflows its circle — the live bar
-                    // does this on purpose and the code says so.
-                    Image(systemName: "wave.3.right.circle.fill")
-                        .font(.system(size: 60))
-                        .foregroundStyle(isSelected ? Color.white : Color.secondary)
-                }
-                .frame(width: 50, height: 50)
-                if showLabels { Color.clear.frame(height: 12) }
-                Color.clear.frame(width: 20, height: 3)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var homeCircle: some View {
-        let isSelected = selected == "home"
-        return Button {
-            withAnimation(AmbientMotion.snappy) { selected = "home" }
-            AmbientHaptics.impact(.medium)
-        } label: {
-            ZStack {
-                Circle()
-                    // Company blue rather than Apple's default. Home is the
-                    // container, not a feature, so it takes the brand colour —
-                    // the same reasoning that gives the dashboard its wash.
-                    .fill(isSelected ? (ambient ? AmbientStyle.brand : Color.blue)
-                                     : Color(.systemGray5))
-                    .frame(width: 78, height: 78)
-                    .overlay(Circle().strokeBorder(Color(.separator), lineWidth: 1.5))
-                Image(systemName: "house.fill")
-                    .font(.system(size: 44, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.white : Color.gray)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Home")
-        .frame(width: 84, height: 44, alignment: .bottom)
-    }
 }
-
-/// Fixed width reproduces today's overflow; flexible is the proposal.
-private struct ItemWidth: ViewModifier {
-    let flexible: Bool
-    let width: CGFloat
-
-    func body(content: Content) -> some View {
-        if flexible {
-            content.frame(maxWidth: .infinity)
-        } else {
-            content.frame(width: width)
-        }
-    }
-}
-

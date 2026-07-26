@@ -88,7 +88,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .dashboardIPad:
             return "The iPad's home is a DIFFERENT screen — sports rosters, group jobs and notes, with none of the hours, mileage, shifts or tasks you approved for the phone. This is the half that had no design."
         case .tabBar:
-            return "It belonged to no phase, so it never got converted. Glass instead of an opaque slab, and the real feature colours — the live bar has its own hardcoded map and does not read the palette at all."
+            return "Second cut — the first was rejected for changing nothing that mattered. A FLOATING glass capsule ported from KeepUp's, with a pill that slides and takes the colour of whatever you selected. Real Liquid Glass on iOS 26."
         case .tasks:
             return "Grouped by when — overdue, today, this week — so you stop driving a chip bar to find out what is late. All five filters still work."
         case .chat:
