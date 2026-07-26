@@ -261,11 +261,16 @@ struct BottomTabBar: View {
             }
         }
         .frame(height: TabBarMetrics.height)
+        // ORDER MATTERS HERE. The glass and its shadow are applied to the CAPPED
+        // width, and only then is the finished capsule centred. Applying them after
+        // the centring frame — which is what the first cut did — stretched the
+        // frosted panel, its stroke and its shadow across the full iPad screen
+        // while the cells, pill and centre button stayed inside the 560pt cap.
         .frame(maxWidth: isIPad ? TabBarMetrics.iPadMaxWidth : .infinity)
-        .frame(maxWidth: .infinity)
         .modifier(GlassCapsule(frost: TabBarMetrics.frost))
         // What makes it read as floating rather than painted on.
         .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 5)
+        .frame(maxWidth: .infinity)
         // Several labels cannot render at the largest accessibility sizes; the
         // bar's own text is bounded so navigation stays usable while screen
         // content remains fully scalable.

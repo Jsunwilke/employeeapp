@@ -1333,6 +1333,11 @@ struct FPSportsRosterView_iPad: View {
                     iPadView
                 }
             }
+        // Room for the app's floating bar. Now that this screen no longer hides the
+        // bar, its bottom strip would otherwise sit under the capsule — and the
+        // shell cannot supply this, because the NavigationView belongs to this
+        // feature and an inset applied from outside one does nothing.
+        .tabBarClearance()
         .onAppear {
             isViewVisible = true
             // The tab bar is NO LONGER HIDDEN HERE (AMB.4, operator-authorised

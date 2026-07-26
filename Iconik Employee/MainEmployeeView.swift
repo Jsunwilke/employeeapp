@@ -717,13 +717,13 @@ struct MainEmployeeView: View {
             // Self-nav features own their bar and add their own Home button
             // (via .homeToolbarItem() inside each view).
             //
-            // The clearance has to be applied from OUT HERE for these, which is
-            // weaker: the NavigationView belongs to the feature, so the inset lands
-            // on the container rather than on the scroll view inside it. Verify each
-            // of these on a device as its own phase converts it — Tasks and
-            // Equipment are AMB.5 and AMB.3, capture/training/unflagUser later.
+            // NO clearance from out here. Each self-nav feature applies its own
+            // INSIDE its container, which is the only position that works for a
+            // legacy NavigationView. Applying it here as well would be harmless for
+            // those — the outer inset is simply ignored — but EquipmentView uses a
+            // real NavigationStack, which DOES honour an outer inset, so the two
+            // stacked and it reserved 168pt instead of 84.
             featureView(for: featureId)
-                .tabBarClearance(showsTabBar)
         } else {
             NavigationView {
                 featureView(for: featureId)

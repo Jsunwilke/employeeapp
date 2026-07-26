@@ -159,12 +159,22 @@ struct HoursWidget: View {
             label: "This week",
             // Under 40 the bar is a share of 40; past 40 it is full and split in
             // proportion, which is how the old bar behaved and is the only way
-            // "how far past 40 am I" reads at a glance. Dividing the banked
-            // split by the same denominator keeps the three segments consecutive
-            // in both cases.
-            regularFraction: min(banked, 40) / max(totalWithActive, 40),
-            overtimeFraction: max(banked - 40, 0) / max(totalWithActive, 40),
+            // "how far past 40 am I" reads at a glance.
+            //
+            // THE SPLIT IS TAKEN OVER THE TOTAL, INCLUDING THE RUNNING ENTRY, and
+            // that is the fix for a contradiction the review caught: the caption
+            // beside this bar computes overtime from the total, so when a clock-in
+            // in progress is what pushes you past 40 it said "+3h OT" while the bar
+            // showed no orange at all. A bar and its own label disagreeing about
+            // overtime on a payroll readout is worse than either version alone.
+            //
+            // The running hours are therefore marked as an OVERLAY on the trailing
+            // end rather than appended as a third segment — appending would count
+            // them twice, since they are already inside the split above.
+            regularFraction: min(totalWithActive, 40) / max(totalWithActive, 40),
+            overtimeFraction: max(totalWithActive - 40, 0) / max(totalWithActive, 40),
             activeFraction: running / max(totalWithActive, 40),
+            activeMode: .overlay,
             tint: .blue,
             primaryText: overtime > 0 || activeHours > 0
                 ? "\(formatHours(totalWithActive)) / 40h"
@@ -201,6 +211,12 @@ struct HoursWidget: View {
             regularFraction: regularHours / scale,
             overtimeFraction: overtimeHours / scale,
             activeFraction: running / scale,
+            // APPENDED here, unlike the week, and the difference is in the data
+            // rather than a preference: regularHours and overtimeHours come from
+            // the payroll breakdown and describe BANKED time only, summing to
+            // totalHours. So the running entry genuinely extends the bar past them
+            // and its caption also reports banked overtime — bar and label agree.
+            activeMode: .appended,
             tint: .indigo,
             primaryText: "\(formatHours(totalWithActive)) / 80h",
             notes: periodNotes
@@ -570,7 +586,17 @@ struct HoursMeter: View {
     let regularFraction: Double
     let overtimeFraction: Double
     let activeFraction: Double
+    /// Whether the running entry EXTENDS the bar or merely marks its trailing end.
+    ///
+    /// Both are needed because the two meters are fed differently. The pay period's
+    /// regular/overtime come from the payroll breakdown and cover banked time only,
+    /// so the running entry is extra length (.appended). The week's split is taken
+    /// over the total, so the running hours are already inside it and marking them
+    /// again as a segment would count them twice (.overlay).
+    let activeMode: ActiveMode
     let tint: Color
+
+    enum ActiveMode { case appended, overlay }
     let primaryText: String
     let notes: [HoursMeterNote]
 
@@ -643,7 +669,7 @@ struct HoursMeter: View {
                                 .fill(Color.orange.gradient)
                                 .frame(width: width * clamp(overtimeFraction))
                         }
-                        if activeFraction > 0 {
+                        if activeFraction > 0, activeMode == .appended {
                             // Lighter shade of the same tint, not a white wash:
                             // it has to read as "this part is still going" on a
                             // pale track in daylight.
@@ -654,6 +680,20 @@ struct HoursMeter: View {
                         Spacer(minLength: 0)
                     }
                     .frame(width: width)
+                    .overlay(alignment: .leading) {
+                        // The trailing slice of the fill that is still running.
+                        // Lightened ON TOP, so it reads the same whether it sits
+                        // over the regular segment, the overtime one, or across
+                        // the join between them.
+                        if activeFraction > 0, activeMode == .overlay {
+                            let filled = clamp(regularFraction + overtimeFraction)
+                            let active = clamp(min(activeFraction, filled))
+                            Rectangle()
+                                .fill(Color.white.opacity(0.4))
+                                .frame(width: width * active)
+                                .offset(x: width * clamp(filled - active))
+                        }
+                    }
                     .clipShape(Capsule())
                 }
             }
