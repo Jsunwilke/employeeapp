@@ -1076,150 +1076,37 @@ struct SportsRostersWidget: View {
         return formatter
     }
     
-    // Break down complex view into computed properties
-    private var headerView: some View {
-        HStack {
-            Image(systemName: "sportscourt")
-                .font(.title2)
-                .foregroundColor(.orange)
-            Text("Sports Rosters")
-                .font(.headline)
-            Spacer()
-            
-            Button(action: {
-                // Navigate to sports shoots feature
-                tabBarManager.selectedTab = "sportsShoot"
-            }) {
-                HStack(spacing: 4) {
-                    Text("View All")
-                    Image(systemName: "chevron.right")
-                }
-                .font(.caption)
-                .foregroundColor(.blue)
-            }
-        }
-    }
-    
-    private var loadingView: some View {
-        HStack {
-            Spacer()
-            ProgressView()
-            Spacer()
-        }
-        .padding(.vertical, 40)
-    }
-    
-    private var emptyStateView: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "sportscourt")
-                .font(.system(size: 40))
-                .foregroundColor(.gray)
-            Text("No sports rosters today")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 30)
-    }
-    
-    private var contentView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(todaysSportsShoots.prefix(3)) { shoot in
-                shootRowView(for: shoot)
-            }
-            
-            if todaysSportsShoots.count > 3 {
-                HStack {
-                    Spacer()
-                    Text("\(todaysSportsShoots.count - 3) more rosters")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
+    var body: some View {
+        DashboardWidgetCard {
+            DashboardWidgetHeader("Sports Rosters", systemImage: "sportscourt", tint: .orange) {
+                DashboardHeaderLink("View all") {
+                    tabBarManager.selectedTab = "sportsShoot"
                 }
             }
-        }
-    }
-    
-    private func shootRowView(for shoot: SportsShoot) -> some View {
-        Button(action: {
-            // Route to correct view based on whether it's linked to Production
-            TabBarManager.shared.selectedSportsShoot = shoot
-            if shoot.galleryId != nil {
-                tabBarManager.selectedTab = "focalPointSports"
+
+            if isLoading {
+                DashboardWidgetLoading()
+            } else if todaysSportsShoots.isEmpty {
+                DashboardWidgetEmpty(
+                    systemImage: "sportscourt",
+                    title: "No sports rosters today",
+                    message: "Rosters appear here on the day of the shoot."
+                )
             } else {
-                tabBarManager.selectedTab = "sportsShoot"
-            }
-        }) {
-            HStack {
-                // Sports icon
-                Image(systemName: getSportsIcon(for: shoot.sportName))
-                    .font(.caption)
-                    .foregroundColor(.orange)
-                    .frame(width: 20)
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(shoot.schoolName)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    
-                    HStack(spacing: 8) {
-                        // Sport name
-                        Text(shoot.sportName)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        // Time
-                        Text("• \(dateFormatter.string(from: shoot.shootDate))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                VStack(spacing: 8) {
+                    ForEach(todaysSportsShoots.prefix(3)) { shoot in
+                        shootRow(shoot)
                     }
                 }
-                
-                Spacer()
-                
-                // Route indicator
-                HStack(spacing: 4) {
-                    Image(systemName: shoot.galleryId != nil ? "bolt.fill" : "sportscourt.fill")
-                        .font(.caption2)
-                    Text(shoot.galleryId != nil ? "FP Sports" : "View")
-                        .font(.caption)
+
+                if todaysSportsShoots.count > 3 {
+                    let extra = todaysSportsShoots.count - 3
+                    DashboardMoreRow(title: "\(extra) more roster\(extra == 1 ? "" : "s") today") {
+                        tabBarManager.selectedTab = "sportsShoot"
+                    }
                 }
-                .foregroundColor(shoot.galleryId != nil ? .green : .blue)
-                
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-            }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
-            .background(Color(.secondarySystemBackground))
-            .cornerRadius(8)
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            headerView
-            
-            if isLoading {
-                loadingView
-            } else if todaysSportsShoots.isEmpty {
-                emptyStateView
-            } else {
-                contentView
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
         .onAppear {
             loadSportsRosters()
         }
@@ -1302,6 +1189,54 @@ struct SportsRostersWidget: View {
         }
     }
     
+    /// The route is said OUT LOUD, because two rows that look the same open two
+    /// different tools and the only thing that decides it is whether the shoot is
+    /// linked to Production. The old row said "View" for the Captura side; naming
+    /// the tool is clearer and was approved with the design.
+    private func shootRow(_ shoot: SportsShoot) -> some View {
+        Button {
+            // Routing unchanged: linked to Production opens FP Sports, otherwise
+            // the Captura roster.
+            TabBarManager.shared.selectedSportsShoot = shoot
+            tabBarManager.selectedTab = shoot.galleryId != nil ? "focalPointSports" : "sportsShoot"
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: getSportsIcon(for: shoot.sportName))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(Color.orange.opacity(0.16)))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(shoot.schoolName)
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(shoot.sportName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Text("·").foregroundStyle(.tertiary)
+                        Text(dateFormatter.string(from: shoot.shootDate))
+                            .font(.caption).monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+
+                AmbientBadge(text: shoot.galleryId != nil ? "FP Sports" : "Captura",
+                             systemImage: shoot.galleryId != nil ? "bolt.fill" : "sportscourt.fill",
+                             tint: shoot.galleryId != nil ? .green : .blue)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .ambientCard(density: .compact, border: .hairline(Color.orange.opacity(0.25)))
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
     private func getSportsIcon(for sportName: String) -> String {
         let sessionTypeString = sportName.lowercased()
         
@@ -1343,153 +1278,100 @@ struct ClassGroupsWidget: View {
         return formatter
     }
     
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Header
-            HStack {
-                Image(systemName: "person.3.fill")
-                    .font(.title2)
-                    .foregroundColor(.purple)
-                Text("Group Jobs")
-                    .font(.headline)
-                Spacer()
-                
-                Button(action: {
-                    showingCreateJob = true
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus.circle.fill")
-                        Text("Add Jobs")
-                    }
-                    .font(.caption)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.purple)
-                    .cornerRadius(15)
+    private func jobRow(_ job: ClassGroupJob) -> some View {
+        Button {
+            // Both the id AND the type, so the Groups screen opens on the right
+            // segment. Unchanged from before the conversion.
+            tabBarManager.selectedClassGroupJobId = job.id
+            tabBarManager.selectedClassGroupJobType = job.jobType
+            tabBarManager.selectedTab = "classGroups"
+        } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(job.schoolName)
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text(dateFormatter.string(from: job.sessionDate))
+                        .font(.caption).monospacedDigit()
+                        .foregroundStyle(.secondary)
                 }
+                AmbientPillRow(pills: pills(for: job), density: .compact)
             }
-            
-            if isLoading {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                    Spacer()
-                }
-                .padding(.vertical, 40)
-            } else if todaysJobs.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "person.3.fill")
-                        .font(.system(size: 40))
-                        .foregroundColor(.gray)
-                    Text("No group jobs today")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+            .ambientCard(density: .compact, border: .hairline(Color.purple.opacity(0.25)))
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
 
-                    Button(action: {
-                        showingCreateJob = true
-                    }) {
-                        Text("Add Group Jobs")
-                            .font(.caption)
-                            .foregroundColor(.purple)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Color.purple.opacity(0.1))
-                            .cornerRadius(20)
+    /// A job with nothing added yet is the case worth reading first, so it takes the
+    /// warning colour rather than being a quiet zero. The nouns are the job type's
+    /// own, singular and plural — a "class" is not a "club".
+    private func pills(for job: ClassGroupJob) -> [AmbientPill] {
+        var pills: [AmbientPill] = []
+        if job.classGroupCount > 0 {
+            let noun = job.classGroupCount == 1
+                ? ClassGroupJobType.countNoun(job.jobType)
+                : ClassGroupJobType.countNounPlural(job.jobType)
+            pills.append(.init(text: "\(job.classGroupCount) \(noun)",
+                               systemImage: "person.3", tint: .blue))
+        } else {
+            pills.append(.init(text: "No \(ClassGroupJobType.countNounPlural(job.jobType)) added",
+                               systemImage: "exclamationmark.triangle.fill", tint: .orange))
+        }
+        if job.totalImageCount > 0 {
+            pills.append(.init(text: "\(job.totalImageCount)", systemImage: "photo", tint: .green))
+        }
+        pills.append(.init(text: ClassGroupJobType.badgeLabel(job.jobType), tint: .purple))
+        return pills
+    }
+
+    var body: some View {
+        DashboardWidgetCard {
+            DashboardWidgetHeader("Group Jobs", systemImage: "person.3.fill", tint: .purple) {
+                // The widget's only write action, and it stays a filled button
+                // rather than a text link — it is the one thing you can DO here.
+                Button {
+                    showingCreateJob = true
+                } label: {
+                    Label("Add jobs", systemImage: "plus")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        // ambient-allow: a filled action button, not a card.
+                        .background(Capsule().fill(Color.purple))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isLoading {
+                DashboardWidgetLoading()
+            } else if todaysJobs.isEmpty {
+                DashboardWidgetEmpty(
+                    systemImage: "person.3.fill",
+                    title: "No group jobs today",
+                    message: "Add the classes, clubs or candids you are shooting.",
+                    actionTitle: "Add group jobs",
+                    tint: .purple,
+                    action: { showingCreateJob = true }
+                )
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(todaysJobs.prefix(3)) { job in
+                        jobRow(job)
                     }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 30)
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(todaysJobs.prefix(3)) { job in
-                        Button(action: {
-                            // Set selected job (+ its type, so the list opens the right
-                            // segment) and navigate to the Groups feature
-                            tabBarManager.selectedClassGroupJobId = job.id
-                            tabBarManager.selectedClassGroupJobType = job.jobType
-                            tabBarManager.selectedTab = "classGroups"
-                        }) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                // School name and time
-                                HStack {
-                                    Text(job.schoolName)
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                        .lineLimit(1)
-                                        .foregroundColor(.primary)
-                                    Spacer()
-                                    Text(dateFormatter.string(from: job.sessionDate))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                
-                                // Group count and type
-                                HStack {
-                                    if job.classGroupCount > 0 {
-                                        Label("\(job.classGroupCount) \(job.classGroupCount == 1 ? ClassGroupJobType.countNoun(job.jobType) : ClassGroupJobType.countNounPlural(job.jobType))",
-                                              systemImage: "person.3")
-                                            .font(.caption)
-                                            .foregroundColor(.blue)
-                                    } else {
-                                        Text("No \(ClassGroupJobType.countNounPlural(job.jobType)) added")
-                                            .font(.caption)
-                                            .foregroundColor(.orange)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    if job.totalImageCount > 0 {
-                                        Label("\(job.totalImageCount)", systemImage: "photo")
-                                            .font(.caption)
-                                            .foregroundColor(.green)
-                                    }
-                                    
-                                    // Job type badge
-                                    Text(ClassGroupJobType.badgeLabel(job.jobType))
-                                        .font(.caption)
-                                        .foregroundColor(.purple)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(Color.purple.opacity(0.1))
-                                        .cornerRadius(12)
-                                }
-                            }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 12)
-                            .background(Color(.secondarySystemBackground))
-                            .cornerRadius(8)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                    }
-                    
-                    if todaysJobs.count > 3 {
-                        Button(action: {
-                            // Navigate to the Groups feature to view all
-                            tabBarManager.selectedClassGroupJobId = nil
-                            tabBarManager.selectedClassGroupJobType = nil
-                            tabBarManager.selectedTab = "classGroups"
-                        }) {
-                            HStack {
-                                Spacer()
-                                Text("View All (\(todaysJobs.count) jobs)")
-                                    .font(.caption)
-                                    .foregroundColor(.blue)
-                                Spacer()
-                            }
-                        }
+
+                if todaysJobs.count > 3 {
+                    DashboardMoreRow(title: "View all (\(todaysJobs.count) jobs)") {
+                        // Clearing BOTH selections is what makes the Groups screen
+                        // open on its full list rather than on a stale job.
+                        tabBarManager.selectedClassGroupJobId = nil
+                        tabBarManager.selectedClassGroupJobType = nil
+                        tabBarManager.selectedTab = "classGroups"
                     }
                 }
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
         .onAppear {
             loadClassGroupJobs()
         }
@@ -1576,225 +1458,186 @@ struct PhotoshootNotesWidget: View {
         return SchoolItem(id: "unknown", name: "Unknown", address: "", coordinates: nil)
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Header
-            HStack {
-                Image(systemName: "note.text")
-                    .font(.title2)
-                    .foregroundColor(.blue)
-                Text("Photoshoot Notes")
-                    .font(.headline)
+    /// One note in the strip. Selection is the card's own `highlighted` state plus a
+    /// strong border, rather than a hand-rolled tint — same vocabulary as every other
+    /// selected thing in the app now.
+    private func noteChip(_ note: PhotoshootNote) -> some View {
+        let isSelected = selectedNote?.id == note.id
+        return Button {
+            selectedNote = note
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    Text(dateFormatter.string(from: note.timestamp))
+                        .font(.caption2.weight(.semibold)).monospacedDigit()
+                    if note.photoURLs.count > 0 {
+                        Image(systemName: "photo").font(.system(size: 9))
+                        Text("\(note.photoURLs.count)").font(.caption2)
+                    }
+                    Spacer(minLength: 0)
+                    // Green submitted, blue synced, orange not yet — unchanged.
+                    Circle().fill(syncColor(for: note)).frame(width: 6, height: 6)
+                }
+                .foregroundStyle(.secondary)
+
+                Text(note.school.isEmpty ? "No school" : note.school)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Text(note.noteText.isEmpty ? "(No content)" : note.noteText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .frame(width: 132, height: 76, alignment: .topLeading)
+            .ambientCard(density: .compact,
+                         state: isSelected ? .highlighted : .normal,
+                         border: isSelected ? .strong(Color.blue)
+                                            : .hairline(Color.primary.opacity(0.07)))
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    private func syncColor(for note: PhotoshootNote) -> Color {
+        if note.status == .submitted { return .green }
+        return note.syncedToServer ? .blue : .orange
+    }
+
+    private func syncLabel(for note: PhotoshootNote) -> String {
+        if note.status == .submitted { return "Submitted" }
+        return note.syncedToServer ? "Synced" : "Not synced"
+    }
+
+    /// The editor. THIS WIDGET IS THE ONLY ONE ON THE DASHBOARD THAT WRITES DATA, and
+    /// every binding below still writes straight through to the stored note on each
+    /// keystroke, exactly as before — the conversion changed how it looks, not when it
+    /// saves.
+    @ViewBuilder
+    private func noteEditor(_ note: PhotoshootNote) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "building.columns.fill")
+                    .font(.caption).foregroundStyle(.secondary)
+                if schoolOptions.isEmpty {
+                    Text("Loading schools…")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    ProgressView().scaleEffect(0.7)
+                } else {
+                    Picker("", selection: Binding(
+                        get: { getSelectedSchool(for: note) },
+                        set: { newSchool in
+                            if let index = notes.firstIndex(where: { $0.id == note.id }) {
+                                notes[index].school = newSchool.name
+                                selectedNote = notes[index]
+                                saveNotes()
+                            }
+                        }
+                    )) {
+                        ForEach(schoolOptions, id: \.id) { school in
+                            Text(school.name).tag(school)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .labelsHidden()
+                }
+                Spacer(minLength: 0)
+                AmbientBadge(text: syncLabel(for: note), tint: syncColor(for: note))
+            }
+
+            TextEditor(text: Binding(
+                get: { note.noteText },
+                set: { newValue in
+                    if let index = notes.firstIndex(where: { $0.id == note.id }) {
+                        notes[index].noteText = newValue
+                        selectedNote = notes[index]
+                        saveNotes()
+                    }
+                }
+            ))
+            .font(.subheadline)
+            .frame(height: 96)
+            // iOS 16.0+, and this app's floor is 16.6, so no availability dance.
+            .scrollContentBackground(.hidden)
+            .padding(8)
+            // ambient-allow: a text input, not a card. An input needs an opaque fill
+            // to read as writable; a material would let the ambient wash through the
+            // thing you are typing into.
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemBackground)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.blue.opacity(0.3), lineWidth: 1))
+
+            HStack(spacing: 12) {
+                Text("\(note.noteText.count) characters")
+                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                if note.photoURLs.count > 0 {
+                    Label("\(note.photoURLs.count) photo\(note.photoURLs.count == 1 ? "" : "s")",
+                          systemImage: "photo")
+                        .font(.caption2).foregroundStyle(.blue)
+                }
                 Spacer()
-                
-                HStack(spacing: 12) {
-                    Button(action: createNewNote) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title3)
-                            .foregroundColor(.blue)
-                    }
-                    
-                    Button(action: {
-                        showingFullView = true
-                    }) {
-                        Image(systemName: "arrow.up.forward.circle")
-                            .font(.title3)
-                            .foregroundColor(.gray)
-                    }
-                }
-            }
-            
-            // Notes list or empty state
-            if notes.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "note.text")
-                        .font(.system(size: 40))
-                        .foregroundColor(.gray)
-                    Text("No notes created yet")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    
-                    Button(action: createNewNote) {
-                        HStack {
-                            Image(systemName: "plus.circle")
-                            Text("Add Note")
-                        }
+                Button {
+                    deleteNote(note)
+                } label: {
+                    Image(systemName: "trash")
                         .font(.caption)
-                        .foregroundColor(.blue)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(20)
-                    }
+                        .foregroundStyle(.red)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 30)
-            } else {
-                // Horizontal scrollable list of notes
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(notes.sorted(by: { $0.timestamp > $1.timestamp }).prefix(5)) { note in
-                            Button(action: {
-                                selectedNote = note
-                            }) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        Text(dateFormatter.string(from: note.timestamp))
-                                            .font(.caption2)
-                                            .fontWeight(.medium)
-                                        if note.photoURLs.count > 0 {
-                                            Image(systemName: "photo")
-                                                .font(.caption2)
-                                            Text("\(note.photoURLs.count)")
-                                                .font(.caption2)
-                                        }
-                                        Spacer()
-                                        // Sync status badge
-                                        if note.status == .submitted {
-                                            Circle()
-                                                .fill(Color.green)
-                                                .frame(width: 6, height: 6)
-                                        } else if note.syncedToServer {
-                                            Circle()
-                                                .fill(Color.blue)
-                                                .frame(width: 6, height: 6)
-                                        } else {
-                                            Circle()
-                                                .fill(Color.orange)
-                                                .frame(width: 6, height: 6)
-                                        }
-                                    }
-                                    .foregroundColor(.blue)
-
-                                    Text(note.school.isEmpty ? "No school" : note.school)
-                                        .font(.caption)
-                                        .fontWeight(.medium)
-                                        .foregroundColor(.primary)
-                                        .lineLimit(1)
-
-                                    Text(note.noteText.isEmpty ? "(No content)" : note.noteText)
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(2)
-                                }
-                                .padding(8)
-                                .frame(width: 120, height: 70)
-                                .background(selectedNote?.id == note.id ? Color.blue.opacity(0.1) : Color(.systemGray6))
-                                .cornerRadius(8)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(selectedNote?.id == note.id ? Color.blue : Color.clear, lineWidth: 1)
-                                )
-                            }
-                        }
-                    }
-                }
-                .frame(height: 75)
-            }
-            
-            // Selected note editor
-            if let note = selectedNote {
-                VStack(alignment: .leading, spacing: 8) {
-                    // School selector
-                    if schoolOptions.isEmpty {
-                        HStack {
-                            Text("Loading schools...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        }
-                        .padding(8)
-                        .background(Color(.systemGray6))
-                        .cornerRadius(6)
-                    } else {
-                        HStack {
-                            Text("School:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            
-                            Picker("", selection: Binding(
-                                get: { getSelectedSchool(for: note) },
-                                set: { newSchool in
-                                    if let index = notes.firstIndex(where: { $0.id == note.id }) {
-                                        notes[index].school = newSchool.name
-                                        selectedNote = notes[index]
-                                        saveNotes()
-                                    }
-                                }
-                            )) {
-                                ForEach(schoolOptions, id: \.id) { school in
-                                    Text(school.name).tag(school)
-                                }
-                            }
-                            .pickerStyle(MenuPickerStyle())
-                            .font(.caption)
-                        }
-                        .padding(8)
-                        .background(Color(.systemGray6))
-                        .cornerRadius(6)
-                    }
-                    
-                    // Note content editor
-                    VStack(alignment: .trailing, spacing: 4) {
-                        TextEditor(text: Binding(
-                            get: { note.noteText },
-                            set: { newValue in
-                                if let index = notes.firstIndex(where: { $0.id == note.id }) {
-                                    notes[index].noteText = newValue
-                                    selectedNote = notes[index]
-                                    saveNotes()
-                                }
-                            }
-                        ))
-                        .font(.caption)
-                        .padding(4)
-                        .background(Color(.systemBackground))
-                        .cornerRadius(6)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                        )
-                        .frame(height: 60)
-                        
-                        Text("\(note.noteText.count) characters")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    // Photo indicator and action buttons
-                    HStack {
-                        if note.photoURLs.count > 0 {
-                            Label("\(note.photoURLs.count) photo\(note.photoURLs.count == 1 ? "" : "s")", systemImage: "photo")
-                                .font(.caption2)
-                                .foregroundColor(.blue)
-                        }
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            deleteNote(note)
-                        }) {
-                            Image(systemName: "trash")
-                                .font(.caption)
-                                .foregroundColor(.red)
-                        }
-                    }
-                }
-                .padding(12)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(8)
+                .buttonStyle(.plain)
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
+    }
+
+    var body: some View {
+        DashboardWidgetCard {
+            DashboardWidgetHeader("Photoshoot Notes", systemImage: "note.text", tint: .blue) {
+                HStack(spacing: 14) {
+                    Button(action: createNewNote) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 19))
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("New note")
+
+                    Button {
+                        showingFullView = true
+                    } label: {
+                        Image(systemName: "arrow.up.forward.circle")
+                            .font(.system(size: 19))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open all notes")
+                }
+            }
+
+            if notes.isEmpty {
+                DashboardWidgetEmpty(
+                    systemImage: "note.text",
+                    title: "No notes yet",
+                    message: "Notes you write on a job are kept here until they sync.",
+                    actionTitle: "Add note",
+                    tint: .blue,
+                    action: createNewNote
+                )
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        // Newest first, five shown — unchanged.
+                        ForEach(notes.sorted(by: { $0.timestamp > $1.timestamp }).prefix(5)) { note in
+                            noteChip(note)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .ambientNoBounceWhenShort()
+
+                if let note = selectedNote {
+                    noteEditor(note)
+                }
+            }
+        }
         .onAppear {
             loadNotes()
             loadSchoolOptions()
