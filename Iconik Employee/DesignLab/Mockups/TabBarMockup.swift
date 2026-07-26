@@ -34,10 +34,20 @@
 //      has a single amber; this app has 27 distinct feature colours since AMB.2,
 //      and D11 makes a feature's colour mean something. So the pill changes hue
 //      as it travels, and it agrees with the tile you tapped to get there.
-//    SCAN AND iPAD HOME SURVIVE AS RAISED CIRCLES straddling the capsule's top
-//      edge. NAV.1 made Scan permanent and prominent on iPhone, and gave the
-//      iPad a big centre Home instead (iPads have no NFC). Flattening either
-//      into an ordinary cell would lose a deliberate navigation decision.
+//    SCAN AND iPAD HOME KEEP A DEDICATED CENTRE SLOT. NAV.1 made Scan permanent
+//      and prominent on iPhone, and gave the iPad a big centre Home instead
+//      (iPads have no NFC). Flattening either into an ordinary cell would lose a
+//      deliberate navigation decision.
+//
+//      REVISED after the operator saw the first version of this file: the circle
+//      was floated above the capsule's top edge and the cells divided the whole
+//      width underneath it, so items slid behind the button. It is now
+//      vertically centred in the capsule with 68pt of the row RESERVED for it,
+//      which the cells step over rather than pass under. One consequence, named
+//      rather than slipped in: today's Scan glyph is 60pt on a 50pt circle — a
+//      deliberate overrun that worked because the button stood proud of the bar.
+//      Centred inside a 60pt capsule it would spill past the glass, so the
+//      glyph is sized to sit inside its circle.
 //    DIVIDING BY COUNT ALSO FIXES A REAL BUG: today's cells are a fixed 50pt
 //      with minimum-length spacers, so at the six items the customise screen
 //      allows the bar is 438pt wide against 393pt on an iPhone 16.
@@ -270,13 +280,7 @@ private struct GlassTabBarPreview: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            capsuleBar
-            centreButton
-                // Straddles the top edge, so it reads as sitting ON the glass
-                // rather than inside it.
-                .offset(y: -22)
-        }
+        capsuleBar
         .frame(maxWidth: maxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 14)
@@ -288,15 +292,33 @@ private struct GlassTabBarPreview: View {
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
+    /// Width reserved in the middle of the row for Scan (iPhone) or Home (iPad).
+    ///
+    /// It is a RESERVED SLOT, not an overlay. The first cut floated the circle
+    /// above the capsule's top edge and let the cells divide the whole width
+    /// underneath, so items slid behind it. Operator: centre it vertically, and
+    /// keep the other icons out from under it.
+    private var centreSlot: CGFloat { 68 }
+
     private var capsuleBar: some View {
         GeometryReader { geo in
             let count = max(items.count, 1)
-            let cellWidth = geo.size.width / CGFloat(count)
-            let index = CGFloat(items.firstIndex(where: { $0.id == selected }) ?? 0)
+            // The cells share what is left after the centre slot is taken out,
+            // which is what stops anything passing behind the button.
+            let cellWidth = max((geo.size.width - centreSlot) / CGFloat(count), 1)
+            let mid = (count + 1) / 2   // odd counts keep the extra item on the left
+            let selectedIndex = items.firstIndex(where: { $0.id == selected })
+
+            // Each cell's leading edge, stepping over the centre slot. Precomputed
+            // rather than a local function, which a ViewBuilder closure forbids.
+            let cellOrigins = (0..<count).map { index in
+                cellWidth * CGFloat(index) + (index < mid ? 0 : centreSlot)
+            }
+
             // Wider than a cell so a long label fits, then clamped so it can never
             // slide past the capsule's rounded ends.
             let pillWidth = cellWidth + 8
-            let idealPillX = cellWidth * index - 4
+            let idealPillX = (selectedIndex.map { cellOrigins[$0] } ?? 0) - 4
             let pillX = min(max(idealPillX, 0), max(geo.size.width - pillWidth, 0))
             // How far the clamp moved it. The selected icon shifts by the same
             // amount so it stays centred IN the pill on the end cells.
@@ -323,8 +345,17 @@ private struct GlassTabBarPreview: View {
                     .opacity(onCentre ? 0 : 1)
 
                 HStack(spacing: 0) {
-                    ForEach(items) { item in
+                    ForEach(Array(items.prefix(mid))) { item in
                         cell(item, pillShift: pillShift, isSelected: item.id == selected)
+                            .frame(width: cellWidth)
+                    }
+
+                    centreButton
+                        .frame(width: centreSlot)
+
+                    ForEach(Array(items.dropFirst(mid))) { item in
+                        cell(item, pillShift: pillShift, isSelected: item.id == selected)
+                            .frame(width: cellWidth)
                     }
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -402,21 +433,28 @@ private struct GlassTabBarPreview: View {
             ZStack {
                 Circle()
                     .fill(isSelected ? AnyShapeStyle(centreTint.gradient)
-                                     : AnyShapeStyle(.ultraThinMaterial))
-                    .overlay(Circle().strokeBorder(.white.opacity(isSelected ? 0.55 : 0.35),
+                                     : AnyShapeStyle(centreTint.opacity(0.16)))
+                    .overlay(Circle().strokeBorder(.white.opacity(isSelected ? 0.55 : 0.3),
                                                    lineWidth: 1))
-                    .frame(width: 56, height: 56)
+                    // 48 inside a 60pt bar leaves 6pt above and below, so it is
+                    // genuinely centred rather than clipped by the capsule.
+                    .frame(width: 48, height: 48)
                 Image(systemName: centreSymbol)
-                    // Scan's glyph deliberately overruns its circle today and the
-                    // code says so on purpose; a house at that size would clip,
-                    // which is why the iPad draws its own.
-                    .font(.system(size: layout == .iPad ? 26 : 40, weight: .semibold))
+                    // Sized to sit INSIDE the circle. Today's Scan glyph is 60pt
+                    // on a 50pt circle — a deliberate overrun that worked because
+                    // the button stood proud of the bar. Centred inside a 60pt
+                    // capsule it would spill past the glass, so the overrun goes.
+                    // Named as a change, not slipped in.
+                    .font(.system(size: layout == .iPad ? 22 : 26, weight: .semibold))
                     .foregroundStyle(isSelected ? Color.white : centreTint)
             }
-            .shadow(color: centreTint.opacity(isSelected ? 0.4 : 0.15), radius: 10, y: 4)
+            // Centred in its slot, vertically and horizontally.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(layout == .iPad ? "Home" : "Scan")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 

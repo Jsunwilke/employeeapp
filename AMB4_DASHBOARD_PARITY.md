@@ -483,10 +483,23 @@ taken:
       has 27 distinct feature colours since AMB.2, and under D11 a feature's
       colour means something. So the pill changes hue as it travels and agrees
       with the tile that was tapped to get there.
-    SCAN AND iPAD HOME SURVIVE as raised circles straddling the capsule's top
-      edge. NAV.1 made Scan permanent and prominent on iPhone and gave the iPad
-      a centre Home instead, because iPads have no NFC. Flattening either into an
-      ordinary cell would discard a navigation decision, not a style.
+    SCAN AND iPAD HOME KEEP A DEDICATED CENTRE SLOT. NAV.1 made Scan permanent
+      and prominent on iPhone and gave the iPad a centre Home instead, because
+      iPads have no NFC. Flattening either into an ordinary cell would discard a
+      navigation decision, not a style.
+
+      REVISED after the operator saw it (2026-07-25): "center the scan button
+      vertically on the bar. and dont let other icons flow behind it." The first
+      version floated the circle above the capsule's top edge while the cells
+      divided the full width underneath, so items passed behind it. It is now
+      vertically centred with 68pt of the row RESERVED, which the cells step over
+      rather than pass under — verified numerically at every width and item count
+      (no cell overlaps the slot, the pill never escapes the capsule, 6 items on
+      a 375pt phone and 10 on iPad both hold).
+      ONE CONSEQUENCE, named: today's Scan glyph is 60pt on a 50pt circle, a
+      deliberate overrun that worked because the button stood proud of the bar.
+      Centred inside a 60pt capsule it would spill past the glass, so the glyph
+      is sized to sit inside its circle.
     THE iOS 16.6 FLOOR IS HONOURED (D4). Real Liquid Glass is iOS 26 only, so
       below it the capsule is custom glass — material, sheen, rim — written to
       stand on its own rather than as a degraded afterthought. The toolchain is
