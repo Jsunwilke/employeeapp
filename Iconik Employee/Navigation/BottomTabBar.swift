@@ -177,12 +177,21 @@ struct BottomTabBar: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             capsule
+                // The capsule carries its own side insets so the HANDLE does not
+                // inherit them — it has to sit flush against the screen edge, and
+                // padding this whole stack left it stranded 14pt short of it.
+                .padding(.horizontal, TabBarMetrics.horizontalInset)
                 .offset(x: tucked ? tuckedTravel : dragX)
-                .gesture(tuckDrag)
+                // HIGH PRIORITY, and that is the whole fix for "swiping sometimes
+                // just taps an icon". Every cell is a Button, and a child Button
+                // beats a parent `.gesture()`, so an ordinary attachment lost the
+                // race and the swipe registered as a tap. Given first refusal the
+                // drag wins — and it still cannot steal taps, because it needs 12pt
+                // of travel before it recognises at all, which a tap never produces.
+                .highPriorityGesture(tuckDrag)
 
             if tucked { handle }
         }
-        .padding(.horizontal, TabBarMetrics.horizontalInset)
         .padding(.bottom, TabBarMetrics.bottomInset)
         // Any navigation brings it back. HomeToolbarButton works by setting
         // selectedTab, so this covers the top-left Home button and equally a

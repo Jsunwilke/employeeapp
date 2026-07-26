@@ -218,7 +218,7 @@ struct TabBarMockup: View {
             // A bar that reserves its space sits flush; a floating one is inset.
             .padding(.bottom, floats ? 6 : 0)
             .offset(x: tucked ? tuckedTravel : dragX)
-            .gesture(tuckDrag)
+            .highPriorityGesture(tuckDrag)
 
             // The way back. Only present while tucked, and deliberately at the
             // same height as the bar it replaces, so the eye already knows where
