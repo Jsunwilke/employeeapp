@@ -98,7 +98,9 @@ struct TabBarItem: Identifiable, Codable, Equatable {
 struct TabBarConfiguration: Codable {
     var items: [TabBarItem]
     var showLabels: Bool = true
-    var animateSelection: Bool = true
+    // `animateSelection` lived here and was persisted, and nothing ever read it —
+    // removed in AMB.4. Decoding an older saved configuration still works: an
+    // unknown key is ignored, and every remaining property has a default.
     
     static let defaultConfiguration = TabBarConfiguration(
         items: [
@@ -214,21 +216,6 @@ class TabBarManager: ObservableObject {
             .map { $0 }
     }
     
-    func getQuickAccessItemsForDevice() -> [TabBarItem] {
-        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
-        
-        if isIPad {
-            // iPad: Return up to 10 items, excluding scan
-            return configuration.items
-                .filter { $0.isQuickAccess && $0.id != "scan" }
-                .sorted { $0.order < $1.order }
-                .prefix(10)
-                .map { $0 }
-        } else {
-            // iPhone: Return current behavior with scan
-            return getQuickAccessItems()
-        }
-    }
     
     func getMaxItemsForDevice() -> Int {
         return UIDevice.current.userInterfaceIdiom == .pad ? 10 : 6

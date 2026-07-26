@@ -1335,10 +1335,15 @@ struct FPSportsRosterView_iPad: View {
             }
         .onAppear {
             isViewVisible = true
-            // Hide tab bar when in roster view (iPad) to maximize vertical space
-            if UIDevice.current.userInterfaceIdiom == .pad {
-                TabBarManager.shared.isFullScreenOverlayActive = true
-            }
+            // The tab bar is NO LONGER HIDDEN HERE (AMB.4, operator-authorised
+            // 2026-07-25). It used to be removed on iPad "to maximize vertical
+            // space", which left the app's largest iPad tool with no bottom
+            // navigation at all — and on iPad the bottom bar is the ONLY route home,
+            // because HomeToolbarButton is iPhone-only. The bar is now a floating
+            // capsule the user can SWIPE AWAY by hand, leaving a handle to bring it
+            // back, so the space is still available on demand without the app taking
+            // navigation away. The photo viewer below still hides it outright, which
+            // is a genuine full-screen overlay.
 
             // Initialize LockManager with current user
             if let userId = SupabaseManager.shared.client.auth.currentUser?.id {
@@ -1353,10 +1358,10 @@ struct FPSportsRosterView_iPad: View {
         }
         .onDisappear {
             isViewVisible = false
-            // Restore tab bar when leaving roster view
-            if UIDevice.current.userInterfaceIdiom == .pad {
-                TabBarManager.shared.isFullScreenOverlayActive = false
-            }
+            // Nothing to restore — this view no longer hides the bar. Kept as a
+            // safety net for the photo-viewer flag in case the view goes away while
+            // the viewer is still up.
+            TabBarManager.shared.isFullScreenOverlayActive = false
             // Phase G G.5 — paired with the .onChange below; if the user
             // backs out of the view while a shoot is selected, end the
             // active capture session so direct PowerSync writes resume.

@@ -599,6 +599,11 @@ struct MainEmployeeView: View {
     private var isIPad: Bool {
         horizontalSizeClass == .regular && UIDevice.current.userInterfaceIdiom == .pad
     }
+
+    /// The bar is only taken away for a genuine full-screen overlay — the photo
+    /// viewer. Since AMB.4 a screen that merely wants room says so by letting the
+    /// user tuck the bar, rather than removing their navigation for them.
+    private var showsTabBar: Bool { !tabBarManager.isFullScreenOverlayActive }
     
     var body: some View {
         ZStack {
@@ -606,12 +611,31 @@ struct MainEmployeeView: View {
             // NavigationView — each screen provides its own nav bar (see
             // mainContent), so nothing stacks a second bar on top of a
             // feature that brings its own.
-            VStack(spacing: 0) {
+            // THE BAR FLOATS (AMB.4). It used to be a row in this stack, so it
+            // owned a strip of the screen and nothing could ever pass behind it —
+            // which also meant its glass had nothing to refract. Operator's
+            // reasoning: "what would be the point of glass if the bar reserved its
+            // own space?" So it is an overlay now, and content scrolls underneath.
+            ZStack(alignment: .bottom) {
                 // Main content area — routed to its own nav container per feature
                 mainContent
+                    // ONE place that gives all 27 feature screens room to clear the
+                    // capsule. A safe-area inset is the right tool rather than
+                    // per-screen padding: a scroll view rests above the bar but its
+                    // content still travels beneath it, and a screen with something
+                    // pinned to the bottom gets pushed clear without knowing why.
+                    // Only two screens padded for the old bar by hand, so this
+                    // replaces almost nothing and covers everything.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        if showsTabBar {
+                            Color.clear.frame(height: TabBarMetrics.clearance)
+                        }
+                    }
 
-                // Bottom tab bar (hidden during full-screen overlay like photo viewer)
-                if !tabBarManager.isFullScreenOverlayActive {
+                // Hidden outright only for a genuine full-screen overlay, like the
+                // photo viewer. Everywhere else it is present and the user can tuck
+                // it away by hand.
+                if showsTabBar {
                     BottomTabBar(
                         selectedTab: $tabBarManager.selectedTab,
                         tabBarManager: tabBarManager,
@@ -620,7 +644,6 @@ struct MainEmployeeView: View {
                     )
                 }
             }
-            .ignoresSafeArea(edges: .bottom) // Keep tab bar positioned correctly
 
             // Flag notification banner overlay
             if isFlagged && !flagNote.isEmpty && !isBannerDismissed {
@@ -830,7 +853,10 @@ struct MainEmployeeView: View {
                     allFeaturesRow
                 }
                 .padding(.top, 9)
-                .padding(.bottom, 100) // Space for the bottom tab bar
+                // No hand-rolled room for the bar any more — the shell's
+                // safeAreaInset does it for every screen, and leaving this at 100
+                // would double the gap.
+                .padding(.bottom, 12)
             }
             // ON THE SCROLL VIEW, not on its content. This was previously
             // attached to the inner VStack, which cannot work: a refresh action
@@ -1113,7 +1139,11 @@ struct MainEmployeeView: View {
                          border: .strong(Color.red.opacity(0.55)),
                          glow: .red, fillWidth: true)
             .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+            // Clears the floating bar. This banner is bottom-anchored in the same
+            // stack, and it was already drawn over the old bar — now that the bar
+            // floats and is the only route home on iPad, a banner sitting on top of
+            // it would cover navigation rather than just decoration.
+            .padding(.bottom, showsTabBar ? TabBarMetrics.clearance + 8 : 24)
         }
         .transition(.move(edge: .bottom))
         .animation(.easeInOut, value: isFlagged)
