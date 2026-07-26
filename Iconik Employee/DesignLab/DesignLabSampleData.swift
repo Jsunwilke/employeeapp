@@ -279,6 +279,116 @@ extension DesignLabSampleData {
     static var urgentTasks: [LabTask] { Array(tasks.prefix(3)) }
 }
 
+// MARK: - iPad home dashboard (AMB.4)
+
+/// One of today's sports shoots, as the iPad's Sports Rosters widget needs it.
+///
+/// `linkedToProduction` is the load-bearing field, not decoration: a shoot with
+/// a gallery id opens the Focal Point Sports view and one without opens the
+/// Captura view, so the same-looking row leads to two different tools. The
+/// widget has to say which before it is tapped.
+struct LabSportsShoot: Identifiable {
+    let id: String
+    let school: String
+    let sport: String
+    let time: Date
+    let linkedToProduction: Bool
+}
+
+/// One of today's group jobs. `count` is deliberately allowed to be zero,
+/// because the real widget turns that case orange and says so — a job with no
+/// groups added yet is the one you most need to be told about.
+struct LabGroupJob: Identifiable {
+    let id: String
+    let school: String
+    let time: Date
+    let count: Int
+    /// The job-type-specific noun the real widget uses, singular and plural
+    /// (ClassGroupJobType.countNoun / countNounPlural).
+    let noun: (singular: String, plural: String)
+    let badge: String
+    let images: Int
+}
+
+/// A photoshoot note. The only widget in the app that EDITS data in place, so
+/// its mockup carries the fields the editor binds to rather than a summary.
+struct LabPhotoshootNote: Identifiable {
+    enum Sync { case submitted, synced, pending
+        var color: Color {
+            switch self {
+            case .submitted: return .green
+            case .synced: return .blue
+            case .pending: return .orange
+            }
+        }
+        var label: String {
+            switch self {
+            case .submitted: return "Submitted"
+            case .synced: return "Synced"
+            case .pending: return "Not synced"
+            }
+        }
+    }
+
+    let id: String
+    let time: Date
+    let school: String
+    var text: String
+    let photos: Int
+    let sync: Sync
+}
+
+extension DesignLabSampleData {
+
+    /// Today's sports shoots. Seeded with the cases that decide the row: both
+    /// routes (linked and not), a sport whose keyword glyph resolves and one
+    /// that falls through to the generic court, and a school name long enough
+    /// to have to truncate.
+    static var sportsShoots: [LabSportsShoot] {
+        [
+            .init(id: "sh1", school: "Lincoln High School", sport: "Varsity Basketball",
+                  time: at(9, 0), linkedToProduction: true),
+            .init(id: "sh2", school: "Northgate Preparatory Academy", sport: "Girls Volleyball",
+                  time: at(13, 30), linkedToProduction: false),
+            .init(id: "sh3", school: "Maple Grove Elementary", sport: "Fencing Club",
+                  time: at(15, 45), linkedToProduction: false),
+            .init(id: "sh4", school: "Riverside Middle School", sport: "Track and Field",
+                  time: at(17, 0), linkedToProduction: true),
+        ]
+    }
+
+    /// Today's group jobs, including the zero-count case the real widget warns
+    /// about and a job type whose noun is not "group".
+    static var groupJobs: [LabGroupJob] {
+        [
+            .init(id: "gj1", school: "Lincoln High School", time: at(8, 30),
+                  count: 14, noun: ("class", "classes"), badge: "Class Groups", images: 212),
+            .init(id: "gj2", school: "Maple Grove Elementary", time: at(11, 0),
+                  count: 0, noun: ("club", "clubs"), badge: "Clubs", images: 0),
+            .init(id: "gj3", school: "Northgate Preparatory Academy", time: at(14, 15),
+                  count: 1, noun: ("candid", "candids"), badge: "Candids", images: 38),
+        ]
+    }
+
+    /// Notes covering every sync state, an empty note, and one long enough to
+    /// need truncating in the strip while still being fully editable below.
+    static var photoshootNotes: [LabPhotoshootNote] {
+        [
+            .init(id: "n1", time: at(9, 12), school: "Lincoln High School",
+                  text: "Gym lights are on a 20-minute timer — ask the front office to override before setting up. Backdrop goes on the north wall, the south one has a window.",
+                  photos: 3, sync: .pending),
+            .init(id: "n2", time: at(8, 5), school: "Maple Grove Elementary",
+                  text: "Retakes for 4th grade only. List is with Mrs Alvarez.",
+                  photos: 0, sync: .synced),
+            .init(id: "n3", time: at(7, 40), school: "Northgate Preparatory Academy",
+                  text: "", photos: 1, sync: .submitted),
+            .init(id: "n4", time: at(16, 30, dayOffset: -1), school: "Riverside Middle School",
+                  text: "Cafeteria was already set up when we arrived. Same again next year.",
+                  photos: 5, sync: .submitted),
+        ]
+    }
+}
+
 // MARK: - Tasks (AMB.5)
 
 struct LabTask: Identifiable {

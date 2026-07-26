@@ -30,6 +30,33 @@ enum DashboardWidget: String, CaseIterable, Identifiable, Transferable, Codable 
     }
 }
 
+/// Everywhere the home screen can push to.
+///
+/// One destination type behind ONE `ambientPush`, rather than the three separate
+/// `NavigationLink(isActive:)` this screen used to keep live at once (Settings,
+/// the design lab, and a tapped shift). Two live `isActive` links competing for
+/// one container is the exact shape of the dead tap AMB.1 shipped, and AMB.3's
+/// review gate turned it into a standing rule for the rest of the arc: one push
+/// per view; more than one target means an enum.
+enum HomeDestination: Identifiable {
+    case settings
+    /// TEMPORARY — the AMB arc's design lab. Removed at AMB.12 with the lab.
+    case designLab
+    case shift(Session)
+
+    /// Required by `ambientPush(item:)`, which constrains its item to
+    /// `Identifiable`. Nothing currently READS it — the wrapper only tests the
+    /// binding for nil — so this is a conformance, not a behaviour. The view's
+    /// own `.id()` at the push site is what actually decides identity.
+    var id: String {
+        switch self {
+        case .settings: return "settings"
+        case .designLab: return "designLab"
+        case .shift(let session): return "shift-\(session.dayOccurrenceKey)"
+        }
+    }
+}
+
 /// Simple model for a menu feature.
 struct FeatureItem: Identifiable, Equatable {
     let id: String
@@ -48,6 +75,9 @@ class MainEmployeeViewModel: ObservableObject {
     @Published var upcomingShifts: [Session] = []
     @Published var allSessions: [Session] = [] // Store all sessions for coworker data
     @Published var isLoadingSchedule: Bool = false
+    /// Distinct from `isLoadingSchedule`, which blanks the widget for its first
+    /// paint. A refresh keeps the rows on screen and only holds the pull control.
+    @Published var isRefreshing: Bool = false
 
     // Weather service and data
     private let weatherService = WeatherService()
@@ -238,15 +268,31 @@ class MainEmployeeViewModel: ObservableObject {
     }
 
     // Function to fetch upcoming events from Supabase
-    func fetchUpcomingEvents(employeeName: String = "") {
-        // Don't show loading if we already have sessions
-        if upcomingShifts.isEmpty {
-            isLoadingSchedule = true
-        }
-
-        // Check if we already have a listener - avoid creating duplicates
+    ///
+    /// `showLoading` exists because a REFRESH must not raise the loading flag.
+    /// `isLoadingSchedule` is only ever cleared from the listener's callback, and
+    /// there are real paths where that callback never fires at all — offline
+    /// with a warm in-memory cache, or a failed fetch with a warm cache. On a
+    /// first load that is survivable. On a refresh it is not: the flag would
+    /// stick true, and because the re-subscribe also sets hasActiveListener,
+    /// every later fetch returns at the guard, so the spinner could never be
+    /// cleared for the rest of the session. A refresh keeps the rows (or the
+    /// empty state) on screen and holds only the pull control.
+    func fetchUpcomingEvents(employeeName: String = "", showLoading: Bool = true) {
+        // The listener guard comes FIRST, and the order matters. It used to run
+        // after the loading flag was raised, so an early return left
+        // isLoadingSchedule stuck true with nothing downstream to clear it —
+        // every reset lives past this point. Anyone with no upcoming shifts who
+        // triggered a second fetch got a spinner that never stopped, in place of
+        // the empty state. Harmless while the only trigger was a refresh button
+        // nobody could reach; a real hang once pull-to-refresh works.
         if hasActiveListener {
             return
+        }
+
+        // Don't show loading if we already have sessions
+        if showLoading && upcomingShifts.isEmpty {
+            isLoadingSchedule = true
         }
 
         // Get organization ID from UserDefaults
@@ -254,6 +300,9 @@ class MainEmployeeViewModel: ObservableObject {
 
         guard !organizationID.isEmpty else {
             isLoadingSchedule = false
+            // Nothing is going to call back, so end any refresh now rather than
+            // leaving the pull control held for the full timeout.
+            isRefreshing = false
             return
         }
 
@@ -264,6 +313,7 @@ class MainEmployeeViewModel: ObservableObject {
                 guard let currentUserID = UserManager.shared.getCurrentUserIDUnified() else {
                     self?.upcomingShifts = []
                     self?.isLoadingSchedule = false
+                    self?.isRefreshing = false
                     return
                 }
 
@@ -319,6 +369,9 @@ class MainEmployeeViewModel: ObservableObject {
 
                 self?.upcomingShifts = sorted
                 self?.isLoadingSchedule = false
+                // A pull-to-refresh is finished when data has actually landed,
+                // which is here — not when the re-subscribe call returns.
+                self?.isRefreshing = false
 
                 // Load weather data for upcoming shifts
                 self?.loadWeatherForSessions(sorted)
@@ -413,6 +466,58 @@ class MainEmployeeViewModel: ObservableObject {
         return weatherDataBySession[cacheKey]
     }
     
+    /// What pull-to-refresh actually does.
+    ///
+    /// `fetchUpcomingEvents` returns immediately once a listener is up, which is
+    /// always after the first load — so calling it directly from a refresh
+    /// gesture fetches nothing and lies to the user. Dropping the subscription
+    /// first makes the re-subscribe do a real round trip.
+    ///
+    /// The wait exists so the spinner tells the truth. Without it the gesture
+    /// returns instantly and the control snaps back before anything has
+    /// arrived, which reads as "refreshed" when nothing has. Bounded, because a
+    /// refresh that never resolves must still end.
+    @MainActor
+    func refreshUpcomingEvents() async {
+        // Two controls call this — the pull gesture and the widget's button —
+        // and overlapping runs are not harmless. Both would clear
+        // hasActiveListener and re-subscribe on the SAME subscription id, and
+        // the unsubscribe inside startListeningToSessionsAsync is not atomic
+        // with its subscribe: the second run can look for a channel to stop
+        // before the first has recorded one, then overwrite it. The first
+        // channel is then never unsubscribed and its change loop lives for the
+        // rest of the process, refetching the whole org on every edit.
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        // Drop the guard flag ONLY — do not call cleanup() here. cleanup()
+        // enqueues its unsubscribe on a detached Task while fetchUpcomingEvents
+        // enqueues the re-subscribe on another; if the stop landed second it
+        // would tear down the listener that had just been created, and the
+        // dashboard would silently stop receiving updates until the app was
+        // backgrounded. There is nothing to clean up by hand anyway:
+        // startListeningToSessionsAsync unsubscribes the same subscription id
+        // before it subscribes (SessionService.swift:236).
+        hasActiveListener = false
+        fetchUpcomingEvents(showLoading: false)
+
+        // Hold the pull control until data lands, so it does not snap back
+        // claiming a refresh that has not happened. Bounded, because several
+        // paths through the listener never call back at all.
+        let deadline = Date().addingTimeInterval(8)
+        while isRefreshing && Date() < deadline {
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                // Cancelled — the user navigated away. Without this the sleep
+                // throws instantly on every iteration and the "poll" becomes a
+                // main-actor busy loop for the rest of the deadline.
+                break
+            }
+        }
+    }
+
     // Cleanup method to remove listener
     func cleanup() {
         if hasActiveListener {
@@ -421,130 +526,6 @@ class MainEmployeeViewModel: ObservableObject {
             }
             hasActiveListener = false
         }
-    }
-}
-
-// MARK: - Compact Session Row for MainEmployeeView
-
-struct CompactSessionRow: View {
-    let session: Session
-    let weatherData: WeatherData?
-    let currentUserID: String?
-    
-    private var timeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter
-    }
-    
-    private var dateFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "E, MMM d"
-        return formatter
-    }
-    
-    // Get the current user's photographer info from the session
-    private var currentUserPhotographerInfo: (name: String, notes: String?)? {
-        guard let userID = currentUserID else { return nil }
-        return session.getPhotographerInfo(for: userID)
-    }
-    
-    private var displayName: String {
-        if let userInfo = currentUserPhotographerInfo {
-            return userInfo.name
-        }
-        return session.employeeName // Fallback to session's employee name
-    }
-    
-    private var colorForPosition: Color {
-        if let positionColor = positionColorMap[session.position] {
-            return positionColor
-        }
-        
-        let colorMap: [String: Color] = [
-            "Photographer 1": .red,
-            "Photographer 2": .blue,
-            "Photographer 3": .green,
-            "Photographer 4": .orange,
-            "Photographer 5": .purple,
-            "Poser 1": .pink,
-            "Poser 2": .teal,
-            "Production": .mint,
-            "Delivery": .gray
-        ]
-        
-        return colorMap[session.position] ?? .blue
-    }
-    
-    var body: some View {
-        HStack {
-            // Left color bar
-            Rectangle()
-                .fill(colorForPosition)
-                .frame(width: 4)
-                .cornerRadius(2)
-            
-            // Content
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    if let start = session.startDate {
-                        Text(dateFormatter.string(from: start))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                    
-                    // Position label
-                    Text(session.getSessionTypeDisplayName())
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(colorForPosition.opacity(0.2))
-                        .foregroundColor(colorForPosition)
-                        .cornerRadius(12)
-                }
-                
-                Text(session.schoolName)
-                    .font(.headline)
-                    .lineLimit(1)
-                
-                // Show user's name
-                Text("Photographer: \(displayName)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                
-                HStack {
-                    if let start = session.startDate, let end = session.endDate {
-                        Text("\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                    
-                    // Weather info if available
-                    if let weather = weatherData, let iconName = weather.iconSystemName {
-                        HStack(spacing: 4) {
-                            Image(systemName: iconName)
-                                .foregroundColor(weather.conditionColor)
-                            
-                            Text(weather.temperatureString)
-                                .foregroundColor(.secondary)
-                        }
-                        .font(.caption)
-                    }
-                }
-            }
-            .padding(.leading, 8)
-            
-            // Chevron
-            Image(systemName: "chevron.right")
-                .foregroundColor(.gray)
-                .font(.caption)
-        }
-        .padding(.vertical, 4)
     }
 }
 
@@ -588,8 +569,8 @@ struct MainEmployeeView: View {
     // State for Sports Shoots feature
     @State private var selectedSportsShootID: String? = nil
     
-    // State to track which session is selected for navigation
-    @State private var selectedSession: Session? = nil
+    // The one thing home is currently pushing to (see HomeDestination).
+    @State private var homeDestination: HomeDestination? = nil
     
     // Flag status
     @State private var isFlagged: Bool = false
@@ -603,11 +584,6 @@ struct MainEmployeeView: View {
     @State private var isBannerDismissed: Bool = false
     @State private var currentListeningUserID: String? = nil
     
-    // For navigating to Settings and appearance
-    @State private var showSettings = false
-    /// TEMPORARY — the AMB arc's design lab. Removed at AMB.12 along with the
-    /// lab itself. See Iconik Employee/DesignLab/.
-    @State private var showDesignLab = false
     @State private var showThemePicker = false
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -655,6 +631,14 @@ struct MainEmployeeView: View {
             // Clean up chat if we're leaving it
             if tabBarManager.selectedTab == "chat" && newTab != "chat" {
                 ChatManager.shared.cleanup()
+            }
+            // Leaving home tears down its NavigationView but NOT this state, so
+            // a destination left set here re-pushed itself the next time home
+            // was selected — tap a shift, switch to Tasks, come back, and the
+            // detail opened again on its own. The bottom bar stays live while a
+            // detail is pushed, so this is an ordinary thing to do by accident.
+            if newTab != "home" {
+                homeDestination = nil
             }
         }
         .onAppear {
@@ -749,49 +733,40 @@ struct MainEmployeeView: View {
     
     // MARK: - Home View (Dashboard)
     
+    /// The ambient wash behind home.
+    ///
+    /// D11 gives every converted screen its feature's colour, but home is not a
+    /// feature — it is the container — so it takes the COMPANY blue, at 90%
+    /// (operator, 2026-07-25). The blue came from Logo.svg, the only place it
+    /// was ever written down; the app's AccentColor asset is empty, so before
+    /// AMB.2 the app had been running on Apple's default blue.
+    ///
+    /// Being flagged still turns the page red, because that is the one state on
+    /// this screen that has to be visible from across a room.
     private var homeBackground: some View {
-        Group {
-            if isFlagged {
-                Color.red.opacity(0.3).ignoresSafeArea()
-            } else {
-                backgroundGradient.ignoresSafeArea()
-            }
-        }
+        AmbientBackdrop(tint: isFlagged ? .red : AmbientStyle.brand,
+                        intensity: isFlagged ? 1 : 0.9)
     }
-    
+
     @ViewBuilder
     private var flagNotificationView: some View {
         if isFlagged && !flagNote.isEmpty {
-            HStack {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "flag.fill")
-                            .foregroundColor(.red)
-                        if flaggedByName.isEmpty {
-                            Text("Flag Note")
-                                .font(.headline)
-                        } else {
-                            Text("Flag Note from \(flaggedByName)")
-                                .font(.headline)
-                        }
-                        Spacer()
-                    }
-                    Text(flagNote)
-                        .font(.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding()
-                .background(Color.red.opacity(0.2))
-                .cornerRadius(12)
-            }
-            .padding(.horizontal)
+            AmbientNoteCard(
+                title: flaggedByName.isEmpty ? "Flag note" : "Flag note from \(flaggedByName)",
+                text: flagNote,
+                accent: .red
+            )
+            .padding(.horizontal, 16)
         }
     }
-    
+
     private var dashboardWidgetsView: some View {
         VStack(spacing: 16) {
             ForEach(widgetOrder) { widget in
                 widgetView(for: widget)
+                    // Drag to reorder, saved per device. The approved mockup drew
+                    // a fixed stack with no reordering at all; this is the single
+                    // largest capability on the shell and it stays.
                     .onDrag {
                         draggedWidget = widget
                         return NSItemProvider(object: widget.rawValue as NSString)
@@ -804,7 +779,7 @@ struct MainEmployeeView: View {
                     ))
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 16)
     }
     
     @ViewBuilder
@@ -821,9 +796,12 @@ struct MainEmployeeView: View {
                     sessions: viewModel.upcomingShifts,
                     isLoading: viewModel.isLoadingSchedule,
                     weatherDataBySession: viewModel.weatherDataBySession,
-                    onRefresh: { loadSchedule() },
+                    // The widget's own refresh button had the same dead
+                    // behaviour as the pull gesture — it called straight into
+                    // the listener guard and returned. Same real path now.
+                    onRefresh: { Task { await viewModel.refreshUpcomingEvents() } },
                     onSessionTap: { session in
-                        selectedSession = session
+                        homeDestination = .shift(session)
                     }
                 )
             case .tasks:
@@ -844,93 +822,83 @@ struct MainEmployeeView: View {
     private var homeView: some View {
         ZStack {
             homeBackground
-            
+
             ScrollView {
                 VStack(spacing: 16) {
-                    // Dashboard content
-                    VStack(spacing: 16) {
-                        flagNotificationView
-                        dashboardWidgetsView
-                        
-                        // All Features Button
-                        NavigationLink(destination: AllFeaturesView(
-                            viewModel: viewModel,
-                            tabBarManager: tabBarManager,
-                            userRole: storedUserRole
-                        )) {
-                            HStack {
-                                Image(systemName: "square.grid.2x2")
-                                    .font(.title2)
-                                Text("All Features")
-                                    .font(.headline)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                            }
-                            .foregroundColor(.primary)
-                            .padding()
-                            .background(Color(.systemBackground))
-                            .cornerRadius(12)
-                            .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-                        }
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                    }
-                    .padding(.bottom, 100) // Space for tab bar
+                    flagNotificationView
+                    dashboardWidgetsView
+                    allFeaturesRow
                 }
-                .padding(.top, 9) // Add padding under header
-                .refreshable {
-                    loadSchedule()
-                }
+                .padding(.top, 9)
+                .padding(.bottom, 100) // Space for the bottom tab bar
             }
-                
-                // Navigation links for sheets
-                NavigationLink(destination: SettingsView(), isActive: $showSettings) {
-                    EmptyView()
-                }
-
-                // TEMPORARY (AMB arc, removed at AMB.12). Pushed into THIS
-                // NavigationView on purpose: a mockup has to run inside the same
-                // navigation container its real screen will get, or it is
-                // testing a frame that does not exist. See DesignLabView.swift.
-                NavigationLink(destination: DesignLabView(), isActive: $showDesignLab) {
-                    EmptyView()
-                }
-                
-                // Theme picker sheet
-                if showThemePicker {
-                    Color.black.opacity(0.001)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .onTapGesture {
-                            showThemePicker = false
-                        }
-                        .sheet(isPresented: $showThemePicker) {
-                            themePickerSheet
-                        }
-                }
-                
-                
-                // Hidden navigation link for session details
-                if let session = selectedSession {
-                    NavigationLink(
-                        destination: ShiftDetailView(
-                            session: session,
-                            allSessions: viewModel.allSessions, // Pass ALL sessions, not just the upcoming ones
-                            currentUserID: UserManager.shared.getCurrentUserID(),
-                            // This screen's listener asks for published sessions
-                            // only, so nothing here is ever a draft and nothing
-                            // has been redacted on the way in.
-                            crewHidden: false
-                        )
-                        .id(session.id), // Force SwiftUI to create fresh view for each session
-                        isActive: Binding(
-                            get: { selectedSession != nil },
-                            set: { if !$0 { selectedSession = nil } }
-                        )
-                    ) { EmptyView() }
-                    .hidden()
-                }
+            // ON THE SCROLL VIEW, not on its content. This was previously
+            // attached to the inner VStack, which cannot work: a refresh action
+            // travels to a scroll view through ITS OWN environment, and the
+            // environment flows downward, so a child cannot install one on its
+            // parent. The converted schedule (ScheduleView) has always had it in
+            // the right place; home did not.
+            .refreshable {
+                await viewModel.refreshUpcomingEvents()
             }
         }
+        .sheet(isPresented: $showThemePicker) {
+            themePickerSheet
+        }
+        // The screen's ONE push. See HomeDestination.
+        .ambientPush(item: $homeDestination) { destination in
+            switch destination {
+            case .settings:
+                SettingsView()
+            case .designLab:
+                // Pushed into the Home screen's real NavigationView on purpose:
+                // a mockup has to run inside the same navigation container its
+                // real screen will get, or it is testing a frame that does not
+                // exist. See DesignLabView.swift.
+                DesignLabView()
+            case .shift(let session):
+                ShiftDetailView(
+                    session: session,
+                    allSessions: viewModel.allSessions, // ALL sessions, not just the upcoming ones
+                    currentUserID: UserManager.shared.getCurrentUserID(),
+                    // This screen's listener asks for published sessions only,
+                    // so nothing here is ever a draft and nothing has been
+                    // redacted on the way in.
+                    crewHidden: false
+                )
+                // Keyed by DAY OCCURRENCE, not session id. A multi-day job is
+                // several rows sharing one id, so keying on the id let SwiftUI
+                // reuse the detail across days — open day 1, go back, open day 2
+                // and you kept day 1's loaded state under day 2's data. This is
+                // the identity ShiftDetailView documents for itself, and the
+                // one ScheduleView already uses.
+                .id(session.dayOccurrenceKey)
+            }
+        }
+    }
+
+    private var allFeaturesRow: some View {
+        NavigationLink(destination: AllFeaturesView(
+            viewModel: viewModel,
+            tabBarManager: tabBarManager,
+            userRole: storedUserRole
+        )) {
+            HStack(spacing: 12) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(AmbientStyle.brand)
+                Text("All Features").font(.headline)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.primary)
+            .ambientCard(density: .roomy, fillWidth: true)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+    }
     
     // MARK: - Feature View Navigation
     
@@ -1020,14 +988,14 @@ struct MainEmployeeView: View {
                             .foregroundColor(.gray)
                     }
                     Menu {
-                        Button(action: { showSettings = true }) {
+                        Button(action: { homeDestination = .settings }) {
                             Label("Settings", systemImage: "gear")
                         }
                         Button(action: { showThemePicker = true }) {
                             Label("Appearance", systemImage: "paintbrush")
                         }
                         // TEMPORARY — removed at AMB.12 with the lab itself.
-                        Button(action: { showDesignLab = true }) {
+                        Button(action: { homeDestination = .designLab }) {
                             Label("Design Lab", systemImage: "paintpalette")
                         }
                         Button("Logout") {
@@ -1097,8 +1065,12 @@ struct MainEmployeeView: View {
             }
         }
         
-        // Reset selections when view appears
-        selectedSession = nil
+        // NOT clearing homeDestination here. The old code cleared its selected
+        // session on every appear, and carrying that forward would mean any
+        // re-fire of this onAppear pops the user out of a screen they are
+        // reading. The stale-destination case it was really guarding — coming
+        // back to Home and having the last screen re-push itself — is handled
+        // where it actually happens, on the tab change.
         
         // Apply the saved theme when the app starts or the view appears
         applyAppTheme()
@@ -1106,50 +1078,42 @@ struct MainEmployeeView: View {
     
     // MARK: - Computed Properties & UI Components
     
-    private var backgroundGradient: some View {
-        LinearGradient(
-            gradient: Gradient(
-                colors: [
-                    Color(UIColor.systemBackground),
-                    Color(UIColor.systemBackground).opacity(0.9),
-                    Color(UIColor.systemBackground).opacity(0.85)
-                ]
-            ),
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-    
+    /// The flag banner that floats over the whole shell, not just home.
+    ///
+    /// It is deliberately a SECOND rendering of the same note: the inline card
+    /// inside the scroll (flagNotificationView) can be scrolled past, and this
+    /// one cannot be missed. Only this one can be dismissed, and dismissing it
+    /// leaves the inline card in place — that pairing is why both exist.
     private var flagNotificationBanner: some View {
         VStack {
             Spacer()
-            VStack(spacing: 8) {
-                HStack {
-                    Image(systemName: "flag.fill").foregroundColor(.red)
-                    if flaggedByName.isEmpty {
-                        Text("Flag Note").font(.headline)
-                    } else {
-                        Text("Flag Note from \(flaggedByName)").font(.headline)
-                    }
-                    Spacer()
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.red)
+                    Text(flaggedByName.isEmpty ? "Flag note" : "Flag note from \(flaggedByName)")
+                        .font(.headline)
+                    Spacer(minLength: 0)
                     Button(action: {
-                        // Dismiss the banner overlay
-                        withAnimation {
-                            isBannerDismissed = true
-                        }
+                        withAnimation { isBannerDismissed = true }
                     }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
+                            .font(.system(size: 17))
+                            .foregroundStyle(.secondary)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss flag note")
                 }
-                Text(flagNote).font(.body)
+                Text(flagNote)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding()
-            .background(Color(UIColor.secondarySystemBackground).opacity(0.95))
-            .cornerRadius(12)
+            .ambientCard(density: .roomy, state: .highlighted,
+                         border: .strong(Color.red.opacity(0.55)),
+                         glow: .red, fillWidth: true)
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
-            .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 5)
         }
         .transition(.move(edge: .bottom))
         .animation(.easeInOut, value: isFlagged)

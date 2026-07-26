@@ -40,6 +40,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     case palette
     case equipment
     case dashboard
+    case dashboardIPad
     case tasks
     case chat
 
@@ -51,6 +52,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .palette: return "Feature Colours"
         case .equipment: return "Equipment"
         case .dashboard: return "Home Dashboard"
+        case .dashboardIPad: return "Home Dashboard — iPad"
         case .tasks: return "Tasks"
         case .chat: return "Chat"
         }
@@ -64,6 +66,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .palette: return "AMB.2 · D11"
         case .equipment: return "AMB.3"
         case .dashboard: return "AMB.4"
+        case .dashboardIPad: return "AMB.4 · iPad"
         case .tasks: return "AMB.5"
         case .chat: return "AMB.6"
         }
@@ -79,6 +82,8 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "The two tabs are gone: one screen leads with your gear and says what is late, with the whole inventory one row behind it. The kit detail is a packing list. AMB.3 waits on this."
         case .dashboard:
             return "The most-opened screen in the app, with the company blue turned right down behind it. Its shift widget also stops disagreeing with the schedule."
+        case .dashboardIPad:
+            return "The iPad's home is a DIFFERENT screen — sports rosters, group jobs and notes, with none of the hours, mileage, shifts or tasks you approved for the phone. This is the half that had no design."
         case .tasks:
             return "Grouped by when — overdue, today, this week — so you stop driving a chip bar to find out what is late. All five filters still work."
         case .chat:
@@ -92,6 +97,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .palette: return "paintpalette.fill"
         case .equipment: return "shippingbox.fill"
         case .dashboard: return "house.fill"
+        case .dashboardIPad: return "ipad.landscape"
         case .tasks: return "checklist"
         case .chat: return "bubble.left.and.bubble.right.fill"
         }
@@ -106,6 +112,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .palette: return .pink
         case .equipment: return FeatureTheme.color(for: "equipment")
         case .dashboard: return AmbientStyle.brand
+        case .dashboardIPad: return AmbientStyle.brand
         case .tasks: return FeatureTheme.color(for: "tasks")
         case .chat: return FeatureTheme.color(for: "chat")
         }
@@ -118,6 +125,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .palette: PaletteMockup()
         case .equipment: EquipmentMockup()
         case .dashboard: DashboardMockup()
+        case .dashboardIPad: DashboardIPadMockup()
         case .tasks: TasksMockup()
         case .chat: ChatMockup()
         }

@@ -98,6 +98,13 @@ ALLOW_MARKER = re.compile(r"^\s*(?://|\*|/\*)\s*ambient-allow:\s*\S+")
 # here may shrink but never grow, so conversion is unobstructed while a new card
 # in DashboardWidgets — the highest-drift file in the app — is still refused.
 # Delete the entry entirely when its phase converts the file.
+#
+# AMB.4, 2026-07-25: MainEmployeeView is converted and its row is DELETED (it was
+# 2, it is now 0). DashboardWidgets drops 8 -> 3. The three that remain are
+# exactly the iPad-only widgets — Sports Rosters, Group Jobs, Photoshoot Notes —
+# which are held behind their own D10 mockup approval because the iPad dashboard
+# is a different screen and had no approved design. This row is deleted when
+# those three land.
 # ---------------------------------------------------------------------------
 ALLOWLIST = {}  # populated below by _load_allowlist()
 
@@ -106,8 +113,7 @@ Iconik Employee/AllFeaturesView.swift|AMB.12|1
 Iconik Employee/Chat/Views/MessageInputAccessoryView.swift|AMB.6|1
 Iconik Employee/Components/AddressAutocompleteField.swift|AMB.12|2
 Iconik Employee/Components/LoadingOverlay.swift|AMB.12|1
-Iconik Employee/DashboardWidgets.swift|AMB.4|8
-Iconik Employee/MainEmployeeView.swift|AMB.4|2
+Iconik Employee/DashboardWidgets.swift|AMB.4|3
 Iconik Employee/Misc Features/CustomDailyReportsView.swift|AMB.7|2
 Iconik Employee/Misc Features/DailyJobReportView.swift|AMB.7|2
 Iconik Employee/Misc Features/LocationPhotoAttachmentView.swift|AMB.7|6

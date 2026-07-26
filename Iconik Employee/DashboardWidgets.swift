@@ -32,25 +32,40 @@ struct HoursWidget: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        DashboardWidgetCard {
             headerView
 
+            // Offline is stated as its own line rather than as a caption under
+            // the title. This is payroll data on a phone that works in school
+            // basements, so when the last fetch came from the cache instead of
+            // the network, that belongs near the top rather than tucked beside
+            // the heading.
+            //
+            // What this does NOT cover, stated so nobody reads more into it:
+            // the first paint of this widget comes from UserDefaults before any
+            // fetch resolves, and at that moment the flag still holds whatever
+            // the previous session left it as. It reports the last FETCH, not
+            // the age of the numbers on screen. Unchanged from before AMB.4.
+            if timeTrackingService.isUsingOfflineData {
+                offlineRow
+            }
+
             if isLoadingHours {
-                loadingView
+                DashboardWidgetLoading()
             } else {
                 contentView
             }
         }
-        .padding(EdgeInsets(top: 12, leading: 16, bottom: 16, trailing: 16))
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
         .task {
             await timeTrackingService.refreshUserAndStatus()
+
+            // The await above is a network round trip that does not check for
+            // cancellation. Leaving home during it meant onDisappear ran first,
+            // invalidating a timer that was still nil, and the task then resumed
+            // and installed a 1-second repeating Timer on a view that no longer
+            // exists — nothing left to ever invalidate it. SwiftUI cancels a
+            // .task when its view goes away, so asking is enough.
+            guard !Task.isCancelled else { return }
 
             await MainActor.run {
                 loadHoursData()
@@ -99,302 +114,149 @@ struct HoursWidget: View {
 
     // MARK: - View Components
 
-    private var loadingView: some View {
-        HStack {
-            Spacer()
-            ProgressView()
-            Spacer()
+    private var offlineRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "icloud.slash")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Offline")
+                .font(.caption.weight(.semibold))
+            if let lastSync = timeTrackingService.lastSyncTime {
+                Text("· last synced \(lastSync.timeAgoDisplay())")
+                    .font(.caption)
+            }
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 30)
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Capsule().fill(Color.orange.opacity(0.12)))
     }
 
     private var contentView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 14) {
             thisWeekSection
             payPeriodSection
         }
     }
 
+    /// This week against 40 hours.
+    ///
+    /// The arithmetic below is carried over unchanged from the pre-AMB.4 widget —
+    /// which week an entry belongs to, when the running entry counts, and where
+    /// overtime starts are business rules, and a design phase does not get to
+    /// move them (AMB plan, D12). What changed is only how they are drawn.
     @ViewBuilder
     private var thisWeekSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("This Week:")
-                .font(.subheadline)
-                .foregroundColor(.primary)
+        // `banked` is time already recorded; `running` is the open entry, and it
+        // is zero when the fetch already counted it (activeEntryIncludedInTotal).
+        let banked = currentWeekHours
+        let running = activeEntryIncludedInTotal ? 0 : activeHours
+        let totalWithActive = banked + running
+        let overtime = max(totalWithActive - 40, 0)
 
-            GeometryReader { (geometry: GeometryProxy) in
-                HStack(spacing: 12) {
-                    // Progress bar with fixed width
-                    ZStack(alignment: .leading) {
-                        // Background
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.gray.opacity(0.2))
-                            .frame(height: 24)
-
-                        // Progress including active hours (only if not already included)
-                        let totalWithActive = activeEntryIncludedInTotal ? currentWeekHours : (currentWeekHours + activeHours)
-                        let barWidth = geometry.size.width - 100 // Reserve 100 points for text
-
-                        if totalWithActive <= 40 {
-                            // Under 40h: Show actual progress
-                            let progress = totalWithActive / 40.0
-
-                            // Logged hours bar
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.blue)
-                                .frame(width: barWidth * CGFloat(currentWeekHours / 40.0), height: 24)
-
-                            // Active hours overlay (lighter blue)
-                            if activeHours > 0 {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.blue.opacity(0.4))
-                                    .frame(width: barWidth * CGFloat(progress), height: 24)
-                            }
-                        } else {
-                            // Over 40h: Full bar with proportional segments
-                            let effectiveTotal = activeEntryIncludedInTotal ? currentWeekHours : (currentWeekHours + activeHours)
-                            let regularHours = min(effectiveTotal, 40.0)
-                            let overtimeHours = max(effectiveTotal - 40.0, 0)
-                            let totalHours = regularHours + overtimeHours
-                            let regularRatio = regularHours / totalHours
-
-                            // Blue segment (regular hours proportion)
-                            UnevenRoundedRectangle(
-                                topLeadingRadius: 8,
-                                bottomLeadingRadius: 8,
-                                bottomTrailingRadius: 0,
-                                topTrailingRadius: 0
-                            )
-                            .fill(Color.blue)
-                            .frame(width: barWidth * CGFloat(regularRatio), height: 24)
-
-                            // Orange segment (overtime proportion)
-                            if overtimeHours > 0 {
-                                UnevenRoundedRectangle(
-                                    topLeadingRadius: 0,
-                                    bottomLeadingRadius: 0,
-                                    bottomTrailingRadius: 8,
-                                    topTrailingRadius: 8
-                                )
-                                .fill(Color.orange)
-                                .frame(width: barWidth * CGFloat(1.0 - regularRatio), height: 24)
-                                .offset(x: barWidth * CGFloat(regularRatio))
-                            }
-
-                            // Active hours overlay on top
-                            if activeHours > 0 {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.white.opacity(0.3))
-                                    .frame(width: barWidth, height: 24)
-                            }
-                        }
-                    }
-                    .frame(width: geometry.size.width - 100, height: 24)
-
-                    // Hours and percentage with fixed width
-                    VStack(alignment: .trailing, spacing: 0) {
-                        let totalWithActive = activeEntryIncludedInTotal ? currentWeekHours : (currentWeekHours + activeHours)
-                        if totalWithActive > 40 {
-                            // Show total with overtime indicator
-                            Text("\(formatHours(totalWithActive))/40h")
-                                .font(.caption)
-                                .foregroundColor(.primary)
-                            let overtime = totalWithActive - 40
-                            Text("+\(formatHours(overtime)) OT")
-                                .font(.caption2)
-                                .foregroundColor(.orange)
-                        } else if activeHours > 0 {
-                            Text("\(formatHours(totalWithActive))/40h")
-                                .font(.caption)
-                                .foregroundColor(.primary)
-                            Text("Active: \(formatHours(activeHours))")
-                                .font(.caption2)
-                                .foregroundColor(.blue)
-                        } else {
-                            Text("\(formatHours(currentWeekHours))/40h")
-                                .font(.caption)
-                                .foregroundColor(.primary)
-                            Text("\(Int((currentWeekHours / 40.0) * 100))%")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .frame(width: 88, alignment: .trailing)
-                }
-            }
-            .frame(height: 24)
-        }
+        HoursMeter(
+            label: "This week",
+            // Under 40 the bar is a share of 40; past 40 it is full and split in
+            // proportion, which is how the old bar behaved and is the only way
+            // "how far past 40 am I" reads at a glance. Dividing the banked
+            // split by the same denominator keeps the three segments consecutive
+            // in both cases.
+            regularFraction: min(banked, 40) / max(totalWithActive, 40),
+            overtimeFraction: max(banked - 40, 0) / max(totalWithActive, 40),
+            activeFraction: running / max(totalWithActive, 40),
+            tint: .blue,
+            primaryText: overtime > 0 || activeHours > 0
+                ? "\(formatHours(totalWithActive)) / 40h"
+                : "\(formatHours(currentWeekHours)) / 40h",
+            notes: weekNotes(overtime: overtime)
+        )
     }
 
+    /// Exactly what the old readout said, in the same precedence. The week
+    /// showed OT *or* Active *or* a percentage — never two at once — so this
+    /// keeps that rather than quietly starting to show both.
+    private func weekNotes(overtime: Double) -> [HoursMeterNote] {
+        if overtime > 0 { return [.init(text: "+\(formatHours(overtime)) OT", color: .orange)] }
+        if activeHours > 0 { return [.init(text: "Active \(formatHours(activeHours))", color: .blue)] }
+        return [.init(text: "\(Int((currentWeekHours / 40.0) * 100))%", color: .secondary)]
+    }
+
+    /// The pay period against 80 hours. Same rule: the numbers are the old ones.
     @ViewBuilder
     private var payPeriodSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Pay Period:")
-                .font(.subheadline)
-                .foregroundColor(.primary)
+        let running = activeEntryIncludedInTotal ? 0 : activeHours
+        let totalWithActive = totalHours + running
+        // Scaled to at least 80, or to the real total when the period ran over,
+        // so a period past 80 still shows the split rather than a full bar.
+        let scale = max(totalWithActive, 80)
 
-            GeometryReader { (geometry: GeometryProxy) in
-                HStack(spacing: 12) {
-                    // Progress bar with overtime and fixed width
-                    ZStack(alignment: .leading) {
-                        // Background
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.gray.opacity(0.2))
-                            .frame(height: 24)
+        HoursMeter(
+            label: "Pay period",
+            // regularHours and overtimeHours come from the payroll breakdown and
+            // describe BANKED time only — they sum to totalHours, never to
+            // totalWithActive. Dividing them by the same scale as `running`
+            // keeps the three segments consecutive and stops the running marker
+            // landing on hours that are already banked.
+            regularFraction: regularHours / scale,
+            overtimeFraction: overtimeHours / scale,
+            activeFraction: running / scale,
+            tint: .indigo,
+            primaryText: "\(formatHours(totalWithActive)) / 80h",
+            notes: periodNotes
+        )
+    }
 
-                        let barWidth = geometry.size.width - 100 // Same as This Week
-                        let totalWithActive = activeEntryIncludedInTotal ? totalHours : (totalHours + activeHours)
-
-                        if overtimeHours == 0 {
-                            // No overtime: Show simple progress bar
-                            let progress = totalWithActive / 80.0
-
-                            // Just blue bar for regular hours
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.blue)
-                                .frame(width: barWidth * CGFloat(min(totalHours / 80.0, 1.0)), height: 24)
-
-                            // Active hours overlay
-                            if activeHours > 0 {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.blue.opacity(0.4))
-                                    .frame(width: barWidth * CGFloat(min(progress, 1.0)), height: 24)
-                            }
-                        } else {
-                            // Has overtime: Show proportional segments scaled to bar width
-                            let maxHours = max(totalWithActive, 80.0) // Scale to at least 80 or actual if more
-                            let regularRatio = regularHours / maxHours
-                            let overtimeRatio = overtimeHours / maxHours
-
-                            // Blue segment (regular hours proportion)
-                            UnevenRoundedRectangle(
-                                topLeadingRadius: 8,
-                                bottomLeadingRadius: 8,
-                                bottomTrailingRadius: 0,
-                                topTrailingRadius: 0
-                            )
-                            .fill(Color.blue)
-                            .frame(width: min(barWidth * CGFloat(regularRatio), barWidth), height: 24)
-
-                            // Orange segment (overtime proportion)
-                            UnevenRoundedRectangle(
-                                topLeadingRadius: 0,
-                                bottomLeadingRadius: 0,
-                                bottomTrailingRadius: 8,
-                                topTrailingRadius: 8
-                            )
-                            .fill(Color.orange)
-                            .frame(width: min(barWidth * CGFloat(overtimeRatio), barWidth - min(barWidth * CGFloat(regularRatio), barWidth)), height: 24)
-                            .offset(x: min(barWidth * CGFloat(regularRatio), barWidth))
-
-                            // Active hours overlay on top
-                            if activeHours > 0 {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.white.opacity(0.3))
-                                    .frame(width: barWidth, height: 24)
-                            }
-                        }
-                    }
-                    .frame(width: geometry.size.width - 100, height: 24)
-
-                    // Hours and percentage with fixed width
-                    VStack(alignment: .trailing, spacing: 0) {
-                        let totalWithActive = activeEntryIncludedInTotal ? totalHours : (totalHours + activeHours)
-
-                        // Always show total hours
-                        Text("\(formatHours(totalWithActive))/80h")
-                            .font(.caption)
-                            .foregroundColor(.primary)
-                            .lineLimit(1)
-
-                        // Show active hours if clocked in
-                        if activeHours > 0 {
-                            Text("Active: \(formatHours(activeHours))")
-                                .font(.caption2)
-                                .foregroundColor(.blue)
-                                .lineLimit(1)
-                        }
-
-                        // Always show overtime if present
-                        if overtimeHours > 0 {
-                            Text("(\(formatHours(overtimeHours)) OT)")
-                                .font(.caption2)
-                                .foregroundColor(.orange)
-                                .lineLimit(1)
-                        } else if activeHours == 0 {
-                            // Only show percentage if no active hours and no overtime
-                            Text("\(Int((totalHours / 80.0) * 100))%")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .frame(width: 88, alignment: .trailing)
-                }
-            }
-            .frame(height: 24)
+    /// The pay period differs from the week on purpose, and did before this
+    /// phase: it shows Active AND overtime together, because in the second week
+    /// of a period you can easily be both clocked in and already over.
+    private var periodNotes: [HoursMeterNote] {
+        var notes: [HoursMeterNote] = []
+        if activeHours > 0 {
+            notes.append(.init(text: "Active \(formatHours(activeHours))", color: .blue))
         }
+        if overtimeHours > 0 {
+            notes.append(.init(text: "\(formatHours(overtimeHours)) OT", color: .orange))
+        } else if activeHours == 0 {
+            notes.append(.init(text: "\(Int((totalHours / 80.0) * 100))%", color: .secondary))
+        }
+        return notes
     }
 
     // MARK: - View Components
 
     private var headerView: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "clock")
-                .font(.title3)
-                .foregroundColor(.yellow)
-                .background(
-                    Circle()
-                        .fill(Color.yellow.opacity(0.2))
-                        .frame(width: 28, height: 28)
-                )
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Hours Tracking")
-                    .font(.headline)
-
-                // Offline indicator
-                if timeTrackingService.isUsingOfflineData {
-                    HStack(spacing: 4) {
-                        Image(systemName: "icloud.slash")
-                            .font(.caption2)
-                        Text("Offline")
-                            .font(.caption2)
-                        if let lastSync = timeTrackingService.lastSyncTime {
-                            Text("• \(lastSync.timeAgoDisplay())")
-                                .font(.caption2)
-                        }
-                    }
-                    .foregroundColor(.orange)
-                }
-            }
-            Spacer()
-
-            // Clock In/Out Button
-            Button(action: {
-                if timeTrackingService.isClockIn {
-                    showingNotesInput = true
-                } else {
-                    showingSessionSelection = true
-                }
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: timeTrackingService.isClockIn ? "stop.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 18))
-
-                    if timeTrackingService.isClockIn {
-                        Text(formatHours(activeHours))
-                            .font(.caption)
-                            .fontWeight(.medium)
-                    }
-                }
-                .foregroundColor(timeTrackingService.isClockIn ? .red : .green)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(timeTrackingService.isClockIn ? Color.red.opacity(0.1) : Color.green.opacity(0.1))
-                )
-            }
+        DashboardWidgetHeader("Hours Tracking", systemImage: "clock.fill", tint: .yellow) {
+            clockButton
         }
+    }
+
+    /// Clock in and clock out, from the widget header — the app's primary way in
+    /// and out of a shift. Red while running (and carrying the live elapsed
+    /// figure), green when not.
+    private var clockButton: some View {
+        Button(action: {
+            if timeTrackingService.isClockIn {
+                showingNotesInput = true
+            } else {
+                showingSessionSelection = true
+            }
+        }) {
+            let running = timeTrackingService.isClockIn
+            HStack(spacing: 5) {
+                Image(systemName: running ? "stop.circle.fill" : "play.circle.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                Text(running ? formatHours(activeHours) : "Clock in")
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(running ? Color.red : Color.green)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Capsule().fill((running ? Color.red : Color.green).opacity(0.12)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(timeTrackingService.isClockIn ? "Clock out" : "Clock in")
     }
 
     // MARK: - Helper Methods
@@ -671,6 +533,143 @@ struct HoursWidget: View {
     }
 }
 
+// MARK: - Hours meter
+
+/// One line of small print under a meter — overtime, the running entry, or the
+/// plain percentage.
+struct HoursMeterNote: Identifiable {
+    let text: String
+    let color: Color
+    var id: String { text }
+}
+
+/// A labelled hours bar: how much is logged, how much of that is still running,
+/// and how much of it is overtime.
+///
+/// The fractions are computed by the caller rather than in here, because what
+/// counts as regular and what counts as overtime is a payroll rule that lives
+/// with the data (AMB plan, D12). This view only draws what it is given, which
+/// also means the two meters on this widget can scale differently — the week
+/// against a fixed 40, the period against 80 or the real total, whichever is
+/// larger — without this file knowing why.
+struct HoursMeter: View {
+    let label: String
+    /// THREE CONSECUTIVE SEGMENTS, in this order, summing to the total fill:
+    /// banked regular time, banked overtime, then the entry running right now.
+    ///
+    /// Two earlier cuts of this got it wrong, both worth recording because both
+    /// made a FALSE claim about payroll data rather than merely looking wrong.
+    /// The first drew the running band past the filled edge onto the empty
+    /// track, invisible in light mode, and suppressed it entirely in overtime.
+    /// The second made it a slice cut out of the fill — but the pay period's
+    /// regular/overtime figures describe BANKED hours only, so that slice
+    /// landed on already-banked, clocked-out time and labelled it as running.
+    ///
+    /// Three plain segments cannot say anything untrue: whatever is banked is
+    /// banked, and the running entry is what extends past it.
+    let regularFraction: Double
+    let overtimeFraction: Double
+    let activeFraction: Double
+    let tint: Color
+    let primaryText: String
+    let notes: [HoursMeterNote]
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private func clamp(_ value: Double) -> Double {
+        value.isFinite ? min(max(value, 0), 1) : 0
+    }
+
+    /// The total and its small print, kept together so the one-line and stacked
+    /// layouts cannot drift apart.
+    private var readoutValues: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(primaryText)
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            ForEach(notes) { note in
+                Text(note.text)
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(note.color)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // The worst case is the pay period while clocked in AND over 80
+            // hours: label, total, "Active 2h 30m" and "0h 15m OT" all at once.
+            // At normal sizes that fits on one line; at accessibility sizes it
+            // cannot, at any scale factor, so the readout stacks instead of
+            // shrinking the payroll figure to nothing.
+            //
+            // The label carries NO layout priority on purpose. Giving it
+            // priority made the NUMBERS the first thing to be truncated, which
+            // is precisely backwards on a widget about hours worked.
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label).font(.subheadline.weight(.medium))
+                    readoutValues
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(label)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    readoutValues
+                }
+                .minimumScaleFactor(0.75)
+            }
+
+            GeometryReader { geo in
+                let width = geo.size.width
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.08))
+
+                    // One continuous run, clipped to a single capsule. Drawn as
+                    // separate offset capsules, a small overtime segment
+                    // rendered as a lozenge floating in the middle of the bar.
+                    HStack(spacing: 0) {
+                        Rectangle()
+                            .fill(tint.gradient)
+                            .frame(width: width * clamp(regularFraction))
+                        if overtimeFraction > 0 {
+                            Rectangle()
+                                .fill(Color.orange.gradient)
+                                .frame(width: width * clamp(overtimeFraction))
+                        }
+                        if activeFraction > 0 {
+                            // Lighter shade of the same tint, not a white wash:
+                            // it has to read as "this part is still going" on a
+                            // pale track in daylight.
+                            Rectangle()
+                                .fill(tint.opacity(0.45))
+                                .frame(width: width * clamp(activeFraction))
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: width)
+                    .clipShape(Capsule())
+                }
+            }
+            .frame(height: 10)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityValue(accessibilityValue)
+        }
+    }
+
+    /// The bar is decorative to VoiceOver; the numbers beside it are the content.
+    private var accessibilityValue: String {
+        ([primaryText] + notes.map(\.text)).joined(separator: ", ")
+    }
+}
+
 // MARK: - Mileage Widget
 struct MileageWidget: View {
     let userName: String
@@ -688,106 +687,113 @@ struct MileageWidget: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                Image(systemName: "car.fill")
-                    .font(.title2)
-                    .foregroundColor(.orange)
-                Text("Mileage")
-                    .font(.headline)
-                Spacer()
-                
+        DashboardWidgetCard {
+            DashboardWidgetHeader("Mileage", systemImage: "car.fill", tint: .orange) {
                 NavigationLink(destination: MileageReportsView(userName: userName)) {
-                    HStack(spacing: 4) {
-                        Text("View All")
-                        Image(systemName: "chevron.right")
-                    }
-                    .font(.caption)
-                    .foregroundColor(.blue)
+                    Text("View all")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AmbientStyle.brand)
                 }
             }
-            
+
             if isLoading {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                    Spacer()
-                }
-                .padding(.vertical, 20)
+                DashboardWidgetLoading()
             } else {
-                // Mileage stats
-                VStack(spacing: 12) {
-                    // Pay Period
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Pay Period")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("\(Int(currentPeriodMileage)) mi")
-                                .font(.system(size: 24, weight: .semibold))
-                            Text("$\(reimbursement(mileageViewModel.currentPeriodSplit, cachedMiles: currentPeriodMileage), specifier: "%.2f")")
-                                .font(.caption)
-                                .foregroundColor(.green)
-                            if mileageViewModel.currentPeriodSplit.hasCompany {
-                                Text("Personal \(Int(mileageViewModel.currentPeriodPersonalMiles)) · Company \(Int(mileageViewModel.currentPeriodCompanyMiles)) mi")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        Spacer()
+                // The pay period leads: it is the number that turns into money
+                // on the next cheque, and it is what people open this for.
+                //
+                // The caption is NOT decoration. The approved mockup drew this
+                // number bare, and porting that faithfully left the only
+                // unlabelled figure on the widget sitting directly above two
+                // labelled ones — which makes it read as a grand total rather
+                // than as this pay period. The old widget captioned all three.
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pay period")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(Int(currentPeriodMileage))")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                        Text("mi")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        // The miles figure is a fixed 30pt and does not grow with
+                        // Dynamic Type, but the currency beside it does — without
+                        // these the money wrapped or crushed the miles at
+                        // accessibility sizes.
+                        Text(currency(reimbursement(mileageViewModel.currentPeriodSplit,
+                                                    cachedMiles: currentPeriodMileage)))
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.green)
+                            .monospacedDigit()
+                            .lineLimit(1)
                     }
-                    
-                    Divider()
-                    
-                    // Month and Year
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("This Month")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("\(Int(monthMileage)) mi")
-                                .font(.system(size: 18, weight: .medium))
-                            Text("$\(reimbursement(mileageViewModel.monthSplit, cachedMiles: monthMileage), specifier: "%.2f")")
-                                .font(.caption2)
-                                .foregroundColor(.green)
-                        }
-
-                        Spacer()
-
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("This Year")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("\(Int(yearMileage)) mi")
-                                .font(.system(size: 18, weight: .medium))
-                            Text("$\(reimbursement(mileageViewModel.yearSplit, cachedMiles: yearMileage), specifier: "%.2f")")
-                                .font(.caption2)
-                                .foregroundColor(.green)
-                        }
-                    }
+                    .minimumScaleFactor(0.7)
                 }
-                
-                // Info text
+
+                // Only when there IS company mileage, exactly as before — a
+                // photographer who only ever drives their own car should not be
+                // shown a permanent "Company 0".
+                if mileageViewModel.currentPeriodSplit.hasCompany {
+                    AmbientPillRow(pills: [
+                        .init(text: "Personal \(Int(mileageViewModel.currentPeriodPersonalMiles))",
+                              systemImage: "person.fill", tint: .orange),
+                        .init(text: "Company \(Int(mileageViewModel.currentPeriodCompanyMiles))",
+                              systemImage: "building.2.fill", tint: .teal),
+                    ], density: .compact)
+                }
+
+                Divider().opacity(0.4)
+
+                HStack(alignment: .top) {
+                    mileageStat("This month", miles: monthMileage,
+                                pay: reimbursement(mileageViewModel.monthSplit, cachedMiles: monthMileage))
+                    Spacer()
+                    mileageStat("This year", miles: yearMileage,
+                                pay: reimbursement(mileageViewModel.yearSplit, cachedMiles: yearMileage),
+                                trailing: true)
+                }
+
+                // The only place the app says where mileage comes from. This
+                // widget is read-only and there is no other affordance, so
+                // without this line it looks broken rather than derived.
                 Text("Enter mileage via Daily Job Reports")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .italic()
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
         .task {
             await MainActor.run {
                 loadMileageData()
             }
         }
+    }
+
+    /// A period's miles with its money underneath. The dollars are not optional
+    /// decoration — two of the three figures on this widget were dropped by the
+    /// first design, on a screen whose entire job is "what am I owed".
+    private func mileageStat(_ caption: String, miles: Double, pay: Double,
+                             trailing: Bool = false) -> some View {
+        VStack(alignment: trailing ? .trailing : .leading, spacing: 2) {
+            Text(caption)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text("\(Int(miles)) mi")
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+            Text(currency(pay))
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.green)
+                .monospacedDigit()
+        }
+    }
+
+    private func currency(_ value: Double) -> String {
+        String(format: "$%.2f", value)
     }
     
     private func loadMileageData() {
@@ -834,92 +840,74 @@ struct UpcomingShiftsWidget: View {
     let weatherDataBySession: [String: WeatherData]
     let onRefresh: () -> Void
     let onSessionTap: (Session) -> Void
-    
-    private var currentUserID: String? {
-        UserManager.shared.getCurrentUserID()
-    }
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                Image(systemName: "calendar")
-                    .font(.title2)
-                    .foregroundColor(.red)
-                Text("Upcoming Shifts")
-                    .font(.headline)
-                Spacer()
-                
-                Button(action: onRefresh) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.caption)
-                        .foregroundColor(.blue)
+        DashboardWidgetCard {
+            DashboardWidgetHeader("Upcoming Shifts", systemImage: "calendar", tint: .red) {
+                HStack(spacing: 10) {
+                    if !sessions.isEmpty {
+                        Text("\(sessions.count)")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Button(action: onRefresh) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AmbientStyle.brand)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Refresh shifts")
                 }
             }
-            
+
             if isLoading {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                    Spacer()
-                }
-                .padding(.vertical, 20)
+                DashboardWidgetLoading()
             } else if sessions.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "calendar.badge.exclamationmark")
-                        .font(.system(size: 40))
-                        .foregroundColor(.gray)
-                    Text("No upcoming shifts")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Text("Next 2 days")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
+                DashboardWidgetEmpty(
+                    systemImage: "calendar.badge.exclamationmark",
+                    title: "No upcoming shifts",
+                    // The filter is startOfToday up to startOfToday + 3 days, so
+                    // the old "Next 2 days" was wrong by a day. Corrected here to
+                    // match the code rather than changing the code to match it.
+                    message: "Nothing scheduled for you in the next 3 days."
+                )
             } else {
                 VStack(spacing: 8) {
                     // Key by per-day occurrence: a multi-day session yields one row
                     // per day, all sharing the same session id.
                     ForEach(sessions.prefix(3), id: \.dayOccurrenceKey) { session in
                         Button(action: { onSessionTap(session) }) {
-                            CompactShiftRow(
+                            ShiftWidgetRow(
                                 session: session,
-                                weatherData: getWeatherForSession(session),
-                                currentUserID: currentUserID
+                                weatherData: getWeatherForSession(session)
                             )
                         }
                         .buttonStyle(PlainButtonStyle())
                     }
-                    
-                    if sessions.count > 3 {
-                        NavigationLink(destination: ScheduleView()) {
-                            HStack {
-                                Spacer()
-                                Text("View All (\(sessions.count) shifts)")
-                                    .font(.caption)
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                Spacer()
-                            }
-                            .foregroundColor(.blue)
-                            .padding(.top, 4)
+                }
+
+                if sessions.count > 3 {
+                    // Without this the fourth shift is unreachable from home.
+                    NavigationLink(destination: ScheduleView()) {
+                        HStack(spacing: 4) {
+                            Spacer()
+                            Text("View all (\(sessions.count) shifts)")
+                                .font(.caption.weight(.semibold))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .bold))
+                            Spacer()
                         }
+                        .foregroundStyle(AmbientStyle.brand)
+                        .padding(.top, 2)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.1), radius: 8, x: 0, y: 2)
     }
-    
+
     private func getWeatherForSession(_ session: Session) -> WeatherData? {
         guard let sessionDate = session.startDate,
               let location = session.location,
@@ -936,123 +924,99 @@ struct UpcomingShiftsWidget: View {
     }
 }
 
-// MARK: - Compact Shift Row
-struct CompactShiftRow: View {
+// MARK: - Shift row
+
+/// A shift as home draws it, in the schedule's own vocabulary.
+///
+/// This replaces `CompactShiftRow`, and the point of the replacement is not the
+/// styling. The old row painted its colour rail from
+/// `positionColorMap[session.position]`, but `Session.position` returns
+/// `session_types.first` — a session TYPE id such as "sports" — while
+/// `positionColorMap` is keyed by JOB TITLES ("Photographer 1", "Delivery").
+/// The lookup missed, its inline fallback map was keyed by job titles too and
+/// missed as well, and every row fell through to `.blue`. Nearly every shift on
+/// the dashboard was blue no matter what colour the scheduler chose.
+///
+/// It now uses `ScheduleStyle.accent(for:)` — the scheduler's `session_color`,
+/// the same source the converted schedule reads — which is what makes home and
+/// the schedule finally agree about what a job looks like.
+struct ShiftWidgetRow: View {
     let session: Session
     let weatherData: WeatherData?
-    let currentUserID: String?
-    
-    private var timeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter
-    }
-    
-    private var dateFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "E, MMM d"
-        return formatter
-    }
-    
-    private var currentUserPhotographerInfo: (name: String, notes: String?)? {
-        guard let userID = currentUserID else { return nil }
-        return session.getPhotographerInfo(for: userID)
-    }
-    
-    private var colorForPosition: Color {
-        if let positionColor = positionColorMap[session.position] {
-            return positionColor
-        }
-        
-        let colorMap: [String: Color] = [
-            "Photographer 1": .red,
-            "Photographer 2": .blue,
-            "Photographer 3": .green,
-            "Photographer 4": .orange,
-            "Photographer 5": .purple,
-            "Poser 1": .pink,
-            "Poser 2": .teal,
-            "Production": .mint,
-            "Delivery": .gray
-        ]
-        
-        return colorMap[session.position] ?? .blue
-    }
-    
+
     var body: some View {
-        HStack(spacing: 12) {
-            // Color indicator
-            RoundedRectangle(cornerRadius: 4)
-                .fill(colorForPosition)
-                .frame(width: 4)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                // School name and position
-                HStack {
+        let accent = ScheduleStyle.accent(for: session)
+        return HStack(spacing: 12) {
+            // When, in a gutter: the day above the times. The widget spans
+            // today, tomorrow AND the day after — that is the range the view
+            // model filters to — so a row without a day says the wrong thing
+            // two thirds of the time.
+            VStack(spacing: 1) {
+                Text(dayLabel)
+                    .font(.system(size: 10, weight: .bold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(isToday ? accent : .secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text(session.startDate.map { Formatters.shortTime.string(from: $0) } ?? "—")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                Rectangle()
+                    .fill(accent.opacity(0.35))
+                    .frame(width: 2)
+                    .frame(maxHeight: .infinity)
+                Text(session.endDate.map { Formatters.shortTime.string(from: $0) } ?? "")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .frame(width: 58)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
                     Text(session.schoolName)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                        .font(.system(size: 15, weight: .semibold))
                         .lineLimit(1)
-                    
-                    Spacer()
-                    
-                    Text(session.getSessionTypeDisplayName())
-                        .font(.caption2)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(colorForPosition.opacity(0.2))
-                        .foregroundColor(colorForPosition)
-                        .cornerRadius(10)
-                }
-                
-                // Date and time
-                HStack {
-                    if let start = session.startDate {
-                        Text(dateFormatter.string(from: start))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        if let end = session.endDate {
-                            Text("• \(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
-                    // Multi-day "Day N of M" badge
-                    if let dayLabel = session.multiDayLabel {
-                        Text(dayLabel)
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.black.opacity(0.55))
-                            .foregroundColor(.white)
-                            .cornerRadius(8)
-                    }
-
-                    Spacer()
-
-                    // Weather
+                    Spacer(minLength: 0)
                     if let weather = weatherData, let iconName = weather.iconSystemName {
-                        HStack(spacing: 2) {
+                        HStack(spacing: 3) {
                             Image(systemName: iconName)
                                 .font(.caption)
-                                .foregroundColor(weather.conditionColor)
+                                .foregroundStyle(weather.conditionColor)
                             Text(weather.temperatureString)
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                         }
+                        .fixedSize()
                     }
                 }
+                // Types, plus the multi-day "Day N of M" marker, exactly as the
+                // schedule assembles them — one definition, so the two screens
+                // cannot drift apart again.
+                ScheduleTypePills(session: session, density: .compact)
+                if !session.photographers.isEmpty {
+                    AmbientAvatarStack(subjects: ScheduleStyle.avatarSubjects(session.photographers),
+                                       size: 20, maxVisible: 4)
+                }
             }
-            
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.gray)
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 4)
+        .ambientCard(density: .compact, border: .hairline(accent.opacity(0.35)))
+    }
+
+    private var isToday: Bool {
+        guard let start = session.startDate else { return false }
+        return Calendar.current.isDateInToday(start)
+    }
+
+    /// "Today" / "Tomorrow" / "Wed 30" — short enough for a 58pt gutter, which
+    /// `Formatters.relativeDay` is not (it falls back to a full weekday name).
+    private var dayLabel: String {
+        guard let start = session.startDate else { return "" }
+        let calendar = Calendar.current
+        if calendar.isDateInToday(start) { return "Today" }
+        if calendar.isDateInTomorrow(start) { return "Tomorrow" }
+        return "\(Formatters.weekdayShort.string(from: start)) \(Formatters.dayNumber.string(from: start))"
     }
 }
 
@@ -2016,89 +1980,50 @@ struct TasksWidget: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Header
-            HStack(spacing: 8) {
-                Image(systemName: "checklist")
-                    .font(.title3)
-                    .foregroundColor(.green)
-                    .background(
-                        Circle()
-                            .fill(Color.green.opacity(0.2))
-                            .frame(width: 28, height: 28)
-                    )
-                Text("Tasks")
-                    .font(.headline)
+        DashboardWidgetCard {
+            DashboardWidgetHeader("Tasks", systemImage: "checklist", tint: .green) {
+                HStack(spacing: 12) {
+                    // The widget's only write action. Dropping it would leave
+                    // home able to complete a task but never to add one.
+                    Button(action: { showingCreateTask = true }) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 19))
+                            .foregroundStyle(.green)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("New task")
 
-                Spacer()
-
-                // Create Task button
-                Button(action: {
-                    showingCreateTask = true
-                }) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title3)
-                        .foregroundColor(.green)
-                }
-
-                // View All button
-                Button(action: {
-                    tabBarManager.selectedTab = "tasks"
-                }) {
-                    Text("View All")
-                        .font(.caption)
-                        .foregroundColor(.blue)
+                    Button(action: { tabBarManager.selectedTab = "tasks" }) {
+                        Text("View all")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AmbientStyle.brand)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 
-            // Task previews or empty state
             if viewModel.isLoading && viewModel.tasks.isEmpty {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                        .padding(.vertical, 20)
-                    Spacer()
-                }
+                DashboardWidgetLoading()
             } else if urgentTasks.isEmpty {
-                // Empty state
-                VStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle")
-                        .font(.system(size: 36))
-                        .foregroundColor(.green.opacity(0.5))
-                    Text("No tasks")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Text("You're all caught up!")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
+                DashboardWidgetEmpty(
+                    systemImage: "checkmark.circle",
+                    title: "No tasks",
+                    message: "You're all caught up!"
+                )
             } else {
-                // Task list
-                VStack(spacing: 12) {
+                VStack(spacing: 8) {
                     ForEach(urgentTasks) { task in
                         TaskPreviewRow(
                             task: task,
                             onToggleComplete: {
                                 viewModel.toggleTaskCompletion(task)
-                            }
+                            },
+                            onOpen: { selectedTask = task }
                         )
-                        .onTapGesture {
-                            selectedTask = task
-                        }
                     }
                 }
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(.systemGray5), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
         .onAppear {
             viewModel.loadTasks()
         }
@@ -2123,77 +2048,62 @@ struct TasksWidget: View {
 struct TaskPreviewRow: View {
     let task: TaskItem
     let onToggleComplete: () -> Void
+    let onOpen: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Checkbox
+        HStack(spacing: 10) {
+            // The checkbox is a real control and stays outside the row's own tap
+            // target — ticking a task off from home must never open it instead.
             Button(action: onToggleComplete) {
                 Image(systemName: task.status == .completed ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundColor(task.status == .completed ? .green : .gray)
+                    .font(.system(size: 17))
+                    .foregroundStyle(task.status == .completed ? Color.green : Color.secondary)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(PlainButtonStyle())
+            .accessibilityLabel(task.status == .completed ? "Mark not done" : "Mark done")
 
-            // Priority color bar
-            Rectangle()
-                .fill(priorityColor)
-                .frame(width: 3)
-
-            VStack(alignment: .leading, spacing: 4) {
-                // Title
+            // The priority spine is gone (operator, 2026-07-25). It did not read
+            // right on a card, and the Tasks screen drops it in the same pass —
+            // these two rows are the same object seen twice. Priority still
+            // reaches the row through the trailing glyph below.
+            VStack(alignment: .leading, spacing: 3) {
                 Text(task.title)
-                    .font(.body)
+                    .font(.system(size: 14, weight: .medium))
                     .lineLimit(1)
 
-                // Due date and metadata
-                HStack(spacing: 12) {
-                    // Status badge
-                    Text(task.status.displayName)
-                        .font(.caption2)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(statusColor.opacity(0.2))
-                        .foregroundColor(statusColor)
-                        .cornerRadius(4)
+                HStack(spacing: 8) {
+                    AmbientBadge(text: task.status.displayName, tint: statusColor)
 
-                    // Due date
                     if let dueDate = task.dueDate {
-                        HStack(spacing: 4) {
-                            Image(systemName: task.isOverdue ? "exclamationmark.triangle.fill" : "calendar")
-                                .font(.caption2)
-                            Text(relativeDateString(from: dueDate))
-                                .font(.caption)
-                        }
-                        .foregroundColor(task.isOverdue ? .red : .secondary)
+                        Label(relativeDateString(from: dueDate),
+                              systemImage: task.isOverdue ? "exclamationmark.triangle.fill" : "calendar")
+                            .font(.caption2)
+                            .foregroundStyle(task.isOverdue ? Color.red : Color.secondary)
                     }
 
-                    // Subtasks progress
                     if !task.subtasks.isEmpty {
                         let completed = task.subtasks.filter { $0.completed }.count
-                        HStack(spacing: 4) {
-                            Image(systemName: "checklist")
-                                .font(.caption2)
-                            Text("\(completed)/\(task.subtasks.count)")
-                                .font(.caption)
-                        }
-                        .foregroundColor(.secondary)
+                        Label("\(completed)/\(task.subtasks.count)", systemImage: "checklist")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 0)
 
-            // Priority indicator (for urgent/high)
+            // Carries what the spine used to, the same way the Tasks card does:
+            // urgent and high only.
             if task.priority == .urgent || task.priority == .high {
                 Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundColor(priorityColor)
-                    .font(.title3)
+                    .font(.caption)
+                    .foregroundStyle(priorityColor)
             }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(Color(.systemGray6).opacity(0.5))
-        .cornerRadius(8)
+        .ambientCard(density: .compact, border: .hairline(Color.primary.opacity(0.07)))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
     }
 
     private var priorityColor: Color {
