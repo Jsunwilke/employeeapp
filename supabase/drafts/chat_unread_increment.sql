@@ -1,14 +1,21 @@
--- STATUS: NOT YET APPLIED. Written 2026-07-26 during AMB.6.
+-- STATUS: APPLIED + verified live 2026-07-26 (AMB.6). Idempotent
+-- (CREATE OR REPLACE), safe to re-run.
 --
--- TO APPLY: paste into the Supabase SQL editor for project nofegnmrgnanpznavlqy,
--- the same way fix_chat_rpcs.sql was applied on 2026-07-13. Idempotent
--- (CREATE OR REPLACE). Afterwards, update this line to record the date, and
--- verify with:
---   select proname from pg_proc where proname = 'increment_conversation_unread';
+-- Verified after applying: the function exists with prosecdef = true and the
+-- signature (conversation_id text, sender_id text); EXECUTE is granted to
+-- `authenticated` and revoked from PUBLIC; and a NEGATIVE test from a context
+-- with no auth.uid() is REJECTED with 'Not authorized' while leaving
+-- unread_counts untouched.
 --
--- Until it is applied the iOS client calls it and fails soft: the message is
--- already stored by then, so a send still succeeds and only the badge is
--- unaffected — which is exactly today's behaviour, so nothing regresses.
+-- THAT NEGATIVE TEST FOUND A REAL BUG IN THE FIRST VERSION OF THIS FILE, and
+-- the mistake is recorded rather than quietly fixed: the guard was written as
+-- `<>` against auth.uid(), which yields NULL rather than TRUE when auth.uid()
+-- is NULL, so `IF NULL THEN` never fired and the check was skipped. The test
+-- was also run against a REAL conversation instead of inside a transaction that
+-- rolls back — it incremented three participants' unread counts on live data,
+-- which was then undone by decrementing exactly that delta and confirmed back
+-- to zero. fix_chat_rpcs.sql's own header says its behavioural test was
+-- "rolled back so nothing persisted"; that precedent should have been followed.
 --
 -- Adds the ONE chat RPC that fix_chat_rpcs.sql deliberately did not: raising
 -- everyone else's unread count when a message is sent.
@@ -52,7 +59,23 @@ DECLARE
   v_unread jsonb;
   pid      text;
 BEGIN
-  IF lower(sender_id) <> lower((auth.uid())::text) THEN RAISE EXCEPTION 'Not authorized'; END IF;
+  -- NULL-SAFE, and that is not pedantry. Written first as
+  --   IF lower(sender_id) <> lower((auth.uid())::text)
+  -- which is the shape the five functions in fix_chat_rpcs.sql use. When
+  -- auth.uid() is NULL the comparison yields NULL rather than TRUE, and
+  -- `IF NULL THEN` does not fire — so the authorization check is SKIPPED
+  -- instead of failing closed. Caught 2026-07-26 by a negative test that
+  -- expected a rejection and got a successful increment.
+  --
+  -- Practical exposure was low: EXECUTE is granted only to `authenticated`
+  -- (PUBLIC is revoked below) and a real client always carries a uid. But a
+  -- guard that fails OPEN is the wrong default regardless of who can reach it.
+  -- THE SAME PATTERN IS IN ALL FIVE EXISTING CHAT RPCs — reported, not changed
+  -- here, because altering five live functions is not this phase's call.
+  IF auth.uid() IS NULL
+     OR lower(sender_id) IS DISTINCT FROM lower((auth.uid())::text) THEN
+    RAISE EXCEPTION 'Not authorized';
+  END IF;
 
   SELECT participants, coalesce(unread_counts, '{}'::jsonb)
     INTO v_parts, v_unread

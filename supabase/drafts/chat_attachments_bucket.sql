@@ -1,13 +1,14 @@
--- STATUS: NOT YET APPLIED. Written 2026-07-26 during AMB.6.
+-- STATUS: APPLIED + verified live 2026-07-26 (AMB.6). Idempotent, safe to re-run.
 --
--- TO APPLY: paste into the Supabase SQL editor for project nofegnmrgnanpznavlqy,
--- the same way fix_chat_rpcs.sql was applied on 2026-07-13. Idempotent: safe to
--- run more than once. Afterwards, update this line to record the date, and
--- verify with:
---   select id, public from storage.buckets where id = 'chat-attachments';
---   select policyname from pg_policies
---    where schemaname='storage' and tablename='objects'
---      and policyname ilike '%chat attachments%';   -- expect 4 rows
+-- Verified after applying: the bucket exists with public = false, and all four
+-- policies are present on storage.objects with the expected commands
+-- (INSERT / SELECT / DELETE / UPDATE).
+--
+-- NOT verified by an end-to-end upload — that needs a signed-in session on a
+-- device, which is the operator's smoke. The first real photo sent in chat is
+-- the test of the WITH CHECK expression, and if the path layout in
+-- SupabaseChatService.uploadAttachment ever stops being
+-- {organization_id}/{conversation_id}/... every upload will fail that check.
 --
 -- Creates the storage bucket chat image and file messages need.
 --

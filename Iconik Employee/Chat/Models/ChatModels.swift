@@ -116,11 +116,32 @@ struct Conversation: Codable, Identifiable {
             return nil
         }
 
-        // 2. An object that reached a text column and came back as its own JSON
-        //    source. Reparse rather than showing the user a brace.
-        if text.hasPrefix("{"), let data = text.data(using: .utf8),
-           let object = try? embeddedJSONDecoder.decode(LastMessage.self, from: data) {
-            return object
+        // 2. An object serialised INTO the text column. This is what every row
+        //    in production actually holds, and it is LEGACY FIREBASE data —
+        //    verified against the live table 2026-07-26:
+        //
+        //      {"text":"…","senderId":"RdoGpyG9…",
+        //       "timestamp":{"_seconds":1756139102,"_nanoseconds":410000000}}
+        //
+        //    Note `senderId`, not `sender_id`, and a Firestore Timestamp rather
+        //    than an ISO string. Decoding this with the model's own Codable
+        //    fails on BOTH counts, which would have left the raw JSON showing as
+        //    the preview text. Parsed by hand so each field can miss
+        //    independently without losing the row.
+        if text.hasPrefix("{"),
+           let data = text.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+
+            let body = object["text"] as? String ?? ""
+            // Both spellings: legacy Firebase wrote senderId, the web app's
+            // current code writes sender_id.
+            let sender = object["sender_id"] as? String ?? object["senderId"] as? String ?? ""
+
+            return LastMessage(
+                text: body,
+                sender_id: sender,
+                timestamp: parseTimestamp(object["timestamp"]) ?? fallbackTimestamp
+            )
         }
 
         // 3. Plain text — this app's own writes. The sender is genuinely not
@@ -131,26 +152,39 @@ struct Conversation: Codable, Identifiable {
         return LastMessage(text: text, sender_id: "", timestamp: fallbackTimestamp)
     }
 
-    /// Only for case 2 above — an object that came back as a JSON string. The web
-    /// app writes its timestamp with `toISOString()`, which carries fractional
-    /// seconds; the same two-step fallback the rest of this app uses for Supabase
-    /// timestamps (see Models.swift and Schedule/Session.swift).
-    private static let embeddedJSONDecoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let text = try decoder.singleValueContainer().decode(String.self)
+    /// The three timestamp shapes this column has actually held.
+    ///
+    /// Returns nil rather than throwing so the caller can fall back to
+    /// `last_activity`, which is written in the same statement and is therefore
+    /// the right answer anyway.
+    private static func parseTimestamp(_ value: Any?) -> Date? {
+        // 1. Firestore Timestamp — {"_seconds": …, "_nanoseconds": …}. What
+        //    every legacy row in production holds.
+        if let dictionary = value as? [String: Any],
+           let seconds = (dictionary["_seconds"] as? NSNumber)?.doubleValue {
+            let nanos = (dictionary["_nanoseconds"] as? NSNumber)?.doubleValue ?? 0
+            return Date(timeIntervalSince1970: seconds + nanos / 1_000_000_000)
+        }
+
+        // 2. An ISO-8601 string — what the web app's current code writes with
+        //    toISOString(), which carries fractional seconds. Same two-step
+        //    fallback the rest of this app uses for Supabase timestamps (see
+        //    Models.swift and Schedule/Session.swift).
+        if let text = value as? String {
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             if let date = formatter.date(from: text) { return date }
             formatter.formatOptions = [.withInternetDateTime]
             if let date = formatter.date(from: text) { return date }
-            throw DecodingError.dataCorruptedError(
-                in: try decoder.singleValueContainer(),
-                debugDescription: "Unparseable last_message timestamp: \(text)"
-            )
         }
-        return decoder
-    }()
+
+        // 3. A bare epoch, defensively — no row holds this today.
+        if let number = value as? NSNumber {
+            return Date(timeIntervalSince1970: number.doubleValue)
+        }
+
+        return nil
+    }
 
     // Custom encoding to exclude resolvedDisplayName
     func encode(to encoder: Encoder) throws {
