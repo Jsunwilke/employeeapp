@@ -128,6 +128,9 @@ struct TabBarMockup: View {
     @State private var hideOnScroll = true
     @State private var barHidden = false
     @State private var lastOffset: CGFloat = 0
+    /// On-screen probe values — see `react(to:)`.
+    @State private var liveOffset: CGFloat = 0
+    @State private var liveDelta: CGFloat = 0
 
     /// Real feature ids, so `FeatureTheme` returns the colour the converted bar
     /// would actually use — including the ones that fall through to blue today.
@@ -163,6 +166,13 @@ struct TabBarMockup: View {
     /// continuously. And it is always shown near the top, so a screen you have
     /// only just opened never starts with its navigation missing.
     private func react(to offset: CGFloat) {
+        // Instrumentation, shown on screen. This is here because the first attempt
+        // silently did nothing and there was no way to tell whether the scroll was
+        // being observed at all or whether the rule above it was wrong. A live
+        // readout answers that in one look instead of a round trip.
+        liveOffset = offset
+        liveDelta = offset - lastOffset
+
         let delta = offset - lastOffset
 
         if offset > -12 {
@@ -186,28 +196,38 @@ struct TabBarMockup: View {
             // refract — judging a glass bar over a flat page tells you nothing,
             // which is part of why the first cut read as "not really different".
             ScrollView {
-                VStack(spacing: 12) {
-                    controls
-                    ForEach(0..<8, id: \.self) { index in
-                        filler(index)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                // Room for the floating capsule, so the last card can clear it.
-                .padding(.bottom, floats ? 96 : 20)
-                // Reports how far the content has travelled. A GeometryReader in
-                // the content plus a preference is the iOS 16-safe way to observe
-                // this — onScrollGeometryChange is iOS 18, and this app's floor
-                // is 16.6.
-                .background(
+                VStack(spacing: 0) {
+                    // Reports how far the content has travelled.
+                    //
+                    // A zero-height GeometryReader as the FIRST CHILD of the
+                    // content, not a `.background` on it. The first version put it
+                    // in a background and the bar never moved: `.background` and
+                    // `.overlay` build a secondary hierarchy whose preferences do
+                    // not reliably reach an ancestor, so `onPreferenceChange` was
+                    // simply never called. As a real child it propagates normally.
+                    //
+                    // Still a GeometryReader plus a preference rather than
+                    // `onScrollGeometryChange`, which is iOS 18 — this app's floor
+                    // is 16.6.
                     GeometryReader { proxy in
                         Color.clear.preference(
                             key: BarScrollOffsetKey.self,
                             value: proxy.frame(in: .named(Self.scrollSpace)).minY
                         )
                     }
-                )
+                    .frame(height: 0)
+
+                    VStack(spacing: 12) {
+                        controls
+                        ForEach(0..<8, id: \.self) { index in
+                            filler(index)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    // Room for the floating capsule, so the last card can clear it.
+                    .padding(.bottom, floats ? 96 : 20)
+                }
             }
             .coordinateSpace(name: Self.scrollSpace)
             .onPreferenceChange(BarScrollOffsetKey.self) { offset in
@@ -286,6 +306,8 @@ struct TabBarMockup: View {
 
             Divider().opacity(0.4)
 
+            scrollProbe
+
             Toggle("Hide on scroll (the Facebook behaviour)", isOn: $hideOnScroll)
                 .font(.footnote.weight(.semibold))
                 .tint(AmbientStyle.brand)
@@ -323,6 +345,27 @@ struct TabBarMockup: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .ambientCard(density: .compact, fillWidth: true)
+    }
+
+    /// Live proof that the scroll is being observed. If these numbers do not move
+    /// while you drag, the bar is not being told about the scroll at all and the
+    /// problem is the plumbing rather than the rule.
+    private var scrollProbe: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "scope")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text("offset \(Int(liveOffset))")
+                .monospacedDigit()
+            Text("delta \(Int(liveDelta))")
+                .monospacedDigit()
+            Spacer(minLength: 0)
+            Text(barHidden ? "HIDDEN" : "SHOWN")
+                .font(.caption2.weight(.black))
+                .foregroundStyle(barHidden ? .orange : .green)
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
     }
 
     /// The one control that exists to be reported back rather than admired.
