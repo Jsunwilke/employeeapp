@@ -127,6 +127,16 @@ enum Formatters {
     static let shortTime: DateFormatter = {
         let f = DateFormatter(); f.timeStyle = .short; f.dateStyle = .none; return f
     }()
+    /// Numeric date, e.g. "7/28/26". The fallback for a relative date that is
+    /// further away than yesterday or tomorrow. Added in AMB.5, which found the
+    /// task row building one of these per row per keystroke.
+    static let shortDate: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .none; return f
+    }()
+    /// Medium date and short time, e.g. "Jul 12, 2026 at 9:41 AM".
+    static let mediumDateTime: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f
+    }()
     /// "Mon"
     static let weekdayShort: DateFormatter = display("EEE")
     /// "M"

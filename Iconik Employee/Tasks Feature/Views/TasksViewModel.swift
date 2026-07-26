@@ -55,6 +55,12 @@ class TasksViewModel: ObservableObject {
     /// every appearance.
     private var loadedTeamForOrganization: String?
 
+    /// The failed WRITE that Retry should re-run, if the last failure was a write
+    /// rather than a read. Its presence is also what stops a later successful fetch
+    /// from clearing the banner: a create that never happened is still unfixed no
+    /// matter how well the list reloads afterwards.
+    private var pendingRetry: (() -> Void)?
+
     private var currentUserId: String {
         return (UserManager.shared.getCurrentUserIDUnified() ?? "").lowercased()
     }
@@ -192,7 +198,14 @@ class TasksViewModel: ObservableObject {
                 // banner is permanent for the life of the screen: nothing but the
                 // user's own Retry or Dismiss ever cleared `error`, so one failed
                 // fetch left a warning sitting over data that had since arrived.
-                self.error = nil
+                //
+                // BUT NOT WHEN A WRITE IS STILL OUTSTANDING. If creating a task
+                // failed, that task still does not exist, and a healthy re-read
+                // says nothing about it — clearing here would report the failure
+                // and then erase the report.
+                if self.pendingRetry == nil {
+                    self.error = nil
+                }
 
                 // Cache the fetched tasks
                 self.cacheService.setCachedTasks(fetchedTasks, userId: self.currentUserId, orgId: self.currentOrganizationId)
@@ -251,13 +264,31 @@ class TasksViewModel: ObservableObject {
 
     func clearError() {
         error = nil
+        pendingRetry = nil
     }
 
-    /// What the failure banner's Retry does. Clearing first means the banner goes
-    /// as the retry starts, and comes back only if the retry also fails.
+    /// What the failure banner's Retry does.
+    ///
+    /// IT RE-RUNS THE THING THAT FAILED. The first cut always re-fetched the list,
+    /// which is wrong in the case that matters most: if CREATING a task failed, a
+    /// re-fetch succeeds, `error` is cleared by that success, the banner
+    /// disappears — and the task was never created. The failure was reported and
+    /// then silently erased, which is worse than not reporting it.
     func retryAfterFailure() {
         error = nil
-        fetchAllTasks()
+        if let retry = pendingRetry {
+            pendingRetry = nil
+            retry()
+        } else {
+            fetchAllTasks()
+        }
+    }
+
+    /// Records a failed WRITE so Retry can re-run it and so a later successful read
+    /// does not clear the banner out from under it.
+    private func recordFailure(_ failure: Error, retry: @escaping () -> Void) {
+        error = failure
+        pendingRetry = retry
     }
 
     // MARK: - Clear Cache and Reload
@@ -281,7 +312,9 @@ class TasksViewModel: ObservableObject {
                 // Refresh tasks
                 self.refreshTasks()
             } catch {
-                self.error = error
+                // Retry must re-attempt the CREATE. A task that failed to save does
+                // not exist, and re-reading the list will not conjure it.
+                self.recordFailure(error) { [weak self] in self?.createTask(task) }
             }
         }
     }
@@ -301,7 +334,7 @@ class TasksViewModel: ObservableObject {
                     self.tasks[index] = task
                 }
             } catch {
-                self.error = error
+                self.recordFailure(error) { [weak self] in self?.updateTask(task) }
             }
         }
     }
@@ -323,7 +356,7 @@ class TasksViewModel: ObservableObject {
                     self.refreshTasks()
                 }
             } catch {
-                self.error = error
+                self.recordFailure(error) { [weak self] in self?.toggleTaskCompletion(task) }
             }
         }
     }

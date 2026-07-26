@@ -283,7 +283,17 @@ struct TasksView: View {
     private func filterChip(_ filter: TaskFilter, count: Int?) -> some View {
         let selected = filter == selectedFilter
         return Button {
-            withAnimation(AmbientMotion.snappy) { selectedFilter = filter }
+            withAnimation(AmbientMotion.snappy) {
+                selectedFilter = filter
+                // The status row is hidden under All — it always has been. But the
+                // status filter itself was still being APPLIED, so picking
+                // "In Progress" under My Tasks and then switching to All left All
+                // silently filtered by a chip that was no longer on screen, and
+                // All is the one chip with no count to contradict it. Clearing it
+                // on the way in is the only honest option: either the control is
+                // visible or it is not in effect.
+                if filter == .all { selectedStatus = nil }
+            }
             AmbientHaptics.selection()
         } label: {
             HStack(spacing: 5) {
@@ -641,13 +651,16 @@ struct TaskCardRow: View {
 
 /// The relative date the row and the detail both show. One definition; the row
 /// carried its own private copy before.
+///
+/// The formatter comes from the app's shared `Formatters` cache, which exists for
+/// exactly this reason. The first cut built a DateFormatter inside this function —
+/// so once per row, on every re-render, meaning once per row per keystroke in the
+/// search field. DateFormatter construction is genuinely expensive.
 enum TaskDateFormat {
     static func relative(_ date: Date, calendar: Calendar = .current) -> String {
         if calendar.isDateInToday(date) { return "Today" }
         if calendar.isDateInTomorrow(date) { return "Tomorrow" }
         if calendar.isDateInYesterday(date) { return "Yesterday" }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        return formatter.string(from: date)
+        return Formatters.shortDate.string(from: date)
     }
 }

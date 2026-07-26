@@ -46,6 +46,16 @@ struct TaskDetailView: View {
     @State private var newCommentText = ""
     @State private var isSendingComment = false
 
+    @State private var isSaving = false
+    /// A save failure has to be reported IN this sheet: the list's failure banner
+    /// is behind it.
+    @State private var saveError: String?
+    /// Subtask ids with a write in flight. Guards the double-tap race — the local
+    /// flip sets an absolute value while the service call is a relative toggle on a
+    /// re-read row, so two fast taps could settle the database and the screen
+    /// opposite to each other with no error to trigger the rollback.
+    @State private var subtasksInFlight: Set<String> = []
+
     /// Names for the assigned-to line, from the service the rest of the app
     /// already uses. See AMB5_TASKS_PARITY.md finding 4.
     @State private var memberNames: [String: String] = [:]
@@ -79,6 +89,7 @@ struct TaskDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         header
+                        if let saveError { saveFailure(saveError) }
                         if hasWorkflowContext { context }
                         description
                         subtasks
@@ -105,14 +116,18 @@ struct TaskDetailView: View {
                 }
 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(isEditing ? "Save" : "Edit") {
-                        if isEditing {
-                            saveChanges()
-                        } else {
-                            withAnimation(AmbientMotion.snappy) { isEditing = true }
+                    if isSaving {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button(isEditing ? "Save" : "Edit") {
+                            if isEditing {
+                                saveChanges()
+                            } else {
+                                withAnimation(AmbientMotion.snappy) { isEditing = true }
+                            }
                         }
+                        .fontWeight(isEditing ? .semibold : .regular)
                     }
-                    .fontWeight(isEditing ? .semibold : .regular)
                 }
             }
             .onAppear {
@@ -191,6 +206,29 @@ struct TaskDetailView: View {
         .ambientCard(density: .roomy, state: .highlighted,
                      border: .hairline(feature.opacity(0.3)),
                      glow: feature, fillWidth: true)
+    }
+
+    /// A save that did not land, said here rather than on the list behind this
+    /// sheet. Your edits are still in the fields; Save is still there to try again.
+    private func saveFailure(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.semibold)).foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couldn't save your changes").font(.footnote.weight(.semibold))
+                Text(message).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Button {
+                withAnimation(AmbientMotion.snappy) { saveError = nil }
+            } label: {
+                Image(systemName: "xmark.circle.fill").font(.footnote).foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .ambientCard(density: .compact, border: .dashed(Color.orange.opacity(0.6)),
+                     fillWidth: true)
     }
 
     // MARK: - Belongs to
@@ -510,11 +548,9 @@ struct TaskDetailView: View {
         return "\(first) +\(editedTask.assignedTo.count - 1)"
     }
 
+    /// From the app's shared formatter cache, not a fresh DateFormatter per render.
     private var createdText: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: editedTask.createdAt)
+        Formatters.mediumDateTime.string(from: editedTask.createdAt)
     }
 
     // MARK: - Activity
@@ -537,9 +573,46 @@ struct TaskDetailView: View {
 
     // MARK: - Actions
 
+    /// Save.
+    ///
+    /// THE HAZARD, and it is the same one the subtask toggle routes around: this
+    /// screen holds `editedTask`, a snapshot taken when the sheet OPENED, and the
+    /// write sends the whole row. So a straight `onTaskUpdated(editedTask)` sends
+    /// stale values for every field the user did not touch — which reverts any
+    /// concurrent edit made from the web app, and reliably regresses
+    /// `commentCount`, because adding a comment bumps it server-side while this
+    /// snapshot still holds the old number.
+    ///
+    /// So it RE-READS the row and applies only the five fields this screen can
+    /// actually edit. Everything else keeps whatever the server currently has.
+    ///
+    /// It also AWAITS the read and stays in edit mode if it fails, rather than
+    /// dropping out of edit mode as though the save had worked.
     private func saveChanges() {
-        onTaskUpdated(editedTask)
-        withAnimation(AmbientMotion.snappy) { isEditing = false }
+        guard !isSaving else { return }
+        isSaving = true
+        saveError = nil
+
+        Task { @MainActor in
+            defer { isSaving = false }
+            do {
+                var merged = try await TaskService.shared.getTask(id: task.id)
+                merged.description = editedTask.description
+                merged.priority = editedTask.priority
+                merged.status = editedTask.status
+                merged.estimatedHours = editedTask.estimatedHours
+                merged.subtasks = editedTask.subtasks
+
+                editedTask = merged
+                onTaskUpdated(merged)
+                withAnimation(AmbientMotion.snappy) { isEditing = false }
+            } catch {
+                // Stay in edit mode with the edits intact, and say so HERE — the
+                // list's failure banner sits behind this sheet, so it is not a
+                // usable error surface for something typed in it.
+                saveError = error.localizedDescription
+            }
+        }
     }
 
     /// Ticking a subtask.
@@ -564,15 +637,28 @@ struct TaskDetailView: View {
     private func toggleSubtask(_ id: String) {
         guard let index = editedTask.subtasks.firstIndex(where: { $0.id == id }) else { return }
 
+        // In edit mode this is local only, and Save writes it.
+        guard !isEditing else {
+            applyToggle(at: index, completed: !editedTask.subtasks[index].completed)
+            AmbientHaptics.impact(.light)
+            return
+        }
+
+        // One write per subtask at a time. The local flip is ABSOLUTE and the
+        // service call is a RELATIVE toggle on a freshly-read row, so two fast taps
+        // could leave the database and the screen disagreeing — and agreeing-by-
+        // accident is exactly the case the rollback below cannot detect.
+        guard !subtasksInFlight.contains(id) else { return }
+        subtasksInFlight.insert(id)
+
         let wasCompleted = editedTask.subtasks[index].completed
         applyToggle(at: index, completed: !wasCompleted)
         AmbientHaptics.impact(.light)
 
-        guard !isEditing else { return }
-
         // Optimistically flipped above so the checkbox answers immediately; put it
         // back if the write fails, rather than showing a tick that never landed.
         Task { @MainActor in
+            defer { subtasksInFlight.remove(id) }
             do {
                 try await TaskService.shared.toggleSubtask(taskId: task.id,
                                                           subtaskId: id,
@@ -617,7 +703,9 @@ struct TaskDetailView: View {
         Task { @MainActor in
             defer { isSendingComment = false }
             do {
-                try await commentService.addComment(
+                // The returned comment is discarded on purpose: the service
+                // publishes it into `comments`, which this view already observes.
+                _ = try await commentService.addComment(
                     to: task.id,
                     text: text,
                     userId: currentUserId,
