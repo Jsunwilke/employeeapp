@@ -617,20 +617,10 @@ struct MainEmployeeView: View {
             // reasoning: "what would be the point of glass if the bar reserved its
             // own space?" So it is an overlay now, and content scrolls underneath.
             ZStack(alignment: .bottom) {
-                // Main content area — routed to its own nav container per feature
+                // Main content area — routed to its own nav container per feature.
+                // The clearance that keeps content out from under the capsule is
+                // applied INSIDE each container (see tabBarClearance), not here.
                 mainContent
-                    // ONE place that gives all 27 feature screens room to clear the
-                    // capsule. A safe-area inset is the right tool rather than
-                    // per-screen padding: a scroll view rests above the bar but its
-                    // content still travels beneath it, and a screen with something
-                    // pinned to the bottom gets pushed clear without knowing why.
-                    // Only two screens padded for the old bar by hand, so this
-                    // replaces almost nothing and covers everything.
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        if showsTabBar {
-                            Color.clear.frame(height: TabBarMetrics.clearance)
-                        }
-                    }
 
                 // Hidden outright only for a genuine full-screen overlay, like the
                 // photo viewer. Everywhere else it is present and the user can tuck
@@ -713,6 +703,7 @@ struct MainEmployeeView: View {
                 .toolbar {
                     homeProfileToolbar
                 }
+                .tabBarClearance(showsTabBar)
         }
         .navigationViewStyle(StackNavigationViewStyle())
     }
@@ -725,11 +716,19 @@ struct MainEmployeeView: View {
         if isSelfNavFeature(featureId) {
             // Self-nav features own their bar and add their own Home button
             // (via .homeToolbarItem() inside each view).
+            //
+            // The clearance has to be applied from OUT HERE for these, which is
+            // weaker: the NavigationView belongs to the feature, so the inset lands
+            // on the container rather than on the scroll view inside it. Verify each
+            // of these on a device as its own phase converts it — Tasks and
+            // Equipment are AMB.5 and AMB.3, capture/training/unflagUser later.
             featureView(for: featureId)
+                .tabBarClearance(showsTabBar)
         } else {
             NavigationView {
                 featureView(for: featureId)
                     .homeToolbarItem() // top-left Home on every shell-wrapped feature
+                    .tabBarClearance(showsTabBar)
             }
             .navigationViewStyle(StackNavigationViewStyle())
         }

@@ -89,6 +89,25 @@ enum TabBarMetrics {
     static var clearance: CGFloat { height + bottomInset + 10 }
 }
 
+extension View {
+    /// Leaves room at the bottom for the floating bar, so a screen's last row can
+    /// be scrolled clear of it while content still travels underneath.
+    ///
+    /// MUST BE APPLIED INSIDE THE SCREEN'S OWN `NavigationView`. The first version
+    /// of this put the inset on the shell's content group, OUTSIDE the navigation
+    /// containers, and it did nothing at all: the operator could not pull the "All
+    /// Features" row far enough to clear the bar because nothing was inset and the
+    /// over-scroll simply sprang back. A legacy `NavigationView` does not carry an
+    /// externally applied safe-area inset down to the scroll view inside it.
+    func tabBarClearance(_ active: Bool) -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) {
+            if active {
+                Color.clear.frame(height: TabBarMetrics.clearance)
+            }
+        }
+    }
+}
+
 // MARK: - The bar
 
 struct BottomTabBar: View {
