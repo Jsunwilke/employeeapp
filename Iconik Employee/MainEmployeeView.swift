@@ -703,7 +703,7 @@ struct MainEmployeeView: View {
                 .toolbar {
                     homeProfileToolbar
                 }
-                .tabBarClearance(showsTabBar)
+                .tabBarClearance(showsTabBar, keyboardVisible: tabBarManager.isKeyboardVisible)
         }
         .navigationViewStyle(StackNavigationViewStyle())
     }
@@ -728,7 +728,7 @@ struct MainEmployeeView: View {
             NavigationView {
                 featureView(for: featureId)
                     .homeToolbarItem() // top-left Home on every shell-wrapped feature
-                    .tabBarClearance(showsTabBar)
+                    .tabBarClearance(showsTabBar, keyboardVisible: tabBarManager.isKeyboardVisible)
             }
             .navigationViewStyle(StackNavigationViewStyle())
         }

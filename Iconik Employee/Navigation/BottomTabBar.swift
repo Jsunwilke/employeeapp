@@ -107,6 +107,13 @@ extension View {
         }
     }
 
+    /// Room for the bar, released while the keyboard is up — the bar slides away to
+    /// make room for typing, so holding its space open would leave a dead gap above
+    /// the keyboard.
+    func tabBarClearance(_ active: Bool, keyboardVisible: Bool) -> some View {
+        tabBarClearance(active && !keyboardVisible)
+    }
+
     /// For a SELF-NAV feature — one that builds its own navigation container, so the
     /// shell cannot reach inside it. Apply to the container's CONTENT, not to the
     /// feature view from outside; outside is the position that silently did nothing.
@@ -123,7 +130,8 @@ private struct SelfNavTabBarClearance: ViewModifier {
     @ObservedObject private var tabBarManager = TabBarManager.shared
 
     func body(content: Content) -> some View {
-        content.tabBarClearance(!tabBarManager.isFullScreenOverlayActive)
+        content.tabBarClearance(!tabBarManager.isFullScreenOverlayActive,
+                                keyboardVisible: tabBarManager.isKeyboardVisible)
     }
 }
 
@@ -193,6 +201,18 @@ struct BottomTabBar: View {
             if tucked { handle }
         }
         .padding(.bottom, TabBarMetrics.bottomInset)
+        // Out of the way while typing. Slid rather than removed, deliberately: the
+        // bar keeps its TUCKED state across a keyboard appearing, so someone who
+        // tucked it to work on a roster does not get it thrown back at them every
+        // time they type in a field.
+        //
+        // Ignoring the keyboard's safe area first is what makes this predictable —
+        // otherwise SwiftUI lifts the bar up over the keyboard and we would then be
+        // sliding it down from a moved position.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .offset(y: tabBarManager.isKeyboardVisible ? keyboardTravel : 0)
+        .allowsHitTesting(!tabBarManager.isKeyboardVisible)
+        .animation(.easeOut(duration: 0.22), value: tabBarManager.isKeyboardVisible)
         // Any navigation brings it back. HomeToolbarButton works by setting
         // selectedTab, so this covers the top-left Home button and equally a
         // dashboard widget's "View all" or anything else that navigates.
@@ -394,6 +414,9 @@ struct BottomTabBar: View {
 
     /// Far enough to clear the widest screen this app runs on.
     private var tuckedTravel: CGFloat { 1400 }
+
+    /// Enough to clear the bar, its inset and any home indicator beneath it.
+    private var keyboardTravel: CGFloat { TabBarMetrics.clearance + 60 }
 
     /// Right to tuck, and only while shown, so the gesture can never fight a
     /// scroll view or drag the bar off the wrong edge.

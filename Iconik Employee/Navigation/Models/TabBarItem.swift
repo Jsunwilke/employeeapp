@@ -126,6 +126,16 @@ class TabBarManager: ObservableObject {
     // Full-screen overlay state (hides tab bar when photo viewer etc. is active)
     @Published var isFullScreenOverlayActive: Bool = false
 
+    /// Whether the software keyboard is up.
+    ///
+    /// The floating bar gets out of the way while you type, and the space it was
+    /// reserving is released. Two reasons, and the second is the one that was
+    /// reported: typing wants every row it can get, and on iPad the TUCKED bar's
+    /// handle sits in the bottom-right corner — exactly where the keyboard puts its
+    /// own dismiss key. Two controls fighting for one corner, one of them the way
+    /// out of the keyboard.
+    @Published var isKeyboardVisible: Bool = false
+
     // Navigation data for passing between features
     @Published var selectedSportsSession: Session? = nil
     @Published var selectedSportsShoot: SportsShoot? = nil
@@ -134,6 +144,8 @@ class TabBarManager: ObservableObject {
     
     private let configurationKey = "TabBarConfiguration"
     
+    private var keyboardObservers: [NSObjectProtocol] = []
+
     private init() {
         // Load saved configuration or use default
         if let savedData = UserDefaults.standard.data(forKey: configurationKey),
@@ -144,6 +156,24 @@ class TabBarManager: ObservableObject {
         } else {
             self.configuration = TabBarConfiguration.defaultConfiguration
         }
+
+        observeKeyboard()
+    }
+
+    /// NotificationCenter rather than an environment value, because SwiftUI has no
+    /// keyboard-visibility environment key at this app's iOS 16.6 floor.
+    private func observeKeyboard() {
+        let center = NotificationCenter.default
+        keyboardObservers = [
+            center.addObserver(forName: UIResponder.keyboardWillShowNotification,
+                               object: nil, queue: .main) { [weak self] _ in
+                self?.isKeyboardVisible = true
+            },
+            center.addObserver(forName: UIResponder.keyboardWillHideNotification,
+                               object: nil, queue: .main) { [weak self] _ in
+                self?.isKeyboardVisible = false
+            },
+        ]
     }
     
     private func updateTitlesToShortVersions() {
