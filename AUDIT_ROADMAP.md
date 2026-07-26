@@ -638,8 +638,37 @@ other rebases onto it.
   releasing on a disk-cache replay — dormant until that arc switches the cache on, and
   every available fix was worse than the bug).
 
-- [~] **AMB.5 Tasks** (18 views, 3,167 lines) — BUILT 2026-07-26, commit 7914546, NOT
-  pushed. Awaiting `/code-review` (operator-triggered) and both device smokes.
+- [x] **AMB.5 Tasks** (18 views, 3,167 lines) — **DONE + PUSHED 2026-07-26. Operator
+  smoke PASSED, `/code-review` run before the push.** Its mockup and its sample-data
+  block are deleted, matching what AMB.4 did at its own close; the lab keeps the shared
+  time helper, which Chat still uses.
+
+  **The review found seven, six fixed, one refused with a reason — and the worst was
+  again in the FIX round.** `Save` was writing the sheet's opening snapshot over the
+  whole live row, so it reverted any concurrent web-app edit and reliably knocked
+  `commentCount` backwards (adding a comment bumps it server-side while the snapshot
+  keeps the old number). Save now re-reads and applies only the five fields the screen
+  can edit. **This is the same hazard the subtask toggle had already been routed around
+  — I fixed one path and left the other**, which is the "fixing the instance is not
+  fixing the class" lesson AMB.4 wrote about the safe-area inset, repeating one phase
+  later. Also: Save exited edit mode without awaiting, so a failed save looked like a
+  successful one (it now stays in edit mode and reports inside the sheet, because the
+  list's banner sits behind it); **the failure banner's own Retry was erasing the
+  failure it existed to report** — it always re-fetched, and a successful fetch cleared
+  the error, so a create that never happened was announced and then silently
+  un-announced (failed writes now record a retry closure, and a good read no longer
+  clears the banner while a write is outstanding); a subtask double-tap could settle the
+  database and the screen opposite each other; a status chip hidden under All was still
+  being applied; and `TaskDateFormat` built a DateFormatter per row per keystroke
+  instead of using the app's shared `Formatters` cache. REFUSED: chips rendering a
+  literal "0" where the old screen hid a zero — that is the approved mockup's behaviour
+  and it is informative.
+
+  **A correction to this phase's own evidence, worth keeping because it will recur:** my
+  first "zero warnings from changed files" was measured against an already-compiled
+  build, so nothing was re-emitted and the check was vacuous. Re-run by touching every
+  changed file to force recompilation, which surfaced a real warning. **An incremental
+  build is not a warnings check.**
 
   **THE STRUCTURAL CHANGE: the list is GROUPED BY WHEN.** Overdue, Today, This week,
   Later, No date, inside whatever filter is active, with the app's real sort (priority

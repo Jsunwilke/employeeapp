@@ -39,7 +39,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     case specimens
     case palette
     case equipment
-    case tasks
     case chat
 
     var id: String { rawValue }
@@ -49,7 +48,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
         case .equipment: return "Equipment"
-        case .tasks: return "Tasks"
         case .chat: return "Chat"
         }
     }
@@ -61,7 +59,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
         case .equipment: return "AMB.3"
-        case .tasks: return "AMB.5"
         case .chat: return "AMB.6"
         }
     }
@@ -74,8 +71,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
         case .equipment:
             return "The two tabs are gone: one screen leads with your gear and says what is late, with the whole inventory one row behind it. The kit detail is a packing list. AMB.3 waits on this."
-        case .tasks:
-            return "Grouped by when — overdue, today, this week — so you stop driving a chip bar to find out what is late. All five filters still work."
         case .chat:
             return "The hardest test of compact. Three switches inside the thread: per-message timestamps, grouping a run, and whose colour “mine” is."
         }
@@ -86,7 +81,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
         case .equipment: return "shippingbox.fill"
-        case .tasks: return "checklist"
         case .chat: return "bubble.left.and.bubble.right.fill"
         }
     }
@@ -100,7 +94,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return .purple
         case .palette: return .pink
         case .equipment: return FeatureTheme.color(for: "equipment")
-        case .tasks: return FeatureTheme.color(for: "tasks")
         case .chat: return FeatureTheme.color(for: "chat")
         }
     }
@@ -111,7 +104,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
         case .equipment: EquipmentMockup()
-        case .tasks: TasksMockup()
         case .chat: ChatMockup()
         }
     }
