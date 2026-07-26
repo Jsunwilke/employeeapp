@@ -638,9 +638,114 @@ other rebases onto it.
   releasing on a disk-cache replay — dormant until that arc switches the cache on, and
   every available fix was worse than the bug).
 
-- [ ] **AMB.5 Tasks** (18 views, 3,167 lines)
+- [~] **AMB.5 Tasks** (18 views, 3,167 lines) — BUILT 2026-07-26, commit 7914546, NOT
+  pushed. Awaiting `/code-review` (operator-triggered) and both device smokes.
+
+  **THE STRUCTURAL CHANGE: the list is GROUPED BY WHEN.** Overdue, Today, This week,
+  Later, No date, inside whatever filter is active, with the app's real sort (priority
+  descending, then due date, then newest) kept inside each band. Before this, the list
+  was one flat priority-sorted run, so the only way to discover something was LATE was
+  to drive the chip bar over to Urgent — which is defined as "urgent priority OR
+  overdue", so an overdue medium task sorted below four urgent ones that were not late.
+  **The Completed filter is deliberately NOT banded**: a done task with a due date last
+  month would sit under a header reading "Overdue".
+
+  **Delete-first, same commit:** `TasksMainView.swift` gone, along with the seven helper
+  types it defined (`SearchBar`, `LoadingView`, `TaskRowView`, `TaskListView`,
+  `EmptyTasksView`, `TaskFilterChip`, `StatusChip`) and the six the old detail defined.
+  Old-path grep clean — the only surviving mentions are prose in comments. `TaskDetailView`
+  and `CreateTaskView` keep their TYPE names on purpose: the AMB.4 home dashboard presents
+  both, and renaming would have pushed churn into a surface this phase has no business
+  touching. Tasks never had a card-drift allowlist row (it had no cards at all); sweep clean.
+
+  **Parity: `AMB5_TASKS_PARITY.md`,** written from the eight source files inward rather
+  than from the mockup outward. It caught **four things the approved mockup could not
+  carry**, and the first is the AMB.3 lesson repeating exactly:
+  1. **Edit mode had lost three of its four editors.** The mockup moved priority and
+     status up into header badges and drew only the description editor in its editing
+     state, so the priority segmented picker, the status menu picker and the
+     estimated-hours stepper all read as display-only. All three restored.
+  2. **The toolbar was absent from the mockup** — the lab supplies its own nav bar, so it
+     could not show one. Home, the create plus and the Refresh / Clear Cache overflow all
+     survive. A mockup scope artifact and a dropped feature look identical at conversion.
+  3. **The session NAME is not reachable, so it is not drawn.** `TaskItem` carries only
+     `sessionId` — an opaque uuid, no name on the model, no join in `TaskService`. The
+     workflow half of "Belongs to" ships real (`workflowName` / `workflowStepName` were
+     on the model and rendered nowhere); the session half is named, not faked. Same call
+     AMB.3 made about the equipment assignment join.
+  4. **Assignee names resolve through `TeamService`** — which already exists, already
+     reads users filtered by `organization_id`, and is already used by other screens. A
+     presentation join over a service the app owns, NOT a new data path: no schema, RLS
+     or PowerSync change, nothing that touches the web app or Captura. Falls back to the
+     model's own `assignmentDisplayText`, so the line degrades to "3 assignees" or
+     "Unassigned" rather than going blank.
+
+  **Three defects fixed that the redesign made unavoidable rather than optional:**
+  a subtask ticked OUTSIDE edit mode was silently thrown away (the checkbox was not gated
+  on `isEditing` and mutated a local copy that only Save persisted, and Save only existed
+  in edit mode — the four-tab layout hid this behind a tab, the single scroll puts it in
+  front of everyone); every refresh added ANOTHER subscription to `TaskService.$tasks`, so
+  ten checkbox toggles left eleven live sinks each re-running the merge and rewriting the
+  whole disk cache on every realtime delivery; and a new task was created with an
+  UPPERCASE UUID, against this repo's own hard rule.
+
+  **TWO ADVERSARIAL AUDIT PASSES, nine findings accepted and fixed, two rejected with
+  reasons. THE WORST WAS IN MY OWN FIX ROUND** — which is exactly where PUB.1 and AMB.4
+  each found theirs, and the pattern is now three for three. My subtask fix routed through
+  `onTaskUpdated`, which writes the ENTIRE task row from `editedTask`, a snapshot taken
+  when the sheet opened. So a casual checkbox tap would have silently reverted any title,
+  status, priority or assignee change somebody else made in the meantime, **on a database
+  shared with the web app** — and the comment directly above the code named
+  `TaskService.toggleSubtask`, the targeted call it was not making. **A fix that
+  introduces a data-loss path is worse than the dead control it replaced.**
+
+  Also found: the band tested `isDateInToday` BEFORE the past test, so a task due at 09:00
+  read at 17:00 filed under a "Today" header while its own date rendered red with a warning
+  triangle — the screen contradicting itself about what is late; cached chip counts went
+  stale at midnight because two of the four read the clock; the failure banner never
+  cleared on a successful load; the comments shown could belong to the PREVIOUS task
+  (`CommentService` is a singleton with one shared array — pre-existing, but the redesign
+  puts a COUNT on it, turning a flicker into a wrong number); two `Task` blocks wrote
+  `@State` off the main actor; priority went completely invisible in the Completed filter
+  (the mockup gated the glyph on not-done, which compounded with the approved spine
+  removal); "Created" vanished on tapping Edit; the task title vanished on scroll; and the
+  subtask plus was decoration rather than a button.
+
+  **Numeric UI verified ARITHMETICALLY, not by eye** — AMB.4's lesson. Two throwaway Swift
+  harnesses ran 22 date/count cases, including the proof that the band and
+  `TaskItem.isOverdue` now agree on every single one, so the "Overdue" header and the red
+  styling can no longer disagree. Both harnesses deleted at the end of the phase.
+
+  **ONE FIX REVERTED ON PURPOSE, and it was mine.** I changed `ToastView` to clear the
+  floating tab bar on the strength of arithmetic that was wrong: its 50pt padding and
+  `TabBarMetrics.clearance` of 84pt are not measured from the same datum (plain padding on
+  an overlay versus a safe-area inset), and the toast grows upward from it. The audit then
+  found the part that settles it — two of the three call sites are shell-wrapped features
+  that ALREADY receive the shell's 84pt inset, so the change would have double-counted for
+  them. `ToastView` is now behaviourally identical to HEAD with a comment recording exactly
+  what is and is not known. **Shipping an unverified layout change to app-wide chrome is
+  the precise mistake AMB.4 made four times, and every wrong version of it built cleanly.**
+
+  **Deliberate deviations from the approved mockup, named rather than silent:** the
+  priority glyph is NOT hidden on completed rows (see above); the navigation title is the
+  task's own title rather than a static "Task", because the header card scrolls away; the
+  type badge shows only when the type is not `.general`, since every task the app creates
+  is general and a badge reading "General" on all of them is noise; the mockup's 96pt
+  bottom padding is replaced by `tabBarClearance()` inside the screen's own container,
+  because the two would have doubled; `StackNavigationViewStyle` is pinned, matching the
+  shell's own convention and the mockup's detail; and the mockup's sort was shorthand
+  (priority then id) where the app's real three-key sort ships.
+
+  **`CreateTaskView` is RESTYLED, not redesigned** — it was never mocked, and D10 is a hard
+  gate. It gets the wash, a transparent Form background and the feature tint; every
+  section, control, binding and validation is untouched. Real input design is AMB.7's.
+
 - [ ] **AMB.6 Chat** (20 views, 4,655 lines) — long scrollbacks, the real test of the
   compact set. Closes batch 1 and mocks batch 2.
+
+  **Inherited from AMB.5:** `CommentService`-style singletons with one shared published
+  array are a trap when a redesign adds a COUNT — check `ChatManager` for the same shape
+  before drawing an unread or message count from a shared array.
 
 **Batch 2**
 
@@ -659,6 +764,18 @@ other rebases onto it.
 - [ ] **AMB.11 Job box / NFC** (18 views, 5,198 lines)
 - [ ] **AMB.12 Settings, Manager, Training** (~6,600 lines) — the tail, converted per D9.
   Closes the arc and deletes the lab harness + its menu entry.
+
+  **THE SHELL, enumerated at the start of AMB.5 as D13 required: `AMB_SHELL_INVENTORY.md`.**
+  Five surfaces belong to NO phase and carry no allowlist row, so both discovery
+  mechanisms read clean over them: `ToastView`, the home profile toolbar
+  (`MainEmployeeView.homeProfileToolbar`), the appearance picker (`themePickerSheet`), the
+  whole sign-in surface (`SignInView` / `ForgotPasswordView` / `ResetPasswordView` — which
+  EVERY user sees first), and the launch state (`RootView`'s bare `ProgressView`, on screen
+  for up to its own ten-second deadline). Where these land is the operator's call, exactly
+  as D13 was. **The generalisable part: an empty allowlist row means nothing about whether
+  a surface is converted** — the allowlist answers "which files hand-roll a card", and
+  Tasks had no row because it had no cards, not because it was done. And the gate is
+  structurally blind to a Capsule, which is what the toast is.
 
   **Carried in from AMB.3's smoke (operator, 2026-07-25): "Manage Kits" implies a tap
   it does not have.** `AdminKitTemplatesView`'s rows are a plain `HStack` —
