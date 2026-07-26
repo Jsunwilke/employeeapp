@@ -107,10 +107,16 @@ struct MessageThreadView: View {
             // relevance. Cleared on entry.
             chatManager.errorMessage = nil
             if let conversation {
+                // Registered BEFORE the async select, so a conversations event
+                // arriving mid-load already knows this thread is being read.
+                chatManager.beginViewing(conversation.id)
                 Task { await chatManager.selectConversation(conversation, markAsRead: true) }
             }
         }
         .onDisappear {
+            if let conversation {
+                chatManager.endViewing(conversation.id)
+            }
             chatManager.cleanupMessageListener()
         }
         .sheet(isPresented: $showConversationSettings) {

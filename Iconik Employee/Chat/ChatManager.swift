@@ -44,6 +44,14 @@ class ChatManager: ObservableObject {
     /// so one failed send erased other sends still in flight.
     private var pendingMessageIds: Set<String> = []
 
+    /// The conversation whose thread is ACTUALLY ON SCREEN.
+    ///
+    /// Deliberately not `activeConversation`, which is never cleared when the user
+    /// leaves a thread — keying "mark this read" off that would keep zeroing a
+    /// conversation the user walked away from, hiding genuinely unread messages.
+    /// Set and cleared by MessageThreadView's appear/disappear.
+    private var viewingConversationId: String?
+
     // Debouncing
     private var messageUpdateDebouncer = Debouncer(delay: 0.1)
 
@@ -137,6 +145,15 @@ class ChatManager: ObservableObject {
                 self.errorMessage = nil
                 self.updateTotalUnreadCount()
 
+                // THIS is where the badge had to be cleared, and hooking the
+                // messages callback instead is why the previous attempt failed.
+                // A send is three writes: insert the message, update the
+                // conversation, then raise the unread counts. The MESSAGES event
+                // fires from the first, two round trips BEFORE the count exists —
+                // so marking there always saw 0 and returned. The count only
+                // appears here, on the conversations event, and nothing re-marked.
+                self.markViewedConversationRead()
+
                 // Cache the updated data (without resolved names to keep cache clean)
                 self.cacheService.setCachedConversations(updatedConversations)
 
@@ -189,19 +206,38 @@ class ChatManager: ObservableObject {
     func selectConversation(_ conversation: Conversation, markAsRead: Bool = true) async {
         await loadMessages(for: conversation)
 
-        // Mark messages as read only if requested (i.e., user is actively viewing the conversation)
+        // Mark messages as read only if requested (i.e., user is actively viewing
+        // the conversation). Registering here as well as in the view's onAppear
+        // covers `openChannel(cid:)`, which selects a conversation without the
+        // thread having appeared yet.
         if markAsRead {
-            markActiveConversationRead()
+            viewingConversationId = conversation.id
+            markViewedConversationRead()
         }
     }
 
-    /// Zero the active conversation's unread count, locally and on the server.
+    /// Called by the thread as it appears and disappears, so the manager knows
+    /// whether anything is actually being read.
+    func beginViewing(_ conversationId: String) {
+        viewingConversationId = conversationId
+    }
+
+    func endViewing(_ conversationId: String) {
+        // Only clear if it is still OURS. During a push transition the incoming
+        // screen's onAppear can run before the outgoing screen's onDisappear, and
+        // an unconditional clear would wipe the new thread's registration.
+        if viewingConversationId == conversationId {
+            viewingConversationId = nil
+        }
+    }
+
+    /// Zero the on-screen conversation's unread count, locally and on the server.
     ///
     /// The local half matters: the server call only reached the UI via a realtime
     /// round trip, so opening a conversation left its unread pill and the tab bar
     /// badge sitting there until the echo arrived.
-    private func markActiveConversationRead() {
-        guard let conversation = activeConversation, let userId = currentUserId else { return }
+    private func markViewedConversationRead() {
+        guard let conversationId = viewingConversationId, let userId = currentUserId else { return }
 
         // Nothing to do, and worth checking so a busy thread is not firing an
         // RPC per incoming message.
@@ -209,7 +245,13 @@ class ChatManager: ObservableObject {
         // list fell through to the RPC on EVERY incoming message — and each RPC
         // updates conversations, which fires the conversations channel, which
         // refetches: two extra round trips per message, indefinitely.
-        guard let index = conversations.firstIndex(where: { $0.id == conversation.id }) else { return }
+        guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
+
+        // The `> 0` test is ALSO what stops this recursing. Marking writes to
+        // `conversations`, which fires the conversations channel, which calls this
+        // again — but by then the server value is 0, so it returns here. One hop,
+        // always. When a genuinely new message raises the count again the cycle
+        // repeats, which is correct: that is a real message being read.
         guard conversations[index].unreadCount(for: userId) > 0 else { return }
 
         conversations[index].unread_counts[userId] = 0
@@ -217,9 +259,9 @@ class ChatManager: ObservableObject {
 
         Task {
             do {
-                try await supabaseChatService.markMessagesAsRead(conversationId: conversation.id, userId: userId)
+                try await supabaseChatService.markMessagesAsRead(conversationId: conversationId, userId: userId)
             } catch {
-                print("⚠️ mark-as-read failed for \(conversation.id): \(error)")
+                print("⚠️ mark-as-read failed for \(conversationId): \(error)")
             }
         }
     }
@@ -284,12 +326,12 @@ class ChatManager: ObservableObject {
                 self.cacheService.setCachedMessages(conversationId: conversation.id, messages: self.messages)
 
                 // You are LOOKING at this thread, so anything that just arrived
-                // is already read. The unread count is now raised server-side by
-                // every send (the new increment RPC), and mark-as-read only ran
-                // on entering the screen — so a message arriving while you read
-                // lit your own pill and the tab badge, and left them lit until
-                // you backed out and came in again.
-                self.markActiveConversationRead()
+                // is already read. Kept as well as the conversations-callback hook
+                // because it covers the case where the count was ALREADY non-zero
+                // when the page arrived; the conversations hook covers the count
+                // being raised while the thread is open. Both are guarded by the
+                // same `> 0` test, so neither loops.
+                self.markViewedConversationRead()
 
                 self.readCounter.recordRead(
                     operation: "subscribeToConversationMessages",
