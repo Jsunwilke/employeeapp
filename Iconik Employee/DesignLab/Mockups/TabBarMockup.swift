@@ -13,8 +13,10 @@
 //  rather than described from memory. What it actually does:
 //
 //    A FLOATING CAPSULE, not a bar welded to the bottom edge. Inset 14pt from the
-//      sides, 6pt off the bottom, 60pt tall, with a real drop shadow under it.
-//    REAL LIQUID GLASS on iOS 26 — .glassEffect(.clear, in: Capsule()).
+//      sides, 6pt off the bottom, with a real drop shadow under it. KeepUp's is
+//      60pt tall; this one is 68 — see the centre-button note below for why.
+//    REAL LIQUID GLASS on iOS 26 — .glassEffect(.clear, in: Capsule()), with a
+//      separately adjustable frost layer behind it (see GlassCapsule).
 //    A SELECTION PILL IT ANIMATES ITSELF, and the reason is the load-bearing
 //      part: a material or a glassEffect CANNOT ANIMATE ITS POSITION, so a
 //      glass pill that slides is impossible to get from the system. KeepUp
@@ -39,15 +41,22 @@
 //      (iPads have no NFC). Flattening either into an ordinary cell would lose a
 //      deliberate navigation decision.
 //
-//      REVISED after the operator saw the first version of this file: the circle
-//      was floated above the capsule's top edge and the cells divided the whole
-//      width underneath it, so items slid behind the button. It is now
-//      vertically centred in the capsule with 68pt of the row RESERVED for it,
-//      which the cells step over rather than pass under. One consequence, named
-//      rather than slipped in: today's Scan glyph is 60pt on a 50pt circle — a
-//      deliberate overrun that worked because the button stood proud of the bar.
-//      Centred inside a 60pt capsule it would spill past the glass, so the
-//      glyph is sized to sit inside its circle.
+//      REVISED THREE TIMES against operator feedback, and the numbers here are
+//      the current ones — the file's own history is in git, not in this comment.
+//        1. The circle floated above the capsule's top edge while the cells
+//           divided the whole width underneath, so items slid behind it.
+//           -> vertically centred, with a RESERVED slot the cells step over.
+//        2. On odd item counts the slot still sat half a cell right of centre,
+//           which is what the LIVE bar does too. -> both sides now take an equal
+//           half of the non-button width, so it is dead centre at every count.
+//        3. Too small. -> glyph 52pt against 17pt for every other icon, in a 56pt
+//           disc, inside a 76pt slot. The capsule grew 60 -> 68 to contain it with
+//           6pt clear above and below, because it has to stay centred INSIDE the
+//           glass.
+//      One consequence, named rather than slipped in: today's Scan glyph is 60pt
+//      on a 50pt circle — a deliberate overrun that worked because the button
+//      stood proud of the bar. Centred inside the capsule an overrun would spill
+//      past the glass, so the glyph nearly fills its disc instead of exceeding it.
 //    DIVIDING BY COUNT ALSO FIXES A REAL BUG: today's cells are a fixed 50pt
 //      with minimum-length spacers, so at the six items the customise screen
 //      allows the bar is 438pt wide against 393pt on an iPhone 16.
@@ -82,6 +91,9 @@ struct TabBarMockup: View {
     @State private var selected = "chat"
     @State private var unread = 3
     @State private var clockedIn = true
+    /// Starts near the middle so there is room to go either way. The fixed
+    /// `.regular` the operator called too frosted sits at about 1.0.
+    @State private var frost: Double = 0.45
 
     /// Real feature ids, so `FeatureTheme` returns the colour the converted bar
     /// would actually use — including the ones that fall through to blue today.
@@ -136,7 +148,7 @@ struct TabBarMockup: View {
                 }
                 GlassTabBarPreview(items: items, layout: layout, selected: $selected,
                                    showLabels: showLabels, unread: unread,
-                                   clockedIn: clockedIn)
+                                   clockedIn: clockedIn, frost: frost)
             }
             // A bar that reserves its space sits flush; a floating one is inset.
             .padding(.bottom, floats ? 6 : 0)
@@ -147,6 +159,9 @@ struct TabBarMockup: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 12) {
+            frostControl
+            Divider().opacity(0.4)
+
             Picker("Layout", selection: $layout) {
                 ForEach(Layout.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -211,6 +226,39 @@ struct TabBarMockup: View {
         .ambientCard(density: .compact, fillWidth: true)
     }
 
+    /// The one control that exists to be reported back rather than admired.
+    private var frostControl: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "circle.lefthalf.filled")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AmbientStyle.brand)
+                Text("Frost")
+                    .font(.footnote.weight(.semibold))
+                Spacer()
+                Text("\(Int(frost * 100))%")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(AmbientStyle.brand)
+            }
+            Slider(value: $frost, in: 0...1)
+                .tint(AmbientStyle.brand)
+
+            HStack(spacing: 0) {
+                Text("0% bare glass")
+                Spacer()
+                Text("100% fully frosted")
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+
+            Text("Scroll the page while you drag it — frost only shows its worth against something moving underneath. TELL ME THE NUMBER and I will bake it in as a constant; the slider does not ship. For reference, the version you called too frosted was about 100%.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var glassNote: String {
         if #available(iOS 26.0, *) {
             return "This device is on iOS 26, so the capsule is REAL Liquid Glass (.glassEffect). The sliding pill is hand-built either way — a material cannot animate its position, which is why KeepUp draws its own."
@@ -259,6 +307,7 @@ private struct GlassTabBarPreview: View {
     let showLabels: Bool
     let unread: Int
     let clockedIn: Bool
+    let frost: Double
 
     /// iPad caps the row rather than sprawling across a 13-inch screen — KeepUp
     /// does the same at 560 for six items; this allows up to ten.
@@ -385,7 +434,7 @@ private struct GlassTabBarPreview: View {
             }
         }
         .frame(height: barHeight)
-        .modifier(GlassCapsule())
+        .modifier(GlassCapsule(frost: frost))
     }
 
     private func cell(_ item: LabTabItem, pillShift: CGFloat, isSelected: Bool) -> some View {
@@ -486,31 +535,48 @@ private struct GlassTabBarPreview: View {
 /// Real Liquid Glass on iOS 26; a custom-glass capsule below it, because this
 /// app's floor is iOS 16.6 and the fallback has to stand on its own rather than
 /// being a degraded afterthought (AMB plan, D4).
+/// Real Liquid Glass on iOS 26; a custom-glass capsule below it, because this
+/// app's floor is iOS 16.6 and the fallback has to stand on its own rather than
+/// being a degraded afterthought (AMB plan, D4).
+///
+/// FROST IS A DIAL, not a variant, so the operator can settle it by eye and hand
+/// back a number (their request, 2026-07-25 — the previous fixed `.regular` was
+/// too much). The base is always the CLEAREST glass available, and `frost` adds a
+/// diffusing layer behind it: 0 is bare glass, 1 is fully frosted. Continuous and
+/// monotonic, and it behaves the same on both OS paths so tuning on either device
+/// transfers to the other.
+///
+/// Once a value is chosen this collapses to a constant — a slider is not shipping
+/// in the real bar.
 private struct GlassCapsule: ViewModifier {
+    let frost: Double
+
+    func body(content: Content) -> some View {
+        content
+            // Behind the glass, so what shows THROUGH the bar is diffused rather
+            // than the bar being painted over.
+            .background(Capsule().fill(.regularMaterial).opacity(frost))
+            .modifier(BaseGlass())
+            .overlay(
+                Capsule().fill(
+                    .linearGradient(colors: [.white.opacity(0.28), .white.opacity(0.0)],
+                                    startPoint: .top, endPoint: .bottom)
+                )
+                .allowsHitTesting(false)
+            )
+            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.8))
+    }
+}
+
+/// The clearest glass each OS can give. KeepUp uses `.clear` for the same reason:
+/// it is the honest base, and anything frostier is a decision on top of it.
+private struct BaseGlass: ViewModifier {
+    @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            // FROSTED rather than clear (operator, 2026-07-25). KeepUp uses
-            // `.clear`, which is the most transparent Glass and is right for its
-            // flat paper background; over this app's ambient wash and coloured
-            // cards it left the bar reading as barely there. `.regular` keeps the
-            // refraction and specular edge but frosts what is behind it, so the
-            // icons stay legible over whatever scrolls under them. A deliberate
-            // divergence from the reference, not an oversight.
-            content.glassEffect(.regular, in: Capsule())
+            content.glassEffect(.clear, in: Capsule())
         } else {
-            content
-                // Matched to the frost above: thin rather than ultraThin, so the
-                // pre-26 path reads the same weight instead of being noticeably
-                // more transparent than the real thing.
-                .background(.thinMaterial, in: Capsule())
-                .overlay(
-                    Capsule().fill(
-                        .linearGradient(colors: [.white.opacity(0.28), .white.opacity(0.0)],
-                                        startPoint: .top, endPoint: .bottom)
-                    )
-                    .allowsHitTesting(false)
-                )
-                .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.8))
+            content.background(.ultraThinMaterial, in: Capsule())
         }
     }
 }
