@@ -11,7 +11,7 @@ phase-naming registry as the rest of the family.
 
 # 🚀 START HERE  (you, the operator)
 
-      WHAT TO BUILD:  AMB.5
+      WHAT TO BUILD:  AMB.6
 
   An arc id (e.g. NAV.1) or just describe the item in plain words. That is the only
   line you fill in — the agent works out the exact phase and scope.
@@ -82,11 +82,29 @@ phase-naming registry as the rest of the family.
                  session), and four operator smokes each found something a green build
                  could not. Instrument or reason it through BEFORE shipping, and never
                  leave a KNOWN regression for "its own phase".
-      ⬜ AMB.5   Tasks                (18 views)  ← NEXT
-      ⬜ AMB.6   Chat                 (20 views)  hardest test of the compact set
-                                                 + mocks batch 2
-        ── batch 2 ──
+      ✅ AMB.5   Tasks                DONE + PUSHED 2026-07-26
+      ✅ AMB.6   Chat                 CONVERTED + DATA LAYER REPAIRED 2026-07-26,
+                 commits de1eed5..58c4299, NOT PUSHED. Chat had NOT WORKED SINCE
+                 SEP 2025: the conversations query could never succeed (a Swift
+                 array became a Postgres array literal `{uuid}` against a JSONB
+                 column, so Postgres answered "invalid input syntax for type json"
+                 every time) — and the failure was reported as an EMPTY LIST, so
+                 it hid for a year behind "No conversations". A FAILURE THAT IS
+                 PRESENTABLE AS AN EMPTY STATE WILL HIDE INDEFINITELY. Ten more
+                 data-layer defects fixed; two live shared-DB changes applied.
+                 ⚠️ TWO CRITERIA UNMET, deliberately named: the iPad smoke was
+                 NOT run (D7), and BATCH-2 MOCKUPS WERE NOT BUILT — they move to
+                 the START of AMB.7, which D10 blocks until they exist. The
+                 batch-1 mockup and its parity/research docs are therefore NOT
+                 deleted yet.
+                 LESSON: auditing my own FIX round found the worst defect five
+                 phases running. Rounds one and two each introduced a new bug
+                 while closing an old one — one a critical, one a message-loss
+                 path. Never ship a fix round unaudited, and slow down instead.
+        ── batch 2 ── ⚠️ NOT YET MOCKED — AMB.7 must build them before it starts
       ⬜ AMB.7   Reports family       (daily job report, custom, mine, photoshoot notes)
+                 ⚠️ CARRIES BATCH-2 MOCKUPS (Reports + Time off) inherited from
+                 AMB.6. D10 is a hard gate: no real screen until they are approved.
       ⬜ AMB.8   Time off             (8 views)   + mocks batch 3
         ── batch 3 ──
       ⬜ AMB.9   Mileage + Stats
@@ -122,6 +140,19 @@ phase-naming registry as the rest of the family.
               deliberately.
       ONB.1   Invite-code onboarding + sign-in hardening.
       TST.1   Tests for the money paths (TimeEntryValidator, PayPeriodService).
+      CHT.1   Chat data-layer rebuild — MULTIPLATFORM. Findings: CHAT_REBUILD_NOTES.md
+              (written at AMB.6's close). Every chat defect AMB.6 found is two
+              clients disagreeing about the same column: participants held as a
+              jsonb blob with no foreign keys, unread counts stored as a number
+              that BOTH the iOS app and the web app read-modify-write, and message
+              type guessed by searching the message text for ".jpg". The fix is to
+              move truth INTO the database — a participants join table, unread
+              DERIVED from a per-person last_read_at, all writes through RPCs — so
+              no client can contradict another. Cheapest it will ever be: 14
+              conversations, most of the data already dead, dormant since Sep 2025.
+              NEEDS FIRST: the web app's chat code read properly, a real answer on
+              whether Captura touches chat (currently an inference), and the
+              architecture gate written out. Its own arc, not an AMB phase.
       GIC.1   Group-images conflict handling (version-checked, not last-write-wins).
       SEC.*   iOS data protection (at-rest DB encryption, PII out of UserDefaults,
               LAN TLS) — folds into the existing family SEC arc, not a new code.

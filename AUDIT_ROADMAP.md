@@ -769,12 +769,109 @@ other rebases onto it.
   gate. It gets the wash, a transparent Form background and the feature tint; every
   section, control, binding and validation is untouched. Real input design is AMB.7's.
 
-- [ ] **AMB.6 Chat** (20 views, 4,655 lines) — long scrollbacks, the real test of the
-  compact set. Closes batch 1 and mocks batch 2.
+- [x] **AMB.6 Chat** (20 views, 4,655 lines) — **CONVERTED + DATA LAYER REPAIRED
+  2026-07-26. Commits de1eed5..58c4299 (9). NOT PUSHED — see the two unmet criteria
+  at the end of this entry.**
 
-  **Inherited from AMB.5:** `CommentService`-style singletons with one shared published
-  array are a trap when a redesign adds a COUNT — check `ChatManager` for the same shape
-  before drawing an unread or message count from a shared array.
+  **THE PHASE FOUND A FEATURE THAT HAD NOT WORKED SINCE SEPTEMBER 2025, and the
+  operator authorised repairing it rather than restyling over the top.** The
+  screens are converted; the bigger half of the phase was underneath them.
+
+  **THE ROOT CAUSE, and it is not the one I first proposed.** The conversations
+  query could NEVER succeed: `.contains("participants", value: [userId])`
+  interpolates a Swift array's raw value, which is a POSTGRES ARRAY literal
+  `{uuid}`, sent against a JSONB column — so Postgres answered `invalid input
+  syntax for type json` every single time. Verified live: that form errors, and
+  the correct `["uuid"]` returns six real conversations. The SAME malformation
+  was in the realtime filter, where `cs` is not even an operator Realtime
+  supports, so no conversation change ever arrived either.
+
+  **It was invisible because the failure was reported as an EMPTY LIST.** The
+  subscribe path caught the error and published `[]`, so the screen said "No
+  conversations" with only a console print. It surfaced the moment this phase
+  made a failed fetch say so — the operator's smoke showed the real error, and
+  the fix followed from it. **A failure that is presentable as an empty state
+  will hide for a year.**
+
+  **Ten other data-layer defects fixed** (full list in the commit for de1eed5):
+  the thread showed the HUNDRED OLDEST messages and a message you sent never
+  appeared; "Load earlier" paged the wrong direction; a realtime event discarded
+  paged history; opening a conversation showed the PREVIOUS one's messages (the
+  CommentService shape AMB.5 told this phase to look for — it was there); a
+  failed send destroyed the message and the typed text; `cleanup()` had never run
+  once, and once its call site was fixed it turned out not to unsubscribe
+  anything either; image and file upload were hard-coded to fail AND their caller
+  discarded the result; iOS never raised anyone's unread count.
+
+  **`last_message` was a real bug but a SECONDARY one** — execution never reached
+  the decoder. It is a TEXT column, and the two apps write different shapes into
+  it; every production row holds a stringified LEGACY FIREBASE object with
+  `senderId` in camelCase and a Firestore `{_seconds,_nanoseconds}` timestamp,
+  which no `Codable` path could read. Now parsed by hand for both key spellings
+  and three timestamp shapes, proved with a throwaway harness over the real
+  production strings and deleted.
+
+  **TWO LIVE SHARED-DB CHANGES, applied and verified 2026-07-26:**
+  `chat_unread_increment.sql` and `chat_attachments_bucket.sql` (no chat bucket
+  existed in either app; scoped per CONVERSATION so a private DM's files are not
+  readable company-wide). **The RPC's first version contradicted its own header** —
+  it argued against the web app's read-modify-write and then did one; it is a
+  single statement now. Its negative test also found the guard was `<>` against
+  `auth.uid()`, which yields NULL and therefore SKIPPED the check rather than
+  failing closed. **All five pre-existing chat RPCs share that flaw — reported,
+  not changed.**
+
+  **A MISTAKE WORTH THE RECORD: I tested a mutating RPC against a REAL
+  conversation and incremented three people's unread counts.** Undone by
+  decrementing exactly that delta and confirmed back to zero.
+  `fix_chat_rpcs.sql`'s own header says its behavioural test was "rolled back so
+  nothing persisted" — that precedent was in front of me. Later tests ran inside
+  a transaction that rolls back.
+
+  **THE FIX ROUNDS THEMSELVES NEEDED THREE PASSES, and each pass introduced
+  something.** Round one shipped a critical (an attachment filed against the
+  wrong conversation, and a cache write that poisoned another thread's history).
+  Round two "fixed" the cache write by testing a value captured BEFORE the
+  network round trip — fixing the instance, not the class, for the fourth time in
+  this arc — and introduced a MESSAGE-LOSS path by restoring failed text only if
+  the composer was still empty. Round three fixed both and the unread badge.
+  **Auditing my own fix round found the worst defect every single time, five for
+  five now** (PUB.1, AMB.4, AMB.5, and twice here).
+
+  **Parity:** `AMB6_CHAT_PARITY.md`, read from the source. The mockup-is-not-an-
+  inventory lesson held for the FOURTH straight phase — four losses, the worst
+  being that `AmbientEmptyState` has no action slot, so Chat's "New Conversation"
+  button silently ceased to exist while the inventory recorded it as kept. Fixed
+  in the shared component, so every future surface gets the slot.
+
+  **Step 3b earned its place again:** every GIF was forced to a 250x250 square
+  ("Square aspect ratio for most GIFs"), which stretches every landscape GIF.
+  Restored to the mockup's 200x140.
+
+  **AmbientCard gained `AmbientCardFill` and an `AmbientDensity.bubble`** (12/8/16,
+  the mockup's numbers verbatim). `.bubble` is excluded from `allCases` so it
+  cannot be chosen as a list density. Chat now owns NO drift-allowlist rows.
+
+  **TWO ACCEPTANCE CRITERIA ARE NOT MET, and the phase is closed with them named
+  rather than quietly:**
+  1. **iPad smoke NOT RUN.** D7 is explicit that a phase is not done when only
+     the iPhone passes. iPhone passed 2026-07-26 (conversations load).
+  2. **BATCH-2 MOCKUPS NOT BUILT.** D10 assigns Reports family + Time off to this
+     phase. They move to the START of AMB.7, which needs them before it may touch
+     a real screen anyway. **AMB.7 must build them first, or D10 blocks it.**
+  Consequently the batch-1 mockup and `AMB_BATCH1_PARITY.md` / `AMB_BATCH1_RESEARCH.md`
+  are **NOT deleted** — a validation reference outlives the port it validated, and
+  the iPad half of that port is unconfirmed (the GRP.6 lesson).
+
+  **CHAT NEEDS A DATA-LAYER REBUILD, and it is a MULTIPLATFORM one:
+  `CHAT_REBUILD_NOTES.md`.** Every defect above is two clients disagreeing about
+  the same column — participants as a jsonb blob with no foreign keys, unread as a
+  stored number both apps read-modify-write, message type guessed from the message
+  text. The fix is to move truth INTO the database (a participants join table,
+  unread DERIVED from a per-person `last_read_at`, writes through RPCs) so no
+  client can contradict another. It needs its own arc, the architecture gate, and
+  the web app read properly first — plus a real answer on whether Captura touches
+  chat, which is currently an inference and not a fact.
 
 **Batch 2**
 
