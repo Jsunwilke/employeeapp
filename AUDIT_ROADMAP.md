@@ -458,11 +458,38 @@ other rebases onto it.
   file; card-drift sweep clean; app installs, launches and stays up on the
   simulator; old-path grep clean.
 
-  **NOT yet done, and it is the operator's to trigger:** the independent review
-  gate. `/code-review` is user-triggered in this environment — I cannot launch
-  it — so this phase has had a builder self-audit (which found four defects in my
-  own work, all fixed) but NOT an adversarial one. Per the CRS.1 lesson it must
-  run BEFORE the D8 push, not after. Both device smokes are also outstanding.
+  **Independent review gate RUN by the operator 2026-07-25, before any push
+  (0e24e68).** Four findings, each checked against source before acting:
+  - FIXED "0D OVERDUE" — `KitDueState` defaulted `daysOverdue` with `?? 0`, and
+    that value is 0 on the due date itself and nil for a status-flagged
+    assignment with no return date. The badge it replaced guarded `days > 0` and
+    drew NOTHING, which is its own bug. Now optional: a sub-day overdue reads
+    "OVERDUE" with no number, and "1 days overdue" is fixed too.
+  - FIXED a blank Details card — `specs(for:)` always drew its card and gated
+    every row, so an item with only a name rendered a card containing the word
+    DETAILS. Mine: the app's section always had content because the status and
+    condition badges lived in it, and this redesign moved them to the headline.
+  - FIXED `loadMyKitsData` orphaned by the deletion of its only caller. Deleted;
+    delete-first covers what a deletion orphans, not only the replaced file.
+  - **NOT FIXED, deliberately:** overdue fires at 00:00 on the due date, because
+    `EquipmentAssignment.isOverdue` compares against
+    `startOfDay(expected_return_date)` — so an item due today is late from
+    midnight AND is excluded from "due back". The finding is correct, but it is a
+    BUSINESS RULE on the model, it predates this arc, the old kit card turned the
+    same rule red, and four things read it. D12 keeps business rules out of a
+    style phase; what the app calls "late" is the operator's decision, not one a
+    restyle smuggles in. **Follow-on candidate.**
+
+  Also addressed, from the reviewer's flagged uncertainty rather than a finding:
+  this screen stacked TWO `NavigationLink(isActive:)` (the deprecated API
+  `ambientPush` must use) on one view, and Equipment is the first Ambient surface
+  running inside a real `NavigationStack` — two live links competing for one
+  stack is the shape of the AMB.1 dead tap. Collapsed to one
+  `EquipmentDestination` enum and a single link.
+
+  **Still outstanding: both device smokes (iPhone AND iPad, D7).** Exercise the
+  push paths first — row tap, kit tap, QR scan — plus the kit detail's per-item
+  "…" menu. The D8 push waits on those.
 - [ ] **AMB.4 Home dashboard** (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines) —
   highest traffic, and its Upcoming Shifts widget currently disagrees with the
   already-converted schedule.
