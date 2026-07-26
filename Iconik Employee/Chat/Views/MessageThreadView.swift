@@ -31,6 +31,10 @@ struct MessageThreadView: View {
     @State private var showDocumentPicker = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isUploadingMedia = false
+    /// A message whose send failed. Held here rather than pushed back into the
+    /// composer so that typing during an in-flight send cannot destroy it, and it
+    /// cannot be wiped by `errorMessage` being cleared by an unrelated success.
+    @State private var failedMessage: String?
     @FocusState private var isMessageFieldFocused: Bool
 
     private var feature: Color { FeatureTheme.color(for: "chat") }
@@ -54,7 +58,11 @@ struct MessageThreadView: View {
                 // upload was completely silent while you watched the bubble
                 // disappear. The parity inventory claims this as ADDED; this is
                 // the half that did not land.
-                if let error = chatManager.errorMessage {
+                // A failed message outranks a generic error: it carries the text
+                // and can actually be retried. Only ONE banner shows.
+                if let failed = failedMessage {
+                    failedMessageBanner(failed)
+                } else if let error = chatManager.errorMessage {
                     failureBanner(error)
                 }
                 composer
@@ -93,6 +101,11 @@ struct MessageThreadView: View {
             }
         }
         .onAppear {
+            // `errorMessage` is one field on a shared singleton, so arriving here
+            // with the conversation LIST's error still set rendered "Couldn't load
+            // conversations…" above this composer, with a dismiss button and no
+            // relevance. Cleared on entry.
+            chatManager.errorMessage = nil
             if let conversation {
                 Task { await chatManager.selectConversation(conversation, markAsRead: true) }
             }
@@ -410,7 +423,9 @@ struct MessageThreadView: View {
                     // ambient-allow: the composer field is a capsule input, not a card.
                     .background(Capsule().fill(.ultraThinMaterial))
                     .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
-                    .onSubmit { sendMessage() }
+                    // Gated like the send button. It was not, so the return key
+                    // could start a second send while the first was in flight.
+                    .onSubmit { if !chatManager.isSendingMessage { sendMessage() } }
                     .onChange(of: isMessageFieldFocused) { focused in
                         if focused { showEmojiPicker = false }
                     }
@@ -436,6 +451,46 @@ struct MessageThreadView: View {
             Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 0.5)
         }
         .animation(AmbientMotion.snappy, value: showEmojiPicker)
+    }
+
+    /// The message is IN this banner, so it cannot be lost. Retry re-sends it;
+    /// the X discards it deliberately.
+    private func failedMessageBanner(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.arrow.circlepath")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Not sent").font(.caption.weight(.semibold))
+                Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Button {
+                failedMessage = nil
+                chatManager.errorMessage = nil
+                Task {
+                    let sent = await chatManager.sendMessage(text: text)
+                    if !sent { failedMessage = text }
+                }
+            } label: {
+                Text("Retry").font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(feature)
+
+            Button { failedMessage = nil } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .ambientCard(density: .compact,
+                     state: .highlighted,
+                     border: .hairline(Color.orange.opacity(0.45)),
+                     fillWidth: true)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
     }
 
     /// Dismissible, unlike the list's banner — here the user just watched their
@@ -487,23 +542,22 @@ struct MessageThreadView: View {
 
         isMessageFieldFocused = false
 
-        // Cleared IMMEDIATELY, so the next message can be typed while this one is
-        // in flight, and RESTORED only if the send failed and the user has not
-        // started typing something else.
+        // Cleared IMMEDIATELY so the next message can be typed while this one is in
+        // flight, and a FAILED message is parked in its own state where nothing can
+        // overwrite it.
         //
-        // Both extremes were wrong. Originally the field was cleared at once and
-        // the failure path deleted the optimistic bubble, so a failed send
-        // destroyed the message and the typing. Clearing only on success fixed
-        // that and broke something else: anything typed during an in-flight send
-        // was wiped when it landed, and the text sat visibly in both the bubble
-        // and the composer meanwhile.
+        // Three versions of this, and the first two both lost text. Clearing at
+        // once let the failure path destroy the message. Clearing only on success
+        // wiped anything typed during the flight. Restoring "only if the composer
+        // is still empty" — the previous attempt — lost the message outright if the
+        // user typed a single character or tapped one emoji while it was sending,
+        // which is worse than where it started. The composer and the failed message
+        // are now separate things, so neither can eat the other.
         messageText = ""
 
         Task {
             let sent = await chatManager.sendMessage(text: text)
-            if !sent && messageText.isEmpty {
-                messageText = text
-            }
+            if !sent { failedMessage = text }
         }
     }
 

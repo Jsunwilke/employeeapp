@@ -205,13 +205,15 @@ class ChatManager: ObservableObject {
 
         // Nothing to do, and worth checking so a busy thread is not firing an
         // RPC per incoming message.
-        let index = conversations.firstIndex(where: { $0.id == conversation.id })
-        if let index, conversations[index].unreadCount(for: userId) == 0 { return }
+        // `guard let`, not `if let`. With `if let` a conversation missing from the
+        // list fell through to the RPC on EVERY incoming message — and each RPC
+        // updates conversations, which fires the conversations channel, which
+        // refetches: two extra round trips per message, indefinitely.
+        guard let index = conversations.firstIndex(where: { $0.id == conversation.id }) else { return }
+        guard conversations[index].unreadCount(for: userId) > 0 else { return }
 
-        if let index {
-            conversations[index].unread_counts[userId] = 0
-            updateTotalUnreadCount()
-        }
+        conversations[index].unread_counts[userId] = 0
+        updateTotalUnreadCount()
 
         Task {
             do {
@@ -453,7 +455,13 @@ class ChatManager: ObservableObject {
             // away from. Writing one into the other's cache poisoned the
             // destination with a different conversation's messages, and the
             // union-only merge meant they never evicted.
-            if showsOnScreen {
+            // RE-READ, not the snapshot taken before the await. The previous
+            // attempt at this fix hoisted `showsOnScreen` from before the network
+            // round trip and tested it here, which left the whole bug intact and
+            // merely moved the window: leave the thread WHILE the send is in
+            // flight and the stale `true` wrote the NEW thread's messages into
+            // the OLD thread's cache. Fixing the instance is not fixing the class.
+            if activeConversation?.id == conversation.id {
                 cacheService.setCachedMessages(conversationId: conversation.id, messages: messages)
             }
             errorMessage = "Failed to send message: \(error.localizedDescription)"
@@ -466,7 +474,15 @@ class ChatManager: ObservableObject {
     // MARK: - User Management
 
     func loadOrganizationUsers() async {
-        guard let orgId = currentUserOrganizationId else { return }
+        // The TWIN of the dead guard fixed in sendAttachment: same cause, same
+        // file. `getCachedOrganizationID()` returns a NON-optional String and
+        // yields "", so `guard let` never fired and this queried users with
+        // organization_id = '', got nothing, cached nothing — and every direct
+        // conversation then fell back to its default_name because there were no
+        // users to resolve names against. Reachable at launch, before the org id
+        // is cached.
+        let orgId = currentUserOrganizationId ?? ""
+        guard !orgId.isEmpty else { return }
 
         // Load from cache first
         if let cachedUsers = cacheService.getCachedUsers() {
