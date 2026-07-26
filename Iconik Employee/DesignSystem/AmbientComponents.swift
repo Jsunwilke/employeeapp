@@ -230,6 +230,20 @@ struct AmbientEmptyState: View {
     var message: String = "There is nothing to show yet."
     var systemImage: String = "tray"
 
+    /// An optional call to action.
+    ///
+    /// Added in AMB.6 because this component having no action slot is what SILENTLY
+    /// DROPPED a feature: Chat's empty state had a "New Conversation" button, the
+    /// conversion replaced the hand-rolled state with this, and the button simply
+    /// ceased to exist — while the parity inventory recorded it as kept. An empty
+    /// state is very often the first screen a new user sees, and the one place a
+    /// prompt matters most. Every future surface gets the slot rather than
+    /// rediscovering the gap.
+    var actionTitle: String?
+    var actionIcon: String?
+    var action: (() -> Void)?
+    var actionTint: Color?
+
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: systemImage)
@@ -238,6 +252,22 @@ struct AmbientEmptyState: View {
             Text(title).font(.headline)
             Text(message)
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+
+            if let actionTitle, let action {
+                Button(action: action) {
+                    Label(actionTitle, systemImage: actionIcon ?? "plus.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        // ambient-allow: a filled call-to-action button is not a
+                        // card — it is a control, and it needs a solid tint to
+                        // read as tappable against the wash.
+                        .background(Capsule().fill(actionTint ?? AmbientStyle.brand))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 6)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 44)

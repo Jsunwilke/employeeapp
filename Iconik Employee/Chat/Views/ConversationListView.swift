@@ -109,7 +109,15 @@ struct ConversationListView: View {
                     message: searchText.isEmpty
                         ? "Start a conversation with your team members."
                         : "Nothing matches “\(searchText)”.",
-                    systemImage: "bubble.left.and.bubble.right"
+                    systemImage: "bubble.left.and.bubble.right",
+                    // RESTORED. The old empty state carried this button and the
+                    // conversion dropped it, because the shared component had no
+                    // action slot. Only when nothing is being searched for —
+                    // "no search results" is not the moment to offer a new group.
+                    actionTitle: searchText.isEmpty ? "New Conversation" : nil,
+                    actionIcon: "plus.circle.fill",
+                    action: searchText.isEmpty ? { showNewConversation = true } : nil,
+                    actionTint: feature
                 )
                 .modifier(ChatListRow())
             } else {

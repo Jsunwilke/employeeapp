@@ -32,7 +32,12 @@ class ChatManager: ObservableObject {
     private var hasPagedBack = false
     /// One "Load earlier" in flight at a time; two concurrent taps would both
     /// compute the same offset and fetch the same page.
-    private var isLoadingMoreMessages = false
+    ///
+    /// PUBLISHED, because the button needs to show a spinner. It was private,
+    /// and the button read `messagesLoading` instead — which `loadMoreMessages`
+    /// never sets, so tapping "Load earlier" gave no feedback at all while the
+    /// initial load spun the button at the one moment it should not.
+    @Published var isLoadingMoreMessages = false
     /// Ids of optimistic messages that the server has not confirmed yet. They are
     /// excluded from the paging offset, and a failed send removes exactly its own
     /// id — the previous code removed EVERY unconfirmed message on any failure,
@@ -185,21 +190,34 @@ class ChatManager: ObservableObject {
         await loadMessages(for: conversation)
 
         // Mark messages as read only if requested (i.e., user is actively viewing the conversation)
-        if markAsRead, let userId = currentUserId {
-            // Zero it locally too. The server call only reached the UI via a
-            // realtime round trip, so opening a conversation left its unread pill
-            // and the tab bar badge sitting there until the echo arrived.
-            if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
-                conversations[index].unread_counts[userId] = 0
-                updateTotalUnreadCount()
-            }
+        if markAsRead {
+            markActiveConversationRead()
+        }
+    }
 
-            Task {
-                do {
-                    try await supabaseChatService.markMessagesAsRead(conversationId: conversation.id, userId: userId)
-                } catch {
-                    print("⚠️ mark-as-read failed for \(conversation.id): \(error)")
-                }
+    /// Zero the active conversation's unread count, locally and on the server.
+    ///
+    /// The local half matters: the server call only reached the UI via a realtime
+    /// round trip, so opening a conversation left its unread pill and the tab bar
+    /// badge sitting there until the echo arrived.
+    private func markActiveConversationRead() {
+        guard let conversation = activeConversation, let userId = currentUserId else { return }
+
+        // Nothing to do, and worth checking so a busy thread is not firing an
+        // RPC per incoming message.
+        let index = conversations.firstIndex(where: { $0.id == conversation.id })
+        if let index, conversations[index].unreadCount(for: userId) == 0 { return }
+
+        if let index {
+            conversations[index].unread_counts[userId] = 0
+            updateTotalUnreadCount()
+        }
+
+        Task {
+            do {
+                try await supabaseChatService.markMessagesAsRead(conversationId: conversation.id, userId: userId)
+            } catch {
+                print("⚠️ mark-as-read failed for \(conversation.id): \(error)")
             }
         }
     }
@@ -262,6 +280,14 @@ class ChatManager: ObservableObject {
 
                 // Cache the updated messages
                 self.cacheService.setCachedMessages(conversationId: conversation.id, messages: self.messages)
+
+                // You are LOOKING at this thread, so anything that just arrived
+                // is already read. The unread count is now raised server-side by
+                // every send (the new increment RPC), and mark-as-read only ran
+                // on entering the screen — so a message arriving while you read
+                // lit your own pill and the tab badge, and left them lit until
+                // you backed out and came in again.
+                self.markActiveConversationRead()
 
                 self.readCounter.recordRead(
                     operation: "subscribeToConversationMessages",
@@ -348,6 +374,11 @@ class ChatManager: ObservableObject {
         // deleting everything whose id ended in "_temp".
         let messageId = UUID().uuidString.lowercased()
 
+        // Hoisted out of the `do` so the failure path can read it: whether this
+        // send's destination is the thread currently on screen. It decides both
+        // where the optimistic bubble goes and whose cache may be rewritten.
+        let showsOnScreen = activeConversation?.id == conversation.id
+
         do {
             // Get current user info from cache or fetch
             let senderName = await getSenderName()
@@ -381,7 +412,6 @@ class ChatManager: ObservableObject {
             // thread currently on screen. An attachment send that finished after
             // the user moved on would otherwise drop a bubble into whatever
             // conversation they are now looking at.
-            let showsOnScreen = activeConversation?.id == conversation.id
             if showsOnScreen {
                 pendingMessageIds.insert(messageId)
                 messages = merge([optimisticMessage], into: messages)
@@ -413,12 +443,19 @@ class ChatManager: ObservableObject {
             // Remove ONLY this message. Other sends may still be in flight.
             pendingMessageIds.remove(messageId)
             messages.removeAll { $0.id == messageId }
-            // The optimistic copy is dropped from the CACHE too. Without this a
-            // realtime event landing between the optimistic merge and this
-            // failure could persist a message that never existed — which then
-            // reloads on next launch, can never be evicted (the merge is
-            // union-only), and silently shifts every paging offset by one.
-            cacheService.setCachedMessages(conversationId: conversation.id, messages: messages)
+            // The optimistic copy is dropped from the CACHE too, so a realtime
+            // event landing between the merge and this failure cannot persist a
+            // message that never existed.
+            //
+            // ONLY when this send's conversation is the one on screen. `messages`
+            // holds the ACTIVE thread, and `conversation` is the send's
+            // DESTINATION — which can differ for an attachment the user walked
+            // away from. Writing one into the other's cache poisoned the
+            // destination with a different conversation's messages, and the
+            // union-only merge meant they never evicted.
+            if showsOnScreen {
+                cacheService.setCachedMessages(conversationId: conversation.id, messages: messages)
+            }
             errorMessage = "Failed to send message: \(error.localizedDescription)"
 
             isSendingMessage = false
@@ -736,7 +773,12 @@ class ChatManager: ObservableObject {
     /// conversation, nobody in the destination could open it.
     private func sendAttachment(data: Data, fileExtension: String, contentType: String, caption: String) async -> Bool {
         guard let conversation = activeConversation else { return false }
-        guard let organizationId = currentUserOrganizationId else {
+        // `getCachedOrganizationID()` returns a NON-optional String and yields ""
+        // when it does not know, so `guard let` never fired. The empty value then
+        // became the first path segment, which the bucket's WITH CHECK rejects
+        // with an opaque storage error instead of this sentence.
+        let organizationId = currentUserOrganizationId ?? ""
+        guard !organizationId.isEmpty else {
             errorMessage = "No organization found — can't attach files."
             return false
         }

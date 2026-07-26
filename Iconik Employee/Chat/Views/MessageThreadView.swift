@@ -48,6 +48,15 @@ struct MessageThreadView: View {
 
             VStack(spacing: 0) {
                 scrollback
+                // A failure has to be visible ON THIS SCREEN. Four places here
+                // write `errorMessage` and nothing read it — the banner lived
+                // only on the conversation LIST, so a failed send or a failed
+                // upload was completely silent while you watched the bubble
+                // disappear. The parity inventory claims this as ADDED; this is
+                // the half that did not land.
+                if let error = chatManager.errorMessage {
+                    failureBanner(error)
+                }
                 composer
             }
         }
@@ -155,7 +164,11 @@ struct MessageThreadView: View {
             Task { await chatManager.loadMoreMessages() }
         } label: {
             HStack(spacing: 6) {
-                if chatManager.messagesLoading {
+                // Keyed on isLoadingMoreMessages, not messagesLoading. This
+                // button read the INITIAL-load flag, which "Load earlier" never
+                // sets — so tapping it showed nothing at all, while the initial
+                // load spun it at the one moment it should have been still.
+                if chatManager.isLoadingMoreMessages {
                     ProgressView().scaleEffect(0.8)
                 } else {
                     Image(systemName: "arrow.up.circle").font(.caption)
@@ -425,6 +438,36 @@ struct MessageThreadView: View {
         .animation(AmbientMotion.snappy, value: showEmojiPicker)
     }
 
+    /// Dismissible, unlike the list's banner — here the user just watched their
+    /// message vanish and needs to be told why, once.
+    private func failureBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button {
+                chatManager.errorMessage = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .ambientCard(density: .compact,
+                     state: .highlighted,
+                     border: .hairline(Color.orange.opacity(0.45)),
+                     fillWidth: true)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
     private var uploadingOverlay: some View {
         ZStack {
             Color.black.opacity(0.3).ignoresSafeArea()
@@ -444,13 +487,23 @@ struct MessageThreadView: View {
 
         isMessageFieldFocused = false
 
+        // Cleared IMMEDIATELY, so the next message can be typed while this one is
+        // in flight, and RESTORED only if the send failed and the user has not
+        // started typing something else.
+        //
+        // Both extremes were wrong. Originally the field was cleared at once and
+        // the failure path deleted the optimistic bubble, so a failed send
+        // destroyed the message and the typing. Clearing only on success fixed
+        // that and broke something else: anything typed during an in-flight send
+        // was wiped when it landed, and the text sat visibly in both the bubble
+        // and the composer meanwhile.
+        messageText = ""
+
         Task {
             let sent = await chatManager.sendMessage(text: text)
-            // The field is cleared ONLY once the send lands. It used to be
-            // cleared immediately, and the failure path then deleted the
-            // optimistic bubble too — so a failed send destroyed both the
-            // message and what the user had typed, with no way back.
-            if sent { messageText = "" }
+            if !sent && messageText.isEmpty {
+                messageText = text
+            }
         }
     }
 

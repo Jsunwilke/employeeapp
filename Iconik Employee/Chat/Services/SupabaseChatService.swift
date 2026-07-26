@@ -225,6 +225,12 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
             .select()
             .eq("conversation_id", value: conversationId)
             .order("timestamp", ascending: false)
+            // `id` is the tiebreaker, and it is required rather than tidy:
+            // Postgres gives no stable row order for equal sort keys, so two
+            // messages sharing a timestamp either side of a page boundary could
+            // be returned twice or SKIPPED ENTIRELY between pages. The merge
+            // dedupes a repeat; nothing recovers a skip.
+            .order("id", ascending: false)
             .range(from: offset, to: offset + limit) // limit + 1 rows: the extra is the probe
             .execute()
             .value
