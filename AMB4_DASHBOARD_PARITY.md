@@ -488,18 +488,39 @@ taken:
       iPads have no NFC. Flattening either into an ordinary cell would discard a
       navigation decision, not a style.
 
-      REVISED after the operator saw it (2026-07-25): "center the scan button
-      vertically on the bar. and dont let other icons flow behind it." The first
-      version floated the circle above the capsule's top edge while the cells
-      divided the full width underneath, so items passed behind it. It is now
-      vertically centred with 68pt of the row RESERVED, which the cells step over
-      rather than pass under — verified numerically at every width and item count
-      (no cell overlaps the slot, the pill never escapes the capsule, 6 items on
-      a 375pt phone and 10 on iPad both hold).
+      REVISED TWICE after the operator saw it, 2026-07-25.
+
+      First: "center the scan button vertically on the bar. and dont let other
+      icons flow behind it." The original floated the circle above the capsule's
+      top edge while the cells divided the full width underneath, so items passed
+      behind it — the cell maths did not know the button existed.
+
+      Then: "the scan button should always be center. and should be larger than
+      all other icons." BOTH WERE STILL WRONG, and the first is the interesting
+      one. Splitting the row with the extra item on the left — which is what the
+      LIVE bar does — leaves the slot off-centre by half a cell whenever the count
+      is odd: about 30pt right of the middle at five items on an iPhone. So the
+      live bar has never actually centred its Scan button on an odd count either.
+
+      Now: both sides take an EQUAL half of the non-button width, sized for
+      whichever side holds more items, and the lighter side centres its cells
+      inside its half. Cell widths stay uniform and the button sits on the bar's
+      midpoint at every count. Every element is positioned from one array of cell
+      origins — the same numbers the pill uses — because laying it out with nested
+      stacks and spacers is what let the two halves drift apart.
+
+      Verified numerically, not by eye: button centre equals bar centre to the
+      decimal at 2-6 items on three iPhone widths and 2-10 on iPad, with no cell
+      under the button, none outside the bar, no overlaps, and the pill inside the
+      capsule for every selection.
+
+      SIZE: the capsule is 64pt (KeepUp's is 60) so the button can be 52pt with
+      6pt clear above and below, and its glyph is 40pt against 17pt for every
+      other icon — well over twice the size.
       ONE CONSEQUENCE, named: today's Scan glyph is 60pt on a 50pt circle, a
       deliberate overrun that worked because the button stood proud of the bar.
-      Centred inside a 60pt capsule it would spill past the glass, so the glyph
-      is sized to sit inside its circle.
+      Centred inside the capsule an overrun would spill past the glass, so the
+      glyph nearly fills its disc instead of exceeding it.
     THE iOS 16.6 FLOOR IS HONOURED (D4). Real Liquid Glass is iOS 26 only, so
       below it the capsule is custom glass — material, sheen, rim — written to
       stand on its own rather than as a degraded afterthought. The toolchain is

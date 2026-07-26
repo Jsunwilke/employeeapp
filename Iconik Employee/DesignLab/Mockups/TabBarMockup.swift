@@ -298,21 +298,42 @@ private struct GlassTabBarPreview: View {
     /// above the capsule's top edge and let the cells divide the whole width
     /// underneath, so items slid behind it. Operator: centre it vertically, and
     /// keep the other icons out from under it.
-    private var centreSlot: CGFloat { 68 }
+    private var centreSlot: CGFloat { 72 }
+
+    /// The capsule is 4pt taller than KeepUp's 60 so the centre button can be
+    /// clearly the largest thing on the bar and still sit fully inside the glass.
+    private var barHeight: CGFloat { 64 }
 
     private var capsuleBar: some View {
         GeometryReader { geo in
             let count = max(items.count, 1)
-            // The cells share what is left after the centre slot is taken out,
-            // which is what stops anything passing behind the button.
-            let cellWidth = max((geo.size.width - centreSlot) / CGFloat(count), 1)
-            let mid = (count + 1) / 2   // odd counts keep the extra item on the left
             let selectedIndex = items.firstIndex(where: { $0.id == selected })
 
-            // Each cell's leading edge, stepping over the centre slot. Precomputed
-            // rather than a local function, which a ViewBuilder closure forbids.
-            let cellOrigins = (0..<count).map { index in
-                cellWidth * CGFloat(index) + (index < mid ? 0 : centreSlot)
+            // THE CENTRE BUTTON IS DEAD CENTRE, ALWAYS — operator, 2026-07-25.
+            //
+            // The obvious split (extra item on the left for odd counts, which is
+            // what the live bar does) leaves the slot off-centre by half a cell:
+            // at five items on an iPhone that is about 30pt right of the middle.
+            // So instead BOTH SIDES GET AN EQUAL HALF of the remaining width,
+            // sized for whichever side holds more items, and the lighter side
+            // centres its cells inside its half. Cells stay a uniform width and
+            // the button never moves.
+            let perSide = max((count + 1) / 2, count / 2)
+            let cellWidth = max((geo.size.width - centreSlot) / CGFloat(perSide * 2), 1)
+            let halfWidth = cellWidth * CGFloat(perSide)
+            let leftCount = (count + 1) / 2
+            let rightCount = count - leftCount
+            // The lighter side is inset so its group stays centred in its half.
+            let leftInset = halfWidth - cellWidth * CGFloat(leftCount)
+            let rightInset = (halfWidth - cellWidth * CGFloat(rightCount)) / 2
+
+            // Each cell's leading edge. Precomputed rather than a local function,
+            // which a ViewBuilder closure forbids.
+            let cellOrigins = (0..<count).map { index -> CGFloat in
+                index < leftCount
+                    ? leftInset + cellWidth * CGFloat(index)
+                    : halfWidth + centreSlot + rightInset
+                      + cellWidth * CGFloat(index - leftCount)
             }
 
             // Wider than a cell so a long label fits, then clamped so it can never
@@ -344,24 +365,24 @@ private struct GlassTabBarPreview: View {
                     // than reappearing at cell zero.
                     .opacity(onCentre ? 0 : 1)
 
-                HStack(spacing: 0) {
-                    ForEach(Array(items.prefix(mid))) { item in
-                        cell(item, pillShift: pillShift, isSelected: item.id == selected)
-                            .frame(width: cellWidth)
-                    }
-
-                    centreButton
-                        .frame(width: centreSlot)
-
-                    ForEach(Array(items.dropFirst(mid))) { item in
-                        cell(item, pillShift: pillShift, isSelected: item.id == selected)
-                            .frame(width: cellWidth)
-                    }
+                // Everything is placed from `cellOrigins`, the same numbers the
+                // pill uses, so the highlight can never land off its cell. Laying
+                // this out with nested stacks and spacers is what let the two
+                // halves drift apart in the previous cut.
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    cell(item, pillShift: pillShift, isSelected: item.id == selected)
+                        .frame(width: cellWidth, height: geo.size.height)
+                        .offset(x: cellOrigins[index])
                 }
-                .frame(width: geo.size.width, height: geo.size.height)
+
+                // Its slot begins where the left half ends, so its centre is
+                // halfWidth + centreSlot/2 — exactly the bar's midpoint.
+                centreButton
+                    .frame(width: centreSlot, height: geo.size.height)
+                    .offset(x: halfWidth)
             }
         }
-        .frame(height: 60)
+        .frame(height: barHeight)
         .modifier(GlassCapsule())
     }
 
@@ -436,16 +457,17 @@ private struct GlassTabBarPreview: View {
                                      : AnyShapeStyle(centreTint.opacity(0.16)))
                     .overlay(Circle().strokeBorder(.white.opacity(isSelected ? 0.55 : 0.3),
                                                    lineWidth: 1))
-                    // 48 inside a 60pt bar leaves 6pt above and below, so it is
+                    // 52 inside a 64pt bar leaves 6pt above and below, so it is
                     // genuinely centred rather than clipped by the capsule.
-                    .frame(width: 48, height: 48)
+                    .frame(width: 52, height: 52)
                 Image(systemName: centreSymbol)
-                    // Sized to sit INSIDE the circle. Today's Scan glyph is 60pt
-                    // on a 50pt circle — a deliberate overrun that worked because
-                    // the button stood proud of the bar. Centred inside a 60pt
-                    // capsule it would spill past the glass, so the overrun goes.
-                    // Named as a change, not slipped in.
-                    .font(.system(size: layout == .iPad ? 22 : 26, weight: .semibold))
+                    // DELIBERATELY THE LARGEST THING ON THE BAR — operator,
+                    // 2026-07-25. The other icons are 17pt; Scan's glyph is 40,
+                    // well over twice their size, and it nearly fills its disc
+                    // the way the live bar's does. It no longer overruns the
+                    // circle, because centred inside the capsule an overrun
+                    // would spill past the glass.
+                    .font(.system(size: layout == .iPad ? 30 : 40, weight: .semibold))
                     .foregroundStyle(isSelected ? Color.white : centreTint)
             }
             // Centred in its slot, vertically and horizontally.
