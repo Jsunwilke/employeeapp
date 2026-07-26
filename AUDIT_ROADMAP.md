@@ -512,7 +512,7 @@ other rebases onto it.
     on device**, because the operator has no gear outside a kit to exercise it.
     The same code path is covered by the in-kit and inventory item taps, which
     both pass.
-- [ ] **AMB.4 Home dashboard** (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines) —
+- [x] **AMB.4 Home dashboard + the bottom tab bar** — DONE 2026-07-26, operator smoke PASSED on iPhone AND iPad. Original scope (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines) —
   highest traffic, and its Upcoming Shifts widget currently disagrees with the
   already-converted schedule.
 
@@ -572,6 +572,72 @@ other rebases onto it.
   never run (`onChange`'s condition compares the already-updated value against
   itself) — **AMB.6 owns Chat**; and the three iPad widgets have weak lifecycles
   (a fresh realtime channel per construction; one with no teardown at all).
+  **CLOSEOUT 2026-07-26. Both device smokes passed ("those widgets are fine", "very
+  good, it all looks good"); the phase owns NO drift-allowlist rows (MainEmployeeView
+  2 -> 0, DashboardWidgets 8 -> 3 -> 0) and its three mockups are deleted.**
+
+  **THE SCOPE GREW BY ONE SURFACE MID-PHASE, and how it was found is the arc lesson.**
+  The operator asked why the BOTTOM TAB BAR had not been redesigned. It belonged to no
+  phase: the arc's list is organised by FEATURE and the bar is nav-shell furniture on
+  every screen, so it matched no entry — and the card-drift gate could not catch it
+  either, because a full-width bar is not a rounded filled container. Two independent
+  mechanisms for finding unconverted surfaces, both blind to it by construction.
+  Operator ruling (D13): it joins AMB.4, with the main screen, before any other
+  feature. **Before AMB.5, enumerate the remaining SHELL deliberately — the profile
+  toolbar, the theme picker, the toast — rather than waiting to be asked again.**
+
+  **The bar is now a floating glass capsule** ported from the operator's own KeepUp
+  app after their first-cut rejection ("hate it, not really any different" — it had
+  swapped an opaque slab for a material and changed nothing else). Real Liquid Glass on
+  iOS 26 with a custom-glass fallback below it, frost settled at 50% on a slider in the
+  mockup, cells that divide the width, a hand-built sliding pill (a material cannot
+  animate its position, so the system cannot produce one), and Scan/Home dead centre at
+  every item count — which the OLD bar never was on an odd count. Swipe it right to
+  tuck it away behind an edge handle; any navigation brings it back. Hide-on-scroll was
+  built first and dropped on the operator's own reasoning that navigation matters more.
+
+  **It also closed a three-phase-old mistake.** D11 claimed the AMB.2 palette re-cut
+  changed this bar. It had not: FeatureTheme appeared in the file once, inside the
+  CUSTOMISE screen, while the bar coloured from a FOURTH hardcoded map that defaulted
+  most features to blue. The tile you tapped and the item you landed on disagreed for
+  nearly every feature.
+
+  **SPORTS, with explicit operator authorization.** Both rosters stopped hiding the bar
+  on iPad, where it had been removed "to maximize vertical space" — leaving the app's
+  largest iPad tool with no bottom navigation at all, and on iPad the bar is the ONLY
+  route home because HomeToolbarButton is iPhone-only. That is why the roster had grown
+  its own Back-to-Home button. The space is still available, now by the user's swipe.
+  `CapturaSportsView` is hook-protected: the hook was lifted for that one basename and
+  RESTORED, verified byte-identical against a pre-lift backup and a recorded SHA-256,
+  then re-tested to confirm it blocks again.
+
+  **Seventeen capabilities were in the app and absent from the approved design**
+  (`AMB4_DASHBOARD_PARITY.md`), all restored. An eighteenth — the Mileage pay-period
+  caption — was missed BY the inventory and caught by the review, because the line was
+  written about the NUMBER and what went missing was its LABEL. An inventory is a check,
+  not a guarantee.
+
+  **Defects fixed that the conversion made unavoidable:** nearly every shift on the
+  dashboard was drawn BLUE regardless of the scheduler's colour (a session TYPE looked
+  up in a table of JOB TITLES, always missing); pull-to-refresh was attached where a
+  RefreshAction cannot reach and hid a latch that could strand a permanent spinner;
+  three live `NavigationLink(isActive:)` on one screen; a shift detail keyed by session
+  id so a multi-day job reused day 1's state on day 2; an orphaned repeating timer; and
+  `ChatManager.cleanup()` recorded as never having run (AMB.6's).
+
+  **FOUR OPERATOR SMOKES FOUND FOUR THINGS I COULD NOT SEE**, and the pattern is worth
+  keeping: the safe-area inset applied outside a NavigationView did nothing; the same
+  applied to self-nav features I had knowingly left for "their own phase"; a parent drag
+  gesture losing to child Buttons; and the tucked handle colliding with the iPad
+  keyboard's own dismiss key. **I cannot run this surface — the design lab needs a
+  signed-in session against the shared Supabase project — so every untested guess spends
+  the operator's time. When I cannot see it run, instrument or reason it through BEFORE
+  shipping, and never defer a known regression to a later phase.**
+
+  **Review gate: five findings, four fixed, one handed to OFF.1** (home's refresh latch
+  releasing on a disk-cache replay — dormant until that arc switches the cache on, and
+  every available fix was worse than the bug).
+
 - [ ] **AMB.5 Tasks** (18 views, 3,167 lines)
 - [ ] **AMB.6 Chat** (20 views, 4,655 lines) — long scrollbacks, the real test of the
   compact set. Closes batch 1 and mocks batch 2.

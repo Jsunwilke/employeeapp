@@ -39,9 +39,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     case specimens
     case palette
     case equipment
-    case dashboard
-    case dashboardIPad
-    case tabBar
     case tasks
     case chat
 
@@ -52,9 +49,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
         case .equipment: return "Equipment"
-        case .dashboard: return "Home Dashboard"
-        case .dashboardIPad: return "Home Dashboard — iPad"
-        case .tabBar: return "Bottom Tab Bar"
         case .tasks: return "Tasks"
         case .chat: return "Chat"
         }
@@ -67,9 +61,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
         case .equipment: return "AMB.3"
-        case .dashboard: return "AMB.4"
-        case .dashboardIPad: return "AMB.4 · iPad"
-        case .tabBar: return "AMB.4 · nav shell"
         case .tasks: return "AMB.5"
         case .chat: return "AMB.6"
         }
@@ -83,12 +74,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
         case .equipment:
             return "The two tabs are gone: one screen leads with your gear and says what is late, with the whole inventory one row behind it. The kit detail is a packing list. AMB.3 waits on this."
-        case .dashboard:
-            return "The most-opened screen in the app, with the company blue turned right down behind it. Its shift widget also stops disagreeing with the schedule."
-        case .dashboardIPad:
-            return "The iPad's home is a DIFFERENT screen — sports rosters, group jobs and notes, with none of the hours, mileage, shifts or tasks you approved for the phone. This is the half that had no design."
-        case .tabBar:
-            return "Second cut — the first was rejected for changing nothing that mattered. A FLOATING glass capsule ported from KeepUp's, with a pill that slides and takes the colour of whatever you selected. Real Liquid Glass on iOS 26."
         case .tasks:
             return "Grouped by when — overdue, today, this week — so you stop driving a chip bar to find out what is late. All five filters still work."
         case .chat:
@@ -101,23 +86,11 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
         case .equipment: return "shippingbox.fill"
-        case .dashboard: return "house.fill"
-        case .dashboardIPad: return "ipad.landscape"
-        case .tabBar: return "rectangle.bottomthird.inset.filled"
         case .tasks: return "checklist"
         case .chat: return "bubble.left.and.bubble.right.fill"
         }
     }
 
-    /// Whether the mockup's subject is pinned to the bottom of the screen. The
-    /// runner moves its switcher out of the way for these — otherwise the lab's
-    /// own chrome sits on top of the thing being judged.
-    var anchorsBottom: Bool {
-        switch self {
-        case .tabBar: return true
-        default: return false
-        }
-    }
 
     /// Batch-1 surfaces carry their own FEATURE colour (D11), so the gallery is
     /// itself a check on whether four converted screens will read as four
@@ -127,9 +100,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return .purple
         case .palette: return .pink
         case .equipment: return FeatureTheme.color(for: "equipment")
-        case .dashboard: return AmbientStyle.brand
-        case .dashboardIPad: return AmbientStyle.brand
-        case .tabBar: return AmbientStyle.brand
         case .tasks: return FeatureTheme.color(for: "tasks")
         case .chat: return FeatureTheme.color(for: "chat")
         }
@@ -141,9 +111,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
         case .equipment: EquipmentMockup()
-        case .dashboard: DashboardMockup()
-        case .dashboardIPad: DashboardIPadMockup()
-        case .tabBar: TabBarMockup()
         case .tasks: TasksMockup()
         case .chat: ChatMockup()
         }
@@ -247,15 +214,14 @@ private struct DesignLabRunner: View {
         // scrolling mockup and directly ON TOP of one whose whole subject is
         // anchored to the bottom edge. The tab-bar mockup could not be seen at
         // all underneath it. Bottom-anchored mockups move it to the top instead.
-        ZStack(alignment: current.anchorsBottom ? .topTrailing : .bottomTrailing) {
+        ZStack(alignment: .bottomTrailing) {
             current.view
                 .id(current)
 
             if DesignLabMockup.allCases.count > 1 {
                 switcher
                     .padding(.trailing, 14)
-                    .padding(current.anchorsBottom ? .top : .bottom,
-                             current.anchorsBottom ? 10 : 24)
+                    .padding(.bottom, 24)
             }
         }
         .navigationTitle(current.title)

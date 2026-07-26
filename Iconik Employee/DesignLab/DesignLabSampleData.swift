@@ -194,198 +194,20 @@ enum DesignLabSampleData {
     ]
 }
 
-// MARK: - Home dashboard (AMB.4)
 
-/// A shift as the dashboard's Upcoming Shifts widget needs it. Deliberately not
-/// a real `Session` — the lab stays clear of the schedule's service layer.
-struct LabShift: Identifiable {
-    let id: String
-    let school: String
-    let start: Date
-    let end: Date
-    /// Type name and its colour, exactly as the converted schedule draws them.
-    let types: [(name: String, hex: String)]
-    let crew: [String]
-    /// "Day 2 of 3" for a multi-day job.
-    let dayLabel: String?
-    /// The colour the SCHEDULER picked. This is the whole point of the widget
-    /// mockup: today the dashboard ignores it and paints almost every shift
-    /// blue, because it looks the colour up by a field that holds a session
-    /// TYPE and almost never matches.
-    let sessionHex: String
-
-    var accent: Color { Color(hex: sessionHex) }
-}
+// MARK: - Shared time helper
 
 extension DesignLabSampleData {
-
-    private static func at(_ hour: Int, _ minute: Int, dayOffset: Int = 0) -> Date {
+    /// A time today (or a day either side of it), so every mockup's sample data sits
+    /// around the moment the operator is actually looking at it.
+    ///
+    /// Lived in AMB.4's dashboard block until that phase's mockups were deleted at
+    /// its close; kept here because Tasks and Chat still date their samples from it.
+    static func at(_ hour: Int, _ minute: Int, dayOffset: Int = 0) -> Date {
         let calendar = Calendar.current
         let base = calendar.date(byAdding: .day, value: dayOffset,
                                  to: calendar.startOfDay(for: Date())) ?? Date()
         return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base) ?? base
-    }
-
-    /// Three upcoming shifts covering the shapes that decide the layout: a
-    /// two-discipline job with a full crew, a solo job, and one day of a
-    /// multi-day booking.
-    static var upcomingShifts: [LabShift] {
-        [
-            .init(id: "s1", school: "Lincoln High School",
-                  start: at(7, 45), end: at(14, 30),
-                  types: [("Fall Portraits", "#2563eb"), ("Class Groups", "#16a34a")],
-                  crew: ["Maria Alvarez", "Devon Wright", "Priya Nair", "Sam Okafor"],
-                  dayLabel: nil, sessionHex: "#2563eb"),
-            .init(id: "s2", school: "Maple Grove Elementary",
-                  start: at(15, 30), end: at(17, 0),
-                  types: [("Class Groups", "#16a34a")],
-                  crew: ["June Castillo"],
-                  dayLabel: nil, sessionHex: "#16a34a"),
-            .init(id: "s3", school: "Northgate Preparatory",
-                  start: at(7, 45, dayOffset: 1), end: at(15, 0, dayOffset: 1),
-                  types: [("Fall Portraits", "#ea580c")],
-                  crew: ["Maria Alvarez", "Devon Wright"],
-                  dayLabel: "Day 2 of 3", sessionHex: "#ea580c"),
-        ]
-    }
-
-    /// Numbers for the Hours and Mileage widgets, in the shapes those widgets
-    /// actually render (hours against a 40h week and an 80h period, mileage
-    /// split personal vs company per the CAR arc).
-    enum Dashboard {
-        static let weekHours: Double = 31.5
-        static let weekTarget: Double = 40
-        static let periodHours: Double = 62.25
-        static let periodTarget: Double = 80
-        static let isClockedIn = true
-        static let activeHours: Double = 2.4
-
-        static let periodMiles = 182
-        static let periodPay = "$49.04"
-        static let personalMiles = 87
-        static let companyMiles = 94
-        static let monthMiles = 182
-        static let yearMiles = 7727
-        static let yearPay = "$3,444.38"
-    }
-
-    /// The dashboard's task strip — the most urgent assigned to you.
-    ///
-    /// Derived from `tasks` rather than typed out again: AMB.5's Tasks mockup
-    /// needs the same rows, and a photographer seeing the same three items on
-    /// home and in Tasks is what really happens. The first three entries of
-    /// `tasks` are the ones the approved dashboard mockup shipped with, so this
-    /// renders exactly what the operator already said yes to.
-    static var urgentTasks: [LabTask] { Array(tasks.prefix(3)) }
-}
-
-// MARK: - iPad home dashboard (AMB.4)
-
-/// One of today's sports shoots, as the iPad's Sports Rosters widget needs it.
-///
-/// `linkedToProduction` is the load-bearing field, not decoration: a shoot with
-/// a gallery id opens the Focal Point Sports view and one without opens the
-/// Captura view, so the same-looking row leads to two different tools. The
-/// widget has to say which before it is tapped.
-struct LabSportsShoot: Identifiable {
-    let id: String
-    let school: String
-    let sport: String
-    let time: Date
-    let linkedToProduction: Bool
-}
-
-/// One of today's group jobs. `count` is deliberately allowed to be zero,
-/// because the real widget turns that case orange and says so — a job with no
-/// groups added yet is the one you most need to be told about.
-struct LabGroupJob: Identifiable {
-    let id: String
-    let school: String
-    let time: Date
-    let count: Int
-    /// The job-type-specific noun the real widget uses, singular and plural
-    /// (ClassGroupJobType.countNoun / countNounPlural).
-    let noun: (singular: String, plural: String)
-    let badge: String
-    let images: Int
-}
-
-/// A photoshoot note. The only widget in the app that EDITS data in place, so
-/// its mockup carries the fields the editor binds to rather than a summary.
-struct LabPhotoshootNote: Identifiable {
-    enum Sync { case submitted, synced, pending
-        var color: Color {
-            switch self {
-            case .submitted: return .green
-            case .synced: return .blue
-            case .pending: return .orange
-            }
-        }
-        var label: String {
-            switch self {
-            case .submitted: return "Submitted"
-            case .synced: return "Synced"
-            case .pending: return "Not synced"
-            }
-        }
-    }
-
-    let id: String
-    let time: Date
-    let school: String
-    var text: String
-    let photos: Int
-    let sync: Sync
-}
-
-extension DesignLabSampleData {
-
-    /// Today's sports shoots. Seeded with the cases that decide the row: both
-    /// routes (linked and not), a sport whose keyword glyph resolves and one
-    /// that falls through to the generic court, and a school name long enough
-    /// to have to truncate.
-    static var sportsShoots: [LabSportsShoot] {
-        [
-            .init(id: "sh1", school: "Lincoln High School", sport: "Varsity Basketball",
-                  time: at(9, 0), linkedToProduction: true),
-            .init(id: "sh2", school: "Northgate Preparatory Academy", sport: "Girls Volleyball",
-                  time: at(13, 30), linkedToProduction: false),
-            .init(id: "sh3", school: "Maple Grove Elementary", sport: "Fencing Club",
-                  time: at(15, 45), linkedToProduction: false),
-            .init(id: "sh4", school: "Riverside Middle School", sport: "Track and Field",
-                  time: at(17, 0), linkedToProduction: true),
-        ]
-    }
-
-    /// Today's group jobs, including the zero-count case the real widget warns
-    /// about and a job type whose noun is not "group".
-    static var groupJobs: [LabGroupJob] {
-        [
-            .init(id: "gj1", school: "Lincoln High School", time: at(8, 30),
-                  count: 14, noun: ("class", "classes"), badge: "Class Groups", images: 212),
-            .init(id: "gj2", school: "Maple Grove Elementary", time: at(11, 0),
-                  count: 0, noun: ("club", "clubs"), badge: "Clubs", images: 0),
-            .init(id: "gj3", school: "Northgate Preparatory Academy", time: at(14, 15),
-                  count: 1, noun: ("candid", "candids"), badge: "Candids", images: 38),
-        ]
-    }
-
-    /// Notes covering every sync state, an empty note, and one long enough to
-    /// need truncating in the strip while still being fully editable below.
-    static var photoshootNotes: [LabPhotoshootNote] {
-        [
-            .init(id: "n1", time: at(9, 12), school: "Lincoln High School",
-                  text: "Gym lights are on a 20-minute timer — ask the front office to override before setting up. Backdrop goes on the north wall, the south one has a window.",
-                  photos: 3, sync: .pending),
-            .init(id: "n2", time: at(8, 5), school: "Maple Grove Elementary",
-                  text: "Retakes for 4th grade only. List is with Mrs Alvarez.",
-                  photos: 0, sync: .synced),
-            .init(id: "n3", time: at(7, 40), school: "Northgate Preparatory Academy",
-                  text: "", photos: 1, sync: .submitted),
-            .init(id: "n4", time: at(16, 30, dayOffset: -1), school: "Riverside Middle School",
-                  text: "Cafeteria was already set up when we arrived. Same again next year.",
-                  photos: 5, sync: .submitted),
-        ]
     }
 }
 

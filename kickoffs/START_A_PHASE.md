@@ -11,7 +11,7 @@ phase-naming registry as the rest of the family.
 
 # 🚀 START HERE  (you, the operator)
 
-      WHAT TO BUILD:  AMB.4
+      WHAT TO BUILD:  AMB.5
 
   An arc id (e.g. NAV.1) or just describe the item in plain words. That is the only
   line you fill in — the agent works out the exact phase and scope.
@@ -67,14 +67,22 @@ phase-naming registry as the rest of the family.
                  RULE: one .ambientPush per view; two push targets means an enum
                  destination (two stacked NavigationLink(isActive:) is the AMB.1
                  dead-tap shape).
-      ⬜ AMB.4   Home dashboard       ← NEXT. its shift widget disagrees with the live schedule
-                 Mockup ALREADY APPROVED and in the lab (90% company-blue wash), so
-                 there is no new D10 gate to clear. Touches MainEmployeeView, which is
-                 the NAV SHELL — higher stakes than Equipment; run the review gate.
-                 Its two drift-allowlist entries to delete: DashboardWidgets.swift (8
-                 cards, the highest-drift file in the app) and MainEmployeeView (2).
-                 OVERLAPS DEC.1 on DashboardWidgets.swift — decide the order first.
-      ⬜ AMB.5   Tasks                (18 views)
+      ✅ AMB.4   Home dashboard + THE BOTTOM TAB BAR
+                 DONE + smoked iPhone AND iPad 2026-07-26. Both allowlist rows deleted.
+                 THE BAR WAS NOT IN THE PLAN: it belonged to no phase, because this list
+                 is organised by FEATURE and the bar is SHELL — and the drift gate could
+                 not catch it either, since a full-width bar is not a card. Two ways of
+                 finding unconverted surfaces, both blind to it; the operator asking is
+                 what found it (D13 folded it in).
+                 ⚠️ BEFORE STARTING AMB.5: enumerate the rest of the SHELL the same way
+                 — the profile toolbar, the theme picker, the toast, anything else that
+                 appears on screens no phase owns. Do it deliberately rather than
+                 waiting to be asked a second time.
+                 LESSON: I cannot run the app (the lab needs a signed-in Supabase
+                 session), and four operator smokes each found something a green build
+                 could not. Instrument or reason it through BEFORE shipping, and never
+                 leave a KNOWN regression for "its own phase".
+      ⬜ AMB.5   Tasks                (18 views)  ← NEXT
       ⬜ AMB.6   Chat                 (20 views)  hardest test of the compact set
                                                  + mocks batch 2
         ── batch 2 ──
