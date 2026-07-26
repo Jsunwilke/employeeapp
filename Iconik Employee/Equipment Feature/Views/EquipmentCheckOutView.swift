@@ -22,30 +22,41 @@ struct EquipmentCheckOutView: View {
     @State private var isSubmitting = false
     @State private var errorMessage: String?
 
+    private var feature: Color { FeatureTheme.color(for: "equipment") }
+
     var body: some View {
+        ZStack {
+            AmbientBackdrop(tint: feature)
+            formBody.scrollContentBackground(.hidden)
+        }
+        .navigationTitle("Check Out")
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(feature)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    dismiss()
+                }
+            }
+
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Confirm") {
+                    Task {
+                        await checkOut()
+                    }
+                }
+                .disabled(isSubmitting)
+            }
+        }
+        .interactiveDismissDisabled(isSubmitting)
+    }
+
+    private var formBody: some View {
         Form {
             // Equipment info section
             Section("Equipment") {
                 HStack(spacing: 12) {
-                    if let photoPath = equipment.photo_url, !photoPath.isEmpty {
-                        SupabaseImageView(
-                            storageURL: photoPath,
-                            bucket: "equipment-photos",
-                            width: 60,
-                            height: 60,
-                            contentMode: .fill,
-                            cornerRadius: 8
-                        )
-                    } else {
-                        Rectangle()
-                            .fill(Color(.systemGray5))
-                            .frame(width: 60, height: 60)
-                            .cornerRadius(8)
-                            .overlay(
-                                Image(systemName: "camera")
-                                    .foregroundColor(.gray)
-                            )
-                    }
+                    EquipmentFormThumbnail(photoPath: equipment.photo_url)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(equipment.name)
@@ -57,7 +68,8 @@ struct EquipmentCheckOutView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        EquipmentConditionBadge(condition: equipment.conditionEnum)
+                        AmbientBadge(text: equipment.conditionEnum.label,
+                                     tint: equipment.conditionEnum.color)
                     }
                 }
             }
@@ -106,25 +118,6 @@ struct EquipmentCheckOutView: View {
                 }
             }
         }
-        .navigationTitle("Check Out")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
-                    dismiss()
-                }
-            }
-
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Confirm") {
-                    Task {
-                        await checkOut()
-                    }
-                }
-                .disabled(isSubmitting)
-            }
-        }
-        .interactiveDismissDisabled(isSubmitting)
     }
 
     // MARK: - Computed Properties

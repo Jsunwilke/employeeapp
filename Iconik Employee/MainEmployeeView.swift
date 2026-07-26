@@ -988,7 +988,7 @@ struct MainEmployeeView: View {
         case "tasks":
             TasksMainView()
         case "equipment":
-            EquipmentTabView()
+            EquipmentView()
         case "routePlanner":
             RoutePlannerView()
         default:

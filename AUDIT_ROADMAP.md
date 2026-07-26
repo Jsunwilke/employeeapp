@@ -409,16 +409,60 @@ other rebases onto it.
   **Operator approved the batch-1 designs 2026-07-25** ("those all look good,
   lets go with it").
 
-  **Still open, and only the operator can settle it:** whether that approval was
-  given ON A DEVICE. D10 turns on the device specifically because approving an
-  approximation manufactures confidence that was never earned, and D7 wants
-  iPhone AND iPad. Until that is confirmed, AMB.3 does not start and the D8 push
-  does not fire.
+  **Device approval CONFIRMED by the operator 2026-07-25** — the batch-1 mockups
+  were reviewed running on iPhone AND iPad. That satisfies D10 and D7, so the
+  AMB.2 gate is closed and AMB.3 was cleared to start.
 
 **Batch 1** — mocked in AMB.2, reviewed in one sitting, then converted:
 
-- [ ] **AMB.3 Equipment** (34 views, 5,583 lines) — first dense list; proves the compact
-  variants in use and folds any corrections back into the design system.
+- [x] **AMB.3 Equipment** — BUILT 2026-07-25. One screen replaces the two-tab
+  container: your gear leads, with a standing line saying how much you have out,
+  how much is due back and how much is LATE (which the app could only tell you by
+  reading every kit card), and the whole inventory one row down or one keystroke
+  away. Kit detail is a packing list that opens EXPANDED, in the app's own
+  photography workflow order. The item detail leads with status, holder and due
+  date rather than a 250pt photo.
+
+  **Delete-first, same commit:** EquipmentTabView, MyKitsView, AllEquipmentView,
+  KitDetailView, KitCard.swift and EquipmentCard.swift are gone, along with the
+  seven badge components their deletion orphaned. Verified by grep: no live
+  reference to any deleted symbol remains. Both AMB.3 entries deleted from the
+  card-drift allowlist; sweep clean.
+
+  **Three bugs fixed that the redesign made unavoidable rather than optional:**
+  tapping an item under "Other Equipment" ran an EMPTY COMMENT and did nothing;
+  the empty state's "Browse Equipment" button posted a `SwitchToAllEquipment`
+  notification that NOTHING in the app observed, so it was equally dead; and a
+  malformed user id fell back to a fresh random UUID, which queried for a user
+  that cannot exist and reported "no equipment" instead of a problem.
+
+  **Three feature losses caught in my own work by walking the parity inventory
+  against the SOURCE rather than against the approved mockup** — the per-item
+  menu on a kit item, the serial number on a packing list, and the year in
+  assignment history. All three were absent from the mockup the operator
+  approved, and all three would have shipped green. Recorded in
+  AMB_BATCH1_PARITY.md, which is the reason they were found at all.
+
+  **Two places the mockup promised more than the data carries** — naming who
+  holds an inventory item, and naming people in assignment history — are named
+  rather than faked. Both need a new query, and a restyle phase does not change
+  the data layer.
+
+  **Known behaviour difference, deliberate:** flipping the old segmented control
+  recreated the My Kits view and so refetched. One screen has no tab to flip, so
+  the counts no longer refresh as a side effect of navigating. Pull to refresh is
+  preserved on every list and is the sanctioned path; adding a reload-on-return
+  would be new behaviour, which D2 puts outside a style phase.
+
+  **Evidence:** BUILD SUCCEEDED, zero warnings from any Equipment or DesignSystem
+  file; card-drift sweep clean; app installs, launches and stays up on the
+  simulator; old-path grep clean.
+
+  **NOT yet done, and it is the operator's to trigger:** the independent review
+  gate. `/code-review` is user-triggered in this environment — I cannot launch
+  it — so this phase has had a builder self-audit (which found four defects in my
+  own work, all fixed) but NOT an adversarial one. Per the CRS.1 lesson it must
+  run BEFORE the D8 push, not after. Both device smokes are also outstanding.
 - [ ] **AMB.4 Home dashboard** (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines) —
   highest traffic, and its Upcoming Shifts widget currently disagrees with the
   already-converted schedule.

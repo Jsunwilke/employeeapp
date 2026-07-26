@@ -26,30 +26,46 @@ struct DamageReportView: View {
     @State private var submitProgress: String = ""
     @State private var errorMessage: String?
 
+    private var feature: Color { FeatureTheme.color(for: "equipment") }
+
     var body: some View {
+        ZStack {
+            AmbientBackdrop(tint: feature)
+            formBody.scrollContentBackground(.hidden)
+        }
+        .navigationTitle("Report Damage")
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(feature)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    dismiss()
+                }
+            }
+
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Submit") {
+                    Task {
+                        await submitReport()
+                    }
+                }
+                .disabled(description.isEmpty || isSubmitting)
+            }
+        }
+        .interactiveDismissDisabled(isSubmitting)
+        .overlay {
+            if isSubmitting {
+                submittingOverlay
+            }
+        }
+    }
+
+    private var formBody: some View {
         Form {
             // Equipment info section
             Section("Equipment") {
                 HStack(spacing: 12) {
-                    if let photoPath = equipment.photo_url, !photoPath.isEmpty {
-                        SupabaseImageView(
-                            storageURL: photoPath,
-                            bucket: "equipment-photos",
-                            width: 60,
-                            height: 60,
-                            contentMode: .fill,
-                            cornerRadius: 8
-                        )
-                    } else {
-                        Rectangle()
-                            .fill(Color(.systemGray5))
-                            .frame(width: 60, height: 60)
-                            .cornerRadius(8)
-                            .overlay(
-                                Image(systemName: "camera")
-                                    .foregroundColor(.gray)
-                            )
-                    }
+                    EquipmentFormThumbnail(photoPath: equipment.photo_url)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(equipment.name)
@@ -61,7 +77,9 @@ struct DamageReportView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        EquipmentStatusBadge(status: equipment.statusEnum)
+                        AmbientBadge(text: equipment.statusEnum.label,
+                                     systemImage: equipment.statusEnum.systemImage,
+                                     tint: equipment.statusEnum.color)
                     }
                 }
             }
@@ -173,48 +191,26 @@ struct DamageReportView: View {
                 }
             }
         }
-        .navigationTitle("Report Damage")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
-                    dismiss()
-                }
-            }
+    }
 
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Submit") {
-                    Task {
-                        await submitReport()
-                    }
-                }
-                .disabled(description.isEmpty || isSubmitting)
-            }
-        }
-        .interactiveDismissDisabled(isSubmitting)
-        .overlay {
-            if isSubmitting {
-                ZStack {
-                    Color.black.opacity(0.3)
-                        .ignoresSafeArea()
+    /// The per-photo progress overlay, kept: uploading five photos on a bad
+    /// connection is the one place in this feature where the user needs to be told
+    /// what is happening.
+    private var submittingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
 
-                    VStack(spacing: 16) {
-                        ProgressView()
-                            .scaleEffect(1.5)
-                            .tint(.white)
+            VStack(spacing: 16) {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .tint(.white)
 
-                        Text(submitProgress)
-                            .font(.subheadline)
-                            .foregroundColor(.white)
-                    }
-                    .padding(24)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(16)
-                }
+                Text(submitProgress)
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
             }
-        }
-        .onAppear {
-            print("🔧 DamageReportView: onAppear - equipment.name = \(equipment.name)")
+            .ambientCard(density: .hero, state: .highlighted)
         }
     }
 

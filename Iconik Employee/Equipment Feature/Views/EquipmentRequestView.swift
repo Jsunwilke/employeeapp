@@ -21,30 +21,41 @@ struct EquipmentRequestView: View {
     @State private var isSubmitting = false
     @State private var errorMessage: String?
 
+    private var feature: Color { FeatureTheme.color(for: "equipment") }
+
     var body: some View {
+        ZStack {
+            AmbientBackdrop(tint: feature)
+            formBody.scrollContentBackground(.hidden)
+        }
+        .navigationTitle("Request Equipment")
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(feature)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    dismiss()
+                }
+            }
+
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Submit") {
+                    Task {
+                        await submitRequest()
+                    }
+                }
+                .disabled(reason.isEmpty || isSubmitting)
+            }
+        }
+        .interactiveDismissDisabled(isSubmitting)
+    }
+
+    private var formBody: some View {
         Form {
             // Equipment info section
             Section("Equipment") {
                 HStack(spacing: 12) {
-                    if let photoPath = equipment.photo_url, !photoPath.isEmpty {
-                        SupabaseImageView(
-                            storageURL: photoPath,
-                            bucket: "equipment-photos",
-                            width: 60,
-                            height: 60,
-                            contentMode: .fill,
-                            cornerRadius: 8
-                        )
-                    } else {
-                        Rectangle()
-                            .fill(Color(.systemGray5))
-                            .frame(width: 60, height: 60)
-                            .cornerRadius(8)
-                            .overlay(
-                                Image(systemName: "camera")
-                                    .foregroundColor(.gray)
-                            )
-                    }
+                    EquipmentFormThumbnail(photoPath: equipment.photo_url)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(equipment.name)
@@ -56,7 +67,9 @@ struct EquipmentRequestView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        EquipmentStatusBadge(status: equipment.statusEnum)
+                        AmbientBadge(text: equipment.statusEnum.label,
+                                     systemImage: equipment.statusEnum.systemImage,
+                                     tint: equipment.statusEnum.color)
                     }
                 }
             }
@@ -66,8 +79,7 @@ struct EquipmentRequestView: View {
                let user = assignment.assignedToUser {
                 Section("Currently Assigned") {
                     HStack {
-                        Image(systemName: "person.circle.fill")
-                            .foregroundColor(.blue)
+                        AmbientAvatar(name: user.displayName, size: 28)
                         Text(user.displayName)
 
                         Spacer()
@@ -112,7 +124,7 @@ struct EquipmentRequestView: View {
             Section {
                 HStack(spacing: 12) {
                     Image(systemName: "info.circle")
-                        .foregroundColor(.blue)
+                        .foregroundStyle(feature)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Request Process")
@@ -134,33 +146,12 @@ struct EquipmentRequestView: View {
                 }
             }
         }
-        .navigationTitle("Request Equipment")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
-                    dismiss()
-                }
-            }
-
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Submit") {
-                    Task {
-                        await submitRequest()
-                    }
-                }
-                .disabled(reason.isEmpty || isSubmitting)
-            }
-        }
-        .interactiveDismissDisabled(isSubmitting)
     }
 
     // MARK: - Methods
 
     private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        return formatter.string(from: date)
+        Formatters.mediumDate.string(from: date)
     }
 
     private func submitRequest() async {

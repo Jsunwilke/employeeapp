@@ -20,14 +20,49 @@ struct EquipmentCheckInView: View {
     @State private var isSubmitting = false
     @State private var errorMessage: String?
 
+    private var feature: Color { FeatureTheme.color(for: "equipment") }
+
     var body: some View {
+        ZStack {
+            AmbientBackdrop(tint: feature)
+            formBody.scrollContentBackground(.hidden)
+        }
+        .navigationTitle("Check In")
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(feature)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    dismiss()
+                }
+            }
+
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Check In") {
+                    Task {
+                        await checkIn()
+                    }
+                }
+                .disabled(isSubmitting)
+            }
+        }
+        .interactiveDismissDisabled(isSubmitting)
+        .onAppear {
+            // Initialize return conditions with current conditions
+            for item in items {
+                returnConditions[item.id] = item.conditionEnum
+            }
+        }
+    }
+
+    private var formBody: some View {
         Form {
             // Header section
             if let kitName = kitName {
                 Section {
                     HStack {
                         Image(systemName: "shippingbox.fill")
-                            .foregroundColor(.blue)
+                            .foregroundStyle(feature)
                         Text("Returning Kit: \(kitName)")
                             .font(.headline)
                     }
@@ -40,26 +75,7 @@ struct EquipmentCheckInView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         // Item info
                         HStack(spacing: 12) {
-                            if let photoPath = item.photo_url, !photoPath.isEmpty {
-                                SupabaseImageView(
-                                    storageURL: photoPath,
-                                    bucket: "equipment-photos",
-                                    width: 50,
-                                    height: 50,
-                                    contentMode: .fill,
-                                    cornerRadius: 6
-                                )
-                            } else {
-                                Rectangle()
-                                    .fill(Color(.systemGray5))
-                                    .frame(width: 50, height: 50)
-                                    .cornerRadius(6)
-                                    .overlay(
-                                        Image(systemName: "camera")
-                                            .font(.caption)
-                                            .foregroundColor(.gray)
-                                    )
-                            }
+                            EquipmentFormThumbnail(photoPath: item.photo_url, side: 50)
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.name)
@@ -108,31 +124,6 @@ struct EquipmentCheckInView: View {
                     Text(error)
                         .foregroundColor(.red)
                 }
-            }
-        }
-        .navigationTitle("Check In")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
-                    dismiss()
-                }
-            }
-
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Check In") {
-                    Task {
-                        await checkIn()
-                    }
-                }
-                .disabled(isSubmitting)
-            }
-        }
-        .interactiveDismissDisabled(isSubmitting)
-        .onAppear {
-            // Initialize return conditions with current conditions
-            for item in items {
-                returnConditions[item.id] = item.conditionEnum
             }
         }
     }

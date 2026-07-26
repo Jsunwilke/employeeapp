@@ -33,7 +33,43 @@ That is somebody thinking about how a case is actually packed. An alphabetical
 sort would look identical in a screenshot and be worse every single day.
 
 
-## EQUIPMENT
+## EQUIPMENT — CONVERTED IN AMB.3, 2026-07-25
+
+Every line below was walked against the built screens. All KEPT lines are present,
+the MOVED lines moved where they said, both ADDED lines are in, and the one OPEN
+line (the dead "Other Equipment" tap) is fixed and shipped.
+
+THREE PLACES WHERE THE APPROVED MOCKUP AND THE SOURCE DISAGREED, and the source won.
+Worth recording because all three would have shipped as feature loss with a green
+build, a clean drift sweep and an approved design behind them:
+
+  1. THE PER-ITEM MENU IN A KIT. Line 81 below — View Details / Report Damage on a
+     checked-out kit item. The mockup drew the plain compact row, which ends in a
+     status badge, so the menu was simply gone. It is the only route to reporting
+     damage on a kit item without first opening the item. RESTORED.
+
+  2. THE SERIAL NUMBER IN A KIT. Line 80 below. The mockup's row hides the serial at
+     compact density to save height, and the mockup's kit detail used compact — so a
+     packing list, which is exactly where you check a serial against the case in
+     front of you, lost it. RESTORED via an explicit `showsSerial` on the row.
+
+  3. THE YEAR IN ASSIGNMENT HISTORY. The mockup showed "Jun 14 – Jun 28" on sample
+     data that all sat inside one month. Assignment history is the one screen asked
+     "when did I last have this" across years. RESTORED to a full medium date.
+
+TWO PLACES WHERE THE MOCKUP PROMISED MORE THAN THE DATA CARRIES, named rather than
+faked, because closing either needs a new query and AMB.3 does not touch the data
+layer:
+
+  - The inventory row cannot name who holds an item. `equipmentService.equipment` is
+    equipment rows with no assignment join, which is why `EquipmentCard` said the
+    literal "Currently checked out". The converted row says the same. Your OWN gear
+    does have its assignment in hand, so those rows say "You" and when it is due,
+    exactly as the mockup drew.
+  - The item detail's assignment history cannot name people either —
+    `getEquipmentHistory` has no FK to join users, so `assignedToUser` is nil in
+    practice and the app rendered nothing at all there. The converted row says "You"
+    when the holder is you and "Checked out" otherwise.
 
 ### Container — EquipmentTabView
 

@@ -107,8 +107,6 @@ Iconik Employee/Chat/Views/MessageInputAccessoryView.swift|AMB.6|1
 Iconik Employee/Components/AddressAutocompleteField.swift|AMB.12|2
 Iconik Employee/Components/LoadingOverlay.swift|AMB.12|1
 Iconik Employee/DashboardWidgets.swift|AMB.4|8
-Iconik Employee/Equipment Feature/Views/Components/EquipmentCard.swift|AMB.3|1
-Iconik Employee/Equipment Feature/Views/Components/KitCard.swift|AMB.3|2
 Iconik Employee/MainEmployeeView.swift|AMB.4|2
 Iconik Employee/Misc Features/CustomDailyReportsView.swift|AMB.7|2
 Iconik Employee/Misc Features/DailyJobReportView.swift|AMB.7|2
