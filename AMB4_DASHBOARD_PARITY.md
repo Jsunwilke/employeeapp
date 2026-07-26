@@ -724,6 +724,61 @@ TWO THINGS WORTH KEEPING FROM IT, because they cost real time to learn:
            capability is lost by its absence.
 
 
+## The code-review gate — five findings, four fixed, one recorded
+
+Run by the operator 2026-07-26, before any push, over the whole 21-commit range.
+
+FIXED:
+
+  1. THE iPAD GLASS WAS THE WRONG WIDTH. The glass and shadow were applied after the
+     centring frame, so the frosted panel spanned the full iPad screen while the
+     buttons stayed inside the 560pt cap. A porting slip — the mockup already had the
+     order right.
+  2. THE HOURS BAR CONTRADICTED ITS OWN CAPTION. The week's split used banked hours
+     while its caption used the total, so a running clock-in that pushed past 40 gave
+     "+3h OT" beside a bar with no orange. I HAD SPOTTED THIS AND WRITTEN IT DOWN AS A
+     DELIBERATE TRADE-OFF, which was the wrong call: a payroll bar disagreeing with
+     its own label is worse than either version alone. Recording a defect is not the
+     same as resolving it.
+  3. EQUIPMENT RESERVED 168pt INSTEAD OF 84. Self-nav features were getting the
+     clearance twice — once from the shell, once from themselves. Ignored by a legacy
+     NavigationView but honoured by EquipmentView's real NavigationStack.
+  4. FP SPORTS ON iPAD HAD ITS BOTTOM STRIP UNDER THE CAPSULE. It stopped hiding the
+     bar and never got its own clearance. I had left this "for the device smoke",
+     which was deferring a known break rather than a genuine unknown.
+
+RECORDED, NOT PATCHED — the refresh latch can release on stale rows:
+
+  `refreshUpcomingEvents` holds the pull control until the session listener calls
+  back, but `startListeningToSessionsAsync` calls back TWICE: once replaying the disk
+  cache, then again with the network result. The latch clears on the first, so the
+  control could release over stale rows.
+
+  IT CANNOT HAPPEN TODAY. `ScheduleCacheManager.loadMetadata()` decodes ISO-8601
+  dates with a bare JSONDecoder and always fails, so the cache replay never fires —
+  the same dormancy PUB.1 documented and the OFF arc exists to fix.
+
+  NOT PATCHED, deliberately, and this is a judgement the operator should see rather
+  than a shortcut. The available fixes are each worse than the bug: the view model
+  cannot tell the two callbacks apart, so it would have to either count them (fragile
+  against a future third call) or run its own fetch and duplicate the three-day
+  window, the already-ended-today rule and the crew filter that the listener owns —
+  duplicated business rules on payroll-adjacent data to fix a cosmetic early release
+  of a spinner. `isUsingOfflineData` looks like the signal and is not: it is set from
+  connectivity, so online it is false even for the cache replay.
+
+  THE HONEST OWNER IS OFF.1, whose decision O5 is already about exactly this — a
+  failed cache read must not look like an empty one. Whoever switches that cache on
+  makes this live in the same commit, and should fix it there where it can be tested
+  against a cache that actually decodes. Flagged in AUDIT_ROADMAP against OFF.1.
+
+CLEARED BY THE REVIEW, worth recording because they were the phase's riskiest parts:
+the `ambientPush` collapse of three live `NavigationLink(isActive:)` (no dead-tap
+shape left), the refresh reentrancy guard and its bounded poll, every division in
+HoursMeter, the day-boundary overdue rework and its tests, and the Codable change to
+`TabBarConfiguration` (an older saved config still decodes).
+
+
 ## Step 3b — the converted screen against the approved mockup
 
 The arc's workflow requires this pass by name, because it is where two defects
