@@ -82,12 +82,18 @@ struct EnhancedGifMessageView: View {
             } else {
                 // Animated GIF display
                 AnimatedGifView(url: url)
-                    .frame(maxWidth: 250)
-                    .frame(height: 250) // Square aspect ratio for most GIFs
+                    // AMB.6: was 250x250, forced square with the comment "Square
+                    // aspect ratio for most GIFs" — which stretched every
+                    // landscape GIF, and GIFs are mostly landscape. The approved
+                    // mockup draws 200x140 and these are its numbers verbatim.
+                    // A definite height is still required: AnimatedGifView wraps
+                    // a WKWebView, which has no intrinsic content size and would
+                    // collapse to zero without one.
+                    .frame(width: 200, height: 140)
                     .cornerRadius(16)
                     .overlay(
                         RoundedRectangle(cornerRadius: 16)
-                            .stroke(isOwnMessage ? Color.blue : Color(.systemGray5), lineWidth: 1)
+                            .stroke(isOwnMessage ? AmbientStyle.brand : Color(.systemGray5), lineWidth: 1)
                     )
                     .onAppear {
                         // Validate URL
@@ -131,11 +137,14 @@ struct ChatImageView: View {
                 image
                     .resizable()
                     .scaledToFit()
+                    // Already proportioned rather than forced square, so only
+                    // the stroke changes: the own-message edge follows the new
+                    // bubble tint instead of a hardcoded system blue.
                     .frame(maxWidth: 250)
                     .cornerRadius(16)
                     .overlay(
                         RoundedRectangle(cornerRadius: 16)
-                            .stroke(isOwnMessage ? Color.blue : Color(.systemGray5), lineWidth: 1)
+                            .stroke(isOwnMessage ? AmbientStyle.brand : Color(.systemGray5), lineWidth: 1)
                     )
                     .onTapGesture {
                         showFullScreen = true

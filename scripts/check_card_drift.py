@@ -111,7 +111,6 @@ ALLOWLIST = {}  # populated below by _load_allowlist()
 
 _ALLOWLIST_SOURCE = """
 Iconik Employee/AllFeaturesView.swift|AMB.12|1
-Iconik Employee/Chat/Views/MessageInputAccessoryView.swift|AMB.6|1
 Iconik Employee/Components/AddressAutocompleteField.swift|AMB.12|2
 Iconik Employee/Components/LoadingOverlay.swift|AMB.12|1
 Iconik Employee/Misc Features/CustomDailyReportsView.swift|AMB.7|2

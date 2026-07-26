@@ -1,5 +1,15 @@
 -- STATUS: NOT YET APPLIED. Written 2026-07-26 during AMB.6.
 --
+-- TO APPLY: paste into the Supabase SQL editor for project nofegnmrgnanpznavlqy,
+-- the same way fix_chat_rpcs.sql was applied on 2026-07-13. Idempotent
+-- (CREATE OR REPLACE). Afterwards, update this line to record the date, and
+-- verify with:
+--   select proname from pg_proc where proname = 'increment_conversation_unread';
+--
+-- Until it is applied the iOS client calls it and fails soft: the message is
+-- already stored by then, so a send still succeeds and only the badge is
+-- unaffected — which is exactly today's behaviour, so nothing regresses.
+--
 -- Adds the ONE chat RPC that fix_chat_rpcs.sql deliberately did not: raising
 -- everyone else's unread count when a message is sent.
 --

@@ -1,3 +1,19 @@
+//  ConversationListView.swift
+//  Iconik Employee — Chat, converted to the Ambient design language in AMB.6.
+//
+//  Ported from the mockup the operator approved on device (iPhone + iPad,
+//  2026-07-25) as part of batch 1. The capability inventory it is checked
+//  against is AMB6_CHAT_PARITY.md, read out of the previous version of this
+//  file rather than from the mockup — three phases running, that walk has found
+//  features an approved design had silently dropped.
+//
+//  THIS IS A `List`, AND THAT IS LOAD-BEARING RATHER THAN A STYLE CHOICE.
+//  `.swipeActions` is a List-only modifier: on a row inside a LazyVStack it
+//  compiles, renders, and silently does nothing. Pin and delete are real
+//  capabilities here, so the cost of keeping them is stripping List's own
+//  chrome — hidden scroll background, clear row backgrounds, no separators,
+//  insets set by hand — so the ambient wash shows through.
+
 import SwiftUI
 
 struct ConversationListView: View {
@@ -6,183 +22,177 @@ struct ConversationListView: View {
     @State private var showGroupNaming = false
     @State private var selectedUsersForGroup: [ChatUser] = []
     @State private var searchText = ""
-    @State private var selectedConversation: Conversation?
-    @State private var showErrorAlert = false
+    @State private var pushedConversation: Conversation?
 
-    // Current user ID
+    /// Chat's own colour under D11, and the wash behind this screen.
+    private var feature: Color { FeatureTheme.color(for: "chat") }
+
     private var currentUserId: String {
         UserManager.shared.getCurrentUserIDUnified() ?? ""
     }
 
-    // Filtered conversations based on search
     private var filteredConversations: [Conversation] {
-        if searchText.isEmpty {
-            return chatManager.conversations
-        }
-        return chatManager.conversations.filter { conversation in
-            conversation.displayName.localizedCaseInsensitiveContains(searchText)
+        guard !searchText.isEmpty else { return chatManager.conversations }
+        return chatManager.conversations.filter {
+            $0.displayName.localizedCaseInsensitiveContains(searchText)
         }
     }
-    
+
     var body: some View {
         ZStack {
-                if chatManager.isLoading && chatManager.conversations.isEmpty {
-                    ProgressView("Loading conversations...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if chatManager.conversations.isEmpty && !chatManager.isLoading {
-                    emptyStateView
+            AmbientBackdrop(tint: feature)
+
+            content
+        }
+        .navigationTitle("Messages")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { showNewConversation = true } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+            }
+        }
+        .searchable(text: $searchText, prompt: "Search conversations")
+        .refreshable { await chatManager.loadConversations() }
+        .onAppear {
+            Task { await chatManager.initialize() }
+        }
+        .sheet(isPresented: $showNewConversation) {
+            EmployeeSelectorView { selectedUsers in
+                if selectedUsers.count > 1 {
+                    selectedUsersForGroup = selectedUsers
+                    showGroupNaming = true
                 } else {
-                    conversationsList
+                    Task { await createNewConversation(with: selectedUsers, groupName: nil) }
                 }
             }
-            .navigationTitle("Messages")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showNewConversation = true }) {
-                        Image(systemName: "square.and.pencil")
-                    }
-                }
+        }
+        .sheet(isPresented: $showGroupNaming) {
+            GroupNameView(selectedUsers: selectedUsersForGroup) { groupName in
+                Task { await createNewConversation(with: selectedUsersForGroup, groupName: groupName) }
             }
-            .searchable(text: $searchText, prompt: "Search conversations")
-            .refreshable {
-                await chatManager.loadConversations()
-            }
-            .onAppear {
-                Task {
-                    await chatManager.initialize()
-                }
-            }
-            .sheet(isPresented: $showNewConversation) {
-                EmployeeSelectorView { selectedUsers in
-                    if selectedUsers.count > 1 {
-                        // Multiple users selected, show group naming
-                        selectedUsersForGroup = selectedUsers
-                        showGroupNaming = true
-                    } else {
-                        // Single user, create direct conversation
-                        Task {
-                            await createNewConversation(with: selectedUsers, groupName: nil)
-                        }
-                    }
-                }
-            }
-            .sheet(isPresented: $showGroupNaming) {
-                GroupNameView(selectedUsers: selectedUsersForGroup) { groupName in
-                    Task {
-                        await createNewConversation(with: selectedUsersForGroup, groupName: groupName)
-                    }
-                }
-            }
-            .alert("Error", isPresented: $showErrorAlert, actions: {
-                Button("OK", role: .cancel) { }
-            }, message: {
-                Text(chatManager.errorMessage ?? "An error occurred")
-            })
-            .onChange(of: chatManager.errorMessage) { error in
-                showErrorAlert = error != nil
+        }
+        // ONE push target on this view. Two stacked NavigationLink(isActive:) is
+        // the shape of AMB.1's dead tap; the rule since AMB.3 is one
+        // `.ambientPush` per view, with an enum destination if a screen needs
+        // more. This screen needs exactly one.
+        .ambientPush(item: $pushedConversation) { conversation in
+            MessageThreadView(conversation: conversation)
         }
     }
-    
-    // MARK: - Views
-    
-    private var emptyStateView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
-            
-            Text("No Conversations")
-                .font(.title2)
-                .fontWeight(.semibold)
-            
-            Text("Start a conversation with your team members")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Button(action: { showNewConversation = true }) {
-                Label("New Conversation", systemImage: "plus.circle.fill")
-                    .font(.headline)
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-            }
-            .padding(.top, 10)
+
+    @ViewBuilder
+    private var content: some View {
+        if chatManager.isLoading && chatManager.conversations.isEmpty {
+            ProgressView("Loading conversations…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            list
         }
     }
-    
-    private var conversationsList: some View {
+
+    private var list: some View {
         List {
-            ForEach(filteredConversations) { conversation in
-                ConversationRow(
-                    conversation: conversation,
-                    currentUserId: currentUserId
+            // The failure banner. `errorMessage` is published and, before AMB.6,
+            // was surfaced only as an alert that fired on CHANGE — so two
+            // identical consecutive failures raised it once and a failure that
+            // arrived while the alert was dismissed was lost entirely. A banner
+            // is honest about a state that persists.
+            if let error = chatManager.errorMessage {
+                failureBanner(error).modifier(ChatListRow())
+            }
+
+            if filteredConversations.isEmpty {
+                AmbientEmptyState(
+                    title: searchText.isEmpty ? "No conversations" : "Nothing found",
+                    message: searchText.isEmpty
+                        ? "Start a conversation with your team members."
+                        : "Nothing matches “\(searchText)”.",
+                    systemImage: "bubble.left.and.bubble.right"
                 )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    selectedConversation = conversation
-                }
-                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                    Button {
-                        Task {
-                            await chatManager.togglePinConversation(conversation)
-                        }
-                    } label: {
-                        let isPinned = conversation.isPinned(by: currentUserId)
-                        Label(isPinned ? "Unpin" : "Pin",
-                              systemImage: isPinned ? "pin.slash" : "pin")
-                    }
-                    .tint(conversation.isPinned(by: currentUserId) ? .gray : .orange)
-                }
-                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    if conversation.type == .group {
-                        Button(role: .destructive) {
-                            Task {
-                                await chatManager.deleteConversation(conversation)
+                .modifier(ChatListRow())
+            } else {
+                ForEach(filteredConversations) { conversation in
+                    ConversationRow(conversation: conversation, currentUserId: currentUserId)
+                        .contentShape(Rectangle())
+                        .onTapGesture { pushedConversation = conversation }
+                        .modifier(ChatListRow())
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            Button {
+                                Task { await chatManager.togglePinConversation(conversation) }
+                            } label: {
+                                let isPinned = conversation.isPinned(by: currentUserId)
+                                Label(isPinned ? "Unpin" : "Pin",
+                                      systemImage: isPinned ? "pin.slash" : "pin")
                             }
-                        } label: {
-                            Label("Delete", systemImage: "trash")
+                            .tint(conversation.isPinned(by: currentUserId) ? .gray : .orange)
                         }
-                    }
+                        // GROUPS ONLY. A direct message cannot be swiped away,
+                        // and that asymmetry is deliberate — it is in the parity
+                        // inventory twice because it is easy to read as "delete
+                        // exists" rather than "delete is conditional".
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if conversation.type == .group {
+                                Button(role: .destructive) {
+                                    Task { await chatManager.deleteConversation(conversation) }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
                 }
             }
         }
-        .listStyle(PlainListStyle())
-        .background(
-            NavigationLink(
-                destination: MessageThreadView(conversation: selectedConversation),
-                isActive: Binding(
-                    get: { selectedConversation != nil },
-                    set: { if !$0 { selectedConversation = nil } }
-                )
-            ) {
-                EmptyView()
-            }
-        )
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .environment(\.defaultMinListRowHeight, 0)
     }
-    
-    // MARK: - Methods
-    
+
+    private func failureBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Something went wrong")
+                    .font(.subheadline.weight(.semibold))
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Button {
+                chatManager.errorMessage = nil
+                Task { await chatManager.loadConversations() }
+            } label: {
+                Text("Retry").font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(feature)
+        }
+        .ambientCard(density: .compact,
+                     border: .hairline(Color.orange.opacity(0.45)),
+                     fillWidth: true)
+    }
+
     private func createNewConversation(with users: [ChatUser], groupName: String?) async {
         guard !users.isEmpty else { return }
-        
+
         do {
             let participantIds = users.map { $0.id }
             let conversationType: Conversation.ConversationType = users.count == 1 ? .direct : .group
-            
+
             let conversationId = try await chatManager.createConversation(
                 with: participantIds,
                 type: conversationType,
                 customName: groupName
             )
-            
-            // Find the newly created conversation and navigate to it
+
             await chatManager.loadConversations()
             if let newConversation = chatManager.conversations.first(where: { $0.id == conversationId }) {
-                selectedConversation = newConversation
+                pushedConversation = newConversation
             }
         } catch {
             chatManager.errorMessage = error.localizedDescription
@@ -190,177 +200,149 @@ struct ConversationListView: View {
     }
 }
 
-// MARK: - Conversation Row
-struct ConversationRow: View {
-    let conversation: Conversation
-    let currentUserId: String
-    
-    private var unreadCount: Int {
-        conversation.unreadCount(for: currentUserId)
-    }
-    
-    private var hasUnreadMessages: Bool {
-        unreadCount > 0
-    }
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            // Avatar
-            conversationAvatar
-            
-            // Content
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    if conversation.isPinned(by: currentUserId) {
-                        Image(systemName: "pin.fill")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                    }
-                    
-                    Text(conversation.displayName)
-                        .font(.headline)
-                        .fontWeight(hasUnreadMessages ? .bold : .medium)
-                        .lineLimit(1)
-                    
-                    Spacer()
-                    
-                    if let lastMessage = conversation.lastMessage {
-                        Text(lastMessage.formattedTime)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                HStack {
-                    if let lastMessage = conversation.lastMessage {
-                        Text(messagePreview(lastMessage))
-                            .font(.subheadline)
-                            .foregroundColor(hasUnreadMessages ? .primary : .secondary)
-                            .fontWeight(hasUnreadMessages ? .medium : .regular)
-                            .lineLimit(2)
-                    } else {
-                        Text("No messages yet")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .italic()
-                    }
-                    
-                    Spacer()
-                    
-                    if unreadCount > 0 {
-                        Text("\(unreadCount)")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.blue)
-                            .cornerRadius(12)
-                    }
-                }
-            }
-        }
-        .padding(.vertical, 8)
-        .background(
-            conversation.isPinned(by: currentUserId) ? 
-            Color.orange.opacity(0.1) : Color.clear
-        )
-        .cornerRadius(8)
-    }
-    
-    private var conversationAvatar: some View {
-        ZStack {
-            Circle()
-                .fill(avatarColor)
-                .frame(width: 50, height: 50)
-            
-            if conversation.type == .group {
-                Image(systemName: "person.2.fill")
-                    .foregroundColor(.white)
-                    .font(.system(size: 20))
-            } else {
-                Text(avatarInitials)
-                    .foregroundColor(.white)
-                    .font(.system(size: 20, weight: .medium))
-            }
-        }
-    }
-    
-    private var avatarColor: Color {
-        let colors: [Color] = [.blue, .green, .orange, .purple, .pink, .red]
-        let index = abs(conversation.id.hashValue) % colors.count
-        return colors[index]
-    }
-    
-    private var avatarInitials: String {
-        let name = conversation.displayName
-        let components = name.components(separatedBy: " ")
-        
-        if components.count >= 2 {
-            let first = components[0].first?.uppercased() ?? ""
-            let last = components[1].first?.uppercased() ?? ""
-            return "\(first)\(last)"
-        } else {
-            return String(name.prefix(2)).uppercased()
-        }
-    }
-    
-    private func messagePreview(_ lastMessage: LastMessage) -> String {
-        let text = lastMessage.text
-        
-        // Check if it's already a preview with emoji (from Stream adapter)
-        if text == "📷 Photo" || text == "📎 File" || text == "🎬 GIF" {
-            if lastMessage.senderId == currentUserId {
-                return "You: \(text)"
-            }
-            return text
-        }
-        
-        // Check if it's a GIF URL
-        if text.lowercased().contains("giphy.com") || 
-           text.lowercased().contains(".gif") ||
-           text.lowercased().contains("tenor.com") {
-            let gifText = "🎬 GIF"
-            if lastMessage.senderId == currentUserId {
-                return "You: \(gifText)"
-            }
-            return gifText
-        }
-        
-        // Check if it's an image URL
-        if text.lowercased().contains(".jpg") || 
-           text.lowercased().contains(".jpeg") || 
-           text.lowercased().contains(".png") ||
-           text.lowercased().contains(".webp") {
-            let imageText = "📷 Photo"
-            if lastMessage.senderId == currentUserId {
-                return "You: \(imageText)"
-            }
-            return imageText
-        }
-        
-        // Check if it's a URL (generic)
-        if text.hasPrefix("http://") || text.hasPrefix("https://") {
-            let linkText = "🔗 Link"
-            if lastMessage.senderId == currentUserId {
-                return "You: \(linkText)"
-            }
-            return linkText
-        }
-        
-        // Regular text message
-        if lastMessage.senderId == currentUserId {
-            return "You: \(text)"
-        }
-        return text
+/// Strips a List row back to nothing so the ambient wash shows through and the
+/// cards supply all the spacing — while keeping the row a real List row, which
+/// is what keeps `.swipeActions` alive.
+private struct ChatListRow: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: AmbientDensity.compact.stackSpacing / 2,
+                                      leading: 16,
+                                      bottom: AmbientDensity.compact.stackSpacing / 2,
+                                      trailing: 16))
     }
 }
 
-// MARK: - Preview
-struct ConversationListView_Previews: PreviewProvider {
-    static var previews: some View {
-        NavigationView {
-            ConversationListView()
+// MARK: - Conversation row
+
+struct ConversationRow: View {
+    let conversation: Conversation
+    let currentUserId: String
+    var density: AmbientDensity = .compact
+
+    private var unreadCount: Int { conversation.unreadCount(for: currentUserId) }
+    private var unread: Bool { unreadCount > 0 }
+    private var isPinned: Bool { conversation.isPinned(by: currentUserId) }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            avatar
+
+            VStack(alignment: .leading, spacing: density.contentSpacing) {
+                HStack(spacing: 5) {
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.orange)
+                    }
+
+                    Text(conversation.displayName)
+                        .font(unread ? density.titleFont.weight(.bold) : density.titleFont)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 4)
+
+                    if let lastMessage = conversation.lastMessage {
+                        Text(lastMessage.formattedTime)
+                            .font(.caption2)
+                            .foregroundStyle(unread ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.tertiary))
+                    }
+                }
+
+                HStack(alignment: .top, spacing: 8) {
+                    if let lastMessage = conversation.lastMessage {
+                        Text(messagePreview(lastMessage))
+                            .font(density.subtitleFont)
+                            .foregroundStyle(unread ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.secondary))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    } else {
+                        Text("No messages yet")
+                            .font(density.subtitleFont)
+                            .foregroundStyle(.secondary)
+                            .italic()
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if unread {
+                        Text("\(unreadCount)")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .frame(minWidth: 19, minHeight: 19)
+                            .background(Capsule().fill(AmbientStyle.brand))
+                    }
+                }
+            }
         }
+        // Pinned is an orange HAIRLINE, not the old 10% orange wash over the
+        // whole row: under D11 the page already carries a colour, and a second
+        // full-row tint on top of it reads as a rendering fault, not emphasis.
+        .ambientCard(density: density,
+                     border: .hairline(isPinned
+                                       ? Color.orange.opacity(0.45)
+                                       : Color.primary.opacity(0.08)))
+    }
+
+    private var avatar: some View {
+        Group {
+            if conversation.type == .group {
+                ZStack {
+                    // Seeded from the conversation id as before, but through
+                    // AmbientStyle.stableHash rather than `hashValue`, which is
+                    // seeded per process — the same conversation used to change
+                    // colour after every relaunch.
+                    Circle().fill(AmbientStyle.avatarColor(conversation.id).gradient)
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 44, height: 44)
+            } else {
+                AmbientAvatar(name: conversation.displayName, size: 44)
+            }
+        }
+    }
+
+    /// The app's media sniffing, unchanged: Photo / File / GIF / Link, plus the
+    /// "You: " prefix.
+    ///
+    /// ONE CHANGE, forced by the decode repair. `last_message` is a text column
+    /// and this app writes bare text into it, so a row written by this app
+    /// carries no sender id at all. Rather than guess — and be wrong half the
+    /// time — an unknown sender simply gets no prefix. Rows written by the web
+    /// app carry the object and still say "You:".
+    private func messagePreview(_ lastMessage: LastMessage) -> String {
+        let text = lastMessage.text
+        let senderIsMe = !lastMessage.senderId.isEmpty
+            && lastMessage.senderId.lowercased() == currentUserId.lowercased()
+
+        func prefixed(_ body: String) -> String {
+            senderIsMe ? "You: \(body)" : body
+        }
+
+        if text == "📷 Photo" || text == "📎 File" || text == "🎬 GIF" {
+            return prefixed(text)
+        }
+
+        let lowered = text.lowercased()
+
+        if lowered.contains("giphy.com") || lowered.contains(".gif") || lowered.contains("tenor.com") {
+            return prefixed("🎬 GIF")
+        }
+
+        if lowered.contains(".jpg") || lowered.contains(".jpeg")
+            || lowered.contains(".png") || lowered.contains(".webp") {
+            return prefixed("📷 Photo")
+        }
+
+        if text.hasPrefix("http://") || text.hasPrefix("https://") {
+            return prefixed("🔗 Link")
+        }
+
+        return prefixed(text)
     }
 }

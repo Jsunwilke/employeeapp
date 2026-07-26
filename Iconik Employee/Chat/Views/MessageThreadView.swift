@@ -1,3 +1,20 @@
+//  MessageThreadView.swift
+//  Iconik Employee — Chat thread, converted to Ambient in AMB.6.
+//
+//  Ported from the mockup approved on device 2026-07-25. The switches that
+//  mockup left live ship in the positions it opened in, which is what the
+//  operator approved and what AMB6_CHAT_PARITY.md records:
+//
+//      timestamps   only when the conversation pauses
+//      grouping     on
+//      my bubble    the company blue, not chat's pink
+//      body font    15pt, against the 17pt default the app rode on
+//
+//  The bubble colour has a recorded reason: chat's feature colour is #D6409F and
+//  under D11 that is also the wash behind this screen, so a pink bubble on a
+//  pink wash risks mush. The company blue says "you" without competing with the
+//  screen's own colour.
+
 import SwiftUI
 import WebKit  // For WKWebView in AnimatedGifView
 import PhotosUI
@@ -7,7 +24,6 @@ struct MessageThreadView: View {
     let conversation: Conversation?
     @StateObject private var chatManager = ChatManager.shared
     @State private var messageText = ""
-    @State private var scrollToBottom = false
     @State private var showConversationSettings = false
     @State private var showEmojiPicker = false
     @State private var showGifPicker = false
@@ -16,106 +32,50 @@ struct MessageThreadView: View {
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isUploadingMedia = false
     @FocusState private var isMessageFieldFocused: Bool
-    @Environment(\.dismiss) private var dismiss
+
+    private var feature: Color { FeatureTheme.color(for: "chat") }
+    private var bubbleTint: Color { AmbientStyle.brand }
 
     private var currentUserId: String {
         UserManager.shared.getCurrentUserIDUnified() ?? ""
     }
 
+    private var messages: [ChatMessage] { chatManager.messages }
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Messages list
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        // Load more button
-                        if chatManager.hasMoreMessages {
-                            Button(action: {
-                                Task {
-                                    await chatManager.loadMoreMessages()
-                                }
-                            }) {
-                                HStack {
-                                    if chatManager.messagesLoading {
-                                        ProgressView()
-                                            .scaleEffect(0.8)
-                                    } else {
-                                        Image(systemName: "arrow.up.circle")
-                                    }
-                                    Text("Load earlier messages")
-                                        .font(.caption)
-                                }
-                                .foregroundColor(.blue)
-                                .padding(.vertical, 8)
-                            }
-                        }
-                        
-                        // Messages
-                        ForEach(chatManager.messages) { message in
-                            MessageBubbleView(
-                                message: message,
-                                isOwnMessage: message.senderId == currentUserId,
-                                showSenderName: shouldShowSenderName(for: message)
-                            )
-                            .id(message.id)
-                        }
-                        
-                        // Invisible anchor for scrolling
-                        Color.clear
-                            .frame(height: 1)
-                            .id("bottom")
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                }
-                .refreshable {
-                    await chatManager.refreshMessages()
-                }
-                .onChange(of: chatManager.messages.count) { _ in
-                    withAnimation {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-                .onChange(of: scrollToBottom) { shouldScroll in
-                    if shouldScroll {
-                        withAnimation {
-                            proxy.scrollTo("bottom", anchor: .bottom)
-                        }
-                        scrollToBottom = false
-                    }
-                }
-                .onAppear {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
+        ZStack {
+            AmbientBackdrop(tint: feature)
+
+            VStack(spacing: 0) {
+                scrollback
+                composer
             }
-            
-            // Message input
-            messageInputView
         }
+        // A PUSHED screen insets itself. The shell applies its clearance inside
+        // its own NavigationView, to that container's root — and a safe-area
+        // inset does not travel out of a container into what it pushes. Before
+        // AMB.6 this screen had no clearance at all, so the composer sat under
+        // the floating tab bar whenever the keyboard was down.
+        .tabBarClearance()
         .navigationTitle(conversation?.displayName ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
-                    Button(action: {
+                    Button {
                         showConversationSettings = true
-                    }) {
+                    } label: {
                         Label("Conversation Settings", systemImage: "gear")
                     }
-                    
-                    if conversation?.type == .direct {
-                        Button(action: {
-                            // TODO: View profile
-                        }) {
-                            Label("View Profile", systemImage: "person.circle")
-                        }
-                    }
-                    
-                    Button(action: {
-                        Task {
-                            await chatManager.refreshMessages()
-                        }
-                    }) {
+
+                    // "View Profile" is DELETED rather than restyled. Its body
+                    // was an empty TODO — a control that looked live and did
+                    // nothing, the same class AMB.3 removed three of. There is
+                    // no profile screen in the app for it to reach.
+
+                    Button {
+                        Task { await chatManager.refreshMessages() }
+                    } label: {
                         Label("Refresh Messages", systemImage: "arrow.clockwise")
                     }
                 } label: {
@@ -124,466 +84,463 @@ struct MessageThreadView: View {
             }
         }
         .onAppear {
-            if let conversation = conversation {
-                Task {
-                    // Only mark as read when the view actually appears (user is viewing it)
-                    await chatManager.selectConversation(conversation, markAsRead: true)
-                }
+            if let conversation {
+                Task { await chatManager.selectConversation(conversation, markAsRead: true) }
             }
         }
         .onDisappear {
-            // Only clean up the message listener for this conversation
             chatManager.cleanupMessageListener()
         }
-        .onTapGesture {
-            isMessageFieldFocused = false
-        }
         .sheet(isPresented: $showConversationSettings) {
-            if let conversation = conversation {
+            if let conversation {
                 ConversationSettingsView(conversation: conversation)
             }
         }
         .sheet(isPresented: $showGifPicker) {
-            GifPickerView(
-                isPresented: $showGifPicker,
-                onGifSelected: { gifUrl in
-                    // Send GIF as a message
-                    Task {
-                        await chatManager.sendMessage(
-                            text: gifUrl,
-                            type: .file,
-                            fileUrl: gifUrl
-                        )
-                    }
-                }
-            )
+            GifPickerView(isPresented: $showGifPicker) { gifUrl in
+                Task { await chatManager.sendMessage(text: gifUrl, type: .file, fileUrl: gifUrl) }
+            }
         }
-        .photosPicker(
-            isPresented: $showPhotoPicker,
-            selection: $selectedPhotoItem,
-            matching: .images
-        )
+        .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .images)
         .onChange(of: selectedPhotoItem) { item in
-            if let item = item {
-                Task {
-                    await handlePhotoSelection(item)
+            if let item { Task { await handlePhotoSelection(item) } }
+        }
+        .fileImporter(isPresented: $showDocumentPicker,
+                      allowedContentTypes: [.pdf, .text, .plainText, .data],
+                      onCompletion: handleFileSelection)
+        .overlay {
+            if isUploadingMedia { uploadingOverlay }
+        }
+    }
+
+    // MARK: - Scrollback
+
+    private var scrollback: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if chatManager.hasMoreMessages {
+                        loadEarlierButton
+                    }
+
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                        if let day = daySeparator(at: index) {
+                            dayDivider(day)
+                        }
+
+                        row(message, at: index)
+                            .padding(.top, topGap(at: index))
+                            .id(message.id)
+                    }
+
+                    Color.clear.frame(height: 1).id("bottom")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+            .refreshable { await chatManager.refreshMessages() }
+            // Keyed on the LAST message id, not on `count`. A realtime page can
+            // replace the tail without changing the count, and the old
+            // count-keyed watcher missed exactly that case.
+            .onChange(of: messages.last?.id) { _ in
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onTapGesture { isMessageFieldFocused = false }
+        }
+    }
+
+    private var loadEarlierButton: some View {
+        Button {
+            Task { await chatManager.loadMoreMessages() }
+        } label: {
+            HStack(spacing: 6) {
+                if chatManager.messagesLoading {
+                    ProgressView().scaleEffect(0.8)
+                } else {
+                    Image(systemName: "arrow.up.circle").font(.caption)
+                }
+                Text("Load earlier messages").font(.caption)
+            }
+            .foregroundStyle(feature)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Grouping rules (ported verbatim from the approved mockup)
+
+    private func continuesRun(at index: Int) -> Bool {
+        guard index > 0 else { return false }
+        let previous = messages[index - 1]
+        let current = messages[index]
+        guard previous.type != .system, current.type != .system else { return false }
+        guard previous.senderId == current.senderId else { return false }
+        guard Calendar.current.isDate(previous.timestamp, inSameDayAs: current.timestamp) else { return false }
+        return current.timestamp.timeIntervalSince(previous.timestamp) < 5 * 60
+    }
+
+    private func endsRun(at index: Int) -> Bool {
+        guard index + 1 < messages.count else { return true }
+        return !continuesRun(at: index + 1)
+    }
+
+    /// Named in groups only, and never for your own — the app's original rule.
+    private func showsSender(at index: Int) -> Bool {
+        let message = messages[index]
+        guard message.type != .system else { return false }
+        guard conversation?.type == .group else { return false }
+        guard message.senderId != currentUserId else { return false }
+        return !continuesRun(at: index)
+    }
+
+    /// A stamp only where the conversation actually paused.
+    private func showsStamp(at index: Int) -> Bool { endsRun(at: index) }
+
+    private func topGap(at index: Int) -> CGFloat {
+        guard index > 0 else { return 0 }
+        if daySeparator(at: index) != nil { return 0 }
+        if messages[index].type == .system || messages[index - 1].type == .system { return 12 }
+        return continuesRun(at: index) ? 2 : 8
+    }
+
+    private func daySeparator(at index: Int) -> String? {
+        let current = messages[index].timestamp
+        guard index > 0 else { return Formatters.relativeDay(current) }
+        let previous = messages[index - 1].timestamp
+        guard !Calendar.current.isDate(previous, inSameDayAs: current) else { return nil }
+        return Formatters.relativeDay(current)
+    }
+
+    private func dayDivider(_ label: String) -> some View {
+        HStack(spacing: 10) {
+            Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1)
+            Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1)
+        }
+        .padding(.vertical, 14)
+    }
+
+    // MARK: - Rows
+
+    @ViewBuilder
+    private func row(_ message: ChatMessage, at index: Int) -> some View {
+        if message.type == .system {
+            systemRow(message, at: index)
+        } else {
+            bubbleRow(message, at: index)
+        }
+    }
+
+    /// Centred, in a capsule, never in a bubble and never with a sender name.
+    /// "X added Y to the group", "X removed Y", "X left the group".
+    private func systemRow(_ message: ChatMessage, at index: Int) -> some View {
+        VStack(spacing: 3) {
+            Text(message.systemMessageText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                // ambient-allow: a system-message capsule is not a card — it is a
+                // centred inline annotation, and AmbientCard is a rounded
+                // rectangle by construction.
+                .background(Capsule().fill(.ultraThinMaterial))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06)))
+
+            if showsStamp(at: index) {
+                Text(Formatters.shortTime.string(from: message.timestamp))
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func bubbleRow(_ message: ChatMessage, at index: Int) -> some View {
+        let mine = message.senderId == currentUserId
+
+        return HStack {
+            if mine { Spacer(minLength: 60) }
+
+            VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
+                if showsSender(at: index), let senderName = message.senderName {
+                    Text(senderName)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(AmbientStyle.avatarColor(senderName))
+                        .padding(.leading, 4)
+                }
+
+                content(message, mine: mine)
+
+                if showsStamp(at: index) {
+                    Text(Formatters.shortTime.string(from: message.timestamp))
+                        .font(.caption2).foregroundStyle(.tertiary)
+                        .padding(.horizontal, 4)
+                }
+            }
+
+            if !mine { Spacer(minLength: 60) }
+        }
+    }
+
+    @ViewBuilder
+    private func content(_ message: ChatMessage, mine: Bool) -> some View {
+        switch message.type {
+        case .text:
+            if isGifURL(message.text) {
+                ChatAttachment(source: message.text) { url in
+                    EnhancedGifMessageView(url: url, isOwnMessage: mine)
+                }
+            } else if isImageURL(message.text) {
+                ChatAttachment(source: message.text) { url in
+                    ChatImageView(url: url, isOwnMessage: mine)
+                }
+            } else {
+                textBubble(message.text, mine: mine)
+            }
+
+        case .file:
+            if let fileUrl = message.fileUrl {
+                if isGifURL(fileUrl) {
+                    ChatAttachment(source: fileUrl) { url in
+                        EnhancedGifMessageView(url: url, isOwnMessage: mine)
+                    }
+                } else if isImageURL(fileUrl) {
+                    ChatAttachment(source: fileUrl) { url in
+                        ChatImageView(url: url, isOwnMessage: mine)
+                    }
+                } else {
+                    fileBubble(message, mine: mine)
+                }
+            } else {
+                textBubble(message.text, mine: mine)
+            }
+
+        case .system:
+            Text(message.text).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func textBubble(_ text: String, mine: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 15))
+            .foregroundStyle(mine ? AnyShapeStyle(.white) : AnyShapeStyle(Color.primary))
+            .fixedSize(horizontal: false, vertical: true)
+            .ambientCard(density: .bubble,
+                         fill: mine ? .tint(bubbleTint) : .material,
+                         border: mine ? .none : .hairline(Color.primary.opacity(0.08)))
+    }
+
+    private func fileBubble(_ message: ChatMessage, mine: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.fill").font(.footnote)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("File").font(.caption.weight(.medium))
+                if !message.text.isEmpty {
+                    Text(message.text).font(.caption2).lineLimit(1)
                 }
             }
         }
-        .fileImporter(
-            isPresented: $showDocumentPicker,
-            allowedContentTypes: [.pdf, .text, .plainText, .data],
-            onCompletion: handleFileSelection
-        )
-        .overlay(
-            Group {
-                if isUploadingMedia {
-                    Color.black.opacity(0.3)
-                        .ignoresSafeArea()
-                        .overlay(
-                            VStack {
-                                ProgressView()
-                                Text("Uploading...")
-                                    .font(.caption)
-                                    .foregroundColor(.white)
-                            }
-                            .padding()
-                            .background(Color.black.opacity(0.7))
-                            .cornerRadius(10)
-                        )
-                }
-            }
-        )
-        .animation(.easeInOut(duration: 0.2), value: showEmojiPicker)
+        .foregroundStyle(mine ? AnyShapeStyle(.white) : AnyShapeStyle(Color.primary))
+        .ambientCard(density: .bubble,
+                     fill: mine ? .tint(bubbleTint) : .material,
+                     border: mine ? .none : .hairline(Color.primary.opacity(0.08)))
+        // The old "Open" button is DELETED rather than restyled: its body was an
+        // empty TODO. Drawing a button that does nothing is the dead control
+        // AMB.3 spent a phase removing.
     }
-    
-    // MARK: - Message Input View
-    
-    private var messageInputView: some View {
+
+    private func isGifURL(_ url: String) -> Bool {
+        let lowered = url.lowercased()
+        return lowered.contains(".gif")
+            || lowered.contains("giphy.com")
+            || lowered.contains("tenor.com")
+            || lowered.contains("gfycat.com")
+    }
+
+    private func isImageURL(_ url: String) -> Bool {
+        let lowered = url.lowercased()
+        return lowered.contains(".jpg") || lowered.contains(".jpeg")
+            || lowered.contains(".png") || lowered.contains(".webp")
+            || lowered.contains("imgur.com")
+    }
+
+    // MARK: - Composer
+
+    private var composer: some View {
         VStack(spacing: 0) {
-            // Emoji picker overlay
             if showEmojiPicker {
                 EmojiPickerView(
-                    onEmojiSelected: { emoji in
-                        messageText += emoji
-                    },
+                    onEmojiSelected: { messageText += $0 },
                     isPresented: $showEmojiPicker
                 )
                 .padding()
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            
-            Divider()
-            
-            HStack(alignment: .bottom, spacing: 8) {
-                // Input accessory buttons with sliding menu
+
+            HStack(alignment: .bottom, spacing: 10) {
                 MessageInputAccessoryView(
                     showEmojiPicker: $showEmojiPicker,
                     showGifPicker: $showGifPicker,
                     showPhotoPicker: $showPhotoPicker,
-                    onAttachmentTap: {
-                        showDocumentPicker = true
-                    }
+                    onAttachmentTap: { showDocumentPicker = true }
                 )
                 .disabled(chatManager.isSendingMessage)
-                
-                // Message field
-                HStack(alignment: .bottom) {
-                    TextField("Type a message", text: $messageText, axis: .vertical)
-                        .textFieldStyle(PlainTextFieldStyle())
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .lineLimit(1...5)
-                        .focused($isMessageFieldFocused)
-                        .onSubmit {
-                            if !messageText.isEmpty {
-                                sendMessage()
-                            }
-                        }
-                        .onChange(of: isMessageFieldFocused) { focused in
-                            if focused {
-                                showEmojiPicker = false
-                            }
-                        }
-                }
-                .background(Color(.systemGray6))
-                .cornerRadius(20)
-                .frame(maxWidth: .infinity)
-                
-                // Send button
+
+                TextField("Message", text: $messageText, axis: .vertical)
+                    .font(.system(size: 15))
+                    .lineLimit(1...5)
+                    .focused($isMessageFieldFocused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    // ambient-allow: the composer field is a capsule input, not a card.
+                    .background(Capsule().fill(.ultraThinMaterial))
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
+                    .onSubmit { sendMessage() }
+                    .onChange(of: isMessageFieldFocused) { focused in
+                        if focused { showEmojiPicker = false }
+                    }
+
                 Button(action: sendMessage) {
                     if chatManager.isSendingMessage {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                            .frame(width: 28, height: 28)
+                        ProgressView().scaleEffect(0.8).frame(width: 28, height: 28)
                     } else {
                         Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(messageText.isEmpty ? .gray : .blue)
+                            .font(.system(size: 28))
+                            .foregroundStyle(messageText.isEmpty
+                                             ? AnyShapeStyle(.tertiary)
+                                             : AnyShapeStyle(bubbleTint))
                     }
                 }
                 .disabled(messageText.isEmpty || chatManager.isSendingMessage)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(Color(.systemBackground))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        .background(.regularMaterial)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 0.5)
+        }
+        .animation(AmbientMotion.snappy, value: showEmojiPicker)
+    }
+
+    private var uploadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.3).ignoresSafeArea()
+            VStack(spacing: 8) {
+                ProgressView()
+                Text("Uploading…").font(.caption).foregroundStyle(.secondary)
+            }
+            .ambientCard(density: .hero, state: .highlighted)
         }
     }
-    
-    // MARK: - Helper Methods
-    
-    private func shouldShowSenderName(for message: ChatMessage) -> Bool {
-        // Don't show sender name for system messages
-        if message.type == .system {
-            return false
-        }
-        
-        // Show sender name in group conversations
-        guard conversation?.type == .group else { return false }
-        
-        // Show sender name if it's not the current user's message
-        return message.senderId != currentUserId
-    }
-    
+
+    // MARK: - Actions
+
     private func sendMessage() {
         let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        
-        // Dismiss keyboard first to stop any ongoing dictation
+
         isMessageFieldFocused = false
-        
-        // Store the message text and clear the field
-        let messageToSend = text
-        
-        // Clear the field after a small delay to ensure dictation has stopped
-        DispatchQueue.main.async {
-            self.messageText = ""
-        }
-        
+
         Task {
-            await chatManager.sendMessage(text: messageToSend)
-            scrollToBottom = true
+            let sent = await chatManager.sendMessage(text: text)
+            // The field is cleared ONLY once the send lands. It used to be
+            // cleared immediately, and the failure path then deleted the
+            // optimistic bubble too — so a failed send destroyed both the
+            // message and what the user had typed, with no way back.
+            if sent { messageText = "" }
         }
     }
-    
-    // MARK: - Photo Selection Handler
-    
+
     private func handlePhotoSelection(_ item: PhotosPickerItem) async {
         isUploadingMedia = true
         selectedPhotoItem = nil
-        
-        do {
-            // Load the image data
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                isUploadingMedia = false
-                return
-            }
-            
-            // Convert to UIImage to verify it's valid
-            guard let image = UIImage(data: data) else {
-                isUploadingMedia = false
-                return
-            }
-            
-            // Compress the image for upload
-            guard let compressedData = image.downsampledJPEGData(maxDimension: 2048, quality: 0.8) else {
-                isUploadingMedia = false
-                return
-            }
-            
-            await chatManager.sendImageMessage(data: compressedData)
+        defer { isUploadingMedia = false }
 
-            isUploadingMedia = false
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data),
+                  let compressed = image.downsampledJPEGData(maxDimension: 2048, quality: 0.8) else {
+                chatManager.errorMessage = "Couldn't read that photo."
+                return
+            }
+            await chatManager.sendImageMessage(data: compressed)
         } catch {
-            print("Error handling photo selection: \(error)")
-            isUploadingMedia = false
+            chatManager.errorMessage = "Couldn't read that photo: \(error.localizedDescription)"
         }
     }
-    
-    // MARK: - File Selection Handler
-    
+
     private func handleFileSelection(_ result: Result<URL, Error>) {
         switch result {
         case .success(let url):
             Task {
                 isUploadingMedia = true
-                
-                // Start accessing the security-scoped resource
-                let accessing = url.startAccessingSecurityScopedResource()
-                defer {
-                    if accessing {
-                        url.stopAccessingSecurityScopedResource()
-                    }
-                }
-                
-                do {
-                    // Read file data
-                    let data = try Data(contentsOf: url)
-                    let fileName = url.lastPathComponent
-                    
-                    await chatManager.sendFileMessage(data: data, fileName: fileName)
+                defer { isUploadingMedia = false }
 
-                    isUploadingMedia = false
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+
+                do {
+                    let data = try Data(contentsOf: url)
+                    await chatManager.sendFileMessage(data: data, fileName: url.lastPathComponent)
                 } catch {
-                    print("Error reading file: \(error)")
-                    isUploadingMedia = false
+                    chatManager.errorMessage = "Couldn't read that file: \(error.localizedDescription)"
                 }
             }
         case .failure(let error):
-            print("File selection error: \(error)")
+            chatManager.errorMessage = "Couldn't pick that file: \(error.localizedDescription)"
         }
     }
 }
 
-// MARK: - Message Bubble View
-struct MessageBubbleView: View {
-    let message: ChatMessage
-    let isOwnMessage: Bool
-    let showSenderName: Bool
-    
-    var body: some View {
-        if message.type == .system {
-            // System message layout
-            HStack {
-                Spacer()
-                VStack(spacing: 4) {
-                    Text(systemMessageText)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color(.systemGray6))
-                        .cornerRadius(12)
-                    
-                    Text(message.formattedTime)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-            }
-            .padding(.vertical, 4)
-        } else {
-            // Regular message layout
-            HStack(alignment: .bottom, spacing: 8) {
-                if isOwnMessage { Spacer(minLength: 60) }
-                
-                VStack(alignment: isOwnMessage ? .trailing : .leading, spacing: 4) {
-                    if showSenderName && !isOwnMessage, let senderName = message.senderName {
-                        Text(senderName)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    ChatMessageContent(message: message, isOwnMessage: isOwnMessage)
-                    
-                    Text(message.formattedTime)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                
-                if !isOwnMessage { Spacer(minLength: 60) }
-            }
-            .padding(.vertical, 2)
-        }
-    }
-    
-    private var systemMessageText: String {
-        switch message.systemAction {
-        case "participants_added":
-            if let addedByName = message.addedByName,
-               let addedParticipants = message.addedParticipants {
-                let names = addedParticipants.joined(separator: ", ")
-                return "\(addedByName) added \(names) to the group"
-            }
-        case "participant_removed":
-            if let removedByName = message.removedByName,
-               let removedParticipantName = message.removedParticipantName {
-                return "\(removedByName) removed \(removedParticipantName) from the group"
-            }
-        case "participant_left":
-            if let leftUserName = message.leftUserName {
-                return "\(leftUserName) left the group"
-            }
-        default:
-            break
-        }
-        return "System message"
-    }
-}
+// MARK: - Attachment source resolution
 
-// MARK: - Message Content
-struct ChatMessageContent: View {
-    let message: ChatMessage
-    let isOwnMessage: Bool
-    
-    init(message: ChatMessage, isOwnMessage: Bool) {
-        self.message = message
-        self.isOwnMessage = isOwnMessage
-        print("[ChatMessageContent] Rendering message: type=\(message.type.rawValue), text='\(message.text)', fileUrl=\(message.fileUrl ?? "nil")")
-    }
-    
+/// Renders an attachment whose stored value may be EITHER an absolute URL or a
+/// storage path.
+///
+/// Both exist by design. GIFs are posted as absolute Giphy URLs and always have
+/// been; uploads added in AMB.6 store a PATH into a private bucket and are
+/// signed at render time, so the row does not rot the way a baked one-year
+/// signed URL does. This resolves whichever it is and hands a URL string down to
+/// the existing image and GIF views.
+struct ChatAttachment<Content: View>: View {
+    let source: String
+    @ViewBuilder let content: (String) -> Content
+
+    @State private var resolved: String?
+    @State private var failed = false
+
     var body: some View {
         Group {
-            switch message.type {
-            case .text:
-                // Check if it's a media URL
-                if isGifURL(message.text) {
-                    let _ = print("[ChatMessageContent] Detected GIF URL in text: \(message.text)")
-                    EnhancedGifMessageView(url: message.text, isOwnMessage: isOwnMessage)
-                } else if isImageURL(message.text) {
-                    let _ = print("[ChatMessageContent] Detected image URL in text: \(message.text)")
-                    ChatImageView(url: message.text, isOwnMessage: isOwnMessage)
-                } else {
-                    Text(message.text)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(isOwnMessage ? Color.blue : Color(.systemGray5))
-                        .foregroundColor(isOwnMessage ? .white : .primary)
-                        .cornerRadius(16)
-                }
-            case .file:
-                if let fileUrl = message.fileUrl {
-                    let _ = print("[ChatMessageContent] File message with URL: \(fileUrl)")
-                    if isGifURL(fileUrl) {
-                        let _ = print("[ChatMessageContent] Detected GIF URL in fileUrl: \(fileUrl)")
-                        EnhancedGifMessageView(url: fileUrl, isOwnMessage: isOwnMessage)
-                    } else if isImageURL(fileUrl) {
-                        let _ = print("[ChatMessageContent] Detected image URL in fileUrl: \(fileUrl)")
-                        ChatImageView(url: fileUrl, isOwnMessage: isOwnMessage)
-                    } else {
-                        FileMessageView(message: message, isOwnMessage: isOwnMessage)
-                    }
-                } else {
-                    // Fallback to text display if no file URL
-                    Text(message.text)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(isOwnMessage ? Color.blue : Color(.systemGray5))
-                        .foregroundColor(isOwnMessage ? .white : .primary)
-                        .cornerRadius(16)
-                }
-            case .system:
-                Text(message.text)
+            if let resolved {
+                content(resolved)
+            } else if failed {
+                Label("Attachment unavailable", systemImage: "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
+                    .ambientCard(density: .bubble)
+            } else {
+                ProgressView()
+                    .frame(width: 120, height: 90)
+                    .task { await resolve() }
             }
         }
     }
-    
-    private func isGifURL(_ url: String) -> Bool {
-        let lowercased = url.lowercased()
-        let isGif = lowercased.contains(".gif") ||
-                   lowercased.contains("giphy.com") ||
-                   lowercased.contains("tenor.com") ||
-                   lowercased.contains("gfycat.com") ||
-                   lowercased.hasPrefix("https://media") && lowercased.contains("gif")
-        
-        if isGif {
-            print("[ChatMessageContent] isGifURL('\(url)') = true")
-        }
-        return isGif
-    }
-    
-    private func isImageURL(_ url: String) -> Bool {
-        let lowercased = url.lowercased()
-        return lowercased.contains(".jpg") ||
-               lowercased.contains(".jpeg") ||
-               lowercased.contains(".png") ||
-               lowercased.contains(".webp") ||
-               lowercased.contains("imgur.com")
-    }
-}
 
-// MARK: - File Message View
-struct FileMessageView: View {
-    let message: ChatMessage
-    let isOwnMessage: Bool
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Image(systemName: "doc.fill")
-                    .font(.title3)
-                
-                VStack(alignment: .leading) {
-                    Text("File")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                    
-                    if !message.text.isEmpty {
-                        Text(message.text)
-                            .font(.caption2)
-                            .lineLimit(1)
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            
-            if let _ = message.fileUrl {
-                Button(action: {
-                    // TODO: Open file
-                }) {
-                    Text("Open")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-            }
+    private func resolve() async {
+        if source.hasPrefix("http://") || source.hasPrefix("https://") {
+            resolved = source
+            return
         }
-        .background(isOwnMessage ? Color.blue : Color(.systemGray5))
-        .foregroundColor(isOwnMessage ? .white : .primary)
-        .cornerRadius(16)
-    }
-}
 
-// MARK: - Preview
-struct MessageThreadView_Previews: PreviewProvider {
-    static var previews: some View {
-        NavigationView {
-            MessageThreadView(conversation: nil)
+        do {
+            let url = try await SupabaseChatService.shared.signedAttachmentURL(path: source)
+            resolved = url.absoluteString
+        } catch {
+            print("❌ Could not sign chat attachment \(source): \(error)")
+            failed = true
         }
     }
 }

@@ -150,9 +150,13 @@ struct EmojiPickerView: View {
             }
             .frame(height: 250)
         }
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(radius: 5)
+        // AMB.6: was an opaque systemBackground + cornerRadius + shadow, the one
+        // hand-rolled card on this surface and the reason Chat carried a
+        // drift-allowlist row. It is `.highlighted` (regularMaterial) rather than
+        // the default ultraThin because the scrollback sits directly behind it
+        // and must not read through the emoji grid; the composer's own
+        // regularMaterial backs it as well, so the two stack.
+        .ambientCard(density: .roomy, state: .highlighted, fillWidth: true)
     }
 }
 

@@ -1,5 +1,14 @@
 -- STATUS: NOT YET APPLIED. Written 2026-07-26 during AMB.6.
 --
+-- TO APPLY: paste into the Supabase SQL editor for project nofegnmrgnanpznavlqy,
+-- the same way fix_chat_rpcs.sql was applied on 2026-07-13. Idempotent: safe to
+-- run more than once. Afterwards, update this line to record the date, and
+-- verify with:
+--   select id, public from storage.buckets where id = 'chat-attachments';
+--   select policyname from pg_policies
+--    where schemaname='storage' and tablename='objects'
+--      and policyname ilike '%chat attachments%';   -- expect 4 rows
+--
 -- Creates the storage bucket chat image and file messages need.
 --
 -- Why this does not already exist: ChatManager.uploadImage and uploadFile were
@@ -43,6 +52,15 @@
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('chat-attachments', 'chat-attachments', false)
 ON CONFLICT (id) DO NOTHING;
+
+-- Every policy is dropped first, because CREATE POLICY is NOT idempotent — it
+-- errors if the name already exists, which would make a re-run fail halfway and
+-- leave the bucket with a partial policy set. Same DROP-then-CREATE shape the
+-- web repo's fix-all-rls-warnings.sql uses.
+DROP POLICY IF EXISTS "Participants can upload chat attachments" ON storage.objects;
+DROP POLICY IF EXISTS "Participants can view chat attachments" ON storage.objects;
+DROP POLICY IF EXISTS "Admins can delete chat attachments" ON storage.objects;
+DROP POLICY IF EXISTS "Admins can update chat attachments" ON storage.objects;
 
 -- Policy: a participant may upload into their own org + a conversation they are in.
 -- users.id is TEXT, auth.uid() returns UUID, so cast to text.
