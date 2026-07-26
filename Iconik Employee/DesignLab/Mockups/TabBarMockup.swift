@@ -61,13 +61,29 @@
 //      with minimum-length spacers, so at the six items the customise screen
 //      allows the bar is 438pt wide against 393pt on an iPhone 16.
 //
-//  THE DECISION THIS MOCKUP EXISTS TO SETTLE — see the "Reserves its space"
-//  toggle. A floating bar means content scrolls UNDER it, which is what gives
-//  glass something to refract and is the whole point of the look. It also means
-//  the bar stops participating in layout, so every screen needs its own bottom
-//  inset or its last row hides behind the capsule. This app has twenty-odd
-//  screens and nine of them are unconverted. The toggle shows both, and the cost
-//  of each is stated on screen.
+//  IT FLOATS — SETTLED (operator, 2026-07-25). Asked which way to go, they
+//  answered with the question that decides it: "what would be the point of glass
+//  if the bar reserved its own space?" None. Glass exists to show what is behind
+//  it, and a bar that reserves its space has nothing behind it ever, so the blur
+//  has nothing to blur. The toggle stays only for comparison.
+//
+//  WHAT FLOATING COSTS, corrected from a bad first estimate. I told the operator
+//  "about twenty screens of bottom-inset work" and that was pessimistic enough to
+//  have skewed the decision. The real shape: 27 root feature screens, of which
+//  only TWO pad for the bar today — but `safeAreaInset(edge: .bottom)` applied
+//  ONCE where the shell wraps a feature insets all of them at a stroke, and this
+//  app already uses that modifier in DailyJobReportView. Only three places opt out
+//  of the bottom safe area and one of those is the shell itself. So it is one
+//  shell change plus spot-checks, and the spot-checks are the point: a Save button
+//  pinned to the bottom of a form is where this bites, and an untappable Submit is
+//  a real bug rather than a cosmetic one.
+//
+//  HIDE ON SCROLL — the operator asked for Facebook's behaviour (slides away as
+//  you read down, returns the moment you pull up). Built here so it can be felt
+//  rather than described. Read `BarScrollOffsetKey` before shipping it: the shell
+//  cannot see scrolling inside a feature screen, so each screen has to report its
+//  own offset, and the graceful default is that a screen which has not adopted it
+//  keeps a permanent bar.
 
 import SwiftUI
 
@@ -106,6 +122,12 @@ struct TabBarMockup: View {
     /// can be sanity-checked alongside the other changes in the same sitting; the
     /// real bar gets a constant.
     @State private var frost: Double = 0.5
+    /// Facebook's behaviour: the bar slides away as you read down and comes back
+    /// the instant you pull up. Only meaningful while floating — hiding a bar that
+    /// reserves its space would reflow the whole screen under your thumb.
+    @State private var hideOnScroll = true
+    @State private var barHidden = false
+    @State private var lastOffset: CGFloat = 0
 
     /// Real feature ids, so `FeatureTheme` returns the colour the converted bar
     /// would actually use — including the ones that fall through to blue today.
@@ -126,6 +148,36 @@ struct TabBarMockup: View {
 
     private var maxItems: Double { layout == .iPad ? 10 : 6 }
 
+    private static let scrollSpace = "tabBarMockupScroll"
+
+    /// Hiding only applies while the bar floats. A bar that reserves its space
+    /// cannot slide away without the content reflowing to fill the gap, which is
+    /// exactly the jump you do not want under a moving thumb.
+    private var isBarHidden: Bool { floats && hideOnScroll && barHidden }
+
+    /// Facebook's rule, and it is about DIRECTION rather than position: reading
+    /// down hides the bar, any pull upward brings it straight back.
+    ///
+    /// The 6pt threshold is what stops it flickering — without it, the tiny
+    /// offset jitter a scroll view produces at rest is enough to toggle the bar
+    /// continuously. And it is always shown near the top, so a screen you have
+    /// only just opened never starts with its navigation missing.
+    private func react(to offset: CGFloat) {
+        let delta = offset - lastOffset
+
+        if offset > -12 {
+            lastOffset = offset
+            if barHidden { barHidden = false }
+            return
+        }
+
+        guard abs(delta) > 6 else { return }
+        lastOffset = offset
+        // minY falls as content travels up, so a negative delta is a downward read.
+        let shouldHide = delta < 0
+        if shouldHide != barHidden { barHidden = shouldHide }
+    }
+
     var body: some View {
         ZStack {
             AmbientBackdrop(tint: AmbientStyle.brand, intensity: 0.9)
@@ -144,6 +196,22 @@ struct TabBarMockup: View {
                 .padding(.top, 8)
                 // Room for the floating capsule, so the last card can clear it.
                 .padding(.bottom, floats ? 96 : 20)
+                // Reports how far the content has travelled. A GeometryReader in
+                // the content plus a preference is the iOS 16-safe way to observe
+                // this — onScrollGeometryChange is iOS 18, and this app's floor
+                // is 16.6.
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: BarScrollOffsetKey.self,
+                            value: proxy.frame(in: .named(Self.scrollSpace)).minY
+                        )
+                    }
+                )
+            }
+            .coordinateSpace(name: Self.scrollSpace)
+            .onPreferenceChange(BarScrollOffsetKey.self) { offset in
+                react(to: offset)
             }
 
             VStack(spacing: 10) {
@@ -164,6 +232,10 @@ struct TabBarMockup: View {
             }
             // A bar that reserves its space sits flush; a floating one is inset.
             .padding(.bottom, floats ? 6 : 0)
+            // Slid down out of view rather than removed, so it travels back on the
+            // same path instead of popping in.
+            .offset(y: isBarHidden ? 130 : 0)
+            .animation(.easeOut(duration: 0.25), value: isBarHidden)
         }
     }
 
@@ -204,11 +276,26 @@ struct TabBarMockup: View {
             Toggle("Floats over the content", isOn: $floats)
                 .font(.footnote.weight(.semibold))
                 .tint(AmbientStyle.brand)
+                .onChange(of: floats) { _ in barHidden = false }
             Text(floats
                  ? "Content scrolls UNDER the glass, which is what makes it read as glass. THE COST: the bar stops participating in layout, so every screen needs its own bottom inset — about twenty screens here, nine of them not yet converted. Scroll this page and watch the cards pass beneath it."
                  : "The bar reserves its own space, exactly as it does today, so no other screen has to change. THE COST: nothing ever passes behind the glass, so it has little to refract and reads closer to a tinted panel.")
                 .font(.caption2)
                 .foregroundStyle(floats ? .orange : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider().opacity(0.4)
+
+            Toggle("Hide on scroll (the Facebook behaviour)", isOn: $hideOnScroll)
+                .font(.footnote.weight(.semibold))
+                .tint(AmbientStyle.brand)
+                .disabled(!floats)
+                .onChange(of: hideOnScroll) { _ in barHidden = false }
+            Text(floats
+                 ? "Read down and it slides away; pull up even slightly and it comes straight back. Always shown near the top, so a screen never opens with its navigation missing."
+                 : "Needs the floating bar — one that reserves its space cannot slide away without the content reflowing to fill the gap, which is a jump under your thumb.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Divider().opacity(0.4)
@@ -293,6 +380,24 @@ struct TabBarMockup: View {
             Spacer(minLength: 0)
         }
         .ambientCard(density: .compact, fillWidth: true)
+    }
+}
+
+// MARK: - Scroll reporting
+
+/// Carries the content's travel out of the scroll view so the bar can react to
+/// direction. A preference plus a GeometryReader is the iOS 16-safe way to do
+/// this — `onScrollGeometryChange` is iOS 18 and this app's floor is 16.6.
+///
+/// NOTE FOR THE CONVERSION, not just the mockup: the shell cannot observe
+/// scrolling that happens inside an arbitrary feature screen. If hide-on-scroll
+/// ships, each screen has to report its own offset through a small shared
+/// modifier — and the graceful default matters, because a screen that has not
+/// adopted it simply keeps a permanent bar rather than breaking.
+private struct BarScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

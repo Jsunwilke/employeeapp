@@ -559,21 +559,63 @@ taken:
       Xcode 26.6 with the iOS 26.5 SDK, so the API compiles; KeepUp's own floor
       is 17.0, which is why it needs no equivalent fallback.
 
-### THE DECISION THE MOCKUP EXISTS TO SETTLE, and it is not a style question
+### IT FLOATS — SETTLED, and my cost estimate for it was wrong
 
 A floating bar means content scrolls UNDER it. That is what gives glass something
 to refract and is the entire reason the look works — a glass bar over a flat page
-is a tinted panel. It also means THE BAR STOPS PARTICIPATING IN LAYOUT.
+is a tinted panel. It also means the bar stops participating in layout: today the
+shell is `VStack { mainContent; BottomTabBar }`, so the bar owns its strip and no
+screen has to think about it.
 
-Today the shell is `VStack { mainContent; BottomTabBar }`, so the bar occupies its
-own space and no screen has to think about it. Floating it makes the bar an
-overlay, and every screen then needs its own bottom inset or its last row hides
-behind the capsule. That is roughly twenty screens, NINE OF THEM NOT YET
-CONVERTED — so the risk lands on surfaces this phase is not otherwise touching.
+DECIDED by the operator, 2026-07-25, with the question that settles it: "what
+would be the point of glass if the bar reserved its own space?" None. So it floats.
 
-The mockup carries a toggle for it and states the cost of each on screen, because
-this is a shell-wide architectural choice wearing a visual disguise, and it is the
-operator's to make rather than one to settle quietly mid-build.
+I TOLD THEM IT WOULD COST "ABOUT TWENTY SCREENS OF BOTTOM-INSET WORK". That was
+pessimistic enough to have skewed the decision, and it is worth recording as a
+process failure rather than quietly correcting: I estimated from the number of
+screens instead of checking whether a single mechanism covers them. The real shape,
+measured:
+
+    27 root feature screens in MainEmployeeView.featureView, plus home.
+    Only TWO files pad for the bar today — home (100pt, which already clears the
+      capsule) and TimeTrackingButton.
+    `safeAreaInset(edge: .bottom)` applied ONCE where the shell wraps a feature
+      insets every one of them: content rests above the bar and still scrolls
+      beneath it. THE APP ALREADY USES THAT MODIFIER, in DailyJobReportView.
+    Only THREE places opt out of the bottom safe area, and one is the shell
+      itself, one is the already-converted shift detail, one is keyboard-only.
+
+So: one shell change plus spot-checks. The spot-checks are the real work, and they
+are not cosmetic — a Save or Submit button pinned to the bottom of a form becomes
+untappable, which is a bug rather than a blemish. The form-heavy screens (daily
+job report, time off, the equipment forms) are the ones to walk.
+
+### HIDE ON SCROLL — requested, built in the mockup, NOT yet decided
+
+Operator, 2026-07-25: "could this have the same behavior as facebooks bottom tab
+bar? if i scroll down the bar slides down out of view but as soon as i pull up, it
+slides back up."
+
+Built so it can be felt rather than argued about. Direction, not position: a
+downward read hides it, any upward pull returns it, and it is always shown near the
+top so a screen never opens with its navigation missing. A 6pt threshold stops the
+jitter a scroll view produces at rest from flickering the bar. Coherent with
+floating and only with floating — a bar that reserves its space cannot slide away
+without the content reflowing to fill the gap, which is a jump under the thumb.
+
+TWO THINGS TO SETTLE BEFORE IT SHIPS, both recorded rather than assumed:
+
+  1. THE SHELL CANNOT SEE SCROLLING INSIDE A FEATURE SCREEN. Each screen has to
+     report its own offset through a small shared modifier. The graceful default
+     is what makes this safe: a screen that has not adopted it keeps a permanent
+     bar rather than breaking. So it can land screen by screen with the arc.
+
+  2. IT PARTLY UNDOES A NAV.1 DECISION, and that deserves the operator's eyes
+     rather than mine. NAV.1 made Home permanently reachable from the bottom bar
+     and Scan permanently present; hiding the bar means both are sometimes absent.
+     Facebook is a feed — content is the point and navigation is incidental. This
+     is a work tool used one-handed, in a hurry, sometimes in gloves, and Scan is
+     the most-tapped button on the bar. Worth feeling on a device before it ships.
 
 ### Defects found while inventorying — REPORTED, not yet fixed
 
