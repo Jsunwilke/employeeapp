@@ -106,6 +106,25 @@ extension View {
             }
         }
     }
+
+    /// For a SELF-NAV feature — one that builds its own navigation container, so the
+    /// shell cannot reach inside it. Apply to the container's CONTENT, not to the
+    /// feature view from outside; outside is the position that silently did nothing.
+    ///
+    /// Watches the shell itself rather than taking a flag, because these features are
+    /// not handed one.
+    func tabBarClearance() -> some View {
+        modifier(SelfNavTabBarClearance())
+    }
+}
+
+/// Reads the shell's own state so a self-nav feature does not have to be told.
+private struct SelfNavTabBarClearance: ViewModifier {
+    @ObservedObject private var tabBarManager = TabBarManager.shared
+
+    func body(content: Content) -> some View {
+        content.tabBarClearance(!tabBarManager.isFullScreenOverlayActive)
+    }
 }
 
 // MARK: - The bar

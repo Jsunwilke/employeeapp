@@ -90,6 +90,10 @@ struct TasksMainView: View {
                     )
                 }
             }
+            // Room for the app's floating bar. Applied inside this screen's own
+            // navigation container, because the shell cannot reach into a self-nav
+            // feature (AMB.4).
+            .tabBarClearance()
             .navigationTitle("Tasks")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {

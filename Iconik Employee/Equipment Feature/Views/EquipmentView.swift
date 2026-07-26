@@ -109,6 +109,10 @@ struct EquipmentView: View {
 
                 qrButton
             }
+            // Room for the app's floating bar. Applied HERE, inside this screen's
+            // own NavigationStack, because the shell cannot reach into a self-nav
+            // feature — the QR button sat directly under the capsule until it was.
+            .tabBarClearance()
             .navigationTitle("Equipment")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
