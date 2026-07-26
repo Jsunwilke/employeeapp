@@ -490,6 +490,16 @@ other rebases onto it.
   **Still outstanding: both device smokes (iPhone AND iPad, D7).** Exercise the
   push paths first — row tap, kit tap, QR scan — plus the kit detail's per-item
   "…" menu. The D8 push waits on those.
+
+  **Smoke in progress.** Operator reported that kits are not tappable in "Manage
+  Kits" (the gearshape sheet). Verified as PRE-EXISTING and not an AMB.3
+  regression: that screen's rows have never carried a tap target and there is no
+  kit-template detail screen in the app. Recorded against AMB.12, which owns the
+  file; operator's call was "leave it, note it". **Not yet confirmed either way:
+  whether the kit cards on the main Equipment screen push into the packing list.**
+  Those are this phase's, and they are the first `ambientPush` to run inside a real
+  `NavigationStack`, so they remain the single most important thing for the smoke
+  to answer.
 - [ ] **AMB.4 Home dashboard** (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines) —
   highest traffic, and its Upcoming Shifts widget currently disagrees with the
   already-converted schedule.
@@ -514,6 +524,20 @@ other rebases onto it.
 - [ ] **AMB.11 Job box / NFC** (18 views, 5,198 lines)
 - [ ] **AMB.12 Settings, Manager, Training** (~6,600 lines) — the tail, converted per D9.
   Closes the arc and deletes the lab harness + its menu entry.
+
+  **Carried in from AMB.3's smoke (operator, 2026-07-25): "Manage Kits" implies a tap
+  it does not have.** `AdminKitTemplatesView`'s rows are a plain `HStack` —
+  no `onTapGesture`, no `NavigationLink`, no `Button` anywhere in the file except
+  the toolbar's Done and the alert's OK — sitting in an `.insetGrouped` List, which
+  is what makes them read as tappable. Nothing is broken and AMB.3 never touched
+  the file: there is no kit-template detail screen anywhere in the iOS app for a tap
+  to reach, and `EquipmentService` has no kit-template write method at all (only
+  `getKitTemplates`), because templates are authored in the web app — which the
+  screen's own empty state says. **Operator decision: leave it, note it.** When this
+  phase restyles the screen, the cheap fix is a footer stating templates are managed
+  in the web app, so the list stops implying an action. Making kits genuinely
+  tappable is a FEATURE (a detail screen, and write methods against the shared DB if
+  editing is wanted) and belongs to its own phase, not to a restyle.
 
 **Out of scope, permanently (D1):** Sports Shoot Feature (53 views, 36,352 lines) — the
 hook-protected Captura files plus a live iPad shoot tool where a restyle risks work in
