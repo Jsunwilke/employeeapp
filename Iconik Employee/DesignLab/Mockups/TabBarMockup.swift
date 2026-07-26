@@ -298,11 +298,13 @@ private struct GlassTabBarPreview: View {
     /// above the capsule's top edge and let the cells divide the whole width
     /// underneath, so items slid behind it. Operator: centre it vertically, and
     /// keep the other icons out from under it.
-    private var centreSlot: CGFloat { 72 }
+    private var centreSlot: CGFloat { 76 }
 
-    /// The capsule is 4pt taller than KeepUp's 60 so the centre button can be
-    /// clearly the largest thing on the bar and still sit fully inside the glass.
-    private var barHeight: CGFloat { 64 }
+    /// Taller than KeepUp's 60, and the reason is a constraint rather than a
+    /// preference: the operator asked for Scan at least 30% bigger AND vertically
+    /// centred in the bar, so the glass has to grow to contain it. 68 fits a 56pt
+    /// disc with 6pt clear above and below.
+    private var barHeight: CGFloat { 68 }
 
     private var capsuleBar: some View {
         GeometryReader { geo in
@@ -457,17 +459,18 @@ private struct GlassTabBarPreview: View {
                                      : AnyShapeStyle(centreTint.opacity(0.16)))
                     .overlay(Circle().strokeBorder(.white.opacity(isSelected ? 0.55 : 0.3),
                                                    lineWidth: 1))
-                    // 52 inside a 64pt bar leaves 6pt above and below, so it is
+                    // 56 inside a 68pt bar leaves 6pt above and below, so it is
                     // genuinely centred rather than clipped by the capsule.
-                    .frame(width: 52, height: 52)
+                    .frame(width: 56, height: 56)
                 Image(systemName: centreSymbol)
-                    // DELIBERATELY THE LARGEST THING ON THE BAR — operator,
-                    // 2026-07-25. The other icons are 17pt; Scan's glyph is 40,
-                    // well over twice their size, and it nearly fills its disc
-                    // the way the live bar's does. It no longer overruns the
-                    // circle, because centred inside the capsule an overrun
-                    // would spill past the glass.
-                    .font(.system(size: layout == .iPad ? 30 : 40, weight: .semibold))
+                    // DELIBERATELY THE LARGEST THING ON THE BAR, and then grown
+                    // another 30% on top of that (operator, 2026-07-25). 40 -> 52
+                    // against 17pt for every other icon, so it is now three times
+                    // their size and nearly fills its disc — the same read as the
+                    // live bar's 60pt glyph on a 50pt circle, without overrunning
+                    // it, since centred inside the capsule an overrun would spill
+                    // past the glass.
+                    .font(.system(size: layout == .iPad ? 40 : 52, weight: .semibold))
                     .foregroundStyle(isSelected ? Color.white : centreTint)
             }
             // Centred in its slot, vertically and horizontally.
@@ -486,10 +489,20 @@ private struct GlassTabBarPreview: View {
 private struct GlassCapsule: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(.clear, in: Capsule())
+            // FROSTED rather than clear (operator, 2026-07-25). KeepUp uses
+            // `.clear`, which is the most transparent Glass and is right for its
+            // flat paper background; over this app's ambient wash and coloured
+            // cards it left the bar reading as barely there. `.regular` keeps the
+            // refraction and specular edge but frosts what is behind it, so the
+            // icons stay legible over whatever scrolls under them. A deliberate
+            // divergence from the reference, not an oversight.
+            content.glassEffect(.regular, in: Capsule())
         } else {
             content
-                .background(.ultraThinMaterial, in: Capsule())
+                // Matched to the frost above: thin rather than ultraThin, so the
+                // pre-26 path reads the same weight instead of being noticeably
+                // more transparent than the real thing.
+                .background(.thinMaterial, in: Capsule())
                 .overlay(
                     Capsule().fill(
                         .linearGradient(colors: [.white.opacity(0.28), .white.opacity(0.0)],
