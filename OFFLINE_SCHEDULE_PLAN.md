@@ -213,6 +213,31 @@ Run before this plan is called done, and again at the phase's close.
            visibility, the round-trip proofs. Ships when the airplane-mode smoke
            passes on iPhone and iPad.
 
+           CARRIED IN FROM AMB.4'S CODE REVIEW, 2026-07-26 - FIX IT IN THE COMMIT
+           THAT SWITCHES THE CACHE ON, because that commit is what makes it live.
+
+           Home's pull-to-refresh holds its control until the session listener
+           calls back, but startListeningToSessionsAsync calls back TWICE: once
+           replaying the disk cache, then again with the network result. The latch
+           clears on the FIRST one, so the moment the cache decodes the control
+           will release over stale rows and claim a refresh that has not happened.
+           Dormant today for exactly the reason this arc exists - loadMetadata
+           never decodes, so the replay never fires.
+
+           Do NOT patch it from the view model. It cannot tell the two callbacks
+           apart, so the options there are counting them, which breaks the day
+           anyone adds a third, or running its own fetch and duplicating the
+           three-day window, the already-ended-today rule and the crew filter that
+           the listener owns - duplicated business rules on payroll-adjacent data,
+           to stop a spinner releasing a moment early. isUsingOfflineData looks
+           like the signal and is not: it is set from connectivity, so online it
+           reads false even for the cache replay.
+
+           This belongs with O5, which is already about a failed cache read not
+           looking like an empty one. The same distinction it draws - what the
+           cache actually IS versus what a caller may conclude - is the one the
+           refresh latch needs.
+
     OFF.2  The shift detail offline. SchoolService reads schools from PowerSync
            instead of Supabase, so address, coordinates and the travel plan work
            without signal. Weather stays online - it is a forecast, and a stale
