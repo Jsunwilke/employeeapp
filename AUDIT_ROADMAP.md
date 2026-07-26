@@ -515,6 +515,63 @@ other rebases onto it.
 - [ ] **AMB.4 Home dashboard** (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines) —
   highest traffic, and its Upcoming Shifts widget currently disagrees with the
   already-converted schedule.
+
+  **iPHONE HALF BUILT 2026-07-25 (`53eac3f`), NOT pushed. Blocked on two operator
+  actions: approving the iPad mockup on an iPad (D10), and the smoke (D7).**
+
+  **The finding that reshaped the phase: the iPad dashboard is a DIFFERENT
+  SCREEN.** `loadWidgetOrder` picks the widget set by device — iPhone gets Hours,
+  Mileage, Upcoming Shifts and Tasks; iPad gets Sports Rosters, Group Jobs and
+  Photoshoot Notes. Not a superset; three widgets sharing nothing with the four
+  the operator approved in AMB.2. So D10 was unmet for three of the surface's
+  seven widgets and a D7 iPad smoke would have smoked an unconverted screen.
+  Resolved by D10's own procedure rather than by asking: the three are now mocked
+  in the lab (`DashboardIPadMockup`, gallery entry "Home Dashboard — iPad") and
+  wait on approval. Found by reading the source for the parity inventory — a
+  device-conditional widget list is not something a screenshot can show.
+
+  **Parity: `AMB4_DASHBOARD_PARITY.md`.** Batch 1's inventory never covered the
+  dashboard. Writing the missing half found **seventeen capabilities in the app
+  and absent from the approved design**, all restored and each verified present
+  rather than claimed: the Hours offline indicator, the overtime split and the
+  percentage readout; Mileage's month and year dollar figures and its
+  "enter via Daily Job Reports" caption; the shift date, weather, refresh button
+  and View-all; the Tasks create button, a working checkbox, the detail sheet and
+  five rows not three; every loading and empty state; and widget drag-reordering.
+  **The inventory itself missed one and the audit caught it** — the Mileage
+  pay-period caption, because the line was written about the NUMBER and what went
+  missing was its LABEL. An inventory is a check, not a guarantee.
+
+  **Three defects fixed because the conversion made them unavoidable:** nearly
+  every shift was drawn BLUE regardless of the scheduler's colour
+  (`positionColorMap[session.position]` looked up a session TYPE in a table keyed
+  by job TITLES, always missed, fell through to blue — now
+  `ScheduleStyle.accent`, so home and the schedule finally agree); pull-to-refresh
+  was attached inside the scroll view where a `RefreshAction` cannot reach it;
+  and three live `NavigationLink(isActive:)` on one screen collapsed to one
+  `HomeDestination` enum behind one `ambientPush`.
+
+  Deleted same commit: `CompactShiftRow`, `CompactSessionRow` (120 lines, zero
+  callers) and `PositionColorMap.swift`, orphaned by their removal.
+  `MainEmployeeView`'s drift row deleted (2 → 0); `DashboardWidgets` 8 → 3, the
+  three being exactly the iPad widgets.
+
+  **THREE audits, and the third — aimed at the fix round — found the phase's
+  worst defect, exactly as PUB.1 warned.** The first refresh fix reintroduced a
+  permanent spinner through another door (a refresh reached the loading flag, and
+  there are paths where the listener never calls back), ignored cancellation so a
+  cancelled refresh became a main-actor busy loop, and could orphan a realtime
+  channel; and the hours bar drew its "still running" marker over hours already
+  banked. The meter is now three consecutive segments, verified numerically over
+  fifteen states.
+
+  **Recorded, not fixed:** a size-class watcher that fixes the iPad's stale widget
+  set was built and then REVERTED — crossing that boundary swaps four widgets for
+  three and those widgets open realtime channels in `onAppear`, trading cosmetic
+  staleness for channel churn on the shared DB. Also `ChatManager.cleanup()` has
+  never run (`onChange`'s condition compares the already-updated value against
+  itself) — **AMB.6 owns Chat**; and the three iPad widgets have weak lifecycles
+  (a fresh realtime channel per construction; one with no teardown at all).
 - [ ] **AMB.5 Tasks** (18 views, 3,167 lines)
 - [ ] **AMB.6 Chat** (20 views, 4,655 lines) — long scrollbacks, the real test of the
   compact set. Closes batch 1 and mocks batch 2.
