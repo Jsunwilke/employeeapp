@@ -78,12 +78,28 @@
 //  pinned to the bottom of a form is where this bites, and an untappable Submit is
 //  a real bug rather than a cosmetic one.
 //
-//  HIDE ON SCROLL — the operator asked for Facebook's behaviour (slides away as
-//  you read down, returns the moment you pull up). Built here so it can be felt
-//  rather than described. Read `BarScrollOffsetKey` before shipping it: the shell
-//  cannot see scrolling inside a feature screen, so each screen has to report its
-//  own offset, and the graceful default is that a screen which has not adopted it
-//  keeps a permanent bar.
+//  HIDE ON SCROLL — TRIED AND DROPPED. The operator asked for Facebook's
+//  behaviour, I built it, it did not work on their device, and while I was fixing
+//  it they resolved the question instead: "navigation is more important". Which is
+//  the concern I had raised — NAV.1 made Home permanently reachable and Scan
+//  permanently present, Facebook is a feed where navigation is incidental, and
+//  this is a work tool where Scan is the most-tapped button on the bar. So the
+//  behaviour is gone rather than fixed, along with the on-screen probe I had added
+//  to debug it. Deleted rather than left switched off: an experiment that lost its
+//  argument is not scaffolding worth carrying.
+//
+//  SWIPE TO TUCK — the operator's idea, and a better one. Swipe the bar to the
+//  right and it slides off the edge, leaving a small half-circle handle with a
+//  chevron to pull it back. Navigation is never taken away by the app; it is put
+//  away by the person, on purpose, and it is always one visible tap from
+//  returning. That is the difference from hide-on-scroll.
+//
+//  WHY IT MATTERS BEYOND THE STYLING: on iPad the bar is hidden for the WHOLE of
+//  the Sports roster today — CapturaSportsView.onAppear sets
+//  isFullScreenOverlayActive, commented "to maximize vertical space" — so there is
+//  no bottom navigation at all in the app's biggest iPad tool. A bar that can be
+//  tucked away by hand is a bar that could be allowed in there. That is a separate
+//  decision with real constraints; see AMB4_DASHBOARD_PARITY.md.
 
 import SwiftUI
 
@@ -122,15 +138,12 @@ struct TabBarMockup: View {
     /// can be sanity-checked alongside the other changes in the same sitting; the
     /// real bar gets a constant.
     @State private var frost: Double = 0.5
-    /// Facebook's behaviour: the bar slides away as you read down and comes back
-    /// the instant you pull up. Only meaningful while floating — hiding a bar that
-    /// reserves its space would reflow the whole screen under your thumb.
-    @State private var hideOnScroll = true
-    @State private var barHidden = false
-    @State private var lastOffset: CGFloat = 0
-    /// On-screen probe values — see `react(to:)`.
-    @State private var liveOffset: CGFloat = 0
-    @State private var liveDelta: CGFloat = 0
+    /// Tucked away by hand (the operator's idea). Not the same thing as hidden by
+    /// the app: it is deliberate, and the handle that brings it back is always on
+    /// screen.
+    @State private var tucked = false
+    /// Live finger travel, so the bar follows the drag instead of snapping at the end.
+    @State private var dragX: CGFloat = 0
 
     /// Real feature ids, so `FeatureTheme` returns the colour the converted bar
     /// would actually use — including the ones that fall through to blue today.
@@ -151,42 +164,8 @@ struct TabBarMockup: View {
 
     private var maxItems: Double { layout == .iPad ? 10 : 6 }
 
-    private static let scrollSpace = "tabBarMockupScroll"
 
-    /// Hiding only applies while the bar floats. A bar that reserves its space
-    /// cannot slide away without the content reflowing to fill the gap, which is
-    /// exactly the jump you do not want under a moving thumb.
-    private var isBarHidden: Bool { floats && hideOnScroll && barHidden }
 
-    /// Facebook's rule, and it is about DIRECTION rather than position: reading
-    /// down hides the bar, any pull upward brings it straight back.
-    ///
-    /// The 6pt threshold is what stops it flickering — without it, the tiny
-    /// offset jitter a scroll view produces at rest is enough to toggle the bar
-    /// continuously. And it is always shown near the top, so a screen you have
-    /// only just opened never starts with its navigation missing.
-    private func react(to offset: CGFloat) {
-        // Instrumentation, shown on screen. This is here because the first attempt
-        // silently did nothing and there was no way to tell whether the scroll was
-        // being observed at all or whether the rule above it was wrong. A live
-        // readout answers that in one look instead of a round trip.
-        liveOffset = offset
-        liveDelta = offset - lastOffset
-
-        let delta = offset - lastOffset
-
-        if offset > -12 {
-            lastOffset = offset
-            if barHidden { barHidden = false }
-            return
-        }
-
-        guard abs(delta) > 6 else { return }
-        lastOffset = offset
-        // minY falls as content travels up, so a negative delta is a downward read.
-        let shouldHide = delta < 0
-        if shouldHide != barHidden { barHidden = shouldHide }
-    }
 
     var body: some View {
         ZStack {
@@ -197,26 +176,6 @@ struct TabBarMockup: View {
             // which is part of why the first cut read as "not really different".
             ScrollView {
                 VStack(spacing: 0) {
-                    // Reports how far the content has travelled.
-                    //
-                    // A zero-height GeometryReader as the FIRST CHILD of the
-                    // content, not a `.background` on it. The first version put it
-                    // in a background and the bar never moved: `.background` and
-                    // `.overlay` build a secondary hierarchy whose preferences do
-                    // not reliably reach an ancestor, so `onPreferenceChange` was
-                    // simply never called. As a real child it propagates normally.
-                    //
-                    // Still a GeometryReader plus a preference rather than
-                    // `onScrollGeometryChange`, which is iOS 18 — this app's floor
-                    // is 16.6.
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: BarScrollOffsetKey.self,
-                            value: proxy.frame(in: .named(Self.scrollSpace)).minY
-                        )
-                    }
-                    .frame(height: 0)
-
                     VStack(spacing: 12) {
                         controls
                         ForEach(0..<8, id: \.self) { index in
@@ -228,10 +187,6 @@ struct TabBarMockup: View {
                     // Room for the floating capsule, so the last card can clear it.
                     .padding(.bottom, floats ? 96 : 20)
                 }
-            }
-            .coordinateSpace(name: Self.scrollSpace)
-            .onPreferenceChange(BarScrollOffsetKey.self) { offset in
-                react(to: offset)
             }
 
             VStack(spacing: 10) {
@@ -252,11 +207,90 @@ struct TabBarMockup: View {
             }
             // A bar that reserves its space sits flush; a floating one is inset.
             .padding(.bottom, floats ? 6 : 0)
-            // Slid down out of view rather than removed, so it travels back on the
-            // same path instead of popping in.
-            .offset(y: isBarHidden ? 130 : 0)
-            .animation(.easeOut(duration: 0.25), value: isBarHidden)
+            .offset(x: tucked ? tuckedTravel : dragX)
+            .gesture(tuckDrag)
+
+            // The way back. Only present while tucked, and deliberately at the
+            // same height as the bar it replaces, so the eye already knows where
+            // to look.
+            if tucked {
+                HStack {
+                    Spacer()
+                    tuckHandle
+                }
+                .padding(.bottom, floats ? 6 : 0)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, barHeightForHandle)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
+    }
+
+    /// Far enough to clear the widest screen this app runs on.
+    private var tuckedTravel: CGFloat { 1400 }
+
+    /// Where the handle sits vertically: level with the middle of the bar.
+    private var barHeightForHandle: CGFloat { 8 }
+
+    /// Drag right to tuck, drag left to bring it back. Rightward only while shown
+    /// and leftward only while tucked, so the gesture can never fight the scroll
+    /// view or drag the bar off the wrong edge.
+    private var tuckDrag: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                guard !tucked else { return }
+                dragX = max(0, value.translation.width)
+            }
+            .onEnded { value in
+                let travelled = value.translation.width
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    // A third of the way, or a decisive flick, commits it.
+                    if !tucked, travelled > 90 || value.predictedEndTranslation.width > 180 {
+                        tucked = true
+                    }
+                    dragX = 0
+                }
+                AmbientHaptics.impact(.light)
+            }
+    }
+
+    /// The half-circle that pulls the bar back out. Tap it, or swipe it left.
+    private var tuckHandle: some View {
+        Button {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { tucked = false }
+            AmbientHaptics.impact(.light)
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(AmbientStyle.brand)
+                .frame(width: 26, height: 54)
+                .background(
+                    // Flat against the screen edge, rounded on the inside only, so
+                    // it reads as something tucked BEHIND the edge rather than a
+                    // button floating near it.
+                    UnevenRoundedRectangle(topLeadingRadius: 27, bottomLeadingRadius: 27,
+                                           bottomTrailingRadius: 0, topTrailingRadius: 0,
+                                           style: .continuous)
+                        .fill(.regularMaterial)
+                )
+                .overlay(
+                    UnevenRoundedRectangle(topLeadingRadius: 27, bottomLeadingRadius: 27,
+                                           bottomTrailingRadius: 0, topTrailingRadius: 0,
+                                           style: .continuous)
+                        .strokeBorder(.white.opacity(0.35), lineWidth: 0.8)
+                )
+                .shadow(color: .black.opacity(0.18), radius: 8, x: -2, y: 3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show navigation bar")
+        .gesture(
+            DragGesture(minimumDistance: 10).onEnded { value in
+                if value.translation.width < -30 {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { tucked = false }
+                    AmbientHaptics.impact(.light)
+                }
+            }
+        )
     }
 
     // MARK: - Controls
@@ -296,7 +330,6 @@ struct TabBarMockup: View {
             Toggle("Floats over the content", isOn: $floats)
                 .font(.footnote.weight(.semibold))
                 .tint(AmbientStyle.brand)
-                .onChange(of: floats) { _ in barHidden = false }
             Text(floats
                  ? "Content scrolls UNDER the glass, which is what makes it read as glass. THE COST: the bar stops participating in layout, so every screen needs its own bottom inset — about twenty screens here, nine of them not yet converted. Scroll this page and watch the cards pass beneath it."
                  : "The bar reserves its own space, exactly as it does today, so no other screen has to change. THE COST: nothing ever passes behind the glass, so it has little to refract and reads closer to a tinted panel.")
@@ -306,16 +339,21 @@ struct TabBarMockup: View {
 
             Divider().opacity(0.4)
 
-            scrollProbe
-
-            Toggle("Hide on scroll (the Facebook behaviour)", isOn: $hideOnScroll)
-                .font(.footnote.weight(.semibold))
-                .tint(AmbientStyle.brand)
-                .disabled(!floats)
-                .onChange(of: hideOnScroll) { _ in barHidden = false }
-            Text(floats
-                 ? "Read down and it slides away; pull up even slightly and it comes straight back. Always shown near the top, so a screen never opens with its navigation missing."
-                 : "Needs the floating bar — one that reserves its space cannot slide away without the content reflowing to fill the gap, which is a jump under your thumb.")
+            HStack(spacing: 8) {
+                Image(systemName: "hand.draw")
+                    .font(.caption)
+                    .foregroundStyle(AmbientStyle.brand)
+                Text("Swipe the bar right to tuck it away")
+                    .font(.footnote.weight(.semibold))
+                Spacer(minLength: 0)
+                if tucked {
+                    Button("Bring it back") {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { tucked = false }
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+            }
+            Text("It leaves a handle at the right edge — tap it or swipe it left. This replaces hide-on-scroll: the app never takes navigation away, you put it away, and the way back is always visible. It is also what would make it possible to give the Sports roster a bottom bar again, since today it has none on iPad.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -347,26 +385,6 @@ struct TabBarMockup: View {
         .ambientCard(density: .compact, fillWidth: true)
     }
 
-    /// Live proof that the scroll is being observed. If these numbers do not move
-    /// while you drag, the bar is not being told about the scroll at all and the
-    /// problem is the plumbing rather than the rule.
-    private var scrollProbe: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "scope")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            Text("offset \(Int(liveOffset))")
-                .monospacedDigit()
-            Text("delta \(Int(liveDelta))")
-                .monospacedDigit()
-            Spacer(minLength: 0)
-            Text(barHidden ? "HIDDEN" : "SHOWN")
-                .font(.caption2.weight(.black))
-                .foregroundStyle(barHidden ? .orange : .green)
-        }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-    }
 
     /// The one control that exists to be reported back rather than admired.
     private var frostControl: some View {
@@ -426,23 +444,6 @@ struct TabBarMockup: View {
     }
 }
 
-// MARK: - Scroll reporting
-
-/// Carries the content's travel out of the scroll view so the bar can react to
-/// direction. A preference plus a GeometryReader is the iOS 16-safe way to do
-/// this — `onScrollGeometryChange` is iOS 18 and this app's floor is 16.6.
-///
-/// NOTE FOR THE CONVERSION, not just the mockup: the shell cannot observe
-/// scrolling that happens inside an arbitrary feature screen. If hide-on-scroll
-/// ships, each screen has to report its own offset through a small shared
-/// modifier — and the graceful default matters, because a screen that has not
-/// adopted it simply keeps a permanent bar rather than breaking.
-private struct BarScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
 
 // MARK: - Item
 

@@ -590,32 +590,84 @@ are not cosmetic — a Save or Submit button pinned to the bottom of a form beco
 untappable, which is a bug rather than a blemish. The form-heavy screens (daily
 job report, time off, the equipment forms) are the ones to walk.
 
-### HIDE ON SCROLL — requested, built in the mockup, NOT yet decided
+### SWIPE TO TUCK — the operator's idea, and it replaces hide-on-scroll
+
+Operator, 2026-07-25: "swipe the bar to the right in sports mode to hide it and it
+left a small half circle with chevron to slide it back out."
+
+Swipe the bar right and it slides off the edge, leaving a half-circle handle with a
+chevron; tap it or swipe it left and the bar returns. The distinction from
+hide-on-scroll is the whole point: the app never takes navigation away, the person
+puts it away deliberately, and the way back is always on screen. That answers the
+NAV.1 objection instead of arguing with it.
+
+### THE BAR IS ABSENT FROM THE SPORTS ROSTER ON iPAD, and that is what makes the
+### tuck worth having
+
+Verified, not assumed: `CapturaSportsView.onAppear` sets
+`TabBarManager.shared.isFullScreenOverlayActive = true` when the idiom is iPad,
+commented "Hide tab bar when in roster view (iPad) to maximize vertical space", and
+clears it on disappear. `FPSportsRosterView_iPad` does the same. So on iPad there is
+NO bottom navigation at all in the app's largest tool. On iPhone the bar is only
+hidden while the photo viewer is up.
+
+The operator's point follows: a bar that can be tucked away by hand does not need to
+be taken away by the screen, so Sports could have one again.
+
+THREE CONSTRAINTS BEFORE THAT CAN HAPPEN, all of them real, none of them mine to
+wave through:
+
+  1. `CapturaSportsView.swift` IS A HOOK-PROTECTED CAPTURA FILE. Changing when it
+     hides the bar means editing it, which needs explicit in-conversation operator
+     authorization. `FPSportsRosterView_iPad.swift` is NOT protected.
+  2. D1 PUTS SPORTS PERMANENTLY OUT OF THIS ARC. The bar itself is shell code and is
+     squarely in AMB.4, but making it appear inside Sports is a change to Sports'
+     behaviour and needs a ruling, not an inference.
+  3. THE ORIGINAL REASON WAS GOOD. Vertical space on a roster is not a style
+     preference — it is rows of athletes visible at once during a live shoot. The
+     tuck has to be provably easy to reach and re-hide before anyone gives that
+     space back, and the person to judge that is the operator on an iPad at a shoot.
+
+RECOMMENDED as a follow-on with its own smoke rather than folded into AMB.4: build
+and prove the tuck here, on surfaces this phase already owns, and let Sports adopt
+it as a separate, authorized change.
+
+### HIDE ON SCROLL — TRIED, AND DROPPED
 
 Operator, 2026-07-25: "could this have the same behavior as facebooks bottom tab
 bar? if i scroll down the bar slides down out of view but as soon as i pull up, it
 slides back up."
 
-Built so it can be felt rather than argued about. Direction, not position: a
-downward read hides it, any upward pull returns it, and it is always shown near the
-top so a screen never opens with its navigation missing. A 6pt threshold stops the
-jitter a scroll view produces at rest from flickering the bar. Coherent with
-floating and only with floating — a bar that reserves its space cannot slide away
-without the content reflowing to fill the gap, which is a jump under the thumb.
+Asked for, built, and then dropped — by the operator, who resolved the design
+question rather than the bug: "still doesnt work and you are right. navigation is
+more important." That was the concern I had raised when they asked for it: NAV.1
+made Home permanently reachable and Scan permanently present, Facebook is a feed
+where navigation is incidental, and this is a work tool where Scan is the
+most-tapped button on the bar.
 
-TWO THINGS TO SETTLE BEFORE IT SHIPS, both recorded rather than assumed:
+DELETED rather than left switched off, along with the on-screen probe I added to
+debug it. An experiment that has lost its argument is not scaffolding worth
+carrying, and a disabled toggle invites re-litigating a settled decision.
 
-  1. THE SHELL CANNOT SEE SCROLLING INSIDE A FEATURE SCREEN. Each screen has to
-     report its own offset through a small shared modifier. The graceful default
-     is what makes this safe: a screen that has not adopted it keeps a permanent
-     bar rather than breaking. So it can land screen by screen with the arc.
+TWO THINGS WORTH KEEPING FROM IT, because they cost real time to learn:
 
-  2. IT PARTLY UNDOES A NAV.1 DECISION, and that deserves the operator's eyes
-     rather than mine. NAV.1 made Home permanently reachable from the bottom bar
-     and Scan permanently present; hiding the bar means both are sometimes absent.
-     Facebook is a feed — content is the point and navigation is incidental. This
-     is a work tool used one-handed, in a hurry, sometimes in gloves, and Scan is
-     the most-tapped button on the bar. Worth feeling on a device before it ships.
+  1. IT FAILED SILENTLY FOR A REASON WORTH REMEMBERING. The offset reporter was a
+     GeometryReader inside a `.background(...)`. `.background` and `.overlay` build
+     a SECONDARY view hierarchy, and preferences set there do not reliably reach an
+     ancestor — so `onPreferenceChange` was never called and the bar simply never
+     heard about the scroll. Nothing about the direction logic was wrong. Moving the
+     reporter to a real child fixed the plumbing; the operator reported it still not
+     working on their device before they dropped the feature, so the second cause
+     was never diagnosed and the honest state is UNRESOLVED, not fixed.
+
+  2. I SHOULD HAVE INSTRUMENTED FIRST. I shipped an untested interaction and asked
+     the operator to discover it did nothing, then added an on-screen probe only
+     after they reported it. The rule already existed for exactly this shape of bug
+     ("nothing happens", multiple plausible causes) and I applied it a round too
+     late. Worse, I cannot run this surface myself — reaching the design lab needs a
+     signed-in session against the shared Supabase project — so every guess costs
+     operator time rather than mine. When I cannot see it run, the probe goes in
+     with the first version, not the second.
 
 ### Defects found while inventorying — REPORTED, not yet fixed
 
