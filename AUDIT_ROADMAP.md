@@ -487,19 +487,31 @@ other rebases onto it.
   stack is the shape of the AMB.1 dead tap. Collapsed to one
   `EquipmentDestination` enum and a single link.
 
-  **Still outstanding: both device smokes (iPhone AND iPad, D7).** Exercise the
-  push paths first — row tap, kit tap, QR scan — plus the kit detail's per-item
-  "…" menu. The D8 push waits on those.
+  **OPERATOR SMOKE PASSED on iPhone AND iPad, 2026-07-25 ("all works", "both are
+  good") — D7 satisfied.** Exercised: kit card opens the packing list, the
+  per-item "…" menu, an item row inside a kit, Browse all equipment, an item in
+  the inventory, and the QR button. The push paths work inside a real
+  `NavigationStack`, which was the open risk. **AMB.3 is DONE and PUSHED per D8.**
 
-  **Smoke in progress.** Operator reported that kits are not tappable in "Manage
-  Kits" (the gearshape sheet). Verified as PRE-EXISTING and not an AMB.3
-  regression: that screen's rows have never carried a tap target and there is no
-  kit-template detail screen in the app. Recorded against AMB.12, which owns the
-  file; operator's call was "leave it, note it". **Not yet confirmed either way:
-  whether the kit cards on the main Equipment screen push into the packing list.**
-  Those are this phase's, and they are the first `ambientPush` to run inside a real
-  `NavigationStack`, so they remain the single most important thing for the smoke
-  to answer.
+  Two things the smoke turned up, neither a regression:
+
+  - **"Manage Kits" implies a tap it does not have.** Verified PRE-EXISTING:
+    `AdminKitTemplatesView`'s rows have never carried a tap target, there is no
+    kit-template detail screen in the app, and git confirms AMB.3 never opened the
+    file. Operator's call: "leave it, note it". Filed against AMB.12 above.
+  - **"Also checked out to you" absent, and correctly so.** The operator has 62
+    items out across two kits of 20 and 42 — an exact match, so nothing is left
+    over for a section that only ever listed gear belonging to no kit. But
+    diagnosing it exposed a real hole, fixed in 87bb442: the counts come from
+    ASSIGNMENTS and the rows from matched EQUIPMENT records, and
+    `groupAssignmentsByKit` drops an item silently when it is not in the fetched
+    inventory — so a total match failure rendered as three numbers above blank
+    space. It now says what happened. Same lesson as PUB.1's O5.
+
+    **Consequence worth recording: the dead-tap fix on that section is UNVERIFIED
+    on device**, because the operator has no gear outside a kit to exercise it.
+    The same code path is covered by the in-kit and inventory item taps, which
+    both pass.
 - [ ] **AMB.4 Home dashboard** (`MainEmployeeView` + `DashboardWidgets`, ~3,600 lines) —
   highest traffic, and its Upcoming Shifts widget currently disagrees with the
   already-converted schedule.
