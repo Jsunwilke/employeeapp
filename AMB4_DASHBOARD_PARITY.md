@@ -365,6 +365,114 @@ screen, and so the operator's approval is against a known list.
     Re-fetches today's schedule when the app returns to the foreground
 
 
+## THE BOTTOM TAB BAR — added to AMB.4 by the operator, 2026-07-25
+
+"It should be now in this phase. It should be with the main screen and before any
+other feature."
+
+The bar was in NO phase. The arc's phase list is organised by FEATURE, and the
+bar is nav-shell furniture from NAV.1 that sits on every screen, so it belonged
+to nothing. The card-drift gate could not catch it either: a full-width bar is
+not a rounded-and-filled container, so the rule that has been driving this arc's
+file-by-file conversion is blind to it by construction. It surfaced only because
+the operator asked why it had not changed.
+
+    Iconik Employee/Navigation/BottomTabBar.swift        570 lines
+      BottomTabBar, TabBarButton, TabButtonStyle, TabBarConfigurationView
+    Iconik Employee/Navigation/Models/TabBarItem.swift   243 lines
+      TabBarItem, TabBarConfiguration, TabBarManager  (data — NOT restyled)
+
+### THE D11 PALETTE NEVER ACTUALLY REACHED THE BAR
+
+AMBIENT_ROLLOUT_PLAN.md's D11 says FeatureTheme has three live consumers —
+MainEmployeeView, AllFeaturesView and BottomTabBar — and that re-cutting the
+palette in AMB.2 "changes the home screen's tile colours and the bottom bar
+immediately". THE BOTTOM BAR HALF OF THAT IS NOT TRUE, and it is verified rather
+than suspected: FeatureTheme appears in BottomTabBar.swift exactly once, at line
+569, inside TabBarConfigurationView — the CUSTOMISE screen, not the bar.
+
+The live bar colours itself from TabBarButton.accentColor (lines 322-333), a
+FOURTH hardcoded feature-colour map that the audit roadmap's design-token work
+never found. It covers seven ids and defaults everything else to blue:
+
+    timeTracking cyan · chat blue · scan orange · photoshootNotes purple
+    dailyJobReport green · sportsShoot indigo · equipment cyan · else BLUE
+
+So the tile you tap and the bar item you land on disagree for nearly every
+feature — Tasks is not even in the map, so its bar item is blue while its tile is
+#E93D82. That is precisely the drift D11 was written to eliminate, surviving in
+the one file nobody assigned to a phase. Converting the bar closes it.
+
+### Capabilities — read from the source
+
+    KEPT   TWO DIFFERENT LAYOUTS BY DEVICE, and they are genuinely different
+           screens, not a reflow (the same trap as the dashboard widgets):
+             iPhone — items split left/right around a PERMANENT centre Scan
+               button; up to 6 items besides Scan
+             iPad   — NO Scan at all (getScanItem returns nil on iPad, because
+               iPads have no NFC); a prominent centre HOME button instead; up
+               to 10 items
+    KEPT   The iPad Home button: a 78pt circle with a 44pt house, its LAYOUT
+           height capped at 44pt and bottom-aligned so the circle overflows
+           UPWARD above the bar without making the bar taller
+    KEPT   The iPad top hairline NOTCHES around that circle — a 92pt gap so the
+           line does not cut across it. NAV.1 shipped this deliberately.
+    KEPT   Left and right groups each take half the width on iPad so Home stays
+           dead centre whatever the item count; odd counts put the extra item
+           on the left
+    KEPT   Scan's icon deliberately OVERFLOWS its circle (60pt glyph, 50pt
+           circle) — the code says so explicitly and says a house at that size
+           would clip, which is why iPad Home is drawn differently
+    KEPT   Per-item selected state: tinted icon, tinted label, and a 20x3
+           sliding underline that travels between items via matchedGeometryEffect
+    KEPT   Icon sizes 24pt iPhone / 30pt iPad / 60pt Scan
+    KEPT   Optional labels, driven by configuration.showLabels — 10pt iPhone,
+           12pt iPad, minimumScaleFactor 0.8
+    KEPT   Press feedback: scale to 0.85, spring; selected icons sit at 1.1
+    KEPT   Haptics — light for a normal tab, MEDIUM for Scan and for iPad Home
+    KEPT   Badges: a red count capsule capped at "99+", and a dot — GREEN when
+           the badge is .active (clocked in) and red otherwise
+    KEPT   Badge wiring: chat shows the unread count, timeTracking shows the
+           clocked-in dot
+    KEPT   accessibilityLabel = title, accessibilityHint = description
+    KEPT   The whole bar hides during a full-screen overlay (owned by
+           MainEmployeeView, not the bar)
+    KEPT   Customise screen (TabBarConfigurationView): pick up to N features,
+           reorder by drag, add/remove with +/- buttons, live "N of N selected"
+           counter that turns red at the cap, "Scan is always included" note on
+           iPhone, saves immediately on every change
+
+### Defects found while inventorying — REPORTED, not yet fixed
+
+    1. THE iPHONE BAR OVERFLOWS THE SCREEN AT ITS OWN MAXIMUM.
+       Buttons are a fixed 50pt, Scan is 70pt, and the spacers are minimums
+       (10 + 20 + 20 + 10 = 60pt). At the 6 items getMaxItemsForDevice allows:
+         6 x 50 + 70 + 60 + 8 padding = 438pt
+       against 393pt on an iPhone 15/16 and 375pt on an SE. Five items already
+       overflows an SE (388pt). The default configuration ships THREE items, so
+       this only bites a user who customises — which the customise screen
+       actively invites, and its counter cheerfully allows.
+       Nothing shrinks: fixed widths and minimum-length spacers.
+
+    2. A REDRAW HACK THAT KILLS THE SELECTION ANIMATION.
+       Line 146: .id("bottomTabBar_\(chatManager.totalUnreadCount)").
+       chatManager is an @ObservedObject and totalUnreadCount is @Published
+       (ChatManager.swift:19), so the redraw it forces was already happening.
+       What it DOES do is change the view's identity every time a message
+       arrives, rebuilding the whole bar and discarding the matchedGeometryEffect
+       namespace — so the sliding underline jumps instead of travelling, and
+       every button is reconstructed, whenever the unread count changes.
+
+    3. DEAD STATE AND DEAD CODE, all verified zero-caller:
+         animateSelection — written in five places, read nowhere
+         TabBarConfiguration.animateSelection — stored and persisted, read nowhere
+         TabBarManager.getQuickAccessItemsForDevice() — no callers
+         TabBarConfigurationView.deleteSelectedFeatures(at:) — no callers; the
+           List has .onMove but never .onDelete, so swipe-to-delete was wired
+           only halfway. Removal still works through the minus button, so no
+           capability is lost by its absence.
+
+
 ## Step 3b — the converted screen against the approved mockup
 
 The arc's workflow requires this pass by name, because it is where two defects

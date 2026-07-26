@@ -153,6 +153,22 @@ D11 THE WASH IS THE FEATURE'S COLOUR, AND THE SCHEDULE IS THE EXCEPTION.
     not a reason to avoid it, but it means the palette lands as a visible change
     in its own right and gets its own line in a closeout.
 
+    CORRECTION, 2026-07-25 (AMB.4). THE BOTTOM BAR HALF OF THAT WAS WRONG, and
+    it went uncorrected for three phases. FeatureTheme appears in
+    BottomTabBar.swift exactly once, at line 569 — inside TabBarConfigurationView,
+    the CUSTOMISE screen. The bar itself colours from TabBarButton.accentColor, a
+    FOURTH hardcoded feature-colour map that the audit roadmap's design-token
+    consolidation never found. It covers seven ids and defaults everything else to
+    blue, so the tile you tap and the bar item you land on disagree for nearly
+    every feature; Tasks is not in the map at all, so its bar item is blue against
+    a #E93D82 tile.
+
+    The lesson is not the miss itself but how it survived: the palette was
+    verified by reading the CALL SITES that were known about, not by grepping for
+    what else assigns a colour to a feature id. The card-drift gate could not
+    catch it either — it looks for hand-rolled cards, and a colour map is not a
+    card. AMB.4 closes it by converting the bar (D13).
+
     Also note the schedule's own row in that map says red, while its wash is the
     job's colour. That is not a contradiction to fix — it is D11's exception,
     and FeatureTheme's schedule colour keeps doing its real job of tinting the
@@ -335,6 +351,40 @@ D12 IT IS A REDESIGN, AND NO FEATURE MAY BE LOST. Operator decision
     case is actually packed. An alphabetical sort would be indistinguishable in
     a screenshot and worse every day of the year. Domain logic like that is a
     feature under this decision and is carried forward explicitly.
+
+
+D13 THE BOTTOM TAB BAR IS PART OF AMB.4, AND LANDS BEFORE ANY OTHER FEATURE.
+    Operator decision, 2026-07-25: "it should be now in this phase, it should be
+    with the main screen and before any other feature."
+
+    WHY IT WAS MISSING, which is the part worth keeping. The bar belonged to NO
+    phase. This plan's phase list is organised by FEATURE — Equipment, Tasks,
+    Chat, Reports — and the bar is nav-shell furniture from NAV.1 that sits on
+    every screen, so it matched no entry. The card-drift gate could not have
+    caught it either: it detects hand-rolled CARDS, and a full-width bar is not a
+    rounded, filled container. Two independent mechanisms for finding unconverted
+    surfaces, and the bar was invisible to both. It surfaced only because the
+    operator looked at the app and asked why it had not changed.
+
+    THE GENERAL FORM OF THE GAP: this arc's phase list covers features, and the
+    app also contains SHELL. Time tracking is recorded below as the same kind of
+    hole, found the same way. Before AMB.5 starts, the remaining shell should be
+    enumerated deliberately rather than waiting to be noticed — the profile
+    toolbar, the theme picker, the toast, and whatever else appears on screens
+    nobody has assigned.
+
+    WHY IT BELONGS WITH THE HOME SCREEN RATHER THAN AT THE TAIL: the bar sits at
+    the bottom of the dashboard, so converting home without it leaves a glass,
+    washed screen sitting on an opaque slab — a seam on the app's front door,
+    which is exactly the failure D10's batch-review rule exists to prevent. It is
+    also the app's most-seen pixel, present on every screen including the nine
+    still unconverted, so it does more than any single feature to make the app
+    read as one thing.
+
+    SCOPE: BottomTabBar.swift (570 lines — the bar, its button, and the customise
+    screen). Models/TabBarItem.swift is DATA and is not restyled. The two device
+    layouts are preserved exactly, including the iPad's centre Home button, its
+    upward overflow, and the notch in the top hairline that NAV.1 shipped.
 
 
 ## Phases
