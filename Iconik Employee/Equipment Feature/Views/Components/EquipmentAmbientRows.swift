@@ -311,7 +311,7 @@ struct EquipmentRow: View {
         switch density {
         case .hero: return 64
         case .roomy: return 56
-        case .compact: return 40
+        case .compact, .bubble: return 40
         }
     }
 

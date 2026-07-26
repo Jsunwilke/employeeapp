@@ -33,12 +33,24 @@ import UIKit
 /// is a change of vocabulary rather than a change of size.
 enum AmbientDensity: CaseIterable {
     case hero, roomy, compact
+    /// A chat message bubble. Added in AMB.6 with the tinted fill (see
+    /// `AmbientCardFill`) so Chat could stop hand-rolling one.
+    ///
+    /// It is NOT in `allCases`, which is given explicitly below: the three list
+    /// densities are a spectrum a surface chooses along, and the specimen
+    /// sheet's density switch walks them. A bubble is not a point on that
+    /// spectrum — offering it there would invite a list to be drawn as bubbles.
+    case bubble
+
+    /// Explicit, so `.bubble` stays out of density pickers and specimen sweeps.
+    static var allCases: [AmbientDensity] { [.hero, .roomy, .compact] }
 
     var horizontalPadding: CGFloat {
         switch self {
         case .hero: return 18
         case .roomy: return 16
         case .compact: return 12
+        case .bubble: return 12
         }
     }
 
@@ -47,6 +59,7 @@ enum AmbientDensity: CaseIterable {
         case .hero: return 18
         case .roomy: return 16
         case .compact: return 10
+        case .bubble: return 8
         }
     }
 
@@ -55,6 +68,7 @@ enum AmbientDensity: CaseIterable {
         case .hero: return 24
         case .roomy: return 22
         case .compact: return 14
+        case .bubble: return 16
         }
     }
 
@@ -64,6 +78,7 @@ enum AmbientDensity: CaseIterable {
         case .hero: return 10
         case .roomy: return 7
         case .compact: return 3
+        case .bubble: return 3
         }
     }
 
@@ -73,6 +88,7 @@ enum AmbientDensity: CaseIterable {
         case .hero: return 16
         case .roomy: return 12
         case .compact: return 8
+        case .bubble: return 2
         }
     }
 
@@ -82,6 +98,7 @@ enum AmbientDensity: CaseIterable {
         case .hero: return .system(size: 19, weight: .semibold)
         case .roomy: return .system(size: 17, weight: .semibold)
         case .compact: return .system(size: 15, weight: .semibold)
+        case .bubble: return .system(size: 15, weight: .semibold)
         }
     }
 
@@ -90,6 +107,7 @@ enum AmbientDensity: CaseIterable {
         case .hero: return .subheadline
         case .roomy: return .footnote
         case .compact: return .caption
+        case .bubble: return .caption
         }
     }
 }

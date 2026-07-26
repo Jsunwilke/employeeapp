@@ -34,6 +34,21 @@ enum AmbientCardState {
     case receded
 }
 
+/// What fills a card.
+///
+/// Added in AMB.6. The lab's chat mockup had to prototype its own bubble because
+/// this container could only fill with a MATERIAL, and "my message" needs a solid
+/// colour — a material takes its appearance from what is behind it, which is
+/// exactly what an identity colour must not do. The rule the arc set for that
+/// situation is that the primitive gets extended rather than hand-rolled around,
+/// so here it is.
+enum AmbientCardFill {
+    /// The default: glass over whatever wash the screen carries.
+    case material
+    /// A solid tint. Used by the chat bubble for the sender's own messages.
+    case tint(Color)
+}
+
 /// The hairline around a card. Ambient cards are separated by a lit edge rather
 /// than by a heavy drop shadow, which is what keeps a dense list from looking
 /// like a pile of receipts.
@@ -58,6 +73,7 @@ enum AmbientCardBorder {
 struct AmbientCardModifier: ViewModifier {
     var density: AmbientDensity = .roomy
     var state: AmbientCardState = .normal
+    var fill: AmbientCardFill = .material
     var border: AmbientCardBorder = .none
     /// A coloured bloom under the card. Hero surfaces only — a glow on every row
     /// of a list is the "pile of receipts" failure.
@@ -77,10 +93,15 @@ struct AmbientCardModifier: ViewModifier {
         RoundedRectangle(cornerRadius: density.cornerRadius, style: .continuous)
     }
 
-    private var fill: AnyShapeStyle {
-        switch state {
-        case .highlighted: return AnyShapeStyle(.regularMaterial)
-        case .normal, .receded: return AnyShapeStyle(.ultraThinMaterial)
+    private var fillStyle: AnyShapeStyle {
+        switch fill {
+        case .tint(let color):
+            return AnyShapeStyle(color)
+        case .material:
+            switch state {
+            case .highlighted: return AnyShapeStyle(.regularMaterial)
+            case .normal, .receded: return AnyShapeStyle(.ultraThinMaterial)
+            }
         }
     }
 
@@ -89,7 +110,7 @@ struct AmbientCardModifier: ViewModifier {
             .padding(.horizontal, density.horizontalPadding)
             .padding(.vertical, density.verticalPadding)
             .modifier(AmbientFillWidth(active: fillWidth, alignment: contentAlignment))
-            .background(fill, in: shape)
+            .background(fillStyle, in: shape)
             .overlay { borderOverlay }
             .modifier(AmbientGlow(color: glow))
             .grayscale(state == .receded ? 0.85 : 0)
@@ -150,13 +171,14 @@ extension View {
     func ambientCard(
         density: AmbientDensity = .roomy,
         state: AmbientCardState = .normal,
+        fill: AmbientCardFill = .material,
         border: AmbientCardBorder = .none,
         glow: Color? = nil,
         fillWidth: Bool = false,
         contentAlignment: Alignment = .leading
     ) -> some View {
-        modifier(AmbientCardModifier(density: density, state: state, border: border,
-                                     glow: glow, fillWidth: fillWidth,
+        modifier(AmbientCardModifier(density: density, state: state, fill: fill,
+                                     border: border, glow: glow, fillWidth: fillWidth,
                                      contentAlignment: contentAlignment))
     }
 }

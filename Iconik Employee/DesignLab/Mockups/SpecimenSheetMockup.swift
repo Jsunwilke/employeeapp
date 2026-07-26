@@ -77,6 +77,7 @@ struct SpecimenSheetMockup: View {
         case .hero: return "HERO — \(Int(density.verticalPadding))pt padding, \(Int(density.cornerRadius))pt radius"
         case .roomy: return "ROOMY — \(Int(density.verticalPadding))pt padding, \(Int(density.cornerRadius))pt radius"
         case .compact: return "COMPACT — \(Int(density.verticalPadding))pt padding, \(Int(density.cornerRadius))pt radius"
+        case .bubble: return "BUBBLE — chat only, not a list density"
         }
     }
 
@@ -280,7 +281,7 @@ struct LabEquipmentRow: View {
         switch density {
         case .hero: return 64
         case .roomy: return 56
-        case .compact: return 40
+        case .compact, .bubble: return 40
         }
     }
 
