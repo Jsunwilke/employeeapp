@@ -109,6 +109,16 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Whether the mockup's subject is pinned to the bottom of the screen. The
+    /// runner moves its switcher out of the way for these — otherwise the lab's
+    /// own chrome sits on top of the thing being judged.
+    var anchorsBottom: Bool {
+        switch self {
+        case .tabBar: return true
+        default: return false
+        }
+    }
+
     /// Batch-1 surfaces carry their own FEATURE colour (D11), so the gallery is
     /// itself a check on whether four converted screens will read as four
     /// different places.
@@ -233,14 +243,19 @@ private struct DesignLabRunner: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        // The switcher normally lives bottom-right, which is out of the way for a
+        // scrolling mockup and directly ON TOP of one whose whole subject is
+        // anchored to the bottom edge. The tab-bar mockup could not be seen at
+        // all underneath it. Bottom-anchored mockups move it to the top instead.
+        ZStack(alignment: current.anchorsBottom ? .topTrailing : .bottomTrailing) {
             current.view
                 .id(current)
 
             if DesignLabMockup.allCases.count > 1 {
                 switcher
                     .padding(.trailing, 14)
-                    .padding(.bottom, 24)
+                    .padding(current.anchorsBottom ? .top : .bottom,
+                             current.anchorsBottom ? 10 : 24)
             }
         }
         .navigationTitle(current.title)

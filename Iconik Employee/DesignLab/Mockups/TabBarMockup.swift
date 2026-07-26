@@ -192,6 +192,11 @@ struct TabBarMockup: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Text("Note: the app's REAL bar is still at the very bottom of the screen, below the proposal — it is on every screen, including this one. The lowest bar you can see is the live one; the capsule above it is the proposal.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .ambientCard(density: .compact, fillWidth: true)
     }
