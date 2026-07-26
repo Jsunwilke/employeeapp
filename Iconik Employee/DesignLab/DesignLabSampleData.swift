@@ -463,3 +463,61 @@ extension DesignLabSampleData {
         ]
     }
 }
+
+// MARK: - Shared lab helper, kept when its mockup went
+
+/// Binds a card with a kit's tape colour.
+///
+/// This lived in EquipmentMockup.swift and moved here when AMB.6 closed batch 1
+/// and deleted that mockup — the specimen sheet still uses it, so it is
+/// HARNESS-level rather than a phase's scaffolding. Same call AMB.5 made when it
+/// kept the shared time helper.
+///
+/// A helper hiding inside a phase's mockup is worth noticing: deleting the
+/// mockup broke the build, which is the cheap version of that lesson.
+///
+/// Rainbow is a real tape colour (`KitTemplate.isRainbow`, special-cased in three
+/// production views), so a band drawn as a flat `Color(hex:)` renders garbage.
+struct LabKitEdge: ViewModifier {
+    /// A hex string, or the literal "rainbow", or nil for an item in no kit.
+    let hex: String?
+    let density: AmbientDensity
+
+    private var isRainbow: Bool { hex?.lowercased() == "rainbow" }
+
+    /// Branches on a value fixed at the call site — a row's kit does not change
+    /// under it — so the `_ConditionalContent` identity switch cannot fire
+    /// mid-animation. Same reasoning as `AmbientGlow`.
+    func body(content: Content) -> some View {
+        if let hex {
+            content
+                .overlay(alignment: .leading) {
+                    Group {
+                        if isRainbow {
+                            Rectangle().fill(LabKitEdge.rainbow)
+                        } else {
+                            Rectangle().fill(Color(hex: hex))
+                        }
+                    }
+                    .frame(width: 4)
+                }
+                // Clipping the CARD, not the band: this is what makes the band
+                // follow the corner curve instead of overhanging it.
+                .clipShape(RoundedRectangle(cornerRadius: density.cornerRadius,
+                                            style: .continuous))
+        } else {
+            content
+        }
+    }
+
+    static let rainbow = LinearGradient(
+        colors: [.red, .orange, .yellow, .green, .blue, .purple],
+        startPoint: .top, endPoint: .bottom)
+}
+
+extension View {
+    /// No-op when the thing is in no kit.
+    func labKitEdge(_ hex: String?, density: AmbientDensity) -> some View {
+        modifier(LabKitEdge(hex: hex, density: density))
+    }
+}

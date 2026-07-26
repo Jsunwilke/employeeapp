@@ -38,8 +38,6 @@ import SwiftUI
 enum DesignLabMockup: String, CaseIterable, Identifiable {
     case specimens
     case palette
-    case equipment
-    case chat
 
     var id: String { rawValue }
 
@@ -47,8 +45,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
-        case .equipment: return "Equipment"
-        case .chat: return "Chat"
         }
     }
 
@@ -58,8 +54,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
-        case .equipment: return "AMB.3"
-        case .chat: return "AMB.6"
         }
     }
 
@@ -69,10 +63,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "Every Ambient primitive at every density, drawn against Equipment's real row content. This is where the density decision gets made."
         case .palette:
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
-        case .equipment:
-            return "The two tabs are gone: one screen leads with your gear and says what is late, with the whole inventory one row behind it. The kit detail is a packing list. AMB.3 waits on this."
-        case .chat:
-            return "The hardest test of compact. Three switches inside the thread: per-message timestamps, grouping a run, and whose colour “mine” is."
         }
     }
 
@@ -80,8 +70,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
-        case .equipment: return "shippingbox.fill"
-        case .chat: return "bubble.left.and.bubble.right.fill"
         }
     }
 
@@ -93,8 +81,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return .purple
         case .palette: return .pink
-        case .equipment: return FeatureTheme.color(for: "equipment")
-        case .chat: return FeatureTheme.color(for: "chat")
         }
     }
 
@@ -103,8 +89,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
-        case .equipment: EquipmentMockup()
-        case .chat: ChatMockup()
         }
     }
 }
