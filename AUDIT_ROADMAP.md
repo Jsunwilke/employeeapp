@@ -875,31 +875,84 @@ other rebases onto it.
 
 **Batch 2**
 
-- [ ] **AMB.7 Reports family** (Misc Features, 8,695 lines) — daily job report, custom
-  reports, my reports, photoshoot notes. Form-heavy; first real input styling.
-  **BATCH-2 MOCKUPS BUILT 2026-07-26** (inherited from AMB.6, which never built them).
-  Six Reports surfaces in the lab, all interactive rather than drawn. The daily job
-  report went through THREE designs before the operator approved it on iPhone:
-  v1 was a restyle ("you prettied up what I already had"), v2 an accordion ("hate it,
-  very hard to fill out"), v3 is one screen where nothing collapses, both option
-  lists fully visible in two columns under grouped families, nine peer sections with
-  no visual hierarchy between them, and an inline vehicle confirmation with no
-  default vehicle. **OPERATOR APPROVED 2026-07-26 — D10 SATISFIED for batch 2.**
-  **THE MOCKUP IS THE SPEC** — operator requirement that the real screen "act
-  EXACTLY as the mockup does". The behaviour contract is in AMB_BATCH2_PARITY.md;
-  the school-ownership rule is real tested code (`DesignLab/ReportSchoolLink.swift`,
-  `scripts/test_report_school_link.sh`, 16 checks, proved to fail when the rule is
-  broken) and should be CARRIED OVER at conversion rather than reimplemented.
-  STILL OPEN, and neither blocks the design: whether the org's session_types match
-  the 22 hardcoded job descriptions, and the loading/offline states the mockup
-  deliberately does not specify.
-  ⚠️ FIVE CAPABILITIES were lost inside these redesigns and restored — the denial
-  reason, the report date, the photographer, the session link, the photoshoot note.
-  The operator found four. Parity-walk the NEW screen every round, not just the old.
-  DJR.1's wizard is DROPPED (operator, 2026-07-26). It had been proposed by a Claude
-  session on 2026-07-13 with no research behind it and had never been questioned.
-  DJR.1 keeps draft auto-save and the offline outbox, which AMB.7 deliberately left
-  unspecified because both are data-layer work.
+- [x] **AMB.7 Reports family** — DONE 2026-07-27, NOT YET PUSHED (three commits,
+  b5679dc..fcac798). Seven screens converted, TEN files deleted in the same commit:
+  DailyJobReportView, MyJobReportsView, EditDailyJobReportView, CustomDailyReportsView,
+  TemplateFormView, PhotoshootNotesView, LocationPhotoAttachmentView, the ORPHANED
+  TemplateReportListView, plus UIComponents.swift and JobNotesView.swift, which the
+  conversion orphaned. Nothing runs in parallel.
+
+  **THE DESIGN IS IMPORTED, NOT MATCHED — and that is the answer to the operator's
+  question about building it exactly as designed.** Every converted screen draws with
+  `Reports/ReportFormKit.swift` and runs `ReportRules.swift`, `ReportSchoolLink.swift`
+  and the new `ReportOptions.swift`: the SAME files the lab's mockup uses. There is no
+  copying step, so there is nothing to drift. The lab's private copies of the 22 job
+  descriptions and 12 extra items are deleted — `DesignLabSampleData` forwards to
+  `ReportOptions` — so the mockup and the real screen cannot disagree about what a
+  photographer may tick. `scripts/test_report_rules.sh` compiles and RUNS those real
+  files: **76 checks**, up from 44, with every new rule fix proved to FAIL without it.
+
+  **THE ORPHANED SCREEN'S CAPABILITIES MOVED INTO THE LIVE ONE.** TemplateReportListView
+  was 558 lines, compiled, shipped and unreachable, and it held the search, date filter,
+  grouping, badges, empty state and retry that MyJobReportsView — the list a photographer
+  can actually open — did not have. All of it is in ReportsHomeView now, which also leads
+  with the question the surface never answered: have I filed today's report yet.
+
+  **THE PARITY WALK RAN THREE TIMES**, 103 capability checks against the NEW screens,
+  before showing the operator anything. That is the standing rule and it held.
+
+  **FOUR AUDITS. THE FIX-ROUND AUDIT FOUND THE PHASE'S WORST DEFECT — SIX PHASES
+  RUNNING.** Three adversarial passes (correctness/concurrency, data integrity, design
+  fidelity) found 40+ real findings; a fourth aimed at the FIX round found a CRITICAL one
+  the fix itself had introduced: the report's note-photo list was derived from the
+  thumbnails that had downloaded, so a failed download dropped a photo silently and
+  submitting before the downloads landed dropped all of them — and submit deletes the
+  note, so they had nowhere else to be. A fifth audit covered the second fix round.
+  **The pattern is now six for six and should be treated as a law, not a habit.**
+
+  **REGRESSIONS THE CONVERSION INTRODUCED AND FIXED:** a session resolved its school by
+  NAME only (the deleted form preferred `school_id`, deliberately) so a renamed school
+  put no school on the report and mileage silently went to 0.0; a failed refresh in the
+  school picker EMPTIED the school list the report resolves ids through, erasing every
+  school on the report; a required template `file` field became satisfiable by zero
+  photos; the photo-loss message was raised on a screen the shell was tearing down; and
+  the picker built a `SchoolItem` from a DIFFERENT column than the report screens,
+  degrading the address a route is measured from and caching it.
+
+  **DEAD OR LYING CONTROLS FIXED, because the redesign made them unavoidable:** a
+  required file field and an untouched optional number field each made a template
+  permanently unsubmittable; multiselect and radio ignored readOnly; a field that was
+  both basic and smart rendered twice; a date field snapped back to today; the custom-
+  reports empty state was unreachable and a transient failure hid templates the user
+  already had; the editor rewrote `your_name` from AppStorage on every update — the
+  column the manager drill-down queries by; the editor invented three scan answers on
+  load; Update could write defaults over a record that failed to load; a failed delete
+  was invisible; and editing a template report rewrote `report_type` to "standard" on
+  the shared table.
+
+  **RECORDED AND DELIBERATELY NOT FIXED**, each named in the file that carries it, all
+  needing the data layer: an edit cannot clear a field (R10); the submitted-notes fetch
+  cannot succeed and would drop every row if it could (R1/R2/R3/R8); a location-photo
+  upload can wipe a school's existing photos (R7); the two mileage engines disagree
+  (R22); the already-reported lookup is keyed on FIRST NAME (R25).
+
+  **THE EDITOR WAS NEVER MOCKED**, and that is named rather than slipped in — the
+  mockup's rows pushed nowhere. It gets the approved components applied to the same
+  fields, and no structure the operator has not seen. Its vehicle now takes the two-step
+  the create form always had.
+
+  Card-drift sweep clean, all five AMB.7 rows deleted (MileageReportsView and
+  RoutePlannerView were mislabelled AMB.7 by the generator and are retagged AMB.9 —
+  **the route planner belongs to no phase in the list at all**, the same shape as the
+  bottom tab bar in AMB.4). `/security-review` found no new HIGH or MEDIUM.
+
+  ⚠️ **STILL OPEN AND ONLY THE OPERATOR CAN CLOSE THEM:** the iPhone and iPad smokes
+  (D7), and `/code-review`, which I cannot launch. The batch-2 mockups are deliberately
+  NOT deleted until the smokes pass — a validation reference outlives the port it
+  validates. One question the phase did not need but the roadmap flagged: whether the
+  org's `session_types` match the 22 job descriptions. The approved v3 design prefills
+  nothing from them, so nothing depended on the answer.
+
 - [ ] **AMB.8 Time off** (8 views, 3,763 lines) — closes batch 2 and mocks batch 3.
   **MOCKUP BUILT + APPROVED 2026-07-26** — five surfaces in the lab, approved with
   the Reports set. NOTE it was built BEFORE the feedback that reshaped Reports, so

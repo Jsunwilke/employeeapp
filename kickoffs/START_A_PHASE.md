@@ -11,34 +11,7 @@ phase-naming registry as the rest of the family.
 
 # 🚀 START HERE  (you, the operator)
 
-      WHAT TO BUILD:  AMB.7 — convert the REAL Reports screens
-
-  The batch-2 mockups are BUILT AND APPROVED (2026-07-26), so D10 is satisfied and
-  this phase may touch real screens. Do not re-mock anything.
-
-  READ AMB_BATCH2_PARITY.md FIRST — all of it. It carries three things this phase
-  depends on: the capability inventory for all six Reports surfaces read from source,
-  a BEHAVIOUR CONTRACT of what the converted screen must actually do, and 36
-  non-style defects found while inventorying.
-
-  THE MOCKUP IS THE SPEC, not an illustration. Operator, 2026-07-26: the real screen
-  must "act EXACTLY as the mockup does" — while the mockup's own sample-data plumbing
-  is throwaway. The approved design is DesignLab/Mockups/ReportProposalMockup.swift.
-  Carry DesignLab/ReportSchoolLink.swift over rather than reimplementing it; it is
-  real tested code (scripts/test_report_school_link.sh, 16 checks) and it moves out
-  of DesignLab with the conversion.
-
-  PARITY-WALK YOUR OWN WORK EVERY ROUND, not just the old screen. Five capabilities
-  were lost inside these redesigns and restored, and the operator found four of them.
-  A grep-per-capability pass takes one command; run it before showing anything.
-
-  TWO PAYROLL DEFECTS ARE STILL UNAUTHORISED and must not be folded in silently:
-  TimeOffApprovalView has no permission check, and a PTO shortfall is swallowed after
-  the row is already inserted. Both are recorded in AMB_BATCH2_PARITY.md.
-
-  ONE OPEN QUESTION only the operator can answer: whether the org's session_types
-  match the 22 hardcoded job descriptions. It decides how much can honestly be
-  prefilled, and the mockup has a lab switch for both answers.
+      WHAT TO BUILD:  <leave empty unless the roadmap does not already say it>
 
   An arc id (e.g. NAV.1) or just describe the item in plain words. That is the only
   line you fill in — the agent works out the exact phase and scope.
@@ -133,10 +106,28 @@ phase-naming registry as the rest of the family.
                  phases running. Rounds one and two each introduced a new bug
                  while closing an old one — one a critical, one a message-loss
                  path. Never ship a fix round unaudited, and slow down instead.
-        ── batch 2 ── ⚠️ NOT YET MOCKED — AMB.7 must build them before it starts
-      ⬜ AMB.7   Reports family       (daily job report, custom, mine, photoshoot notes)
-                 ⚠️ CARRIES BATCH-2 MOCKUPS (Reports + Time off) inherited from
-                 AMB.6. D10 is a hard gate: no real screen until they are approved.
+        ── batch 2 ── mocked at the start of AMB.7, approved on iPhone 2026-07-26 ──
+      ✅ AMB.7   Reports family       DONE 2026-07-27, NOT PUSHED (b5679dc..fcac798).
+                 Seven screens converted; TEN files deleted in the same commit,
+                 including the ORPHANED 558-line TemplateReportListView whose
+                 search, filter, grouping, badges and empty state moved into the
+                 list a photographer can actually open.
+                 THE MECHANISM THAT ANSWERS "how do I know it is built exactly as
+                 designed": the design lives in production code the LAB imports,
+                 so there is no matching step. The screens and the mockup draw the
+                 same components and run the same rules, and those rules are
+                 compiled and RUN by scripts/test_report_rules.sh — 76 checks, each
+                 new fix proved to fail without it.
+                 FOUR AUDITS, AND THE ONE AIMED AT MY OWN FIX ROUND FOUND THE
+                 PHASE'S WORST DEFECT — SIX PHASES RUNNING. A fix had made the
+                 report's photo list derive from which thumbnails had downloaded,
+                 so a weak connection silently dropped photos from a report and
+                 then the note holding them was deleted. TREAT "audit the fix
+                 round" AS A LAW. A fifth audit covered the second fix round.
+                 The parity walk ran THREE times, 103 checks against the NEW
+                 screens, before anything was shown to the operator.
+                 ⚠️ The batch-2 mockups are deliberately NOT deleted until both
+                 smokes pass — a validation reference outlives the port.
       ⬜ AMB.8   Time off             (8 views)   + mocks batch 3
         ── batch 3 ──
       ⬜ AMB.9   Mileage + Stats
