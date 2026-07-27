@@ -52,6 +52,8 @@ struct MyTimeOffRequestsView: View {
     @State private var showingCancelAlert = false
     @State private var alertMessage = ""
     @State private var showingAlert = false
+    /// Held when a sheet is up, flushed when it closes — see `cancelRequest`.
+    @State private var queuedAlert: String?
     @State private var destination: TimeOffDestination?
 
     // The balance is loaded here so the lead card can show it. Nil while loading;
@@ -109,10 +111,10 @@ struct MyTimeOffRequestsView: View {
             case .balance: PTOBalanceView(isPushed: true)
             }
         }
-        .sheet(isPresented: $showingNewRequest) {
+        .sheet(isPresented: $showingNewRequest, onDismiss: flushQueuedAlert) {
             TimeOffRequestView(timeOffService: timeOffService)
         }
-        .sheet(item: $editingRequest) { request in
+        .sheet(item: $editingRequest, onDismiss: flushQueuedAlert) { request in
             TimeOffRequestView(timeOffService: timeOffService, editingRequest: request)
         }
         .alert("Cancel Request", isPresented: $showingCancelAlert) {
@@ -268,6 +270,13 @@ struct MyTimeOffRequestsView: View {
 
     // MARK: - Actions
 
+    private func flushQueuedAlert() {
+        guard !showingAlert, let queued = queuedAlert else { return }
+        queuedAlert = nil
+        alertMessage = queued
+        showingAlert = true
+    }
+
     private func refresh() async {
         await timeOffService.refreshRequests()
         await loadBalance()
@@ -307,12 +316,23 @@ struct MyTimeOffRequestsView: View {
             } catch {
                 await MainActor.run { alertMessage = error.localizedDescription }
             }
-            // These are @State writes from a nonisolated continuation — a `View`
-            // isolates `body`, not its methods, so the code after `await` lands
-            // off the main actor. The old screen wrapped every one of these.
+            // The MainActor.run here is REDUNDANT and the comment that used to
+            // justify it was wrong: SwiftUI's `View` protocol is itself
+            // `@MainActor`, so conformance isolates the whole type — methods
+            // included. Verified with a compiler probe. Kept as an explicit hop
+            // rather than deleted, but no longer claiming to fix anything.
+            //
+            // The GUARD is the real change: this screen presents two sheets, and
+            // an alert raised while one of them is up does not appear. Tapping
+            // Edit on another card while a cancel is in flight would have
+            // swallowed the result — including a FAILURE. Queued, not discarded.
             await MainActor.run {
-                showingAlert = true
                 requestToCancel = nil
+                if showingNewRequest || editingRequest != nil {
+                    queuedAlert = alertMessage
+                } else {
+                    showingAlert = true
+                }
             }
         }
     }

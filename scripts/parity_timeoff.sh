@@ -43,6 +43,20 @@ kept () { # $1 = capability, $2 = file, [-i] $3 = pattern
   fi
 }
 
+keptCount () { # $1 = capability, $2 = file, $3 = pattern, $4 = minimum occurrences
+  # FOR A PATTERN THAT LEGITIMATELY APPEARS MORE THAN ONCE. A bare grep for
+  # `errorMessage = ""` passed on the @Published property declaration alone, so the
+  # check could not fail while the property existed — it asserted nothing. Counting
+  # is what distinguishes "the clears are present" from "the variable exists".
+  local n
+  n=$(sed -e 's|//.*||' "$2" 2>/dev/null | grep -c "$3")
+  if [ "$n" -ge "$4" ]; then
+    PASS=$((PASS+1)); printf '  ok    %s (%s occurrences, need %s)\n' "$1" "$n" "$4"
+  else
+    FAIL=$((FAIL+1)); printf '  LOST  %s   [%s ~ %s occurrences, need %s]\n' "$1" "$(basename "$2")" "$n" "$4"
+  fi
+}
+
 gone () { # $1 = capability, $2 = file, $3 = pattern that must NOT appear
   # CODE ONLY — comment lines are stripped first. Every deliberate removal in this
   # phase is explained in a comment that NAMES the thing removed, so a naive grep
@@ -224,7 +238,6 @@ kept "double-submit guard on approve/deny/review"     "$APPR" 'inFlight'
 kept "…and the card shows the write is in flight"     "$KIT" 'actionsBusy'
 kept "a failed deny is shown INSIDE the sheet"        "$APPR" 'denialError'
 kept "the typed denial reason is cleared on dismiss"  "$APPR" 'onDismiss:'
-kept "errorMessage is cleared on a successful fetch"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'errorMessage = ""'
 kept "PTO hours refill when the stored value is zero" "$FORM" 'isUserEdited: storedHours != 0'
 kept "the PTO toggle recalculates"                    "$FORM" 'onChange(of: isPaidTimeOff)'
 kept "TimeOfDay clamps to 23:59 so it round-trips"    "$RULES" '24 \* 60 - 1'
@@ -246,16 +259,22 @@ kept "…nor cancelled mid-write"                       "$APPR" 'disabled(inFlig
 # was up — so a failed approve vanished silently, which is worse than the problem
 # it solved. The message is now held and flushed when the sheet closes.
 kept "a message arriving while a sheet is up is QUEUED" "$APPR" 'queuedAlert = message'
-kept "…and flushed when the sheet closes"             "$APPR" 'guard newValue == nil, let queued = queuedAlert'
+kept "…and flushed when the sheet closes"             "$APPR" 'queuedAlert = nil'
 kept "the deny sheet shows its own busy state"        "$APPR" 'Denying…'
 kept "Retry forces a network fetch, not a cache hit"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'lastCacheUpdate = nil'
-kept "the realtime path clears the failure banner too" "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'errorMessage = ""'
+keptCount "errorMessage cleared on ALL FOUR success paths" "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'errorMessage = ""' 5
 kept "dates carry a year outside the current one"     "$PRES" 'Formatters.mediumDate.string'
 kept "…and a range is formatted as ONE unit"          "$PRES" 'rangeString'
 kept "the lab draws dates through the same formatter" "Iconik Employee/DesignLab/DesignLabSampleData.swift" 'TimeOffDateLabel.rangeString'
 kept "the shortfall is measured on the displayed base" "$FORM" 'projectedAvailable'
 kept "the accrual line is measured from its own base"  "$PTO" 'projectedBalance - balance.balance'
 kept "accrual footnote only for an accrual org"       "$PTO" 'settings.usesAccrualSystem'
+
+kept "approve reports FAILURE as failure, not success"  "$APPR" 'raise(error.localizedDescription)'
+kept "the deny confirmation is not overwritten by a flush" "$APPR" 'queuedAlert = nil'
+kept "the flush will not fire over a live alert"       "$APPR" 'newValue == nil, !showingAlert'
+kept "the LIST screen queues behind its sheets too"    "$LIST" 'flushQueuedAlert'
+kept "raise() has no unread success parameter"         "$APPR" 'private func raise(_ message: String)'
 
 echo
 echo "EXPECTED-GONE — dropped deliberately, each with a reason in the file"

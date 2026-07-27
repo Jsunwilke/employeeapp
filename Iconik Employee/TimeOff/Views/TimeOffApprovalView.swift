@@ -140,7 +140,10 @@ struct TimeOffApprovalView: View {
         // sheet is up, or none.
         .onChange(of: requestToDeny?.id) { newValue in
             // The sheet just closed and something was waiting to be said.
-            guard newValue == nil, let queued = queuedAlert else { return }
+            // `!showingAlert` matters: the deny success path dismisses the sheet
+            // AND raises its own alert in one transaction, so without this the
+            // flush would immediately overwrite it.
+            guard newValue == nil, !showingAlert, let queued = queuedAlert else { return }
             queuedAlert = nil
             alertMessage = queued
             showingAlert = true
@@ -410,19 +413,21 @@ struct TimeOffApprovalView: View {
         inFlight.insert(request.id)
         Task {
             defer { inFlight.remove(request.id) }
+            // BOTH BRANCHES GO THROUGH `raise`, AND NEITHER ASSUMES SUCCESS.
+            //
+            // This block previously set `alertMessage` in the do and the catch and
+            // then called `raise("Request approved successfully")` UNCONDITIONALLY
+            // beneath both — so a FAILED approval overwrote the error and told the
+            // manager a payroll write had succeeded when nothing had been written.
+            // It got there because I applied the fix with a string replacement that
+            // silently did not match, and committed without re-reading the region.
+            // Judge a fix by reading what the code does, not by trusting the edit.
             do {
                 try await timeOffService.approveTimeOffRequest(requestId: request.id)
-                alertMessage = "Request approved successfully"
+                raise("Request approved successfully")
             } catch {
-                alertMessage = error.localizedDescription
+                raise(error.localizedDescription)
             }
-            // QUEUED, NOT SUPPRESSED. An alert raised on a view that is already
-            // presenting a sheet does not appear — and Approve and Deny are
-            // reachable on different cards at the same time, so this really can
-            // interleave. My first cut wrote `showingAlert = (requestToDeny == nil)`,
-            // which DISCARDS the message when a sheet is up: a failed approve would
-            // have vanished in silence, which is worse than the problem it solved.
-            raise("Request approved successfully", success: true)
         }
     }
 
@@ -455,6 +460,13 @@ struct TimeOffApprovalView: View {
                 requestToDeny = nil
                 denialReason = ""
                 denialError = ""
+                // Anything queued while this sheet was up is DROPPED, not shown
+                // after it. Otherwise the `.onChange` flush fires on the same
+                // dismissal and overwrites this confirmation with, say, an approve
+                // result from another card — which is round 2's lost-confirmation
+                // defect rebuilt with different plumbing. The queued message has
+                // already been superseded by the action the manager just completed.
+                queuedAlert = nil
                 alertMessage = "Request denied successfully"
                 showingAlert = true
             } catch {
@@ -475,19 +487,23 @@ struct TimeOffApprovalView: View {
             defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.putTimeOffRequestInReview(requestId: request.id)
-                raise("Request placed in review", success: true)
+                raise("Request placed in review")
             } catch {
-                raise(error.localizedDescription, success: false)
+                raise(error.localizedDescription)
             }
         }
     }
 
-    /// Shows the message now if nothing is presented, otherwise holds it until the
-    /// deny sheet closes. `.onChange(of: requestToDeny)` flushes it — deterministic
-    /// state, not a presentation callback that may or may not fire (round 2 lost a
-    /// confirmation exactly that way).
+    /// Shows the message now if nothing is presented, otherwise HOLDS it until the
+    /// deny sheet closes — queued, never discarded, because a dropped message here
+    /// is a failed payroll write nobody is told about.
+    ///
+    /// There is no `success:` parameter. The first version took one and never read
+    /// it, which is how the caller above came to pass `success: true` on a failure
+    /// path without anything complaining. A parameter that cannot change behaviour
+    /// is a comment that looks like code.
     @MainActor
-    private func raise(_ message: String, success: Bool) {
+    private func raise(_ message: String) {
         alertMessage = message
         if requestToDeny == nil {
             showingAlert = true
