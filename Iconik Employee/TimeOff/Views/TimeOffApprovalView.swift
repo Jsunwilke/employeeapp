@@ -28,6 +28,8 @@ struct TimeOffApprovalView: View {
     @State private var denialReason = ""
     /// Shown inside the denial sheet — see `denyRequest`.
     @State private var denialError = ""
+    /// Raised from `onDismiss`, after the sheet has actually gone — see `denyRequest`.
+    @State private var pendingSuccessMessage: String?
     @State private var showingAlert = false
     @State private var alertMessage = ""
     /// THE DOUBLE-SUBMIT GUARD. The OLD screen swapped the whole list for a
@@ -130,6 +132,11 @@ struct TimeOffApprovalView: View {
             // button pre-enabled — on the next one.
             denialReason = ""
             denialError = ""
+            if let message = pendingSuccessMessage {
+                pendingSuccessMessage = nil
+                alertMessage = message
+                showingAlert = true
+            }
         }) { request in
             denialSheet(request)
         }
@@ -323,15 +330,15 @@ struct TimeOffApprovalView: View {
                             AmbientHaptics.impact(.medium)
                             denyRequest(request)
                         } label: {
-                            Text("Deny Request")
+                            Text(inFlight.contains(request.id) ? "Denying…" : "Deny Request")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity).padding(.vertical, 14)
                                 // ambient-allow: a control, not a card.
-                                .background(Capsule().fill(trimmed.isEmpty ? Color.gray : Color.red))
+                                .background(Capsule().fill(trimmed.isEmpty || inFlight.contains(request.id) ? Color.gray : Color.red))
                         }
                         .buttonStyle(.plain)
-                        .disabled(trimmed.isEmpty)
+                        .disabled(trimmed.isEmpty || inFlight.contains(request.id))
 
                         if !denialError.isEmpty {
                             TimeOffInlineNote(text: denialError,
@@ -363,6 +370,18 @@ struct TimeOffApprovalView: View {
 
     // MARK: - Actions
 
+    /// @MainActor ON THE METHOD, not `MainActor.run` at each write.
+    ///
+    /// The fix round wrapped every post-`await` state write in `MainActor.run`
+    /// on the correct rationale that a `View` isolates `body`, not its methods —
+    /// and then released the in-flight guard in a `defer`, which runs in that same
+    /// nonisolated closure. So the ONE write that could drop the guard was the one
+    /// the fix did not protect, and `inFlight` is a `Set` that `body` reads
+    /// concurrently: a lost insert re-arms the double-tap this guard exists to
+    /// stop. Isolating the method makes the `Task` inherit MainActor, so every
+    /// write in it — including the `defer` — is on the main actor by construction
+    /// rather than by remembering.
+    @MainActor
     private func approveRequest(_ request: TimeOffRequest) {
         guard !inFlight.contains(request.id) else { return }
         inFlight.insert(request.id)
@@ -370,42 +389,48 @@ struct TimeOffApprovalView: View {
             defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.approveTimeOffRequest(requestId: request.id)
-                await MainActor.run { alertMessage = "Request approved successfully" }
+                alertMessage = "Request approved successfully"
             } catch {
-                await MainActor.run { alertMessage = error.localizedDescription }
+                alertMessage = error.localizedDescription
             }
-            await MainActor.run { showingAlert = true }
+            showingAlert = true
         }
     }
 
+    @MainActor
     private func denyRequest(_ request: TimeOffRequest) {
         let reason = denialReason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reason.isEmpty, !inFlight.contains(request.id) else { return }
+        // Cleared before the attempt, not only on success: otherwise a retry
+        // leaves the previous error on screen for its whole duration.
+        denialError = ""
         inFlight.insert(request.id)
         Task {
             defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.denyTimeOffRequest(requestId: request.id, denialReason: reason)
-                await MainActor.run {
-                    // Dismissed and cleared only on SUCCESS. A failed deny keeps
-                    // the sheet and the typed reason, so the manager can retry
-                    // instead of rewriting it.
-                    requestToDeny = nil
-                    denialReason = ""
-                    denialError = ""
-                    alertMessage = "Request denied successfully"
-                    showingAlert = true
-                }
+                // MEDIUM 5 — the fix round moved the FAILURE out of the alert
+                // because an alert raised on a view that is presenting a sheet
+                // does not appear, and then left the SUCCESS alert doing exactly
+                // that in the same transaction as the dismissal. The reasoning was
+                // applied to one branch and not the other. The confirmation is
+                // handed to `onDismiss` instead, so it fires after the sheet has
+                // actually gone.
+                pendingSuccessMessage = "Request denied successfully"
+                requestToDeny = nil
+                denialReason = ""
+                denialError = ""
             } catch {
                 // NOT an alert. The sheet is still up, and an alert raised on the
                 // view that is presenting a sheet does not appear — so the old
                 // arrangement made a failed deny completely silent, and the
                 // manager's only feedback was to tap Deny again.
-                await MainActor.run { denialError = error.localizedDescription }
+                denialError = error.localizedDescription
             }
         }
     }
 
+    @MainActor
     private func putRequestInReview(_ request: TimeOffRequest) {
         guard !inFlight.contains(request.id) else { return }
         inFlight.insert(request.id)
@@ -413,11 +438,11 @@ struct TimeOffApprovalView: View {
             defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.putTimeOffRequestInReview(requestId: request.id)
-                await MainActor.run { alertMessage = "Request placed in review" }
+                alertMessage = "Request placed in review"
             } catch {
-                await MainActor.run { alertMessage = error.localizedDescription }
+                alertMessage = error.localizedDescription
             }
-            await MainActor.run { showingAlert = true }
+            showingAlert = true
         }
     }
 }

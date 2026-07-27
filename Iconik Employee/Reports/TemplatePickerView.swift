@@ -87,7 +87,11 @@ struct TemplatePickerView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
             }
-            .ambientNoBounceWhenShort()
+            // AMB.8: NO .ambientNoBounceWhenShort() with .refreshable. It is
+            // scrollBounceBehavior(.basedOnSize), which removes the very bounce the
+            // pull gesture needs, so refresh was dead whenever the content fit.
+            // This file's own comment blamed ScrollView-vs-List; the real cause was
+            // two lines above it.
         }
         .modifier(PushedTabBarClearance(active: isPushed))
         .navigationTitle("Custom Daily Reports")

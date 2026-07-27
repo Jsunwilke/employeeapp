@@ -12,19 +12,25 @@
 //       negatives got NOTHING. "Pending Requests" is passed `-pendingBalance`, so
 //       8 hours of pending time off rendered as "8" — visually identical to a
 //       credit, on the one row that is a debit.
-//    2. EVERY FIGURE WAS `Int(...)`-TRUNCATED, so a 4.5-hour balance read "4".
+//    2. EVERY BALANCE FIGURE WAS `Int(...)`-TRUNCATED, so a 4.5-hour balance read
+//       "4". The breakdown and the hero are `%.1f` now. The one surviving stat
+//       tile is still a rounded integer, because `AmbientStatTile` takes an Int —
+//       it is labelled "(hours)" so the unit is not lost with the decimal.
 //    3. IT IS A PUSHED SCREEN WITH NO TAB-BAR CLEARANCE. The rule written into
 //       BottomTabBar.swift is that an inset does not travel out of a navigation
 //       container into what that container pushes — so the last row sat under the
 //       floating bar, from Settings then and from both routes now. It insets
 //       itself.
 //
-//  ⚠️ RECORDED, NOT FIXED — "Used This Year" was STRUCTURALLY always zero.
-//  `PTOBalance.usedThisYear` is declared OUTSIDE `CodingKeys`, so it is never
-//  decoded, and only `useHours` increments it in memory; the old screen rendered
-//  it anyway. This now shows `balance.used`, the column the database actually
-//  holds. The deeper defect — `usePTOHours` never PERSISTS `used`, so the column
-//  stays 0 too — is a data-layer change and belongs to TOF.1.
+//  ⚠️ THE "USED THIS YEAR" TILE IS REMOVED. It is not shown at all — see the note
+//  on `yearToDate` below for why swapping it to the real column made it worse.
+//  Restoring it needs a data-layer change and belongs to TOF.1.
+//
+//  (This header previously claimed the tile "now shows balance.used". It did, for
+//  one commit, and then the data audit showed nothing maintains that column
+//  either. Left uncorrected it would have been a file header stating something
+//  untrue of the code beneath it — the exact shape of the AMB.7 commit that said
+//  a clear landed "in both early returns" when it had not.)
 
 import SwiftUI
 

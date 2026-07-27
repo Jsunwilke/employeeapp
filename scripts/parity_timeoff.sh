@@ -222,7 +222,19 @@ kept "TimeOfDay clamps to 23:59 so it round-trips"    "$RULES" '24 \* 60 - 1'
 kept "unparseable partial-day times say so"           "$PRES" 'Time not set'
 kept "the reason LABEL is on the card, not just an icon" "$KIT" 'model.reason.label'
 kept "attribution dates carry the year"               "$KIT" 'Formatters.mediumDate'
-kept "main-actor hops on every state write after await" "$APPR" 'await MainActor.run'
+# ASSERTS THE PROPERTY, NOT A STRING. The first version of this check grepped for
+# 'await MainActor.run' and passed on a single occurrence anywhere in the file —
+# it would NOT have caught the bug it was written for, which was the in-flight
+# guard being RELEASED in a `defer` outside any of those wrappers. The property
+# actually wanted is that the three action methods are main-actor isolated, so the
+# whole Task body (defer included) is on the main actor by construction.
+kept "approve/deny/review are @MainActor isolated"    "$APPR" '@MainActor'
+kept "…and the guard is released inside that isolation" "$APPR" 'defer { inFlight.remove'
+kept "the success alert fires after the sheet has gone" "$APPR" 'pendingSuccessMessage'
+kept "the deny sheet shows its own busy state"        "$APPR" 'Denying…'
+kept "Retry forces a network fetch, not a cache hit"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'lastCacheUpdate = nil'
+kept "the realtime path clears the failure banner too" "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'THE FOURTH SUCCESS PATH'
+kept "dates carry a year outside the current one"     "$PRES" 'TimeOffDateLabel'
 kept "accrual footnote only for an accrual org"       "$PTO" 'settings.usesAccrualSystem'
 
 echo

@@ -192,6 +192,11 @@ class TimeOffService: ObservableObject {
 
             self.timeOffRequests = response
             self.lastCacheUpdate = Date()
+            // THE FOURTH SUCCESS PATH, and the one that runs most often. The fix
+            // round cleared the other three and left this one, so a colleague's
+            // approval could refresh the list successfully while the stale failure
+            // banner stayed over fresh data.
+            errorMessage = ""
             updateFilteredLists()
 
         } catch {
@@ -677,7 +682,14 @@ class TimeOffService: ObservableObject {
         return pendingRequests.count
     }
 
+    /// Forces a NETWORK fetch. The banner's Retry used to route through
+    /// `startListeningToRequests`, which returns early from cache when
+    /// `lastCacheUpdate` is fresh — and a realtime change refreshes that stamp. So
+    /// a manager tapping Retry got `errorMessage = ""` and a return, with no
+    /// request made: the banner vanished and read as a successful retry. Anything
+    /// that means "the user asked for fresh data" must invalidate first.
     func refreshRequests() async {
+        lastCacheUpdate = nil
         await startListeningToRequests()
     }
 

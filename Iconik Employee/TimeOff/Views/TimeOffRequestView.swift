@@ -400,18 +400,32 @@ struct TimeOffRequestView: View {
                             Divider()
                             mathRow("Left afterwards", remaining,
                                     remaining < 0 ? .orange : .green, emphasised: true)
-                            // The shortfall/accrual message below is evaluated
-                            // against the PROJECTED balance, and without this row
-                            // the two contradict each other on screen: "Left
-                            // afterwards −5.0 h" in orange above a blue note
-                            // saying you will have enough. This is the number that
-                            // reconciles them, and the old form showed it.
-                            if projectedPTOBalance != balance.availableBalance {
-                                Divider()
-                                mathRow("Projected by \(Formatters.monthDay.string(from: startDate))",
-                                        projectedPTOBalance - ptoHours.value,
-                                        projectedPTOBalance - ptoHours.value < 0 ? .orange : .green)
-                            }
+                            // A "PROJECTED BY <DATE>" ROW WAS ADDED HERE IN A FIX
+                            // ROUND AND IS DELIBERATELY REMOVED AGAIN.
+                            //
+                            // I added it to reconcile a real cosmetic contradiction
+                            // — "Left afterwards −5.0 h" in orange above a blue note
+                            // saying you will have enough by the request date. The
+                            // audit of that fix round showed the row asserted a
+                            // WRONG payroll number: `calculateProjectedBalance` is
+                            // built on `totalBalance` (the raw column) while
+                            // "Available now" uses `availableBalance`
+                            // (`balance - pending_balance`), and its
+                            // `pendingRequests:` parameter defaults to empty. So
+                            // with any pending hours the row fired with no accrual
+                            // involved at all and overstated by exactly the hours
+                            // the previous screen calls "already requested and not
+                            // yet decided".
+                            //
+                            // Passing the pending requests would only make the two
+                            // bases comparable IF `pending_balance` equalled the sum
+                            // of pending request hours — and this phase's own
+                            // research established it does not, because a request
+                            // approved on the WEB never releases its reservation.
+                            // So the honest move on a payroll screen is to show one
+                            // number I can stand behind rather than two I cannot.
+                            // The base mismatch is pre-existing, affects the message
+                            // below, and is recorded under TOF.1.
                         }
                     }
                 }

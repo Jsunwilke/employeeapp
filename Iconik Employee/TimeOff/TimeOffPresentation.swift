@@ -63,9 +63,9 @@ extension TimeOffRequest {
     private var presentedDateLabel: String {
         let span = presentedSpan
         if isPartialDay || span.dayCount == 1 {
-            return Formatters.monthDay.string(from: start_date)
+            return TimeOffDateLabel.string(from: start_date)
         }
-        return "\(Formatters.monthDay.string(from: start_date)) – \(Formatters.monthDay.string(from: end_date))"
+        return "\(TimeOffDateLabel.string(from: start_date)) – \(TimeOffDateLabel.string(from: end_date))"
     }
 
     private var presentedTimeLabel: String {
@@ -119,6 +119,24 @@ extension TimeOffRequest {
         case .pending, .cancelled, .none:
             return nil
         }
+    }
+}
+
+/// "Jul 25" this year, "Jul 25, 2025" in any other.
+///
+/// `Formatters.monthDay` drops the year entirely, so on the History tab a request
+/// approved in January 2025 and one approved in January 2026 both read "Jan 5".
+/// The fix round corrected the small grey attribution line and left the card's
+/// PRIMARY date on `monthDay` — the instance, not the class, and arguably the
+/// wrong instance. A year is only shown when it is not the current one, so the
+/// common case stays as short as the design drew it.
+enum TimeOffDateLabel {
+    static func string(from date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.component(.year, from: date) == calendar.component(.year, from: Date()) {
+            return Formatters.monthDay.string(from: date)
+        }
+        return Formatters.mediumDate.string(from: date)
     }
 }
 
