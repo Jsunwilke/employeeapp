@@ -10,6 +10,18 @@ class TimeOffService: ObservableObject {
     @Published var myRequests: [TimeOffRequest] = []
     @Published var pendingRequests: [TimeOffRequest] = []
     @Published var isLoading = false
+    /// TRUE ONLY WHILE THE LIST IS BEING FETCHED, and deliberately separate from
+    /// `isLoading`.
+    ///
+    /// `isLoading` is a single flag written by SEVEN operations — the fetch plus
+    /// create, update, cancel, approve, deny and put-in-review. Routing the fetch
+    /// through it too means a completing fetch clears the flag out from under an
+    /// in-flight approve, and an approve's own clear ends a fetch's spinner. That
+    /// is benign for today's readers only because both gate on the list being
+    /// empty, which is luck rather than design — and shared mutable state that
+    /// happens not to bite yet is precisely the shape this feature has been bitten
+    /// by twice already.
+    @Published var isFetchingList = false
     @Published var errorMessage = ""
 
     private var requestsChannel: RealtimeChannelV2?
@@ -76,6 +88,12 @@ class TimeOffService: ObservableObject {
     func startListeningToRequests() async {
         // Refresh the user ID in case the singleton was created before sign-in,
         // otherwise updateFilteredLists() leaves myRequests empty
+        // SET BEFORE THE FIRST AWAIT. Placed after `resolveUserId()` it left the
+        // empty state showing for the whole of a cold-start session lookup, which
+        // is the exact lie the flag exists to prevent.
+        isFetchingList = true
+        defer { isFetchingList = false }
+
         _ = try? await resolveUserId()
 
         // Try currentOrgId first, fall back to UserDefaults if not set yet
@@ -96,9 +114,6 @@ class TimeOffService: ObservableObject {
         // with a Create CTA, and "All Caught Up!" on a manager's queue, both while
         // the request was still in flight. Same family as the failure-that-looks-
         // like-emptiness this phase exists to remove.
-        isLoading = true
-        defer { isLoading = false }
-
         // Check if we already have an active listener
         if hasActiveListener {
             print("📅 TimeOffService: Reusing existing listener")

@@ -125,25 +125,6 @@ struct TimeOffApprovalView: View {
             // (.basedOnSize), which removes the very bounce .refreshable needs, so
             // pull-to-refresh silently died whenever the content fit on screen.
             .refreshable { await timeOffService.refreshRequests() }
-            // SWIPE BETWEEN TABS, RESTORED. The shipped screen was a real
-            // `TabView` with `PageTabViewStyle`, so the three queues could be
-            // paged horizontally. The conversion replaced it with a button row and
-            // dropped the gesture — a genuine capability loss that I recorded and
-            // then neither restored nor declared, which is the "writing it down
-            // felt like diligence and functioned as a decision to ship it" trap.
-            // `highPriorityGesture` is deliberate: a parent DragGesture loses to
-            // child Buttons, and this needs 12pt of travel so it cannot steal a tap.
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 12)
-                    .onEnded { value in
-                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                        let all = QueueTab.allCases
-                        guard let i = all.firstIndex(of: tab) else { return }
-                        let next = value.translation.width < 0 ? i + 1 : i - 1
-                        guard all.indices.contains(next) else { return }
-                        withAnimation(AmbientMotion.snappy) { tab = all[next] }
-                        AmbientHaptics.selection()
-                    })
         }
         .navigationTitle("Time Off Approvals")
         .navigationBarTitleDisplayMode(.large)
@@ -183,6 +164,25 @@ struct TimeOffApprovalView: View {
 
     // MARK: - Tabs
 
+    /// SWIPE BETWEEN TABS — ON THE TAB STRIP, NOT THE SCROLL VIEW.
+    ///
+    /// The shipped screen was a real `TabView` with `PageTabViewStyle`, three
+    /// separate scrollable pages, where paging and scrolling were owned by UIKit
+    /// and never competed. The conversion replaced it with a button row and
+    /// dropped the gesture; I restored it by attaching a `highPriorityGesture` to
+    /// the ScrollView — which is precisely what this repo's own design system
+    /// warns against. `BottomTabBar.swift` uses the identical DragGesture pattern
+    /// and its comment says it is attached to the small capsule "so the gesture
+    /// can never fight a scroll view". I lifted the pattern and attached it to the
+    /// thing the pattern exists to avoid, on the screen where a manager approves
+    /// payroll — if it had won recognition over the pan, older requests would have
+    /// been unreachable.
+    ///
+    /// HONESTLY REDUCED: swiping the CONTENT no longer changes tabs. Swiping the
+    /// tab strip does. That is less than the shipped screen offered and it is
+    /// stated rather than implied — the alternative was shipping an untested
+    /// gesture over a payroll list on the strength of reasoning, which is what
+    /// this phase has been punished for repeatedly.
     private var tabBar: some View {
         HStack(spacing: 6) {
             ForEach(QueueTab.allCases) { option in
@@ -211,6 +211,18 @@ struct TimeOffApprovalView: View {
                 .buttonStyle(.plain)
             }
         }
+        .contentShape(Rectangle())
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 12)
+                .onEnded { value in
+                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                    let all = QueueTab.allCases
+                    guard let i = all.firstIndex(of: tab) else { return }
+                    let next = value.translation.width < 0 ? i + 1 : i - 1
+                    guard all.indices.contains(next) else { return }
+                    withAnimation(AmbientMotion.snappy) { tab = all[next] }
+                    AmbientHaptics.selection()
+                })
     }
 
     /// If the design does not say the order out loud, the next person to touch
@@ -243,7 +255,7 @@ struct TimeOffApprovalView: View {
             }
         } else {
             if hasFailed { failureBanner }
-            if timeOffService.isLoading && timeOffService.timeOffRequests.isEmpty {
+            if timeOffService.isFetchingList && timeOffService.timeOffRequests.isEmpty {
                 loadingState
             } else if queue.isEmpty {
                 emptyState

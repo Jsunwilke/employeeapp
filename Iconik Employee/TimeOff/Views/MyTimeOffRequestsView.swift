@@ -157,10 +157,18 @@ struct MyTimeOffRequestsView: View {
             TimeOffRequestView(timeOffService: timeOffService, editingRequest: request)
         }
         .alert("Cancel Request", isPresented: $showingCancelAlert) {
+            // BOTH buttons flush. This alert was added to `isPresentingSomething`
+            // and NOT to the flush set, so a result that landed while it was up
+            // stranded — and leaving the screen destroyed it. The fifth surface
+            // got into the queue enumeration and not into the drain, which is the
+            // same half-swept class this round is named for.
             Button("Cancel Request", role: .destructive) {
-                if let requestToCancel { cancelRequest(requestToCancel) }
+                if let requestToCancel { cancelRequest(requestToCancel) } else { flushQueuedAlert() }
             }
-            Button("Keep Request", role: .cancel) { requestToCancel = nil }
+            Button("Keep Request", role: .cancel) {
+                requestToCancel = nil
+                flushQueuedAlert()
+            }
         } message: {
             Text("Are you sure you want to cancel this time off request? This action cannot be undone.")
         }
@@ -249,7 +257,7 @@ struct MyTimeOffRequestsView: View {
                 // goes unnoticed.
                 failureBanner
             }
-            if timeOffService.isLoading && timeOffService.myRequests.isEmpty {
+            if timeOffService.isFetchingList && timeOffService.myRequests.isEmpty {
                 loadingState
             } else if requests.isEmpty {
                 emptyState
@@ -366,11 +374,17 @@ struct MyTimeOffRequestsView: View {
         inFlight.insert(request.id)
         Task {
             defer { inFlight.remove(request.id) }
+            // A LOCAL, not the shared `alertMessage`. `inFlight` is keyed per
+            // request, so two cards can be cancelling at once; writing the text to
+            // shared state in one hop and reading it back in another let A append
+            // B's message — a failed cancel becoming a duplicated success, in the
+            // round titled for not dropping results.
+            var outcome: String
             do {
                 try await timeOffService.cancelTimeOffRequest(requestId: request.id)
-                await MainActor.run { alertMessage = "Request cancelled successfully" }
+                outcome = "Request cancelled successfully"
             } catch {
-                await MainActor.run { alertMessage = error.localizedDescription }
+                outcome = error.localizedDescription
             }
             // The MainActor.run here is REDUNDANT and the comment that used to
             // justify it was wrong: SwiftUI's `View` protocol is itself
@@ -385,8 +399,9 @@ struct MyTimeOffRequestsView: View {
             await MainActor.run {
                 requestToCancel = nil
                 if isPresentingSomething {
-                    queuedAlerts.append(alertMessage)
+                    queuedAlerts.append(outcome)
                 } else {
+                    alertMessage = outcome
                     showingAlert = true
                 }
             }

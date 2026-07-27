@@ -50,8 +50,8 @@ keptIn () { # $1 = capability, $2 = file, $3 = function name, $4 = pattern
   # check never noticed. A check that cannot distinguish the site it names is not
   # a check. Extracts the function body by brace depth, then greps inside it.
   local body
-  body=$(awk -v fn="func $3(" '
-    index($0, fn) { inside=1 }
+  body=$(awk -v fn="func $3(" -v vr="var $3: " '
+    index($0, fn) || index($0, vr) { inside=1 }
     inside { print; n=gsub(/\{/,"{"); m=gsub(/\}/,"}"); depth+=n-m; if (depth<=0 && seen) exit; if (n>0) seen=1 }
   ' "$2" 2>/dev/null | sed -e 's|//.*||')
   if printf '%s' "$body" | grep -q "$4"; then
@@ -305,14 +305,24 @@ kept "raise() has no unread success parameter"         "$APPR" 'private func rai
 
 echo
 echo "Operator /code-review round — 8 findings, asserted so they cannot return"
-keptIn "the fetch reports isLoading, so the empty state cannot lie" "Iconik Employee/TimeOff/Services/TimeOffService.swift" startListeningToRequests 'isLoading = true'
-kept "edit mode does not double-subtract its own reservation" "$FORM" 'available: availableForThisRequest'
-kept "…and the row above it uses the same figure"     "$FORM" 'mathRow("Available now", availableForThisRequest'
-keptCount "the queues are ARRAYS, not single slots"   "$APPR" 'queuedAlerts' 4
-keptCount "…on the list screen too"                   "$LIST" 'queuedAlerts' 3
+keptIn "the fetch reports its own flag, so the empty state cannot lie" "Iconik Employee/TimeOff/Services/TimeOffService.swift" startListeningToRequests 'isFetchingList = true'
+kept "…and it is SEPARATE from the shared isLoading"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'var isFetchingList'
+kept "the list screen reads the fetch flag"           "$LIST" 'isFetchingList'
+kept "the queue screen reads it too"                  "$APPR" 'isFetchingList'
+keptCount "edit mode does not double-subtract, at ALL THREE sites" "$FORM" 'availableForThisRequest' 5
+kept "…including the shortfall message's own base"    "$FORM" 'availableNow: availableForThisRequest'
+kept "…and the row above it uses the same figure"     "$FORM" 'availableForThisRequest, .secondary)'
+kept "…labelled honestly in edit mode"                "$FORM" '"Available for this request"'
+keptCount "the queues are ARRAYS, not single slots"   "$APPR" 'queuedAlerts' 6
+keptCount "…on the list screen too"                   "$LIST" 'queuedAlerts' 4
 kept "pushing does NOT tear down the realtime channel" "$LIST" 'guard destination == nil else { return }'
 kept "the queue is flushed when the push pops"        "$LIST" 'if newValue == nil { flushQueuedAlert() }'
-kept "swipe between the three tabs is restored"       "$APPR" 'highPriorityGesture'
+keptCount "EVERY presentation surface has a flush hook" "$LIST" 'flushQueuedAlert()' 4
+# `tabBar` is a computed var, so keptIn (which looks for `func name(`) cannot scope
+# to it. Asserted as a pair instead: the gesture exists, and it is NOT on the
+# ScrollView — which is the property that matters, since attaching it there is what
+# this repo's own design system warns against.
+keptIn "swipe between tabs lives on the STRIP"        "$APPR" tabBar 'highPriorityGesture'
 
 echo
 echo "EXPECTED-GONE — dropped deliberately, each with a reason in the file"

@@ -155,7 +155,13 @@ struct TimeOffRequestView: View {
               TimeOffRuleStatus.parse(editingRequest.status)?.isEditable == true,
               let alreadyReserved = editingRequest.ptoHoursRequested
         else { return balance.availableBalance }
-        return balance.availableBalance + alreadyReserved
+        // UNCLAMPED. `availableBalance` is `max(0, balance - pending)`, so adding
+        // the reservation onto the clamped value overstates whenever pending
+        // exceeds balance — and this phase's own research found three ways that
+        // happens: a web approval never releases its reservation, a swallowed
+        // reservePTOHours leaves a paid request with none, and editing hours never
+        // adjusts the old reserve.
+        return (balance.balance - balance.pendingBalance) + alreadyReserved
     }
 
     private var remaining: Double {
@@ -182,7 +188,14 @@ struct TimeOffRequestView: View {
     }
 
     private var standing: PTOStanding {
-        PTOStanding.evaluate(availableNow: currentPTOBalance?.availableBalance ?? 0,
+        // `availableForThisRequest`, NOT `availableBalance`. This argument was
+        // missed when the other three call sites were switched, so in edit mode
+        // `.sufficient` was unreachable whenever the request exceeded the
+        // post-reservation balance — the form showed "Left afterwards 4.0 h" in
+        // green and a blue "you haven't accrued this yet" note underneath it, for
+        // hours the person already has banked. The comment below claimed the bases
+        // matched while this line was the one that made them not.
+        PTOStanding.evaluate(availableNow: availableForThisRequest,
                              projectedByRequestDate: projectedAvailable,
                              requested: ptoHours.value)
     }
@@ -433,7 +446,12 @@ struct TimeOffRequestView: View {
                     if let balance = currentPTOBalance {
                         Divider()
                         VStack(spacing: 6) {
-                            mathRow("Available now", availableForThisRequest, .secondary)
+                            // NOT "Available now": in edit mode this is what you
+                            // would have if you replaced this request with the
+                            // edited one, and the balance card one screen away
+                            // shows the real figure under that exact wording.
+                            mathRow(editingRequest == nil ? "Available now" : "Available for this request",
+                                    availableForThisRequest, .secondary)
                             mathRow("This request", -ptoHours.value, .secondary)
                             Divider()
                             mathRow("Left afterwards", remaining,
