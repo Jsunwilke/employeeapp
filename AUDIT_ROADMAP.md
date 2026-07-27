@@ -875,8 +875,8 @@ other rebases onto it.
 
 **Batch 2**
 
-- [x] **AMB.7 Reports family** — DONE 2026-07-27, NOT YET PUSHED (ten commits,
-  b5679dc..b16cddd). Seven screens converted, TEN files deleted in the same commit:
+- [x] **AMB.7 Reports family** — DONE 2026-07-27, NOT YET PUSHED (sixteen commits,
+  b5679dc..30567ad). Seven screens converted, TEN files deleted in the same commit:
   DailyJobReportView, MyJobReportsView, EditDailyJobReportView, CustomDailyReportsView,
   TemplateFormView, PhotoshootNotesView, LocationPhotoAttachmentView, the ORPHANED
   TemplateReportListView, plus UIComponents.swift and JobNotesView.swift, which the
@@ -890,7 +890,7 @@ other rebases onto it.
   descriptions and 12 extra items are deleted — `DesignLabSampleData` forwards to
   `ReportOptions` — so the mockup and the real screen cannot disagree about what a
   photographer may tick. `scripts/test_report_rules.sh` compiles and RUNS those real
-  files: **99 checks**, up from 44, with every new rule fix proved to FAIL without it.
+  files: **104 checks**, up from 44, with every new rule fix proved to FAIL without it.
 
   **THE ORPHANED SCREEN'S CAPABILITIES MOVED INTO THE LIVE ONE.** TemplateReportListView
   was 558 lines, compiled, shipped and unreachable, and it held the search, date filter,
@@ -964,8 +964,21 @@ other rebases onto it.
   **the route planner belongs to no phase in the list at all**, the same shape as the
   bottom tab bar in AMB.4). `/security-review` found no new HIGH or MEDIUM.
 
-  ⚠️ **STILL OPEN AND ONLY THE OPERATOR CAN CLOSE THEM:** the iPhone and iPad smokes
-  (D7), and `/code-review`, which I cannot launch. The batch-2 mockups are deliberately
+  **`/code-review` RAN (operator, 2026-07-27) AND FOUND TWO REAL REGRESSIONS AFTER TEN OF
+  MY OWN AUDITS** — the session link derived from a live array instead of held, so a
+  refresh filed `session_id` as NULL; and `ReportSchoolLink.set` reordering the route when
+  a source was re-pointed at its own school, which changes the mileage. Both were in the
+  seam where three screens' duplicated logic was consolidated: my audits kept checking the
+  logic I had WRITTEN and never asked what the deleted code HELD that the new code merely
+  computes. Fixed, plus the four the review named without formally reporting (a required
+  toggle blocking Submit while showing a valid "off"; a Delete button reading its report
+  from state the alert may have cleared; future-dated reports under "This Week"; an
+  in-flight lookup not invalidated). The audit of THAT round then found the toggle fix had
+  opened a data gap, and the audit after it found the repair was UNREACHABLE on every
+  template the web app builds — a JavaScript/Swift truthiness mismatch found only by
+  reading the OTHER repo. **The audits that found the most left this repo.**
+
+  ⚠️ **STILL OPEN AND ONLY THE OPERATOR CAN CLOSE THEM:** the iPhone and iPad smokes (D7). The batch-2 mockups are deliberately
   NOT deleted until the smokes pass — a validation reference outlives the port it
   validates. One question the phase did not need but the roadmap flagged: whether the
   org's `session_types` match the 22 job descriptions. The approved v3 design prefills
