@@ -148,20 +148,35 @@ struct TimeOffRequestView: View {
     /// accrual note, and a "Left afterwards" figure that was wrong by the
     /// request's own size. Adding its stored hours back makes the comparison
     /// "what would I have if I replaced this request with the edited one".
-    private var availableForThisRequest: Double {
-        guard let balance = currentPTOBalance else { return 0 }
+    /// THE ONE SOURCE for "hours this request has already reserved". Both figures
+    /// below add it; neither derives it from the other.
+    ///
+    /// It was previously recovered inside `projectedAvailable` as
+    /// `availableForThisRequest - balance.availableBalance` — a value derived from
+    /// a derived value, and wrong in exactly the case the unclamping existed for:
+    /// `availableBalance` is `max(0, balance - pending)`, so once pending exceeds
+    /// balance the clamp makes that subtraction return `balance - pending +
+    /// reserved` rather than `reserved`. Derived-from-derived arithmetic has now
+    /// gone wrong three times in this feature; naming the quantity once is the fix
+    /// that stops the fourth.
+    private var ownReservation: Double {
         guard let editingRequest,
               editingRequest.isPaidTimeOff,
               TimeOffRuleStatus.parse(editingRequest.status)?.isEditable == true,
-              let alreadyReserved = editingRequest.ptoHoursRequested
-        else { return balance.availableBalance }
-        // UNCLAMPED. `availableBalance` is `max(0, balance - pending)`, so adding
-        // the reservation onto the clamped value overstates whenever pending
-        // exceeds balance — and this phase's own research found three ways that
-        // happens: a web approval never releases its reservation, a swallowed
-        // reservePTOHours leaves a paid request with none, and editing hours never
-        // adjusts the old reserve.
-        return (balance.balance - balance.pendingBalance) + alreadyReserved
+              let hours = editingRequest.ptoHoursRequested
+        else { return 0 }
+        return hours
+    }
+
+    /// UNCLAMPED, deliberately. Adding the reservation onto the CLAMPED
+    /// `availableBalance` overstates whenever pending exceeds balance — and this
+    /// phase found three ways that happens: a web approval never releases its
+    /// reservation, a swallowed `reservePTOHours` leaves a paid request with none,
+    /// and editing hours never adjusts the old reserve. A negative here is honest:
+    /// it means the reservations on file already exceed the balance.
+    private var availableForThisRequest: Double {
+        guard let balance = currentPTOBalance else { return 0 }
+        return (balance.balance - balance.pendingBalance) + ownReservation
     }
 
     private var remaining: Double {
@@ -183,7 +198,6 @@ struct TimeOffRequestView: View {
     /// as the number beside it, and that defect is recorded under TOF.1.
     private var projectedAvailable: Double {
         guard let balance = currentPTOBalance else { return 0 }
-        let ownReservation = availableForThisRequest - balance.availableBalance
         return max(0, projectedPTOBalance - balance.pendingBalance + ownReservation)
     }
 

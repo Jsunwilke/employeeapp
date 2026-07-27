@@ -309,8 +309,15 @@ keptIn "the fetch reports its own flag, so the empty state cannot lie" "Iconik E
 kept "…and it is SEPARATE from the shared isLoading"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'var isFetchingList'
 kept "the list screen reads the fetch flag"           "$LIST" 'isFetchingList'
 kept "the queue screen reads it too"                  "$APPR" 'isFetchingList'
-keptCount "edit mode does not double-subtract, at ALL THREE sites" "$FORM" 'availableForThisRequest' 5
+# FOUR: the declaration, `remaining`, the mathRow, and PTOStanding's availableNow.
+# It was 5 while `projectedAvailable` recovered the reservation by subtracting from
+# it; removing that derivation is what dropped the count, which is the threshold
+# doing its job rather than a regression.
+keptCount "edit mode does not double-subtract, at ALL FOUR sites" "$FORM" 'availableForThisRequest' 4
+keptCount "the reservation is added, never re-derived"  "$FORM" 'ownReservation' 3
 kept "…including the shortfall message's own base"    "$FORM" 'availableNow: availableForThisRequest'
+kept "the reservation is ONE named source, not derived" "$FORM" 'private var ownReservation'
+gone "…and is never recovered by subtraction"         "$FORM" 'availableForThisRequest - balance.availableBalance'
 kept "…and the row above it uses the same figure"     "$FORM" 'availableForThisRequest, .secondary)'
 kept "…labelled honestly in edit mode"                "$FORM" '"Available for this request"'
 keptCount "the queues are ARRAYS, not single slots"   "$APPR" 'queuedAlerts' 6
