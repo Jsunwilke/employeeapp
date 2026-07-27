@@ -133,6 +133,12 @@ struct TemplateReportView: View {
         // COUNT under the field's own key, which both changed the stored shape
         // and made "0" satisfy a required field.
         if field.type == "file" { return !field.required || !selectedImages.isEmpty }
+        // A toggle ALWAYS has a state, and off is an answer. Untouched it is
+        // nil, which the service reads as unanswered — so a required toggle
+        // blocked Submit while showing a perfectly valid "off", and the only
+        // escape was to flip it twice. The approved design's validator returned
+        // true here and this had lost it.
+        if field.type == "toggle" { return true }
         let value = formData[field.id]
         // An untouched optional field is fine, whatever its type. Asking the
         // service about it is what made an optional number block forever.

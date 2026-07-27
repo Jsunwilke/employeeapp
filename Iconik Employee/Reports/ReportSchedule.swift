@@ -163,6 +163,10 @@ final class ReportSchedule: ObservableObject {
     func refreshReported(photographerFirstName: String, organizationID: String) async {
         guard let date = loadedDate else { return }
         guard !photographerFirstName.isEmpty, !organizationID.isEmpty else {
+            // Invalidate anything already in flight: without this, an older
+            // lookup could land AFTER this non-answer and quietly repopulate a
+            // set that has just been declared unknown.
+            reportedRun += 1
             // The live form's `checkExistingReports` answered `[]` when it could
             // not identify the photographer, so auto-select proceeded. Same
             // answer here rather than blocking auto-select forever — but it is

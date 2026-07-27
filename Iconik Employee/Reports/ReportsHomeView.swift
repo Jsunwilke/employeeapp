@@ -87,6 +87,11 @@ struct ReportsHomeView: View {
         func contains(_ date: Date) -> Bool {
             guard self != .all else { return true }
             let days = Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
+            // A FUTURE date gives a negative, which every upper bound accepts —
+            // so a report dated next year appeared under "This Week". A window
+            // that looks backwards should only look backwards; a future-dated
+            // report is still reachable under All.
+            guard days >= 0 else { return false }
             switch self {
             case .all: return true
             case .week: return days <= 7
@@ -130,18 +135,18 @@ struct ReportsHomeView: View {
         .onAppear(perform: load)
         .onDisappear { schedule.stop() }
         .refreshable { await reload() }
+        // `presenting:` hands the report INTO the action closure. Reading it
+        // back out of `pendingDelete` relied on SwiftUI not having cleared the
+        // binding first, which is not something to depend on for a destructive
+        // action — a nil read there is a Delete button that does nothing.
         .alert("Delete Report", isPresented: Binding(
             get: { pendingDelete != nil },
             set: { if !$0 { pendingDelete = nil } }
-        )) {
+        ), presenting: pendingDelete) { report in
             Button("Cancel", role: .cancel) { pendingDelete = nil }
-            Button("Delete", role: .destructive) {
-                if let report = pendingDelete { delete(report) }
-            }
-        } message: {
-            if let report = pendingDelete {
-                Text("Are you sure you want to delete the report from \(Formatters.mediumDate.string(from: report.date))?")
-            }
+            Button("Delete", role: .destructive) { delete(report) }
+        } message: { report in
+            Text("Are you sure you want to delete the report from \(Formatters.mediumDate.string(from: report.date))?")
         }
         .ambientPush(item: $destination) { destination in
             switch destination {
