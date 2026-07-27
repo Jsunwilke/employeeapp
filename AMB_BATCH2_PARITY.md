@@ -676,6 +676,93 @@ filter, no grouping, and no empty state at all.
     Templates are read-only in this app; authoring is web-only
 
 
+## THE BEHAVIOUR CONTRACT — what AMB.7 must build for real
+
+Operator, 2026-07-26: "the real deal will act EXACTLY as the mockup does", and
+then, on the mockup's own logic being throwaway: "that is why I said its fake.
+and thats ok. as long as it all works when built for real."
+
+So the mockup is a SPECIFICATION, and its sample-data plumbing is not. This list
+is the part that has to survive into the real screen. It exists because this arc
+has already lost five capabilities inside redesigns — the denial reason, the
+report date, the photographer, the session link and the photoshoot note — and
+the operator found four of them, not the parity walk.
+
+### The daily job report
+
+    ONE SCREEN. Nothing collapses, nothing expands, every field ready on arrival.
+      Rejected on the operator's instruction: a wizard, an accordion, and any
+      disclosure step in front of a field filled in every day.
+
+    NINE PEER SECTIONS, all with the same heading, card and spacing, and a status
+      on the right of each heading. Nothing is styled as secondary — a wrong
+      school or vehicle is a payroll error and a missing job description is a
+      billing error.
+
+    EVERY PREFILLED VALUE IS EDITABLE, in place, with no extra step. Date,
+      photographer, session, schools, mileage, vehicle, what you shot, extras,
+      the scan answers, the attached note, notes, photos.
+
+    SCHOOL OWNERSHIP — specified and tested in ReportSchoolLink.swift, which the
+      conversion should carry over rather than reimplement:
+        each source remembers the school IT contributed
+        changing a session or note REPLACES its own school, never appends
+        off-schedule, or "No photoshoot note", removes it
+        a school added by hand is owned by nobody and is never auto-removed
+        a school BOTH sources point at survives until both let go
+        stop order is route order, and is preserved through add and remove
+
+    MILEAGE
+      calculated from the route between the schools on the report, point to
+        point — NOT GPS trip detection (splits on every stop, silent
+        non-capture is its top real-world complaint)
+      the route is ALWAYS shown under the figure, never a bare number
+      a TYPED value wins and is never overwritten by a recalculation, with the
+        calculated figure still offered alongside
+      a figure well out of line with this photographer's own history at that
+        school is flagged in place
+
+    VEHICLE
+      lives WITH the mileage — one decision, not two sections
+      defaults to the photographer's usual
+      the two-step confirmation fires ON A CHANGE from that usual, not on every
+        report. Firing every time is what wears a safeguard out.
+
+    THE TWO LISTS
+      all 22 job descriptions and all 12 extra items, visible, never behind a
+        disclosure control
+      grouped under families, TWO COLUMNS, checkbox leading, whole cell tappable
+      the families and their contents NEVER reorder themselves — no recency
+        sorting; frequent users learn where things are
+      "NONE" alongside other items warns, and still saves both, because
+        exclusivity is a data rule and out of this arc's scope
+
+    SESSION
+      today's sessions, earliest first
+      "No scheduled session (off-schedule)" is a first-class choice
+      auto-select takes the first session NOT already reported, once per date,
+        and a manual pick is never undone by a refresh
+      a session already reported says so on its row
+
+    PHOTOSHOOT NOTE
+      attach one, or choose "No photoshoot note"
+      auto-selected ONLY when there is exactly one
+      attaching fills in the school and copies the note's photos onto the report
+      the note's text is editable from the report
+
+    SUBMIT
+      lives in the navigation bar, and is NEVER blocked. Warnings do not gate.
+
+### Not specified by the mockup — decide before conversion
+
+    Loading states. The live form has "Checking your schedule...",
+      "Calculating route distances..." and "Loading photographers...". Sample
+      data never loads, so the mockup cannot show them and does not.
+    Offline. The live form has none at all, and the mockup adds none.
+    The draft strip is drawn and marked PROPOSED. There is no draft or autosave
+      in the live form; adding one is a data-layer change and out of scope here.
+
+
 ## REPORTS FAMILY — non-style findings
 
 Thirty-six defects found while inventorying, none of them style. They are NOT
