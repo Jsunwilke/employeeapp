@@ -225,25 +225,14 @@ class TemplateService: ObservableObject {
         }
     }
     
-    func loadTemplatesAsync() {
-        guard !storedUserOrganizationID.isEmpty else {
-            self.errorMessage = "No organization ID found"
-            return
-        }
-
-        isLoading = true
-        errorMessage = ""
-
-        Task {
-            do {
-                _ = try await fetchTemplates(for: storedUserOrganizationID)
-                self.isLoading = false
-            } catch {
-                self.isLoading = false
-                self.errorMessage = error.localizedDescription
-            }
-        }
-    }
+    // `loadTemplatesAsync()` was deleted in AMB.7 along with its only caller.
+    // It folded "this organisation has no templates" into `errorMessage`, which
+    // is what made the empty state unreachable (AMB_BATCH2_PARITY.md, R35):
+    // `TemplateService.fetchTemplates` THROWS on an empty result, and the screen
+    // checked its error state first, so a new organisation saw a warning
+    // triangle instead of the onboarding copy written for that moment.
+    // `TemplatePickerView` now awaits `fetchTemplates` directly and treats
+    // `noTemplatesFound` as the empty case rather than as a failure.
 
     // MARK: - School Data Loading
 

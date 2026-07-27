@@ -964,7 +964,7 @@ struct MainEmployeeView: View {
         case "photoshootNotes":
             PhotoshootNotesView()
         case "dailyJobReport":
-            DailyJobReportView()
+            DailyReportView()
         case "capture":
             CaptureGalleryListView()
         case "sportsShoot":
@@ -978,15 +978,15 @@ struct MainEmployeeView: View {
         case "training":
             PhotoCritiqueListView()
         case "customDailyReports":
-            CustomDailyReportsView()
+            TemplatePickerView()
         case "myDailyJobReports":
-            MyJobReportsView()
+            ReportsHomeView()
         case "mileageReports":
             MileageReportsView(userName: storedUserFirstName)
         case "schedule":
             ScheduleView()
         case "locationPhotos":
-            LocationPhotoAttachmentView()
+            LocationPhotosView()
         case "timeOffRequests":
             MyTimeOffRequestsView()
         case "timeOffApprovals":

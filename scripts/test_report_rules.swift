@@ -180,6 +180,56 @@ do {
     check(s.selection == nil, "selects nothing rather than re-offering a filed session")
 }
 
+// ───────────────────────────────────────────── option lists
+
+// GROUPING IS PRESENTATION, AND IT MUST LOSE NOTHING. The screen draws the
+// GROUPED lists; the report stores values from the FLAT lists. If a group ever
+// disagrees with its flat list, a checkbox a photographer needs silently stops
+// existing — and the screen still builds, still looks right, and still submits.
+// That is the exact failure shape this arc keeps finding, so it is a test.
+
+print("\nOPTIONS — 22 job descriptions, grouped, nothing lost")
+do {
+    eq(ReportOptions.jobDescriptions.count, 22, "22 job descriptions")
+    check(ReportOptions.groupingIsFaithful(flat: ReportOptions.jobDescriptions,
+                                           groups: ReportOptions.jobDescriptionGroups),
+          "every job description appears exactly once across the groups")
+    eq(Set(ReportOptions.flattened(ReportOptions.jobDescriptionGroups)),
+       Set(ReportOptions.jobDescriptions),
+       "and no group invents one that is not in the list")
+    check(ReportOptions.jobDescriptions.contains("NONE"),
+          "\"NONE\" is an ordinary option in the list")
+}
+
+print("\nOPTIONS — 12 extra items, grouped, nothing lost")
+do {
+    eq(ReportOptions.extraItems.count, 12, "12 extra items")
+    check(ReportOptions.groupingIsFaithful(flat: ReportOptions.extraItems,
+                                           groups: ReportOptions.extraItemGroups),
+          "every extra item appears exactly once across the groups")
+    eq(Set(ReportOptions.flattened(ReportOptions.extraItemGroups)),
+       Set(ReportOptions.extraItems),
+       "and no group invents one that is not in the list")
+}
+
+print("\nOPTIONS — the grouping check can actually fail")
+do {
+    // A test that cannot fail is fake evidence in another costume, so prove the
+    // check catches both a dropped option and an invented one.
+    let dropped: [(String, [String])] = [("Some", Array(ReportOptions.extraItems.dropLast()))]
+    check(!ReportOptions.groupingIsFaithful(flat: ReportOptions.extraItems, groups: dropped),
+          "a dropped option is caught")
+    let invented: [(String, [String])] = [("Some", ReportOptions.extraItems.dropLast() + ["Typo"])]
+    check(!ReportOptions.groupingIsFaithful(flat: ReportOptions.extraItems, groups: invented),
+          "an invented option is caught")
+}
+
+print("\nOPTIONS — the scan answers")
+do {
+    eq(ReportOptions.yesNo, ["Yes", "No"], "Cards Scanned has no NA")
+    eq(ReportOptions.yesNoNA, ["Yes", "No", "NA"], "the other two do")
+}
+
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 { print("FAILED"); exit(1) }
 print("PASSED")

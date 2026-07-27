@@ -12,5 +12,6 @@ cp scripts/test_report_rules.swift "$BUILD/main.swift"
 swiftc -O -o "$BUILD/run" \
   "Iconik Employee/Reports/ReportSchoolLink.swift" \
   "Iconik Employee/Reports/ReportRules.swift" \
+  "Iconik Employee/Reports/ReportOptions.swift" \
   "$BUILD/main.swift"
 "$BUILD/run"

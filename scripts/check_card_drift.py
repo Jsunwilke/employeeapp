@@ -99,6 +99,17 @@ ALLOW_MARKER = re.compile(r"^\s*(?://|\*|/\*)\s*ambient-allow:\s*\S+")
 # in DashboardWidgets — the highest-drift file in the app — is still refused.
 # Delete the entry entirely when its phase converts the file.
 #
+# AMB.7 IS COMPLETE, 2026-07-27: all FIVE of its rows are DELETED, because all
+# five files are — CustomDailyReportsView, DailyJobReportView,
+# LocationPhotoAttachmentView, TemplateFormView and the orphaned
+# TemplateReportListView were replaced by Reports/, which hand-rolls no cards.
+# MileageReportsView and RoutePlannerView were tagged AMB.7 by the generator and
+# are NOT this phase's: mileage belongs to AMB.9, and the ROUTE PLANNER belongs
+# to no phase in the list at all — the same shape as the bottom tab bar, which
+# also matched no entry because the list is organised by FEATURE. Retagged to
+# AMB.9 so the row is not read as AMB.7 having failed; where the route planner
+# really lands is the operator's call.
+#
 # AMB.4 IS COMPLETE, 2026-07-26: both of its rows are DELETED. MainEmployeeView
 # went 2 -> 0 with the dashboard shell, and DashboardWidgets went 8 -> 3 -> 0 once
 # the operator approved the iPad dashboard and its three iPad-only widgets (Sports
@@ -113,13 +124,8 @@ _ALLOWLIST_SOURCE = """
 Iconik Employee/AllFeaturesView.swift|AMB.12|1
 Iconik Employee/Components/AddressAutocompleteField.swift|AMB.12|2
 Iconik Employee/Components/LoadingOverlay.swift|AMB.12|1
-Iconik Employee/Misc Features/CustomDailyReportsView.swift|AMB.7|2
-Iconik Employee/Misc Features/DailyJobReportView.swift|AMB.7|2
-Iconik Employee/Misc Features/LocationPhotoAttachmentView.swift|AMB.7|6
-Iconik Employee/Misc Features/MileageReportsView.swift|AMB.7|2
-Iconik Employee/Misc Features/RoutePlannerView.swift|AMB.7|1
-Iconik Employee/Misc Features/TemplateFormView.swift|AMB.7|2
-Iconik Employee/Misc Features/TemplateReportListView.swift|AMB.7|2
+Iconik Employee/Misc Features/MileageReportsView.swift|AMB.9|2
+Iconik Employee/Misc Features/RoutePlannerView.swift|AMB.9|1
 Iconik Employee/NFC/DeleteConfirmationAlert.swift|AMB.11|1
 Iconik Employee/NFC/JobBoxNotification.swift|AMB.11|2
 Iconik Employee/NFC/ScanView.swift|AMB.11|2
@@ -137,7 +143,6 @@ Iconik Employee/TimeTrackingMainView.swift|AMB.12|2
 Iconik Employee/Training/Components/CritiqueGridCard.swift|AMB.12|1
 Iconik Employee/Training/Components/CritiqueListCard.swift|AMB.12|1
 Iconik Employee/Training/Components/StatsCard.swift|AMB.12|1
-Iconik Employee/UIComponents.swift|AMB.12|1
 Iconik Employee/Sports Shoot Feature/CaptureGalleryListView.swift|out of scope (D1)|1
 Iconik Employee/Sports Shoot Feature/CapturaSportsRosterView_iPhone.swift|out of scope (D1)|2
 Iconik Employee/Sports Shoot Feature/CapturaSportsView.swift|out of scope (D1)|2
