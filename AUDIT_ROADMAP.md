@@ -877,7 +877,34 @@ other rebases onto it.
 
 - [ ] **AMB.7 Reports family** (Misc Features, 8,695 lines) — daily job report, custom
   reports, my reports, photoshoot notes. Form-heavy; first real input styling.
+  **BATCH-2 MOCKUPS BUILT 2026-07-26** (inherited from AMB.6, which never built them).
+  Six Reports surfaces in the lab, all interactive rather than drawn. The daily job
+  report went through THREE designs before the operator approved it on iPhone:
+  v1 was a restyle ("you prettied up what I already had"), v2 an accordion ("hate it,
+  very hard to fill out"), v3 is one screen where nothing collapses, both option
+  lists fully visible in two columns under grouped families, nine peer sections with
+  no visual hierarchy between them, and an inline vehicle confirmation with no
+  default vehicle. Operator: "yep all looks good" (iPhone).
+  **THE MOCKUP IS THE SPEC** — operator requirement that the real screen "act
+  EXACTLY as the mockup does". The behaviour contract is in AMB_BATCH2_PARITY.md;
+  the school-ownership rule is real tested code (`DesignLab/ReportSchoolLink.swift`,
+  `scripts/test_report_school_link.sh`, 16 checks, proved to fail when the rule is
+  broken) and should be CARRIED OVER at conversion rather than reimplemented.
+  ⚠️ STILL OPEN before conversion: iPad review (D7), whether the org's session_types
+  match the 22 hardcoded job descriptions, and the loading/offline states the mockup
+  deliberately does not specify.
+  ⚠️ FIVE CAPABILITIES were lost inside these redesigns and restored — the denial
+  reason, the report date, the photographer, the session link, the photoshoot note.
+  The operator found four. Parity-walk the NEW screen every round, not just the old.
+  ⚠️ DJR.1 (not started) still proposes a WIZARD for this screen. The research says
+  do not: NN/g on repeat users, and the MoJ's report that one-thing-per-page was
+  "slow and disorientating" for daily professionals. DJR.1 and AMB.7 now contradict
+  each other and DJR.1 should be rewritten or dropped.
 - [ ] **AMB.8 Time off** (8 views, 3,763 lines) — closes batch 2 and mocks batch 3.
+  **MOCKUP BUILT 2026-07-26** — five surfaces in the lab, NOT YET REVIEWED by the
+  operator. It was built before the feedback that reshaped the Reports design, so it
+  likely carries the same faults: collapsed content, weak card separation, and
+  hierarchy between sections. Expect to re-cut it against the v3 lessons.
 
 **Batch 3**
 
