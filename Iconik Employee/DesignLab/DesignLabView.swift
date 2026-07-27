@@ -38,16 +38,9 @@ import SwiftUI
 enum DesignLabMockup: String, CaseIterable, Identifiable {
     case specimens
     case palette
-    /// Batch 2, built 2026-07-26. These two belonged to AMB.6 and were not built
-    /// there — the phase went entirely into repairing Chat, which turned out
-    /// never to have worked. D10 blocks AMB.7 from touching a real screen until
-    /// they are approved, so they are the first thing batch 2 does.
-    case reports
-    /// The SECOND daily-report design, built after the operator's verdict that
-    /// the first "prettied up what I already had". Kept BESIDE it rather than
-    /// replacing it, because the point is to compare two architectures on a
-    /// device — which is what the switcher at the bottom right is for.
-    case reportProposal
+    /// AMB.7's two Reports mockups were DELETED at that phase's close, once the
+    /// operator confirmed both device smokes on the converted screens — a
+    /// validation reference outlives the port it validates, not the phase.
     case timeOff
 
     var id: String { rawValue }
@@ -56,8 +49,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
-        case .reports: return "Reports Family"
-        case .reportProposal: return "Daily Report — everything visible"
         case .timeOff: return "Time Off"
         }
     }
@@ -68,8 +59,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
-        case .reports: return "AMB.7"
-        case .reportProposal: return "AMB.7 · v3"
         case .timeOff: return "AMB.8"
         }
     }
@@ -80,10 +69,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "Every Ambient primitive at every density, drawn against Equipment's real row content. This is where the density decision gets made."
         case .palette:
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
-        case .reports:
-            return "Six surfaces and TWO parallel report systems that an org flag switches between. Flip the workflow switch at the top — the whole screen changes."
-        case .reportProposal:
-            return "Third attempt. Nothing collapses, nothing expands — all 22 job descriptions and all 12 extra items on screen as grouped chips, because those are what you fill in every day."
         case .timeOff:
             return "Five surfaces. The balance moves out of Settings to the top of the screen it is about, status gets ONE rendering instead of three, and the manager queue admits it is a queue."
         }
@@ -93,8 +78,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
-        case .reports: return "doc.text.fill"
-        case .reportProposal: return "wand.and.stars"
         case .timeOff: return "calendar.badge.clock"
         }
     }
@@ -107,8 +90,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return .purple
         case .palette: return .pink
-        case .reports: return ReportsMockup.featureTint
-        case .reportProposal: return ReportProposalMockup.featureTint
         case .timeOff: return TimeOffMockup.featureTint
         }
     }
@@ -118,8 +99,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
-        case .reports: ReportsMockup()
-        case .reportProposal: ReportProposalMockup()
         case .timeOff: TimeOffMockup()
         }
     }
