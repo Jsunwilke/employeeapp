@@ -102,7 +102,14 @@ struct ReportProposalMockup: View {
     /// app's rule, which runs once per date and is never undone by a refresh.
     @State private var session: LabSession? = DesignLabSampleData.todaysSessions
         .first { !$0.alreadyReported }
-    @State private var stops: [LabSchool] = [DesignLabSampleData.schools[1]]
+    /// School ownership lives in ReportSchoolLink — a plain, testable type that
+    /// scripts/test_report_school_link.sh compiles and RUNS. The view holds no
+    /// copy of the rule, so the tests cannot pass while the screen misbehaves.
+    @State private var link = ReportSchoolLink(
+        stops: [DesignLabSampleData.schools[1].id],
+        sessionSchool: DesignLabSampleData.schools.first {
+            $0.name == DesignLabSampleData.todaysSessions.first { !$0.alreadyReported }?.school
+        }?.id)
 
     @State private var mileage = ""
     @State private var mileageEdited = false
@@ -124,20 +131,16 @@ struct ReportProposalMockup: View {
     @State private var attachedNote: LabPhotoshootNote?
     @State private var attachedNoteText = ""
 
-    /// Which school each autofill source contributed, so changing a session or
-    /// a note REPLACES its own school rather than piling another one on — and
-    /// never removes one the photographer added themselves.
-    /// Seeded to match the auto-selected session, so the screen is consistent
-    /// before the first tap: the session owns the school already on the report.
-    @State private var sessionSchoolID: String? = DesignLabSampleData.schools
-        .first { $0.name == DesignLabSampleData.todaysSessions
-            .first { !$0.alreadyReported }?.school }?.id
-    @State private var noteSchoolID: String?
 
 
     @State private var showVehicleConfirm = false
     @State private var showSchoolPicker = false
     @State private var submitted = false
+
+    /// Resolved from the link, so display order IS route order.
+    private var stops: [LabSchool] {
+        link.stops.compactMap { id in DesignLabSampleData.schools.first { $0.id == id } }
+    }
 
     private var computed: Double { DesignLabSampleData.routeMiles(stops) }
     private var miles: Double { Double(mileage) ?? computed }
@@ -167,7 +170,7 @@ struct ReportProposalMockup: View {
             SchoolPickerSheet(
                 chosen: stops.map(\.id),
                 onPick: { school in
-                    withAnimation(AmbientMotion.snappy) { stops.append(school) }
+                    withAnimation(AmbientMotion.snappy) { link.addStop(school.id) }
                     showSchoolPicker = false
                 },
                 onCancel: { showSchoolPicker = false })
@@ -301,25 +304,9 @@ struct ReportProposalMockup: View {
         }
     }
 
-    /// Replace the school contributed by ONE autofill source.
-    ///
-    /// The old one comes out unless the other source is also holding it; the new
-    /// one goes in unless it is already on the report. Schools the photographer
-    /// added by hand are never in `owned`, so they are never removed.
-    private func applySchool(named name: String?,
-                             from owned: inout String?,
-                             alsoClaimedBy other: String?) {
-        if let old = owned, old != other {
-            stops.removeAll { $0.id == old }
-        }
-        owned = nil
-        guard let name,
-              let match = DesignLabSampleData.schools.first(where: { $0.name == name })
-        else { return }
-        if !stops.contains(where: { $0.id == match.id }) {
-            stops.append(match)
-        }
-        owned = match.id
+    private func schoolID(named name: String?) -> String? {
+        guard let name else { return nil }
+        return DesignLabSampleData.schools.first { $0.name == name }?.id
     }
 
     /// `nil` renders the off-schedule row.
@@ -331,9 +318,7 @@ struct ReportProposalMockup: View {
                 // Picking a different session REPLACES its school. Choosing
                 // off-schedule removes it. Schools you added yourself are never
                 // touched, and neither is one the photoshoot note is holding.
-                applySchool(named: option?.school,
-                            from: &sessionSchoolID,
-                            alsoClaimedBy: noteSchoolID)
+                link.set(schoolID(named: option?.school), for: .session)
             }
             AmbientHaptics.selection()
         } label: {
@@ -380,9 +365,7 @@ struct ReportProposalMockup: View {
                             Text(school.name).font(.system(size: 13, weight: .semibold))
                             Button {
                                 withAnimation(AmbientMotion.snappy) {
-                                    stops.removeAll { $0.id == school.id }
-                                    if sessionSchoolID == school.id { sessionSchoolID = nil }
-                                    if noteSchoolID == school.id { noteSchoolID = nil }
+                                    link.removeStop(school.id)
                                 }
                             } label: {
                                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
@@ -714,9 +697,7 @@ struct ReportProposalMockup: View {
                 attachedNoteText = ""
                 // Same rule as the session: replace this source's school,
                 // remove it when you choose none, leave everything else alone.
-                applySchool(named: note?.school,
-                            from: &noteSchoolID,
-                            alsoClaimedBy: sessionSchoolID)
+                link.set(schoolID(named: note?.school), for: .note)
             }
             AmbientHaptics.selection()
         } label: {
