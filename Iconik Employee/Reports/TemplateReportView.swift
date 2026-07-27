@@ -551,9 +551,16 @@ struct TemplateReportView: View {
     /// today while storing nothing — the strip then names a field that visibly
     /// looks filled in, which is the dead-Submit-button trap this screen exists
     /// to remove. Say so, and offer the one tap that resolves it.
+    ///
+    /// "Unset" means nil OR AN EMPTY STRING, because the web builders seed
+    /// `defaultValue: ""` on every field. Testing only for nil made this
+    /// affordance dead on every template they produce — the picker showed a
+    /// date, the blocking strip named the field, and the one control built to
+    /// explain that gap never rendered.
     @ViewBuilder
     private func unsetHint(_ field: TemplateField, store: @escaping () -> Void) -> some View {
-        if field.readOnly != true, formData[field.id] == nil {
+        let unset = formData[field.id] == nil || (formData[field.id] as? String)?.isEmpty == true
+        if field.readOnly != true, unset {
             HStack(spacing: 6) {
                 Text("Not chosen yet").font(.caption2).foregroundStyle(.orange)
                 Button("Use this") {
@@ -611,22 +618,26 @@ struct TemplateReportView: View {
         for field in template.fields {
             if field.smartConfig != nil {
                 formData[field.id] = templateService.calculateSmartField(field, formData: formData)
-            } else if let defaultValue = field.defaultValue {
-                formData[field.id] = defaultValue
             } else if field.type == "toggle", field.required {
                 // A REQUIRED toggle is seeded with its own resting state, so
                 // "answered No" is stored as `false` rather than as NOTHING.
-                //
                 // Letting an untouched toggle pass validation (see `isValid`)
-                // without this would have turned a form that could not submit
-                // into a row where "answered No" and "never answered" are the
-                // same absence — on a JSONB column the web app also reads. That
-                // is the shape this app lost a whole feature to for a year.
+                // without this would turn a form that could not submit into a
+                // row where "answered No" and "never answered" are the same
+                // absence — on a JSONB column the web app also reads.
                 //
-                // Only REQUIRED ones: an optional toggle left alone has always
-                // stored nothing, and this phase does not change what an
-                // untouched optional field writes.
+                // TYPE IS TESTED BEFORE `defaultValue`, and that ORDER is the
+                // whole fix. Both web template builders write `defaultValue: ""`
+                // on EVERY field, and JavaScript's `field.defaultValue || ""`
+                // collapses that empty string while Swift's `if let` unwraps it
+                // happily — so with the branches the other way round this seed
+                // was unreachable on every template the web app produces, and
+                // the row got `""` instead of `false`. The web app's own report
+                // form switches on type first (CreateReportModal) and seeds
+                // `false` for a toggle; this now agrees with it.
                 formData[field.id] = false
+            } else if let defaultValue = field.defaultValue {
+                formData[field.id] = defaultValue
             }
         }
         syncPhotoFields()
