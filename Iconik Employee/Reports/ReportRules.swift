@@ -70,11 +70,6 @@ struct ReportMileage: Equatable {
         guard let typed else { return nil }
         let cleaned = typed.trimmingCharacters(in: .whitespaces)
         guard !cleaned.isEmpty else { return nil }
-        // `Double` also accepts "nan", "inf", "1e3" and "0x1p4". A decimal pad
-        // cannot type them, but a paste, a hardware keyboard and dictation all
-        // can — and a NaN reaches the JSON encoder, which refuses it, so the
-        // submit dies with something nobody can act on. A mileage is digits and
-        // at most one separator.
         // A mileage is digits and at most one separator. `Double` also accepts
         // "nan", "inf", "1e3", "0x1p4" and a leading sign — a decimal pad can
         // type none of them, but a paste, a hardware keyboard and dictation all

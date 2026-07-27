@@ -153,6 +153,11 @@ struct DailyReportView: View {
     @State private var usualMiles: [String: Double] = [:]
     /// Which route measurement is current. See `recalculateMileage`.
     @State private var mileageRun = 0
+    /// How many legs of the last route could not be measured at all — the
+    /// geocoder or the directions request failed, which offline means ALL of
+    /// them. Having an address is not the same as the leg being measured, and
+    /// treating them as the same put a confident 0.0 under a full route.
+    @State private var unmeasuredLegs = 0
     /// `reapplyLinkedSchools` runs once — see its own note.
     @State private var hasReappliedSchools = false
     @FocusState private var fieldFocused: Bool
@@ -648,9 +653,23 @@ struct DailyReportView: View {
                     .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if !unmeasurableStops.isEmpty && !mileage.isOverridden {
-                Label("\(unmeasurableStops.map(\.name).joined(separator: ", ")) has no address or coordinates on file, so it is not in this figure. Type the mileage in yourself.",
+            // Not repeated when there is no home address — that line already
+            // says the route cannot be measured, and two identical instructions
+            // stacked is the screen talking over itself.
+            if !unmeasurableStops.isEmpty && !mileage.isOverridden && !storedUserHomeAddress.isEmpty {
+                let names = unmeasurableStops.map(\.name).joined(separator: ", ")
+                Label("\(names) \(unmeasurableStops.count == 1 ? "has" : "have") no address or coordinates on file, so \(unmeasurableStops.count == 1 ? "it is" : "they are") not in this figure. Type the mileage in yourself.",
                       systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // A leg that FAILED to measure. Offline this is every leg, and
+            // without saying so the figure reads as a measured zero.
+            if unmeasuredLegs > 0 && !mileage.isOverridden && !isCalculatingMileage {
+                Label(unmeasuredLegs == 1
+                      ? "One leg of this route couldn't be measured, so the figure is short. Check it before submitting."
+                      : "The route couldn't be measured — no signal, most likely. Type the mileage in yourself.",
+                      systemImage: "wifi.exclamationmark")
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1045,6 +1064,7 @@ struct DailyReportView: View {
         mileageRun += 1
         let run = mileageRun
 
+        unmeasuredLegs = 0
         guard !storedUserHomeAddress.isEmpty else {
             // No home address means no route to measure. The live form CLEARED
             // the field here, wiping a typed value; ReportMileage leaves a typed
@@ -1070,14 +1090,24 @@ struct DailyReportView: View {
         isCalculatingMileage = true
         Task {
             var total = 0.0
+            var failed = 0
             for index in 0..<(route.count - 1) {
                 if let leg = await ReportRoute.miles(from: route[index], to: route[index + 1]) {
                     total += leg
+                } else {
+                    failed += 1
                 }
             }
             await MainActor.run {
                 guard run == self.mileageRun else { return }
-                self.mileage.recalculate(to: total)
+                self.unmeasuredLegs = failed
+                // If NOTHING could be measured — which is what no signal looks
+                // like — do not overwrite a figure that was measured earlier
+                // with a zero. A partial result is still written, and the
+                // shortfall is said on screen rather than filed silently.
+                if failed < route.count - 1 {
+                    self.mileage.recalculate(to: total)
+                }
                 self.isCalculatingMileage = false
             }
         }
@@ -1120,6 +1150,10 @@ struct DailyReportView: View {
     // MARK: - Attaching a note
 
     private func attach(_ note: PhotoshootNote?) {
+        // Recorded BEFORE the guard. With two or more drafts the screen opens
+        // with nothing attached and "No photoshoot note" already drawn as the
+        // selection, so tapping it is a no-op — and the decision was lost.
+        if note == nil { hasDeclinedNote = true }
         guard attachedNoteID != note?.id else { return }
         // Anything the PREVIOUS note put here goes with it. Switching notes used
         // to leave the old note's photos on the report, so the report
@@ -1128,10 +1162,6 @@ struct DailyReportView: View {
         droppedNoteURLs.removeAll()
         attachedNoteID = note?.id
         attachedNoteSnapshot = note
-        // Choosing "No photoshoot note" is a DECISION, not the absence of one.
-        // Without this, adjusting the session afterwards re-attached the note
-        // the photographer had just declined.
-        if note == nil { hasDeclinedNote = true }
         // Same rule as the session: replace this source's school, remove it when
         // you choose none, leave everything else alone.
         link.set(schoolID(named: note?.school), for: .note)
@@ -1204,6 +1234,10 @@ struct DailyReportView: View {
         // row whose date and session were the new ones and whose school was the
         // old one.
         let note = attachedNote
+        // Is this note still in the shared list — i.e. still ours to consume?
+        // `status` cannot answer: everything offered is a draft, and the
+        // snapshot freezes that value at attach time.
+        let noteIsLive = attachedNoteIsLive
         let organizationID = storedUserOrganizationID
         let stopNames = stops.map(\.name).joined(separator: ", ")
         // Always store a destination: when a session is picked but its school did
@@ -1277,11 +1311,12 @@ struct DailyReportView: View {
             do {
                 let created = try await DailyJobReportService.shared.createReport(report)
 
-                // Only a DRAFT is linked. `attachToReport` is an unconditional
-                // UPDATE of `daily_report_id`, so doing this to a note that was
-                // already submitted against another report would repoint that
-                // row away from it, on the shared database.
-                if let note, note.status == .draft {
+                // Linked only while the note is still in the shared list.
+                // `attachToReport` is an unconditional UPDATE of
+                // `daily_report_id`, so touching a note that has already left —
+                // submitted or deleted somewhere else — would repoint a row this
+                // report has no claim on, on the shared database.
+                if let note, noteIsLive {
                     do {
                         try await PhotoshootNoteService.shared.attachToReport(noteId: note.id,
                                                                              reportId: created.id)
