@@ -54,7 +54,16 @@ struct PhotoshootNotesView: View {
     @State private var schoolOptions: [SchoolItem] = []
     @State private var isLoadingSchools = true
 
-    @State private var todaySessions: [Session] = []
+    /// Today's sessions, owned by an OBJECT.
+    ///
+    /// This screen used to mint `private let subscriptionID = UUID()` on the
+    /// struct — a fresh id every time SwiftUI re-created the view value. So
+    /// `onDisappear` unsubscribed an id that need not be the one `onAppear`
+    /// subscribed with, `stopListeningToSessions` no-oped, and the channel plus
+    /// its refetch loop stayed alive; a foreground could register another. A
+    /// `@StateObject` has one identity for the life of the screen, which is why
+    /// `ReportSchedule` is a class.
+    @StateObject private var schedule = ReportSchedule()
     @State private var showSchoolDialog = false
     @State private var pendingNoteID: UUID?
     @State private var showDeleteConfirmation = false
@@ -73,8 +82,6 @@ struct PhotoshootNotesView: View {
     @State private var showSubmitted = false
     @State private var hasLoadedSubmitted = false
 
-    private let sessionService = SessionService.shared
-    private let subscriptionID = UUID()
     @ObservedObject private var organizationService = OrganizationService.shared
 
     private var feature: Color { FeatureTheme.color(for: "photoshootNotes") }
@@ -86,6 +93,10 @@ struct PhotoshootNotesView: View {
 
     private var selectedIndex: Int? {
         selectedID.flatMap { id in notes.firstIndex { $0.id == id } }
+    }
+
+    private func note(id: UUID) -> PhotoshootNote? {
+        notes.first { $0.id == id }
     }
 
     var body: some View {
@@ -125,7 +136,7 @@ struct PhotoshootNotesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .bottom) { banners }
         .onAppear(perform: load)
-        .onDisappear { sessionService.stopListeningToSessions(subscriptionId: subscriptionID) }
+        .onDisappear { schedule.stop() }
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             loadScheduleForToday()
         }
@@ -183,8 +194,8 @@ struct PhotoshootNotesView: View {
 
             Spacer(minLength: 0)
 
-            if !todaySessions.isEmpty {
-                Text("\(todaySessions.count) session\(todaySessions.count == 1 ? "" : "s") today")
+            if !schedule.sessions.isEmpty {
+                Text("\(schedule.sessions.count) session\(schedule.sessions.count == 1 ? "" : "s") today")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.green)
                     .padding(.horizontal, 10).padding(.vertical, 6)
@@ -238,7 +249,8 @@ struct PhotoshootNotesView: View {
     /// The School section sits ABOVE the note body, deliberately and unchanged —
     /// which school a note belongs to is the thing that makes it useful later.
     private func editor(_ index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let noteID = notes[index].id
+        return VStack(alignment: .leading, spacing: 8) {
             AmbientSectionTitle("School")
 
             if isLoadingSchools && schoolOptions.isEmpty {
@@ -250,7 +262,7 @@ struct PhotoshootNotesView: View {
             } else {
                 Menu {
                     ForEach(schoolOptions) { school in
-                        Button(school.name) { setSchool(school.name, at: index) }
+                        Button(school.name) { setSchool(school.name, for: noteID) }
                     }
                 } label: {
                     HStack {
@@ -270,9 +282,14 @@ struct PhotoshootNotesView: View {
             // EVERY KEYSTROKE SAVES. There is no Save button anywhere, and there
             // never has been.
             TextEditor(text: Binding(
-                get: { notes[index].noteText },
+                // Resolved by ID on every read AND every write. Binding through
+                // an Int captured when the body was built is a crash waiting for
+                // a keystroke that arrives after the note is gone — submitting a
+                // note removes it while the field can still be first responder.
+                get: { note(id: noteID)?.noteText ?? "" },
                 set: { newValue in
-                    notes[index].noteText = newValue
+                    guard let current = notes.firstIndex(where: { $0.id == noteID }) else { return }
+                    notes[current].noteText = newValue
                     saveNotes()
                 }))
                 .frame(minHeight: 150)
@@ -334,7 +351,7 @@ struct PhotoshootNotesView: View {
                     HStack(spacing: 10) {
                         ForEach(notes[index].photoURLs, id: \.self) { urlString in
                             thumbnail(urlString, size: 100) {
-                                deletePhoto(urlString, at: index)
+                                deletePhoto(urlString, from: notes[index].id)
                             }
                         }
                     }
@@ -415,7 +432,7 @@ struct PhotoshootNotesView: View {
         if note.status == .draft {
             let ready = !note.school.isEmpty && !note.noteText.isEmpty
             VStack(spacing: 6) {
-                Button { submitNote(at: index) } label: {
+                Button { submitNote(note.id) } label: {
                     HStack(spacing: 8) {
                         if isSubmitting {
                             ProgressView().tint(.white).scaleEffect(0.8)
@@ -623,8 +640,8 @@ struct PhotoshootNotesView: View {
         show(success: "Note deleted")
     }
 
-    private func setSchool(_ name: String, at index: Int) {
-        guard notes.indices.contains(index) else { return }
+    private func setSchool(_ name: String, for noteID: UUID) {
+        guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
         withAnimation(AmbientMotion.snappy) { notes[index].school = name }
         saveNotes()
     }
@@ -679,9 +696,9 @@ struct PhotoshootNotesView: View {
         }
     }
 
-    private func deletePhoto(_ urlString: String, at index: Int) {
+    private func deletePhoto(_ urlString: String, from noteID: UUID) {
+        guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
         deletePhotoFromStorage(urlString)
-        guard notes.indices.contains(index) else { return }
         notes[index].photoURLs.removeAll { $0 == urlString }
         saveNotes()
         show(success: "Photo removed")
@@ -737,9 +754,8 @@ struct PhotoshootNotesView: View {
         }
     }
 
-    private var sortedTodaySessions: [Session] {
-        todaySessions.sorted { ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture) }
-    }
+    /// `ReportSchedule` already delivers them earliest-first with undated last.
+    private var sortedTodaySessions: [Session] { schedule.sessions }
 
     private func sessionOptionLabel(_ session: Session) -> String {
         guard let start = session.startDate else { return session.schoolName }
@@ -747,43 +763,24 @@ struct PhotoshootNotesView: View {
     }
 
     private func loadScheduleForToday() {
-        guard let currentUserID = UserManager.shared.getCurrentUserID(),
-              !organizationID.isEmpty else { return }
-        let currentUserEmail = UserDefaults.standard.string(forKey: "userEmail")
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: Date())
-        guard let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) else { return }
-
-        sessionService.startListeningToSessions(
-            subscriptionId: subscriptionID,
-            organizationID: organizationID,
-            includeUnpublished: false
-        ) { all in
-            Task { @MainActor in
-                let mine = all.filter { session in
-                    guard let start = session.startDate else { return false }
-                    guard start >= startOfDay, start < endOfDay else { return false }
-                    return session.isUserAssigned(userID: currentUserID, userEmail: currentUserEmail)
-                }
-                todaySessions = mine
-                if let index = selectedIndex, notes[index].school.isEmpty {
-                    setSchoolFromSchedule(for: notes[index].id)
-                }
+        schedule.start(for: Date()) {
+            if let index = selectedIndex, notes[index].school.isEmpty {
+                setSchoolFromSchedule(for: notes[index].id)
             }
         }
     }
 
     /// One session today: fill it in. Several: ask.
     private func setSchoolFromSchedule(for noteID: UUID) {
-        guard !todaySessions.isEmpty, !schoolOptions.isEmpty else { return }
-        guard let index = notes.firstIndex(where: { $0.id == noteID }), notes[index].school.isEmpty else { return }
+        guard !schedule.sessions.isEmpty, !schoolOptions.isEmpty else { return }
+        guard let existing = note(id: noteID), existing.school.isEmpty else { return }
 
-        if todaySessions.count == 1,
-           let session = todaySessions.first,
+        if schedule.sessions.count == 1,
+           let session = schedule.sessions.first,
            let match = schoolOptions.first(where: { $0.name == session.schoolName }) {
-            setSchool(match.name, at: index)
+            setSchool(match.name, for: noteID)
             show(success: "Auto-selected school from your schedule")
-        } else if todaySessions.count > 1 {
+        } else if schedule.sessions.count > 1 {
             pendingNoteID = noteID
             showSchoolDialog = true
         }
@@ -792,17 +789,15 @@ struct PhotoshootNotesView: View {
     private func selectSchool(from session: Session) {
         defer { pendingNoteID = nil }
         guard let noteID = pendingNoteID,
-              let index = notes.firstIndex(where: { $0.id == noteID }),
               let match = schoolOptions.first(where: { $0.name == session.schoolName }) else { return }
-        setSchool(match.name, at: index)
+        setSchool(match.name, for: noteID)
         show(success: "Selected \(session.schoolName) for this note")
     }
 
     // MARK: - Submitting
 
-    private func submitNote(at index: Int) {
-        guard !isSubmitting, notes.indices.contains(index) else { return }
-        let note = notes[index]
+    private func submitNote(_ noteID: UUID) {
+        guard !isSubmitting, let note = note(id: noteID) else { return }
         guard !note.school.isEmpty else {
             show(error: "Please select a school before submitting")
             return

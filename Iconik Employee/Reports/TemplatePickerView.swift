@@ -34,6 +34,11 @@ import SwiftUI
 
 struct TemplatePickerView: View {
 
+    /// True when PUSHED from the reports list rather than opened as its own
+    /// feature. See `PushedTabBarClearance` — the shell's inset does not travel
+    /// into what a container pushes, and applying both reserves twice the room.
+    var isPushed = false
+
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
 
     @State private var templates: [ReportTemplate] = []
@@ -61,7 +66,11 @@ struct TemplatePickerView: View {
     private var categories: [(String, [ReportTemplate])] {
         Dictionary(grouping: filtered) { $0.shootType.capitalized }
             .sorted { $0.key < $1.key }
-            .map { ($0.key, $0.value.sorted { $0.isDefault && !$1.isDefault }) }
+            // `{ $0.isDefault && !$1.isDefault }` is NOT a strict weak ordering
+            // — it is false in both directions for two equal elements, which
+            // leaves `sort` free to do anything. Carried in verbatim from the
+            // screen this replaces and fixed here rather than inherited again.
+            .map { ($0.key, $0.value.sorted { ($0.isDefault ? 0 : 1) < ($1.isDefault ? 0 : 1) }) }
     }
 
     var body: some View {
@@ -71,6 +80,7 @@ struct TemplatePickerView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if !failure.isEmpty { failureBanner }
                     searchField
+                    summaryRow
                     content
                 }
                 .padding(.horizontal, 16)
@@ -78,11 +88,26 @@ struct TemplatePickerView: View {
             }
             .ambientNoBounceWhenShort()
         }
+        .modifier(PushedTabBarClearance(active: isPushed))
         .navigationTitle("Custom Daily Reports")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await loadTemplates() }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                // A ScrollView does not wire up `.refreshable` the way a List
+                // does, so pull-to-refresh here is not something to rely on.
+                // This button always works.
+                Button { Task { await loadTemplates() } } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(isLoading)
+            }
+        }
         .onAppear {
-            guard !hasLoaded else { return }
+            // Every appearance, so a template edited in the web app is picked up
+            // when the photographer comes back to this screen. `isLoading`
+            // stops two overlapping fetches; `hasLoaded` only decides whether a
+            // spinner replaces the content.
             Task { await loadTemplates() }
         }
         .ambientPush(item: $opening) { template in
@@ -152,6 +177,23 @@ struct TemplatePickerView: View {
             }
         }
         .ambientCard(density: .compact, fillWidth: true)
+    }
+
+    /// "N templates available · N categories", both counting the FILTERED set.
+    /// A KEEP from the inventory that the first cut of this screen dropped.
+    @ViewBuilder
+    private var summaryRow: some View {
+        if !templates.isEmpty {
+            HStack {
+                Text("\(filtered.count) template\(filtered.count == 1 ? "" : "s") available")
+                Spacer()
+                let named = categories.filter { !$0.0.trimmingCharacters(in: .whitespaces).isEmpty }.count
+                if named > 0 {
+                    Text("\(named) categor\(named == 1 ? "y" : "ies")")
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     private func row(_ template: ReportTemplate) -> some View {
@@ -236,6 +278,7 @@ struct TemplatePickerView: View {
             hasLoaded = true
             return
         }
+        guard !isLoading else { return }
         isLoading = true
         defer {
             isLoading = false

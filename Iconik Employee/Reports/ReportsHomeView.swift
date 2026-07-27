@@ -140,9 +140,9 @@ struct ReportsHomeView: View {
         .ambientPush(item: $destination) { destination in
             switch destination {
             case .newReport:
-                DailyReportView()
+                DailyReportView(isPushed: true)
             case .templates:
-                TemplatePickerView()
+                TemplatePickerView(isPushed: true)
             case .edit(let reportID):
                 ReportEditorView(reportID: reportID)
             }
@@ -177,7 +177,12 @@ struct ReportsHomeView: View {
             searchField.modifier(ReportListRow())
             filterRow.modifier(ReportListRow())
 
-            if reports.isEmpty && errorMessage.isEmpty {
+            if !errorMessage.isEmpty && reports.isEmpty {
+                // A failure has already drawn its banner above. Adding an empty
+                // state under it would say "you have no reports" about a query
+                // that never answered — the same shape in a new place.
+                EmptyView()
+            } else if reports.isEmpty {
                 // The state MyJobReportsView did not have at all: an empty list
                 // and a failed query used to be the same blank screen.
                 AmbientEmptyState(
@@ -202,21 +207,23 @@ struct ReportsHomeView: View {
                     systemImage: "magnifyingglass")
                     .modifier(ReportListRow())
             } else if groupByTemplate {
+                // Headings are ORDINARY ROWS, not `Section` headers. A plain
+                // List's header sticks and draws its own opaque background,
+                // which would put a grey bar across the ambient wash — and the
+                // approved design has the title sitting on the wash. The rows
+                // stay real List rows either way, which is what keeps
+                // `.swipeActions` alive.
                 ForEach(groups, id: \.0) { name, rows in
-                    Section {
-                        ForEach(rows) { report in row(report) }
-                    } header: {
-                        AmbientSectionTitle(name, trailing: "\(rows.count)")
-                            .modifier(ReportListRow())
-                    }
+                    AmbientSectionTitle(name, trailing: "\(rows.count)")
+                        .padding(.top, 6)
+                        .modifier(ReportListRow())
+                    ForEach(rows) { report in row(report) }
                 }
             } else {
-                Section {
-                    ForEach(filtered) { report in row(report) }
-                } header: {
-                    AmbientSectionTitle("Filed reports", trailing: "\(filtered.count)")
-                        .modifier(ReportListRow())
-                }
+                AmbientSectionTitle("Filed reports", trailing: "\(filtered.count)")
+                    .padding(.top, 6)
+                    .modifier(ReportListRow())
+                ForEach(filtered) { report in row(report) }
             }
         }
         .listStyle(.plain)
@@ -259,6 +266,13 @@ struct ReportsHomeView: View {
 
             if schedule.isLoadingSessions {
                 Text("Checking your schedule…").font(.subheadline).foregroundStyle(.secondary)
+            } else if schedule.reportedLookupFailed {
+                // NOT "0 reports filed". A failed lookup that renders as a zero
+                // is the shape that hid a dead feature for a year here, and this
+                // one would actively steer a photographer into filing a report
+                // they have already filed.
+                Text("\(schedule.sessions.count) session\(schedule.sessions.count == 1 ? "" : "s") scheduled · couldn't check what you have filed")
+                    .font(.subheadline).foregroundStyle(.orange)
             } else {
                 Text("\(schedule.sessions.count) session\(schedule.sessions.count == 1 ? "" : "s") scheduled · \(filed) report\(filed == 1 ? "" : "s") filed")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -272,10 +286,7 @@ struct ReportsHomeView: View {
                             .foregroundStyle(.white)
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text(outstanding.isEmpty
-                             ? (schedule.sessions.isEmpty ? "Nothing scheduled — an off-schedule day still files"
-                                                          : "Everything scheduled is already reported")
-                             : "Not yet reported")
+                        Text(subtitleForLead(outstanding: outstanding))
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.85))
                     }
@@ -298,6 +309,14 @@ struct ReportsHomeView: View {
             .buttonStyle(.plain)
         }
         .ambientCard(density: .hero, state: .highlighted, glow: feature, fillWidth: true)
+    }
+
+    private func subtitleForLead(outstanding: [Session]) -> String {
+        if schedule.reportedLookupFailed { return "Check the list below before filing again" }
+        if !outstanding.isEmpty { return "Not yet reported" }
+        return schedule.sessions.isEmpty
+            ? "Nothing scheduled — an off-schedule day still files"
+            : "Everything scheduled is already reported"
     }
 
     // MARK: - Controls
@@ -382,11 +401,11 @@ struct ReportsHomeView: View {
 
     private func load() {
         schedule.start(for: Date()) { }
-        Task {
-            await schedule.refreshReported(photographerFirstName: storedUserFirstName,
-                                           organizationID: storedUserOrganizationID)
-        }
-        guard reports.isEmpty else { return }
+        // Reload on EVERY appearance, which includes popping back from the
+        // editor — otherwise a report you just edited or deleted keeps showing
+        // its old values. `content` only draws the full-screen loading state
+        // when there is nothing to show yet, so a refresh over an existing list
+        // is invisible rather than a blank flash.
         Task { await reload() }
     }
 

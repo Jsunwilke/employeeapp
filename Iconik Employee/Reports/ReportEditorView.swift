@@ -72,6 +72,7 @@ struct ReportEditorView: View {
     @State private var isDeleting = false
     @State private var showDeleteAlert = false
     @State private var failure = ""
+    @State private var openPhotoURL: String?
     @FocusState private var fieldFocused: Bool
 
     private var feature: Color { FeatureTheme.color(for: "myDailyJobReports") }
@@ -81,6 +82,9 @@ struct ReportEditorView: View {
             AmbientBackdrop(tint: feature, intensity: 0.3)
             content
         }
+        // Always pushed from the reports list, so it insets itself past the
+        // floating tab bar — the shell's inset stops at the list.
+        .tabBarClearance()
         .navigationTitle("Edit Job Report")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -104,6 +108,9 @@ struct ReportEditorView: View {
         } message: {
             Text("Are you sure you want to delete this report? This action cannot be undone.")
         }
+        .sheet(item: $openPhotoURL) { url in
+            PhotoDetailView(imageURL: url, label: "Photo")
+        }
         .onAppear(perform: loadReport)
         .disabled(isDeleting)
     }
@@ -125,6 +132,7 @@ struct ReportEditorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 if !failure.isEmpty { failureBanner }
+                if isTemplateReport { templateBanner }
                 detailsSection
                 listSection(title: "What did you shoot?",
                             groups: ReportOptions.jobDescriptionGroups,
@@ -135,6 +143,7 @@ struct ReportEditorView: View {
                 scanSection
                 jobNotesSection
                 photoshootNoteSection
+                if isTemplateReport { templateFieldsSection }
                 if !photoURLs.isEmpty { photosSection }
                 updateButton
             }
@@ -142,6 +151,77 @@ struct ReportEditorView: View {
             .padding(.vertical, 16)
         }
         .ambientNoBounceWhenShort()
+    }
+
+    // MARK: - Template reports
+
+    /// A template report can be opened here — the list shows every report and
+    /// always did. What it could not do before was SAY so, or show any of what
+    /// the template actually captured.
+    private var isTemplateReport: Bool {
+        (loaded?.report_type ?? "standard") == "template"
+    }
+
+    private var templateBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "doc.text.below.ecg").font(.footnote).foregroundStyle(feature)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(loaded?.template_name ?? "Template report")
+                    .font(.subheadline.weight(.semibold))
+                Text("This report was filed from a template. Its own answers are below and are read-only here — templates are authored in the web app.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .ambientCard(density: .compact, border: .hairline(feature.opacity(0.4)), fillWidth: true)
+    }
+
+    /// The template's captured answers, rendered generically as key/value rows.
+    ///
+    /// This capability existed ONLY in TemplateReportListView — 558 lines,
+    /// compiled, shipped and unreachable. The inventory said to build it
+    /// somewhere real or drop it knowingly; this is somewhere real.
+    private var templateFieldsSection: some View {
+        let entries = (loaded?.form_data ?? [:])
+            .filter { !Self.hiddenFormKeys.contains($0.key) }
+            .map { ($0.key, Self.describe($0.value)) }
+            .filter { !$0.1.isEmpty }
+            .sorted { $0.0 < $1.0 }
+        return ReportSection(title: "Template answers",
+                             status: "\(entries.count)",
+                             statusTint: entries.isEmpty ? nil : feature) {
+            if entries.isEmpty {
+                Text("This report stored no template answers.")
+                    .font(.subheadline).foregroundStyle(.tertiary)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(entries, id: \.0) { key, value in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(key.replacingOccurrences(of: "_", with: " ").capitalized)
+                                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            Text(value)
+                                .font(.subheadline)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Plumbing the photographer did not type, so it is not shown back to them.
+    private static let hiddenFormKeys: Set<String> = ["session_id", "session_name", "photoURLs"]
+
+    private static func describe(_ value: AnyCodable) -> String {
+        switch value.value {
+        case let text as String: return text
+        case let flag as Bool: return flag ? "Yes" : "No"
+        case let number as Int: return "\(number)"
+        case let number as Double: return String(format: "%g", number)
+        case let list as [Any]: return list.map { "\($0)" }.joined(separator: ", ")
+        default: return ""
+        }
     }
 
     // MARK: - Sections
@@ -249,8 +329,18 @@ struct ReportEditorView: View {
         ReportSection(title: "Attached photos",
                       status: "\(photoURLs.count)",
                       statusTint: feature) {
-            StoragePhotoGallery(photoURLs: photoURLs, columns: 3)
-                .padding(.vertical, 4)
+            // The grid is built here rather than through `StoragePhotoGallery`,
+            // which draws its OWN "Photos (N)" headline and its own horizontal
+            // padding — both doubled inside a section that already has a title
+            // and a count. Tapping still opens the same detail view.
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
+                      spacing: 8) {
+                ForEach(photoURLs, id: \.self) { url in
+                    StorageImageView(imageURL: url, width: nil, height: 100, contentMode: .fill)
+                        .contentShape(Rectangle())
+                        .onTapGesture { openPhotoURL = url }
+                }
+            }
         }
     }
 
@@ -371,7 +461,18 @@ struct ReportEditorView: View {
             sportsBackgroundShot: sportsBackground,
             jobDescriptionText: jobNotes.isEmpty ? nil : jobNotes,
             photoshootNoteText: photoshootNoteText.isEmpty ? nil : photoshootNoteText,
-            photoURLs: photoURLs.isEmpty ? nil : photoURLs)
+            photoURLs: photoURLs.isEmpty ? nil : photoURLs,
+            // EVERY template column is carried forward from the record. The old
+            // editor passed none of them, and `reportType` is non-optional with
+            // a default of "standard" — so pressing Update on a template report
+            // silently RECLASSIFIED it on the shared table, leaving its
+            // template_id and form_data orphaned behind a standard label.
+            templateId: original.template_id,
+            templateName: original.template_name,
+            templateVersion: original.template_version,
+            reportType: original.report_type ?? "standard",
+            smartFieldsUsed: original.smart_fields_used,
+            formData: original.form_data)
 
         Task {
             do {

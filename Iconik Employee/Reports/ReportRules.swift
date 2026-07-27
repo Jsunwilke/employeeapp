@@ -52,11 +52,32 @@ struct ReportMileage: Equatable {
         return !typed.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    /// The value that goes on the report.
-    var value: Double {
-        if isOverridden, let parsed = Double(typed!) { return parsed }
-        return calculated
+    /// What the photographer typed, read as a number.
+    ///
+    /// LENIENT ON PURPOSE. `Double("12,5")` is nil, and a decimal pad on a
+    /// non-US locale emits a comma; `Double(" 12.5")` is nil too, and a paste
+    /// carries whitespace. The screen said "You typed this — it won't be
+    /// overwritten" while `value` quietly fell back to the calculated figure,
+    /// so a comma meant the report filed a DIFFERENT number from the one on
+    /// screen. This is reimbursement data.
+    var typedValue: Double? {
+        guard let typed else { return nil }
+        let cleaned = typed
+            .trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: ",", with: ".")
+        guard !cleaned.isEmpty else { return nil }
+        return Double(cleaned)
     }
+
+    /// The photographer has typed something that is not a number at all.
+    ///
+    /// The screen MUST say so rather than filing the calculated figure behind
+    /// their back — that silent substitution is the whole reason this is
+    /// exposed rather than swallowed.
+    var typedIsUnreadable: Bool { isOverridden && typedValue == nil }
+
+    /// The value that goes on the report.
+    var value: Double { typedValue ?? calculated }
 
     /// What the field shows. A typed value is shown verbatim so editing is not
     /// fought by reformatting mid-keystroke.

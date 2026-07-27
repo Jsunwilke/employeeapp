@@ -9,13 +9,25 @@
 //      That component is a BUTTON that owns its own sheet and writes back a
 //      single selection. The report needs a list of stops, added one at a time
 //      from a control that is not itself a school row — so the sheet is the
-//      unit, not the button. The two coexist: the rest of the app keeps
-//      `SearchableSchoolPicker`, and it is still what Location Photos uses,
-//      because there a school IS a single selection.
+//      unit, not the button. `SearchableSchoolPicker` stays in the app for
+//      NFC/ManualEntryView, which is now its only consumer.
 //
 //      Everything it did that mattered is here: search over name AND address,
 //      the refresh that re-pulls schools from the server, and the address line
 //      under each name.
+//
+//  THE REFRESH IS DELIBERATELY NOT THE ONE THAT COMPONENT USES
+//      `DatabaseManager.refreshSchoolsFromServer` calls back only WHEN THE DATA
+//      CHANGED, and its own failure path calls back with an EMPTY ARRAY. Both
+//      are dangerous here:
+//        · refreshing an unchanged list never calls back, so the spinner spins
+//          for the life of the sheet and the button stays disabled;
+//        · an empty array would REPLACE the school list, and the report stores
+//          school IDS that are resolved through it — so a failed refresh would
+//          make every school already on the report disappear, with no way to
+//          add them back.
+//      So this awaits `SchoolService.getSchools` directly, which either returns
+//      or throws, and it never assigns an empty result over a non-empty list.
 
 import SwiftUI
 
@@ -114,10 +126,22 @@ struct ReportSchoolPickerSheet: View {
     private func refresh() {
         guard !isRefreshing, !organizationID.isEmpty else { return }
         isRefreshing = true
-        DatabaseManager.shared.refreshSchoolsFromServer(forOrgID: organizationID) { items in
-            DispatchQueue.main.async {
-                self.schools = items
-                self.isRefreshing = false
+        Task {
+            defer { isRefreshing = false }
+            do {
+                let fetched = try await SchoolService.shared.getSchools(organizationID: organizationID)
+                let items = fetched
+                    .map { SchoolItem(id: $0.id, name: $0.name, address: $0.address ?? "",
+                                      coordinates: $0.coordinates) }
+                    .sorted { $0.name.lowercased() < $1.name.lowercased() }
+                // NEVER replace a non-empty list with an empty one. The report
+                // stores school IDS and resolves them through this list, so an
+                // empty result would erase every school already on the report
+                // and leave no way to add them back.
+                guard !items.isEmpty || schools.isEmpty else { return }
+                schools = items
+            } catch {
+                print("⚠️ ReportSchoolPickerSheet: refresh failed — \(error.localizedDescription)")
             }
         }
     }

@@ -36,6 +36,23 @@ import CoreLocation
 import MapKit
 import Supabase
 
+/// A photo on the report, and where it came from.
+///
+/// The `sourceURL` is what stops an attached note's photos being uploaded a
+/// SECOND time: the old form downloaded them for display, re-uploaded every one
+/// as a brand-new storage object, and then also appended the note's original
+/// URLs — so a note with three photos put six entries on the report and three
+/// duplicate objects in the bucket. A photo that already has a URL is already in
+/// storage.
+struct ReportPhoto: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    /// Non-nil when this photo is already in storage — it came from a note.
+    var sourceURL: String?
+    /// Which note put it here, so switching notes can take its photos back.
+    var noteID: UUID?
+}
+
 /// A photographer the report can be filed under. Moved here from the deleted
 /// DailyJobReportView, which was its only home and its only user.
 struct PhotographerOption: Identifiable {
@@ -47,6 +64,16 @@ struct PhotographerOption: Identifiable {
 }
 
 struct DailyReportView: View {
+
+    /// True when this screen was PUSHED (from the reports list) rather than
+    /// opened as its own feature from the shell.
+    ///
+    /// A SAFE-AREA INSET ONLY INSETS THE VIEW IT IS APPLIED TO. The shell insets
+    /// a feature's ROOT for the floating tab bar; that inset does not travel
+    /// into what the root pushes, so a pushed screen must do it itself — and a
+    /// screen that did BOTH would reserve 168pt instead of 84. This app has paid
+    /// for that lesson four times, and every wrong version of it built cleanly.
+    var isPushed = false
 
     // MARK: - Stored account data
 
@@ -70,6 +97,8 @@ struct DailyReportView: View {
     /// Which schools are on the report and who put them there. Tested type.
     @State private var link = ReportSchoolLink()
     @State private var schoolOptions: [SchoolItem] = []
+    /// Every school this screen has ever seen, by id. Accumulates; never shrinks.
+    @State private var knownSchools: [String: SchoolItem] = [:]
     @State private var isLoadingSchools = true
     /// The number and the one rule about it: a typed value is never overwritten.
     @State private var mileage = ReportMileage()
@@ -85,7 +114,7 @@ struct DailyReportView: View {
     @State private var jobBox: String?
     @State private var sportsBackground: String?
     @State private var notes = ""
-    @State private var selectedImages: [UIImage] = []
+    @State private var photos: [ReportPhoto] = []
 
     // MARK: - Photoshoot note attachment
 
@@ -99,6 +128,10 @@ struct DailyReportView: View {
     @State private var tempImage: UIImage?
     @State private var isSubmitting = false
     @State private var errorMessage = ""
+    /// How many photos were lost on a submit that otherwise succeeded. Set
+    /// instead of leaving immediately, so the message is on a screen that is
+    /// still there to show it.
+    @State private var pendingPhotoLoss: Int?
     /// Median mileage this photographer has claimed at a school before, per
     /// school id. Loaded once per school, only used for the advisory.
     @State private var usualMiles: [String: Double] = [:]
@@ -116,8 +149,14 @@ struct DailyReportView: View {
 
     /// Schools on the report, resolved in ROUTE order — the order they were
     /// added, which is the order the mileage is calculated along.
+    ///
+    /// Resolved through `knownSchools`, which only ever GROWS. The report stores
+    /// school ids, and resolving them through the live `schoolOptions` array
+    /// meant that anything which emptied that array — a failed refresh, a failed
+    /// reload — silently took every school off the report, leaving a submit with
+    /// no destination and no mileage.
     private var stops: [SchoolItem] {
-        link.stops.compactMap { id in schoolOptions.first { $0.id == id } }
+        link.stops.compactMap { knownSchools[$0] }
     }
 
     private var session: Session? {
@@ -153,6 +192,7 @@ struct DailyReportView: View {
             AmbientBackdrop(tint: feature, intensity: 0.3)
             form
         }
+        .modifier(PushedTabBarClearance(active: isPushed))
         .navigationTitle("Daily Job Report")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -204,16 +244,30 @@ struct DailyReportView: View {
         } message: {
             Text(errorMessage)
         }
+        .alert("Report submitted", isPresented: Binding(
+            get: { pendingPhotoLoss != nil },
+            set: { if !$0 { pendingPhotoLoss = nil } }
+        )) {
+            Button("OK") {
+                pendingPhotoLoss = nil
+                finishAndGoHome()
+            }
+        } message: {
+            let lost = pendingPhotoLoss ?? 0
+            Text("\(lost) photo\(lost == 1 ? "" : "s") could not be uploaded, so \(lost == 1 ? "it is" : "they are") not attached to the report. Everything else was filed.")
+        }
         .sheet(isPresented: $showSchoolPicker) {
             ReportSchoolPickerSheet(
                 schools: $schoolOptions,
                 chosen: link.stops,
                 organizationID: storedUserOrganizationID,
                 onPick: { school in
+                    knownSchools[school.id] = school
                     withAnimation(AmbientMotion.snappy) { link.addStop(school.id) }
                     showSchoolPicker = false
                 },
                 onCancel: { showSchoolPicker = false })
+                .onDisappear { rememberSchools() }
         }
         .sheet(isPresented: $showImagePicker) {
             // One image per presentation, photo library only — unchanged. The
@@ -221,7 +275,7 @@ struct DailyReportView: View {
             ImagePicker(selectedImage: $tempImage)
                 .onDisappear {
                     if let image = tempImage {
-                        selectedImages.append(image)
+                        photos.append(ReportPhoto(image: image))
                         tempImage = nil
                     }
                 }
@@ -363,7 +417,8 @@ struct DailyReportView: View {
                 // Picking a session REPLACES its school; choosing off-schedule
                 // removes it. A school added by hand, or one the photoshoot note
                 // is holding, is never touched. Tested rule.
-                link.set(schoolID(named: option?.schoolName), for: .session)
+                link.set(schoolID(for: option), for: .session)
+                attachNoteMatching(option)
             }
             AmbientHaptics.selection()
         } label: {
@@ -389,6 +444,31 @@ struct DailyReportView: View {
         .buttonStyle(.plain)
     }
 
+    /// The school a SESSION points at.
+    ///
+    /// Prefers the session's own `school_id` and falls back to matching by name,
+    /// which is what the deleted form did and what this conversion had dropped:
+    /// resolving by name alone means a school renamed after the session was
+    /// created puts NO school on the report, so the route is not drawn and the
+    /// mileage stays at zero. The id is the robust key; the name is the legacy
+    /// one.
+    /// Picking a session attaches a matching photoshoot note, which the deleted
+    /// form did and this conversion had dropped. Only when nothing is attached
+    /// yet — a deliberate choice is never overridden.
+    private func attachNoteMatching(_ session: Session?) {
+        guard attachedNoteID == nil, let session else { return }
+        guard let match = availableNotes.first(where: { $0.school == session.schoolName }) else { return }
+        attach(match)
+    }
+
+    private func schoolID(for session: Session?) -> String? {
+        guard let session else { return nil }
+        if let byID = schoolOptions.first(where: { $0.id == session.school_id })?.id { return byID }
+        return schoolID(named: session.schoolName)
+    }
+
+    /// The school a NOTE points at. A note carries a school NAME and no id —
+    /// that is the shape of the model, not a shortcut.
     private func schoolID(named name: String?) -> String? {
         guard let name, !name.isEmpty else { return nil }
         return schoolOptions.first { $0.name == name }?.id
@@ -484,8 +564,10 @@ struct DailyReportView: View {
                 }
             }
 
-            // The route, always. A bare number is what gets accepted unread.
-            if !stops.isEmpty && !mileage.isOverridden {
+            // The route, always — but only when there IS one. Drawing
+            // "Home → School → Home" directly above "the route cannot be
+            // measured" is the screen contradicting itself.
+            if !stops.isEmpty && !mileage.isOverridden && !storedUserHomeAddress.isEmpty {
                 Text((["Home"] + stops.map(\.name) + ["Home"]).joined(separator: " → "))
                     .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -496,7 +578,15 @@ struct DailyReportView: View {
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if mileage.isOverridden {
+            // A typed value the report cannot read is the one case where "you
+            // typed this, it won't be overwritten" would be a lie.
+            if mileage.typedIsUnreadable {
+                Label(String(format: "That is not a number the report can use — it will file %.1f miles.", miles),
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if mileage.isOverridden && !mileage.typedIsUnreadable {
                 HStack(spacing: 6) {
                     Text("You typed this — it won't be overwritten.")
                         .font(.caption).foregroundStyle(.orange)
@@ -673,11 +763,11 @@ struct DailyReportView: View {
 
     private var photosSection: some View {
         section("Photos",
-                status: selectedImages.isEmpty ? "none attached" : "\(selectedImages.count) attached",
-                statusTint: selectedImages.isEmpty ? nil : feature) {
+                status: photos.isEmpty ? "none attached" : "\(photos.count) attached",
+                statusTint: photos.isEmpty ? nil : feature) {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
-                ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
-                    Image(uiImage: image)
+                ForEach(photos) { photo in
+                    Image(uiImage: photo.image)
                         .resizable()
                         .scaledToFill()
                         .frame(maxWidth: .infinity, minHeight: 76, maxHeight: 76)
@@ -686,8 +776,7 @@ struct DailyReportView: View {
                         .overlay(alignment: .topTrailing) {
                             Button {
                                 withAnimation(AmbientMotion.snappy) {
-                                    guard selectedImages.indices.contains(index) else { return }
-                                    selectedImages.remove(at: index)
+                                    photos.removeAll { $0.id == photo.id }
                                 }
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
@@ -696,7 +785,7 @@ struct DailyReportView: View {
                                     .padding(3)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Remove photo \(index + 1)")
+                            .accessibilityLabel("Remove photo")
                         }
                 }
                 Button { showImagePicker = true } label: {
@@ -784,6 +873,7 @@ struct DailyReportView: View {
                                        coordinates: school.coordinates)
                         }
                         .sorted { $0.name.lowercased() < $1.name.lowercased() }
+                    self.rememberSchools()
                     self.isLoadingSchools = false
                     // A session may already be picked but unresolvable until now.
                     self.runAutoSelect()
@@ -797,6 +887,11 @@ struct DailyReportView: View {
                 }
             }
         }
+    }
+
+    /// Fold the current option list into the cache the report resolves through.
+    private func rememberSchools() {
+        for school in schoolOptions { knownSchools[school.id] = school }
     }
 
     /// The same address assembly the live form used, so a school reads the same
@@ -837,7 +932,8 @@ struct DailyReportView: View {
         sessionPick.run(for: dateKey, sessions: schedule.autoSelectCandidates)
         // Only the deciding call touches the school list, so a school the
         // photographer removed by hand is not silently put back by a refresh.
-        link.set(schoolID(named: session?.schoolName), for: .session)
+        link.set(schoolID(for: session), for: .session)
+        attachNoteMatching(session)
     }
 
     // MARK: - Mileage
@@ -925,6 +1021,10 @@ struct DailyReportView: View {
     // MARK: - Attaching a note
 
     private func attach(_ note: PhotoshootNote?) {
+        // Anything the PREVIOUS note put here goes with it. Switching notes used
+        // to leave the old note's photos on the report, so the report
+        // accumulated the photos of every note the photographer looked at.
+        photos.removeAll { $0.noteID != nil }
         attachedNoteID = note?.id
         // Same rule as the session: replace this source's school, remove it when
         // you choose none, leave everything else alone.
@@ -932,24 +1032,42 @@ struct DailyReportView: View {
         if let note { importPhotos(from: note) }
     }
 
-    /// Photos on a note are copied onto the report by downloading each URL — the
+    /// Photos on a note are shown on the report by downloading each URL — the
     /// live behaviour, kept.
+    ///
+    /// They carry the URL they came from, and that is load-bearing: submit
+    /// UPLOADS only photos that have no URL yet. The old form re-uploaded these
+    /// as brand-new storage objects AND appended the note's original URLs, so a
+    /// note with three photos put SIX entries on the report and three duplicate
+    /// objects in the bucket.
     private func importPhotos(from note: PhotoshootNote) {
+        let noteID = note.id
         for urlString in note.photoURLs {
             guard let url = URL(string: urlString) else { continue }
             Task {
                 guard let (data, _) = try? await URLSession.shared.data(from: url),
                       let image = UIImage(data: data) else { return }
-                let incoming = image.pngData()
                 await MainActor.run {
-                    let alreadyHave = selectedImages.contains { $0.pngData() == incoming }
-                    if !alreadyHave { selectedImages.append(image) }
+                    // Still the same note, and not already here. Identity is the
+                    // URL, so there is no full-resolution re-encode to compare
+                    // bytes — the old form ran a PNG encode of every image
+                    // against every other one, on the main actor.
+                    guard attachedNoteID == noteID,
+                          !photos.contains(where: { $0.sourceURL == urlString }) else { return }
+                    photos.append(ReportPhoto(image: image, sourceURL: urlString, noteID: noteID))
                 }
             }
         }
     }
 
     // MARK: - Submitting
+
+    /// Tell the shell the report landed and let it take the photographer home.
+    /// The screen never dismisses itself — that is the shipped behaviour.
+    private func finishAndGoHome() {
+        NotificationCenter.default.post(name: Notification.Name("ShowReportSuccessToast"), object: nil)
+        tabBarManager.selectedTab = "home"
+    }
 
     /// The ONE thing validated before submit, unchanged: the vehicle. A report
     /// with no school, no mileage and no job descriptions still submits.
@@ -969,8 +1087,12 @@ struct DailyReportView: View {
         isSubmitting = true
         errorMessage = ""
 
+        // EVERY field is read HERE, before anything is awaited. The form stays
+        // live while photos upload — only the Submit button is disabled — and
+        // reading half the fields before the upload and half after produced a
+        // row whose date and session were the new ones and whose school was the
+        // old one.
         let note = attachedNote
-        let images = selectedImages
         let organizationID = storedUserOrganizationID
         let stopNames = stops.map(\.name).joined(separator: ", ")
         // Always store a destination: when a session is picked but its school did
@@ -978,40 +1100,52 @@ struct DailyReportView: View {
         // destination is never lost.
         let destination = stopNames.isEmpty ? session?.schoolName : stopNames
         let yourName = selectedPhotographer?.firstName ?? ""
+        let submittedDate = reportDate
+        let submittedSession = session
+        let submittedMiles = miles
+        let submittedShot = shot
+        let submittedExtras = extras
+        let submittedCards = cardsScanned
+        let submittedJobBox = jobBox
+        let submittedBackground = sportsBackground
+        let submittedNotes = notes
+        // Photos already carrying a URL came from the attached note and are
+        // already in storage; only the rest are uploaded.
+        let toUpload = photos.filter { $0.sourceURL == nil }.map(\.image)
+        let existingURLs = photos.compactMap(\.sourceURL)
 
         Task {
             var photoURLs: [String] = []
             var failedUploads = 0
 
-            if !images.isEmpty && !organizationID.isEmpty {
+            if !toUpload.isEmpty && !organizationID.isEmpty {
                 let result = await ReportPhotoUpload.upload(
-                    images, folder: "\(organizationID)/\(currentUserID)")
+                    toUpload, folder: "\(organizationID)/\(currentUserID)")
                 photoURLs = result.urls
                 failedUploads = result.failed
-            } else if !images.isEmpty && organizationID.isEmpty {
-                failedUploads = images.count
+            } else if !toUpload.isEmpty && organizationID.isEmpty {
+                failedUploads = toUpload.count
             }
 
-            // Photos already on the attached note are carried across as URLs.
-            if let note { photoURLs.append(contentsOf: note.photoURLs) }
+            photoURLs.append(contentsOf: existingURLs)
 
             let report = DailyJobReport(
                 id: UUID().uuidString.lowercased(),
                 organizationID: organizationID,
                 userId: currentUserID,
-                date: reportDate,
+                date: submittedDate,
                 yourName: yourName,
                 schoolOrDestination: destination,
-                sessionId: session?.id,
-                sessionName: session?.reportDisplayLabel,
-                totalMileage: miles,
+                sessionId: submittedSession?.id,
+                sessionName: submittedSession?.reportDisplayLabel,
+                totalMileage: submittedMiles,
                 vehicleType: vehicleType,
-                jobDescriptions: shot.isEmpty ? nil : Array(shot),
-                extraItems: extras.isEmpty ? nil : Array(extras),
-                cardsScannedChoice: cardsScanned,
-                jobBoxAndCameraCards: jobBox,
-                sportsBackgroundShot: sportsBackground,
-                jobDescriptionText: notes.isEmpty ? nil : notes,
+                jobDescriptions: submittedShot.isEmpty ? nil : Array(submittedShot),
+                extraItems: submittedExtras.isEmpty ? nil : Array(submittedExtras),
+                cardsScannedChoice: submittedCards,
+                jobBoxAndCameraCards: submittedJobBox,
+                sportsBackgroundShot: submittedBackground,
+                jobDescriptionText: submittedNotes.isEmpty ? nil : submittedNotes,
                 photoshootNoteID: note?.id.uuidString.lowercased(),
                 photoshootNoteText: note?.noteText,
                 photoURLs: photoURLs.isEmpty ? nil : photoURLs,
@@ -1044,15 +1178,18 @@ struct DailyReportView: View {
 
                     if failedUploads > 0 {
                         // The report is filed either way — that is the shipped
-                        // behaviour. What changes is that the loss is NAMED
-                        // rather than being an error alert beside a success.
-                        self.errorMessage = "Report submitted, but \(failedUploads) photo\(failedUploads == 1 ? "" : "s") could not be uploaded and \(failedUploads == 1 ? "is" : "are") not attached to it."
+                        // behaviour and this phase does not change it. What
+                        // changes is that the loss is SAID.
+                        //
+                        // And it is said BEFORE leaving: raising an alert in the
+                        // same update that switches the tab puts the message on
+                        // a screen the shell is tearing down, which is the
+                        // silent loss this was written to remove. Going home
+                        // waits for the acknowledgement.
+                        self.pendingPhotoLoss = failedUploads
+                    } else {
+                        self.finishAndGoHome()
                     }
-
-                    // The screen does not dismiss itself: it tells the shell,
-                    // which shows the toast and returns to Home.
-                    NotificationCenter.default.post(name: Notification.Name("ShowReportSuccessToast"), object: nil)
-                    self.tabBarManager.selectedTab = "home"
                 }
             } catch {
                 await MainActor.run {
@@ -1060,6 +1197,27 @@ struct DailyReportView: View {
                     self.errorMessage = error.localizedDescription
                 }
             }
+        }
+    }
+}
+
+// MARK: - Clearance for a pushed screen
+
+/// Leaves room for the floating tab bar, but only when this screen was pushed.
+///
+/// Split into a modifier so the branch is fixed at the call site and can never
+/// flip at runtime — a `_ConditionalContent` identity switch mid-animation is
+/// its own class of bug. Same shape as `AmbientGlow` in the design system.
+struct PushedTabBarClearance: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        if active {
+            // Reads the shell's own state, so a pushed screen does not have to
+            // be told whether the bar is up or whether the keyboard is showing.
+            content.tabBarClearance()
+        } else {
+            content
         }
     }
 }

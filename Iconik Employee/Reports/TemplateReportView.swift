@@ -70,6 +70,9 @@ struct TemplateReportView: View {
 
     @State private var isSubmitting = false
     @State private var showSuccess = false
+    /// An extra sentence for the success alert — currently only "some photos did
+    /// not upload", which must be said without leaving the screen submittable.
+    @State private var successDetail = ""
     @State private var failure = ""
     @FocusState private var fieldFocused: Bool
 
@@ -121,6 +124,13 @@ struct TemplateReportView: View {
 
     private func isValid(_ field: TemplateField) -> Bool {
         if field.readOnly == true { return true }
+        // A file field is satisfied by PHOTOS, and photos live in view state —
+        // they are not a value in `formData`. Answering this here is what fixes
+        // R14 without writing a sentinel into `form_data`, which is a JSONB
+        // column the web app also reads: an earlier version wrote the photo
+        // COUNT under the field's own key, which both changed the stored shape
+        // and made "0" satisfy a required field.
+        if field.type == "file" { return !field.required || !selectedImages.isEmpty }
         let value = formData[field.id]
         // An untouched optional field is fine, whatever its type. Asking the
         // service about it is what made an optional number block forever.
@@ -135,6 +145,8 @@ struct TemplateReportView: View {
             AmbientBackdrop(tint: feature, intensity: 0.7)
             content
         }
+        // Always pushed, so it always insets itself past the floating bar.
+        .tabBarClearance()
         .navigationTitle(template.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -158,7 +170,9 @@ struct TemplateReportView: View {
         .alert("Report Submitted", isPresented: $showSuccess) {
             Button("OK") { dismiss() }
         } message: {
-            Text("Your daily report has been submitted successfully.")
+            Text(successDetail.isEmpty
+                 ? "Your daily report has been submitted successfully."
+                 : "Your daily report has been submitted. \(successDetail)")
         }
         .alert("Error", isPresented: Binding(
             get: { !failure.isEmpty },
@@ -383,26 +397,36 @@ struct TemplateReportView: View {
             // Written as a full date and read with a formatter that can parse
             // one. The live pair could not agree, so the picker snapped back to
             // today after every selection while the STORED value was correct.
-            DatePicker("", selection: Binding(
-                get: {
-                    (formData[field.id] as? String).flatMap { Formatters.isoDate.date(from: $0) } ?? Date()
-                },
-                set: { formData[field.id] = Formatters.isoDate.string(from: $0) }),
-                displayedComponents: .date)
-                .labelsHidden()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .disabled(readOnly)
+            VStack(alignment: .leading, spacing: 4) {
+                DatePicker("", selection: Binding(
+                    get: {
+                        (formData[field.id] as? String).flatMap { Formatters.isoDate.date(from: $0) } ?? Date()
+                    },
+                    set: { formData[field.id] = Formatters.isoDate.string(from: $0) }),
+                    displayedComponents: .date)
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .disabled(readOnly)
+                unsetHint(field, store: { formData[field.id] = Formatters.isoDate.string(from: Date()) })
+            }
 
         case "time":
+            // STORED AS FIXED 24-HOUR "HH:mm", not as a device-locale display
+            // string. The live form wrote `timeStyle = .short` output and parsed
+            // it back with the same formatter, so a 24-hour device stored
+            // "00:29" and a 12-hour device could not read it — the picker
+            // silently showed *now* and any touch overwrote the real value.
+            // `DesignTokens` says it outright: never parse with a display
+            // formatter, never persist its output.
             DatePicker("", selection: Binding(
-                get: {
-                    (formData[field.id] as? String).flatMap { Formatters.shortTime.date(from: $0) } ?? Date()
-                },
-                set: { formData[field.id] = Formatters.shortTime.string(from: $0) }),
+                get: { Self.parseTime(formData[field.id] as? String) ?? Date() },
+                set: { formData[field.id] = Formatters.time24.string(from: $0) }),
                 displayedComponents: .hourAndMinute)
                 .labelsHidden()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .disabled(readOnly)
+                .overlay(alignment: .bottomLeading) { EmptyView() }
+            unsetHint(field, store: { formData[field.id] = Formatters.time24.string(from: Date()) })
 
         case "file":
             filePicker
@@ -421,7 +445,29 @@ struct TemplateReportView: View {
         }
     }
 
+    @ViewBuilder
     private var filePicker: some View {
+        if selectedImages.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Button { showImagePicker = true } label: {
+                    Label("Add Photos", systemImage: "photo.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(feature)
+                        .frame(maxWidth: .infinity).padding(.vertical, 11)
+                        // ambient-allow: a control, not a card.
+                        .background(Capsule().fill(feature.opacity(0.13)))
+                }
+                .buttonStyle(.plain)
+                Text("Photos are shared across every file field on a template.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            populatedFilePicker
+        }
+    }
+
+    private var populatedFilePicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                 ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
@@ -488,6 +534,27 @@ struct TemplateReportView: View {
         .disabled(disabled)
     }
 
+    /// A date or time picker ALWAYS shows something, so an untouched one shows
+    /// today while storing nothing — the strip then names a field that visibly
+    /// looks filled in, which is the dead-Submit-button trap this screen exists
+    /// to remove. Say so, and offer the one tap that resolves it.
+    @ViewBuilder
+    private func unsetHint(_ field: TemplateField, store: @escaping () -> Void) -> some View {
+        if field.readOnly != true, formData[field.id] == nil {
+            HStack(spacing: 6) {
+                Text("Not chosen yet").font(.caption2).foregroundStyle(.orange)
+                Button("Use this") {
+                    withAnimation(AmbientMotion.snappy) { store() }
+                    AmbientHaptics.selection()
+                }
+                .font(.caption2.weight(.bold))
+                .buttonStyle(.plain)
+                .foregroundStyle(feature)
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
     private func readOnlyWell(_ value: String) -> some View {
         Text(value)
             .font(.subheadline).foregroundStyle(.secondary)
@@ -496,6 +563,13 @@ struct TemplateReportView: View {
             // ambient-allow: a read-only input well, not a card.
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.secondary.opacity(0.1)))
+    }
+
+    /// Canonical first, then the legacy device-locale form so values already in
+    /// `form_data` still open.
+    private static func parseTime(_ text: String?) -> Date? {
+        guard let text, !text.isEmpty else { return nil }
+        return Formatters.time24.date(from: text) ?? Formatters.shortTime.date(from: text)
     }
 
     // MARK: - Bindings
@@ -546,14 +620,13 @@ struct TemplateReportView: View {
         sessionPick.run(for: schedule.dateKey, sessions: schedule.autoSelectCandidates)
     }
 
-    /// Photo count belongs to the fields that ask for it — the smart
-    /// `photo_count` type, and every `file` field's own key, which is what a
-    /// required file field validates against.
+    /// Photo count belongs to the field that asks for it — the smart
+    /// `photo_count` type, and ONLY that. A `file` field's own key is
+    /// deliberately left alone: what it would hold is a count, not a file, and
+    /// writing one changes the shape of a shared JSONB column.
     private func syncPhotoFields() {
-        for field in template.fields {
-            if field.smartConfig?.calculationType == "photo_count" || field.type == "file" {
-                formData[field.id] = "\(selectedImages.count)"
-            }
+        for field in template.fields where field.smartConfig?.calculationType == "photo_count" {
+            formData[field.id] = "\(selectedImages.count)"
         }
     }
 
@@ -596,11 +669,15 @@ struct TemplateReportView: View {
                 _ = try await templateService.submitTemplateReport(template: template, formData: payload)
                 await MainActor.run {
                     isSubmitting = false
+                    // ONE alert either way, and its OK dismisses the screen.
+                    // Reporting a partial photo failure through the error alert
+                    // left the form intact with Submit re-enabled, so reading
+                    // "could not be uploaded" and tapping again filed a SECOND
+                    // complete report.
                     if failedUploads > 0 {
-                        failure = "Report submitted, but \(failedUploads) photo\(failedUploads == 1 ? "" : "s") could not be uploaded and \(failedUploads == 1 ? "is" : "are") not attached to it."
-                    } else {
-                        showSuccess = true
+                        successDetail = "\(failedUploads) photo\(failedUploads == 1 ? "" : "s") could not be uploaded, so \(failedUploads == 1 ? "it is" : "they are") not attached."
                     }
+                    showSuccess = true
                 }
             } catch {
                 await MainActor.run {

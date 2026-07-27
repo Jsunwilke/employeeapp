@@ -51,6 +51,30 @@ do {
     eq(link.stops, ["oakmont"], "released when both let go")
 }
 
+// A SOURCE MUST NOT REMOVE A SCHOOL IT DID NOT PUT THERE. Found by the AMB.7
+// audit: `set` claimed a school that was already in the list, so clearing that
+// source took the photographer's own stop away with it.
+print("\nSCHOOL OWNERSHIP — a hand-added school is nobody's to remove")
+do {
+    var link = ReportSchoolLink()
+    link.addStop("lincoln")
+    link.set("lincoln", for: .session)          // the session happens to agree
+    eq(link.stops, ["lincoln"], "no duplicate when a source agrees with a hand-add")
+    link.set(nil, for: .session)
+    eq(link.stops, ["lincoln"], "going off-schedule does NOT take the hand-added stop")
+
+    link.set("riverside", for: .session)
+    eq(link.stops, ["lincoln", "riverside"], "the session adds its own alongside")
+    link.set(nil, for: .session)
+    eq(link.stops, ["lincoln"], "and removes only its own")
+
+    link.removeStop("lincoln")
+    eq(link.stops, [], "the photographer can still remove their own")
+    link.set("lincoln", for: .note)
+    link.set(nil, for: .note)
+    eq(link.stops, [], "and after that it is the note's to remove again")
+}
+
 // ───────────────────────────────────────────── mileage
 
 print("\nMILEAGE — a typed value wins and is never overwritten")
@@ -187,6 +211,31 @@ do {
 // disagrees with its flat list, a checkbox a photographer needs silently stops
 // existing — and the screen still builds, still looks right, and still submits.
 // That is the exact failure shape this arc keeps finding, so it is a test.
+
+// THE SILENT SUBSTITUTION. The screen says "You typed this — it won't be
+// overwritten" while `value` fell back to the calculated figure whenever the
+// text would not parse. A decimal pad on a non-US locale emits a comma, and a
+// paste carries whitespace. This is reimbursement data.
+print("\nMILEAGE — text that is not a plain number")
+do {
+    var m = ReportMileage(calculated: 18.2)
+    m.type("12,5")
+    eq(m.value, 12.5, "a comma decimal separator is read, not discarded")
+    check(!m.typedIsUnreadable, "and is not flagged as unreadable")
+
+    m.type(" 12.5 ")
+    eq(m.value, 12.5, "surrounding whitespace is trimmed")
+
+    m.type("about twelve")
+    check(m.typedIsUnreadable, "text that is not a number IS flagged")
+    eq(m.value, 18.2, "and the report falls back to the calculated figure")
+
+    m.type("12.")
+    eq(m.value, 12.0, "a half-typed number still parses")
+    m.type("")
+    check(!m.isOverridden, "clearing the field hands the number back to the route")
+    eq(m.value, 18.2, "which is the calculated figure again")
+}
 
 print("\nOPTIONS — 22 job descriptions, grouped, nothing lost")
 do {

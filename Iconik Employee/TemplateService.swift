@@ -574,7 +574,7 @@ class TemplateService: ObservableObject {
             ?? formData["job_description_text"] as? String
             ?? formData["notes"] as? String
 
-        // Session link captured by TemplateFormView (SR1); nil for off-schedule
+        // Session link captured by TemplateReportView (SR1); nil for off-schedule
         let sessionId = formData["session_id"] as? String
         let sessionName = formData["session_name"] as? String
 

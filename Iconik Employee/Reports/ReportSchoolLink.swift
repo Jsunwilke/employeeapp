@@ -48,11 +48,21 @@ struct ReportSchoolLink: Equatable {
     private(set) var sessionSchool: String?
     /// The school the attached photoshoot note put on the report, if any.
     private(set) var noteSchool: String?
+    /// Schools the photographer added THEMSELVES.
+    ///
+    /// This is what makes "a school you added by hand is owned by no source"
+    /// true rather than merely written down. Without it, a source that later
+    /// pointed at the same school claimed it, and clearing that source took the
+    /// hand-added stop away with it — hand-add Lincoln, pick the Lincoln
+    /// session, go off-schedule, and Lincoln vanished from the route.
+    private(set) var handAdded: Set<String>
 
-    init(stops: [String] = [], sessionSchool: String? = nil, noteSchool: String? = nil) {
+    init(stops: [String] = [], sessionSchool: String? = nil, noteSchool: String? = nil,
+         handAdded: Set<String> = []) {
         self.stops = stops
         self.sessionSchool = sessionSchool
         self.noteSchool = noteSchool
+        self.handAdded = handAdded
     }
 
     /// Point a source at a school, or pass nil to clear it.
@@ -61,8 +71,8 @@ struct ReportSchoolLink: Equatable {
         let other = self[source.other]
 
         // Take out what this source was holding — unless the other source is
-        // holding the same school, in which case it is not ours to remove.
-        if let owned, owned != other {
+        // holding the same school, or the photographer put it there themselves.
+        if let owned, owned != other, !handAdded.contains(owned) {
             stops.removeAll { $0 == owned }
         }
 
@@ -79,6 +89,7 @@ struct ReportSchoolLink: Equatable {
 
     /// Add a school by hand. Owned by no source, so no source can remove it.
     mutating func addStop(_ school: String) {
+        handAdded.insert(school)
         guard !stops.contains(school) else { return }
         stops.append(school)
     }
@@ -87,6 +98,7 @@ struct ReportSchoolLink: Equatable {
     /// later change cannot try to remove something that is already gone.
     mutating func removeStop(_ school: String) {
         stops.removeAll { $0 == school }
+        handAdded.remove(school)
         if sessionSchool == school { sessionSchool = nil }
         if noteSchool == school { noteSchool = nil }
     }

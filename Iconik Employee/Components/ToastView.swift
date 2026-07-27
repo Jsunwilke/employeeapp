@@ -34,7 +34,7 @@ struct ToastView: View {
 // measured from the same datum: the clearance is a safe-area INSET while this is
 // plain padding on an overlay, the toast grows upward from it, and the clearance
 // carries a 10pt breathing margin. Worse, two of the three call sites (ScanView
-// and DailyJobReportView) are shell-wrapped features that ALREADY receive the
+// and DailyReportView) are shell-wrapped features that ALREADY receive the
 // shell's 84pt inset in MainEmployeeView.featureContainer, so adding padding here
 // would double-count for them and only the MainEmployeeView site is bare.
 //

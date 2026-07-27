@@ -58,12 +58,24 @@ final class ReportSchedule: ObservableObject {
     /// is offer a session the photographer has already filed a report against.
     @Published private(set) var hasCheckedReported = false
 
+    /// The lookup was attempted and did NOT produce an answer.
+    ///
+    /// "Nobody has filed anything" and "we could not find out" are different,
+    /// and a screen that draws a COUNT must not present the second as the first.
+    /// This app lost a whole feature for a year to exactly that shape.
+    @Published private(set) var reportedLookupFailed = false
+
     /// The date currently loaded, as the app's canonical day key.
     private(set) var dateKey: String = ""
 
     private let sessionService = SessionService.shared
     private let subscriptionID = UUID()
     private var loadedDate: Date?
+    /// Which already-reported lookup is current. Two date changes in quick
+    /// succession, or a photographer change mid-flight, could otherwise let the
+    /// older answer land last — and `SessionAutoSelect` makes its one decision
+    /// per date from whatever is there.
+    private var reportedRun = 0
 
     // MARK: - Sessions
 
@@ -75,11 +87,14 @@ final class ReportSchedule: ObservableObject {
     /// those repeats harmless.
     func start(for date: Date, onChange: @escaping () -> Void) {
         let key = Formatters.isoDate.string(from: date)
-        if key != dateKey {
+        let isNewDate = key != dateKey
+        if isNewDate {
             // A different day's answers are not this day's. Clearing these is
             // what makes auto-select re-decide rather than trusting yesterday's.
             reportedSessionIDs = []
             hasCheckedReported = false
+            reportedLookupFailed = false
+            reportedRun += 1          // abandon anything already in flight
         }
         loadedDate = date
         dateKey = key
@@ -101,8 +116,12 @@ final class ReportSchedule: ObservableObject {
         let startOfDay = calendar.startOfDay(for: date)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay
 
-        isLoadingSessions = true
-        sessions = []
+        // Only blank the list when the DATE changed. This is called again on
+        // every re-appear and every foreground, and clearing it unconditionally
+        // made a screen that already had today's sessions flash back to
+        // "Checking your schedule…" each time.
+        if isNewDate { sessions = [] }
+        isLoadingSessions = sessions.isEmpty
 
         sessionService.startListeningToSessions(
             subscriptionId: subscriptionID,
@@ -146,17 +165,22 @@ final class ReportSchedule: ObservableObject {
         guard !photographerFirstName.isEmpty, !organizationID.isEmpty else {
             // The live form's `checkExistingReports` answered `[]` when it could
             // not identify the photographer, so auto-select proceeded. Same
-            // answer here rather than blocking auto-select forever.
+            // answer here rather than blocking auto-select forever — but it is
+            // marked as a non-answer so nothing draws a count from it.
             hasCheckedReported = true
+            reportedLookupFailed = true
             return
         }
 
+        reportedRun += 1
+        let run = reportedRun
+        let key = dateKey
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay
 
         isLoadingReported = true
-        defer { isLoadingReported = false }
+        defer { if run == reportedRun { isLoadingReported = false } }
 
         do {
             let reports = try await DailyJobReportService.shared.getReports(
@@ -165,19 +189,22 @@ final class ReportSchedule: ObservableObject {
                 startDate: startOfDay,
                 endDate: endOfDay
             )
+            // A late answer for a date or a photographer the caller has moved
+            // off must not land.
+            guard run == reportedRun, key == dateKey else { return }
             reportedSessionIDs = Set(reports.compactMap { $0.session_id })
             hasCheckedReported = true
+            reportedLookupFailed = false
         } catch {
-            // Asked and failed still counts as asked — otherwise a network blip
-            // would leave auto-select permanently disabled and the screen would
-            // look like it had simply decided nothing, which is the shape of
-            // failure this arc keeps finding.
+            guard run == reportedRun, key == dateKey else { return }
+            // Asked and failed still counts as ASKED — otherwise a network blip
+            // would leave auto-select permanently disabled. But it is also
+            // recorded as a FAILURE, so a screen showing "N reports filed" can
+            // say it does not know instead of asserting zero. The live form
+            // swallowed this into an empty array and silently re-offered a
+            // session that had been reported (finding R4).
             hasCheckedReported = true
-            // The live form swallows this into an empty array, which silently
-            // re-offers a session that WAS reported (finding R4). Leaving the
-            // previous answer in place is the least wrong thing available
-            // without changing what the caller can show — and the caller is told
-            // by `isLoadingReported` going false with nothing new.
+            reportedLookupFailed = true
             print("⚠️ ReportSchedule: already-reported lookup failed — \(error.localizedDescription)")
         }
     }
