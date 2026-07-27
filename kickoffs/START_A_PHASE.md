@@ -100,8 +100,8 @@ phase-naming registry as the rest of the family.
                  could not. Instrument or reason it through BEFORE shipping, and never
                  leave a KNOWN regression for "its own phase".
       ✅ AMB.5   Tasks                DONE + PUSHED 2026-07-26
-      ✅ AMB.6   Chat                 CONVERTED + DATA LAYER REPAIRED 2026-07-26,
-                 commits de1eed5..58c4299, NOT PUSHED. Chat had NOT WORKED SINCE
+      ✅ AMB.6   Chat                 SHIPPED + PUSHED 2026-07-26, both smokes PASSED.
+                 origin/main 822268a..1517591. Chat had NOT WORKED SINCE
                  SEP 2025: the conversations query could never succeed (a Swift
                  array became a Postgres array literal `{uuid}` against a JSONB
                  column, so Postgres answered "invalid input syntax for type json"
@@ -109,11 +109,16 @@ phase-naming registry as the rest of the family.
                  it hid for a year behind "No conversations". A FAILURE THAT IS
                  PRESENTABLE AS AN EMPTY STATE WILL HIDE INDEFINITELY. Ten more
                  data-layer defects fixed; two live shared-DB changes applied.
-                 ⚠️ TWO CRITERIA UNMET, deliberately named: the iPad smoke was
-                 NOT run (D7), and BATCH-2 MOCKUPS WERE NOT BUILT — they move to
-                 the START of AMB.7, which D10 blocks until they exist. The
-                 batch-1 mockup and its parity/research docs are therefore NOT
-                 deleted yet.
+                 Batch 1 IS closed — both smokes passed, so the Chat and Equipment
+                 mockups and the batch-1 parity/research docs are deleted. (The
+                 Equipment one was AMB.3's LEFTOVER, still shipping months later.
+                 Deleting it broke the build: the specimen sheet used a helper
+                 hidden inside it, now moved into the harness.)
+                 ⚠️ ONE THING UNFINISHED, AND IT IS THIS PHASE'S OWN: the BATCH-2
+                 MOCKUP VIEWS were never built. Their capability inventory WAS —
+                 AMB_BATCH2_PARITY.md — so the drawing can start immediately.
+                 Do not re-file this as AMB.7's job; it is AMB.6's, and calling it
+                 someone else's is what the operator had to correct.
                  LESSON: auditing my own FIX round found the worst defect five
                  phases running. Rounds one and two each introduced a new bug
                  while closing an old one — one a critical, one a message-loss
@@ -170,6 +175,30 @@ phase-naming registry as the rest of the family.
               NEEDS FIRST: the web app's chat code read properly, a real answer on
               whether Captura touches chat (currently an inference), and the
               architecture gate written out. Its own arc, not an AMB phase.
+      TOF.1   TIME OFF AUTHORIZATION + PTO INTEGRITY. Found while inventorying for
+              batch 2 at AMB.6's close, 2026-07-26. Payroll-adjacent, NOT design work,
+              and deliberately NOT folded into AMB.8 — a style phase must not be the
+              thing that quietly fixes an authorization hole. Details and file
+              references: AMB_BATCH2_PARITY.md, findings 1, 2, 3 and 8.
+              1. TimeOffApprovalView HAS NO PERMISSION CHECK AT ALL. Approve, Deny and
+                 Put-in-Review are gated only by whether a row is VISIBLE in
+                 AllFeaturesView — and that row checks Permissions.has("users", .edit),
+                 a DIFFERENT area code from timeOffApprovals. Anything that sets the
+                 selected tab to timeOffApprovals reaches live approve/deny buttons on
+                 every employee's requests. TimeOffService.canManageRequests() already
+                 exists, does the right check, and is never called.
+              2. PTO SHORTFALLS ARE SWALLOWED. reservePTOHours throws "Insufficient PTO
+                 balance" and the caller catches it and only prints a warning, so the
+                 request is created anyway. Same swallow on release and on deduct at
+                 approval. updateTimeOffRequest NEVER adjusts an existing reservation,
+                 so editing hours leaves the old reserve in place.
+              Two smaller ones in the same area, cheap to include: the ownership check
+              in TimeOffDetailView reads UserDefaults "userID", a key NOTHING in the app
+              writes, so it is always false; and "Delete Time Off" is shown only for
+              APPROVED entries and calls a function that rejects approved, so every
+              press is a 403.
+              Server-side auth goes through role_permissions + has_permission() — read
+              the rls-remediation memory before touching it.
       GIC.1   Group-images conflict handling (version-checked, not last-write-wins).
       SEC.*   iOS data protection (at-rest DB encryption, PII out of UserDefaults,
               LAN TLS) — folds into the existing family SEC arc, not a new code.

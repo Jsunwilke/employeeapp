@@ -917,6 +917,36 @@ other rebases onto it.
   tappable is a FEATURE (a detail screen, and write methods against the shared DB if
   editing is wanted) and belongs to its own phase, not to a restyle.
 
+### TOF.1 — Time off authorization + PTO integrity (NOT STARTED, found 2026-07-26)
+
+Found while inventorying batch 2 at AMB.6's close. **Payroll-adjacent and NOT design
+work** — recorded as its own item deliberately, because a style phase must not be the
+thing that quietly closes an authorization hole. Full file references in
+`AMB_BATCH2_PARITY.md` (findings 1, 2, 3, 8).
+
+- [ ] **`TimeOffApprovalView` has NO permission check at all.** Approve, Deny and
+  Put-in-Review are gated only by whether a row is VISIBLE in `AllFeaturesView`, and
+  that row checks `Permissions.has("users", .edit)` — **a different area code from
+  `timeOffApprovals`**. Anything that sets the selected tab to `timeOffApprovals`
+  reaches live approve/deny buttons on every employee's requests.
+  `TimeOffService.canManageRequests()` already exists, does the right check, and is
+  **never called**.
+- [ ] **PTO shortfalls are swallowed.** `reservePTOHours` throws "Insufficient PTO
+  balance"; the caller catches it and only prints a warning, so **the request is
+  created anyway**. Same swallow on release and on deduct at approval. And
+  `updateTimeOffRequest` never adjusts an existing reservation, so editing the hours
+  leaves the old reserve in place.
+- [ ] The ownership check in `TimeOffDetailView` reads `UserDefaults "userID"`, **a key
+  nothing in the app writes**, so it is always false and the buttons appear only for
+  holders of `timeOffApprovals` edit.
+- [ ] "Delete Time Off" is shown only for **approved** entries and calls a function
+  that rejects approved — every press is a 403.
+
+Server-side auth goes through `role_permissions` + `has_permission()`; read the
+rls-remediation memory before touching it.
+
+---
+
 **Out of scope, permanently (D1):** Sports Shoot Feature (53 views, 36,352 lines) — the
 hook-protected Captura files plus a live iPad shoot tool where a restyle risks work in
 progress.
