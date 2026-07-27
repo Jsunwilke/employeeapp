@@ -47,9 +47,6 @@ final class ReportSchedule: ObservableObject {
     /// True from the moment a date is requested until its sessions arrive.
     @Published private(set) var isLoadingSessions = false
 
-    /// True while the "already reported" lookup is in flight.
-    @Published private(set) var isLoadingReported = false
-
     /// True once the "already reported" question has been ASKED for the loaded
     /// date — including when it could not be asked at all, which the live form
     /// treated as "nothing reported" and this keeps identical.
@@ -183,8 +180,6 @@ final class ReportSchedule: ObservableObject {
         let startOfDay = calendar.startOfDay(for: date)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay
 
-        isLoadingReported = true
-        defer { if run == reportedRun { isLoadingReported = false } }
 
         do {
             let reports = try await DailyJobReportService.shared.getReports(

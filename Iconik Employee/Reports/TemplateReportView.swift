@@ -613,6 +613,20 @@ struct TemplateReportView: View {
                 formData[field.id] = templateService.calculateSmartField(field, formData: formData)
             } else if let defaultValue = field.defaultValue {
                 formData[field.id] = defaultValue
+            } else if field.type == "toggle", field.required {
+                // A REQUIRED toggle is seeded with its own resting state, so
+                // "answered No" is stored as `false` rather than as NOTHING.
+                //
+                // Letting an untouched toggle pass validation (see `isValid`)
+                // without this would have turned a form that could not submit
+                // into a row where "answered No" and "never answered" are the
+                // same absence — on a JSONB column the web app also reads. That
+                // is the shape this app lost a whole feature to for a year.
+                //
+                // Only REQUIRED ones: an optional toggle left alone has always
+                // stored nothing, and this phase does not change what an
+                // untouched optional field writes.
+                formData[field.id] = false
             }
         }
         syncPhotoFields()
@@ -660,9 +674,10 @@ struct TemplateReportView: View {
         // Falls back to the session as PICKED — a refresh that delivers a list
         // without it would otherwise file the link as NULL. Same regression the
         // standard report had.
-        let session = sessionPick.selection.flatMap { id in
+        let session: Session? = sessionPick.selection.flatMap { id in
             schedule.sessions.first { $0.id == id }
-        } ?? pickedSession
+                ?? (pickedSession?.id == id ? pickedSession : nil)
+        }
         if let session {
             payload["session_id"] = session.id
             payload["session_name"] = session.reportDisplayLabel

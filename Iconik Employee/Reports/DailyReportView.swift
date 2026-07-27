@@ -207,7 +207,11 @@ struct DailyReportView: View {
     /// selected, and submit filed `session_id` and `session_name` as NULL.
     private var session: Session? {
         guard let id = sessionPick.selection else { return nil }
-        return schedule.sessions.first { $0.id == id } ?? pickedSession
+        // The snapshot is only trusted for the session it was taken FOR. Every
+        // writer pairs the two today; checking it here means a future edit that
+        // forgets to cannot silently file the wrong session link.
+        return schedule.sessions.first { $0.id == id }
+            ?? (pickedSession?.id == id ? pickedSession : nil)
     }
 
     private var selectedPhotographer: PhotographerOption? {
