@@ -31,37 +31,6 @@
 
 import SwiftUI
 
-/// ONE way to turn a `School` into the `SchoolItem` the report screens hold.
-///
-/// This exists because there were two, and they disagreed. The screens compose
-/// the address from `street, city, state, zip`; a refresh inside the picker
-/// took the nullable `address` COLUMN instead — a different column, often
-/// empty — and wrote it into the same array. A school with no coordinates and
-/// an empty address is then dropped from the mileage route entirely, so a
-/// refresh could quietly shorten a reimbursement.
-enum ReportSchoolItem {
-    static func make(from school: School) -> SchoolItem {
-        let parts = [school.street, school.city, school.state, school.zip]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
-        let composed = parts.joined(separator: ", ")
-        let address: String
-        if !composed.isEmpty {
-            address = composed
-        } else if let stored = school.address, !stored.isEmpty {
-            address = stored
-        } else {
-            address = school.name
-        }
-        return SchoolItem(id: school.id, name: school.name,
-                          address: address, coordinates: school.coordinates)
-    }
-
-    static func make(from schools: [School]) -> [SchoolItem] {
-        schools.map(make(from:)).sorted { $0.name.lowercased() < $1.name.lowercased() }
-    }
-}
-
 struct ReportSchoolPickerSheet: View {
     /// The full school list. A binding so the refresh button can replace it,
     /// exactly as `SearchableSchoolPicker.refreshSchools` does.

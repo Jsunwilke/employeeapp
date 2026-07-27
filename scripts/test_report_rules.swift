@@ -208,22 +208,28 @@ do {
 
 // ───────────────────────────────────────────── option lists
 
-// GROUPING IS PRESENTATION, AND IT MUST LOSE NOTHING. The screen draws the
-// GROUPED lists; the report stores values from the FLAT lists. If a group ever
-// disagrees with its flat list, a checkbox a photographer needs silently stops
-// existing — and the screen still builds, still looks right, and still submits.
-// That is the exact failure shape this arc keeps finding, so it is a test.
-
-print("\nSCHOOL OWNERSHIP — hand-adding a school a source already holds")
+// OWNERSHIP MUST NOT DEPEND ON THE ORDER THE CLAIMS ARRIVED IN. A school held
+// by both a source and the photographer survives until BOTH let go — the same
+// rule the two sources already follow between themselves.
+print("\nSCHOOL OWNERSHIP — order independence")
 do {
-    var link = ReportSchoolLink()
-    link.set("riverside", for: .session)
-    link.addStop("riverside")                   // adding what is already there
-    eq(link.stops, ["riverside"], "still one stop")
-    check(!link.handAdded.contains("riverside"),
-          "the source keeps ownership — a hand-add does not steal it")
-    link.set(nil, for: .session)
-    eq(link.stops, [], "so the session can still clear its own school")
+    var a = ReportSchoolLink()          // hand-add first, then the session
+    a.addStop("riverside")
+    a.set("riverside", for: .session)
+    a.set(nil, for: .session)
+
+    var b = ReportSchoolLink()          // the session first, then the hand-add
+    b.set("riverside", for: .session)
+    b.addStop("riverside")
+    b.set(nil, for: .session)
+
+    eq(a.stops, ["riverside"], "hand-add then session: the stop survives")
+    eq(b.stops, ["riverside"], "session then hand-add: the stop survives too")
+    eq(a.stops, b.stops, "and the two orders agree")
+
+    var c = b
+    c.removeStop("riverside")
+    eq(c.stops, [], "the photographer letting go is what removes it")
 }
 
 // THE SILENT SUBSTITUTION. The screen says "You typed this — it won't be
@@ -244,17 +250,39 @@ do {
     check(m.typedIsUnreadable, "text that is not a number IS flagged")
     eq(m.value, 18.2, "and the report falls back to the calculated figure")
 
+    // Already true before the comma work; kept as regression cover, not as
+    // evidence for it.
+    m.type("0")
+    eq(m.value, 0, "a deliberate zero is honoured rather than treated as empty")
+
     m.type("1,234")
     check(m.typedIsUnreadable, "a grouped number is refused rather than read as 1.234")
     m.type("1.234,5")
     check(m.typedIsUnreadable, "and so is a number carrying both separators")
     m.type("12.")
     eq(m.value, 12.0, "a half-typed number still parses")
-    m.type("0")
-    eq(m.value, 0, "a deliberate zero is honoured rather than treated as empty")
-    check(!m.typedIsUnreadable, "and is not flagged")
+    check(!m.typedIsUnreadable, "and a zero is not flagged as unreadable")
 }
 
+// `Double` accepts more than a mileage. A NaN reaches the JSON encoder, which
+// refuses it, so the submit dies with something nobody can act on.
+print("\nMILEAGE — text that Double accepts but a report cannot")
+do {
+    var m = ReportMileage(calculated: 18.2)
+    for text in ["nan", "inf", "-inf", "1e3", "0x1p4", "NaN"] {
+        m.type(text)
+        check(m.typedIsUnreadable, "\"\(text)\" is refused")
+        check(m.value.isFinite, "\"\(text)\" cannot put a non-finite number on a report")
+    }
+    m.type("18")
+    eq(m.value, 18, "and a plain integer still works")
+}
+
+// GROUPING IS PRESENTATION, AND IT MUST LOSE NOTHING. The screen draws the
+// GROUPED lists; the report stores values from the FLAT lists. If a group ever
+// disagrees with its flat list, a checkbox a photographer needs silently stops
+// existing — and the screen still builds, still looks right, and still submits.
+// That is the exact failure shape this arc keeps finding, so it is a test.
 print("\nOPTIONS — 22 job descriptions, grouped, nothing lost")
 do {
     eq(ReportOptions.jobDescriptions.count, 22, "22 job descriptions")

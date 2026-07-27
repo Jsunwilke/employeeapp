@@ -89,13 +89,15 @@ struct ReportSchoolLink: Equatable {
 
     /// Add a school by hand. Owned by no source, so no source can remove it.
     ///
-    /// A school a SOURCE is already holding is not claimed — otherwise adding
-    /// one the session had already put there would pin it forever and the
-    /// session could never clear its own school again, which is the inverse of
-    /// the rule this set exists to enforce.
+    /// A hand-add is a CLAIM, and it is recorded whoever else is holding the
+    /// school. So a school claimed by both a source and the photographer
+    /// survives until BOTH let go — which is exactly the rule the two sources
+    /// already follow between themselves, generalised to a third owner.
+    ///
+    /// Recording it conditionally made ownership depend on the ORDER the claims
+    /// arrived in, and nothing on screen distinguishes those orders.
     mutating func addStop(_ school: String) {
-        let ownedBySource = school == sessionSchool || school == noteSchool
-        if !ownedBySource { handAdded.insert(school) }
+        handAdded.insert(school)
         guard !stops.contains(school) else { return }
         stops.append(school)
     }

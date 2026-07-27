@@ -14,7 +14,6 @@ class TemplateService: ObservableObject {
     @Published var errorMessage = ""
 
     private let weatherService = WeatherService()
-    private var schoolOptions: [SchoolItem] = []
 
     // User profile data for smart fields
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
@@ -235,47 +234,14 @@ class TemplateService: ObservableObject {
     // `noTemplatesFound` as the empty case rather than as a failure.
 
     // MARK: - School Data Loading
+    //
+    // `loadSchools()` was deleted in AMB.7 along with its only caller, the
+    // deleted TemplateFormView. It carried a FIFTH `School` -> `SchoolItem`
+    // derivation, byte-for-byte the one the report screens had; those now share
+    // `Reports/ReportSchoolItem.make(from:)`, and leaving a private copy behind
+    // is how two of them disagreed in the first place. `schoolOptions` went with
+    // it — it was written by that method and read by nothing.
 
-    /// Load schools from Supabase via SchoolService
-    func loadSchools() async throws -> [SchoolItem] {
-        guard !storedUserOrganizationID.isEmpty else {
-            throw TemplateError.noOrganization
-        }
-
-        // Use SchoolService to get schools from Supabase
-        let schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
-
-        // Convert School models to SchoolItem for template use
-        let schoolItems = schools.map { school -> SchoolItem in
-            // Build address from available fields
-            var addressComponents: [String] = []
-            if let street = school.street, !street.isEmpty {
-                addressComponents.append(street)
-            }
-            if let city = school.city, !city.isEmpty {
-                addressComponents.append(city)
-            }
-            if let state = school.state, !state.isEmpty {
-                addressComponents.append(state)
-            }
-            if let zip = school.zip, !zip.isEmpty {
-                addressComponents.append(zip)
-            }
-
-            let address = addressComponents.isEmpty ? school.value : addressComponents.joined(separator: ", ")
-
-            return SchoolItem(
-                id: school.id,
-                name: school.value,
-                address: address,
-                coordinates: school.coordinates
-            )
-        }
-
-        self.schoolOptions = schoolItems
-        return schoolItems
-    }
-    
     // MARK: - Smart Field Calculations
     
     func calculateSmartField(_ field: TemplateField, formData: [String: Any] = [:]) -> String {

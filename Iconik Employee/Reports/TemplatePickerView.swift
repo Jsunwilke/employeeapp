@@ -278,7 +278,9 @@ struct TemplatePickerView: View {
             failure = "No organization found."
             return
         }
-        guard !isLoading else { return }
+        // No `guard !isLoading` — that dropped the NEWER request and kept the
+        // older one's answer, and it also made the generation guard below
+        // unreachable. Both may run; the newest one wins.
         isLoading = true
         loadRun += 1
         let run = loadRun

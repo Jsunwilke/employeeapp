@@ -120,6 +120,15 @@ struct DailyReportView: View {
 
     @State private var photoshootNotes: [PhotoshootNote] = []
     @State private var attachedNoteID: UUID?
+    /// The attached note as it was when it was attached.
+    ///
+    /// The blob this comes from is SHARED and re-read on every appearance, and
+    /// three screens write it. If the note is submitted or deleted elsewhere
+    /// while it is attached here, resolving it only through the blob loses its
+    /// photos and its text — silently, because a photo that is already in
+    /// storage is never in the upload count either. The snapshot is what the
+    /// report falls back to.
+    @State private var attachedNoteSnapshot: PhotoshootNote?
     /// URLs from the attached note the photographer has removed from the grid.
     /// The report's photo list is the note's list MINUS these — derived from the
     /// note, not from what downloaded.
@@ -177,7 +186,13 @@ struct DailyReportView: View {
     }
 
     private var attachedNote: PhotoshootNote? {
-        attachedNoteID.flatMap { id in photoshootNotes.first { $0.id == id } }
+        guard let id = attachedNoteID else { return nil }
+        return photoshootNotes.first { $0.id == id } ?? attachedNoteSnapshot
+    }
+
+    /// The note is still in the shared blob, so its text can still be edited.
+    private var attachedNoteIsLive: Bool {
+        attachedNoteID.map { id in photoshootNotes.contains { $0.id == id } } ?? false
     }
 
     private var miles: Double { mileage.value }
@@ -477,6 +492,14 @@ struct DailyReportView: View {
         attach(match)
     }
 
+    /// Apply the attached note's school once the school list exists. Guarded on
+    /// the note source holding nothing, so it cannot undo a removal — and a
+    /// removal is impossible before the list has loaded.
+    private func reapplyNoteSchool() {
+        guard let note = attachedNote, link.noteSchool == nil else { return }
+        link.set(schoolID(named: note.school), for: .note)
+    }
+
     private func schoolID(for session: Session?) -> String? {
         guard let session else { return nil }
         if let byID = schoolOptions.first(where: { $0.id == session.school_id })?.id { return byID }
@@ -692,7 +715,18 @@ struct DailyReportView: View {
                     }
                 }
 
-                if let attached = attachedNote {
+                if let attached = attachedNote, !attachedNoteIsLive {
+                    Divider()
+                    Label("This note was submitted or deleted somewhere else. Its photos and text are still on this report and will be filed with it.",
+                          systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !attached.noteText.isEmpty {
+                        Text(attached.noteText)
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else if let attached = attachedNote {
                     let attachedID = attached.id
                     Divider()
                     Text(attached.school.isEmpty ? "Note" : "Note for \(attached.school)")
@@ -893,8 +927,12 @@ struct DailyReportView: View {
                     self.schoolOptions = ReportSchoolItem.make(from: schools)
                     self.rememberSchools()
                     self.isLoadingSchools = false
-                    // A session may already be picked but unresolvable until now.
+                    // A session or a note may already be chosen but unresolvable
+                    // until now — a single draft note auto-attaches BEFORE this
+                    // returns, so without this its school never reaches the
+                    // report and an off-schedule day files with no school at all.
                     self.runAutoSelect()
+                    self.reapplyNoteSchool()
                     self.recalculateMileage()
                     self.loadUsualMileage()
                 }
@@ -1037,6 +1075,7 @@ struct DailyReportView: View {
         photos.removeAll { $0.noteID != nil }
         droppedNoteURLs.removeAll()
         attachedNoteID = note?.id
+        attachedNoteSnapshot = note
         // Same rule as the session: replace this source's school, remove it when
         // you choose none, leave everything else alone.
         link.set(schoolID(named: note?.school), for: .note)
@@ -1129,8 +1168,18 @@ struct DailyReportView: View {
         // already in storage; only the rest are uploaded.
         let toUpload = photos.filter { $0.sourceURL == nil }.map(\.image)
         // The note's OWN list is authoritative — not the downloads that
-        // succeeded. Minus whatever the photographer deleted from the grid.
-        let existingURLs = (note?.photoURLs ?? []).filter { !droppedNoteURLs.contains($0) }
+        // succeeded — and anything on the grid that carries a URL is added
+        // after it, in case the note has left the shared blob since. Minus
+        // whatever the photographer deleted. Order is the note's order first,
+        // which is the order they were taken in.
+        var existingURLs: [String] = []
+        for url in (note?.photoURLs ?? []) where !droppedNoteURLs.contains(url) {
+            existingURLs.append(url)
+        }
+        for url in photos.compactMap(\.sourceURL)
+        where !droppedNoteURLs.contains(url) && !existingURLs.contains(url) {
+            existingURLs.append(url)
+        }
 
         Task {
             var photoURLs: [String] = []
