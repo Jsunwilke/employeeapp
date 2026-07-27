@@ -472,55 +472,61 @@ private struct ReportRow: View {
         }
         .foregroundStyle(.secondary)
     }
-}
-// MARK: - The standard daily job report
+}// MARK: - The standard daily job report
 
-/// THE ONE THAT HAS TO BE FILLED IN, so this mockup is fillable.
+/// THE ONE THAT HAS TO BE FILLED IN. Every control here is live.
 ///
-/// The first cut of this screen was a specimen: eight sections with their values
-/// already in place. That is the wrong thing to judge, because this is the
-/// surface a photographer completes at the end of every shoot, tired, on a
-/// phone, and the only question that matters is what COMPLETING it feels like.
-/// Every control below is live. Tick the boxes, type the mileage, add photos,
-/// pick a vehicle, submit it.
+/// TWO CORRECTIONS FROM THE OPERATOR, both recorded so the next person does not
+/// re-make them:
 ///
-/// WHAT THE REDESIGN CLAIMS ABOUT THE ACT OF FILLING ONE IN
+///   1. The first cut was a SPECIMEN — eight sections with their values already
+///      in place and nothing you could touch. Wrong thing to judge. This is the
+///      surface a photographer completes at the end of every shoot, so the only
+///      question worth asking is what COMPLETING it feels like.
 ///
-///     The app already knows most of this report.
+///   2. The second cut folded the date, name, session, school and mileage into
+///      one "we filled this in" card, on the theory that the app already knows
+///      them. The operator's answer was that this is not how their reports work.
+///      That theory came from reading what the form CAN do, not from how a day
+///      actually goes — which is exactly the assumption the arc keeps being
+///      burned by. THE FOLD IS GONE. School and mileage are first-class,
+///      visible, and filled with sample data like everything else.
 ///
-///     Of the eight sections in the live form, FIVE are things the app either
-///     already has or computes for itself: the date is today, the photographer
-///     is you, the session comes from your schedule, the school is derived from
-///     that session and shown locked, and the mileage is calculated from the
-///     route between them. The form still makes you scroll through all five as
-///     equals before reaching the parts only you can answer.
+/// SO THE SCHOOL PICKER IS THE CENTRE OF THIS SCREEN, NOT A DERIVED FIELD.
+/// A report can carry SEVERAL schools — the live form supports that through an
+/// "Add School" button, which the previous cut had hidden behind the
+/// no-session branch. Here it is always available, stops can be removed, and
+/// the mileage RESPONDS: add a school and the number moves, because "does the
+/// mileage update when I add a stop" is a real question about this screen.
 ///
-///     So this design splits the report in two. What the app knows collapses
-///     into ONE confirmable block at the top — open it if something is wrong,
-///     ignore it if it is right. What is left is the actual work: what you shot,
-///     anything extra, the cards, a note, photos, and the vehicle.
-///
-///     That turns a wall of eight into a check and four questions. Nothing is
-///     removed: every field, option and rule from the live form is still here
-///     and still reachable.
+/// STILL OPEN, and the operator is the only one who can settle it: whether a
+/// scheduled session is usually there to attach to, whether a normal day is one
+/// school or several, and how much of the mileage is typed by hand. The design
+/// below assumes NOTHING is pre-filled from the schedule — session is an
+/// optional link you may set, not the thing the report is built from.
 ///
 /// WHAT IS KEPT EXACTLY
-///     All 22 job descriptions and all 12 extra items, verbatim and in the
-///     shipped order. The three scan radios with their real option sets and
-///     their real defaults. The two-step vehicle confirmation, including its
-///     exact wording. The fact that the vehicle is the ONLY thing that blocks
-///     submission. Submit living in the navigation bar.
+///     All 22 job descriptions and all 12 extra items, verbatim, in the shipped
+///     order. The three scan radios with their real options and real defaults.
+///     The two-step vehicle confirmation and its exact wording. The fact that
+///     the vehicle is the ONLY thing that blocks submission. Submit in the nav
+///     bar. Multiple schools per report.
 private struct DailyJobReportMockup: View {
 
-    // Everything the app already knows. Editable, but folded away by default.
-    @State private var knownExpanded = false
     @State private var reportDate = Date()
     @State private var photographer = "Maria Alvarez"
-    @State private var sessionLabel: String? = "Riverside Middle — 3:30 PM (Fall Sports)"
-    @State private var mileage = "18.2"
+    @State private var sessionLabel: String?
 
-    // The part that is actually work.
-    @State private var jobDescriptions: Set<String> = ["Fall Sports"]
+    /// Several stops per report is normal, so this is an array, not a value.
+    @State private var stops: [LabSchool] = [DesignLabSampleData.schools[1]]
+    @State private var showSchoolPicker = false
+
+    /// Typed mileage must WIN. In the live app a recalculation silently
+    /// overwrites what you typed, and clears it entirely if you have no home
+    /// address set. Here an override sticks and says so.
+    @State private var mileageOverride: String?
+
+    @State private var jobDescriptions: Set<String> = []
     @State private var extraItems: Set<String> = []
     @State private var cardsScanned: String?
     @State private var jobBox: String? = "NA"
@@ -530,29 +536,22 @@ private struct DailyJobReportMockup: View {
     @State private var showAllDescriptions = false
     @State private var showAllExtras = false
 
-    // The one requirement.
     @State private var vehicle = ""
     @State private var showVehicleConfirm = false
 
     @State private var submitted = false
     @State private var lastEdit = Date()
 
+    private var computedMiles: Double { DesignLabSampleData.routeMiles(stops) }
+    private var mileageText: String {
+        mileageOverride ?? String(format: "%.1f", computedMiles)
+    }
     private var canSubmit: Bool { !vehicle.isEmpty }
-
-    /// The live form's own suggestion, made visible: the session's type is a job
-    /// description, so it is pre-ticked rather than left for you to find in a
-    /// list of 22.
-    private let suggested = "Fall Sports"
 
     var body: some View {
         ZStack {
             AmbientBackdrop(tint: ReportsMockup.featureTint, intensity: 0.7)
-
-            if submitted {
-                successState
-            } else {
-                form
-            }
+            if submitted { successState } else { form }
         }
         .navigationTitle("Daily Job Report")
         .navigationBarTitleDisplayMode(.inline)
@@ -566,6 +565,7 @@ private struct DailyJobReportMockup: View {
                 .disabled(!canSubmit)
             }
         }
+        .sheet(isPresented: $showSchoolPicker) { schoolPicker }
         .confirmationDialog("Confirm Vehicle", isPresented: $showVehicleConfirm, titleVisibility: .visible) {
             Button("Personal") { commitVehicle("personal") }
             Button("Company") { commitVehicle("company") }
@@ -585,7 +585,9 @@ private struct DailyJobReportMockup: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 draftStrip
-                knownBlock
+                basicsSection
+                schoolsSection
+                mileageSection
                 questionsHeader
                 shotSection
                 extrasSection
@@ -605,14 +607,10 @@ private struct DailyJobReportMockup: View {
 
     /// PROPOSED. There is no draft and no autosave in the live form — every
     /// field is plain view state, so leaving the screen (including the jump to
-    /// Home the app performs after submitting) discards everything typed. This
-    /// strip is what it would look like if that were fixed; it is marked so an
-    /// approval here is not mistaken for an approval of the persistence work.
+    /// Home the app performs after submitting) discards everything typed.
     private var draftStrip: some View {
         HStack(spacing: 7) {
             Image(systemName: "arrow.triangle.2.circlepath").font(.caption.weight(.semibold))
-            // Live, and driven by the same edits you make below — so the claim
-            // "your work is safe" is demonstrated rather than asserted.
             Text("Draft saved ").font(.caption.weight(.semibold))
                 + Text(lastEdit, style: .relative).font(.caption.weight(.semibold))
             Spacer(minLength: 0)
@@ -622,152 +620,210 @@ private struct DailyJobReportMockup: View {
         .ambientCard(density: .compact, border: .dashed(Color.secondary.opacity(0.35)), fillWidth: true)
     }
 
-    // MARK: 1 — what the app already knows
+    // MARK: 1 — the basics
 
-    private var knownBlock: some View {
-        VStack(alignment: .leading, spacing: knownExpanded ? 10 : 0) {
-            Button {
-                withAnimation(AmbientMotion.snappy) { knownExpanded.toggle() }
-                AmbientHaptics.impact(.light)
-            } label: {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.green)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("We filled this in").font(.headline)
-                        Text(knownSummary)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .multilineTextAlignment(.leading)
+    private var basicsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AmbientSectionTitle("The basics")
+            VStack(spacing: 0) {
+                HStack {
+                    Label("Date", systemImage: "calendar")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    DatePicker("", selection: $reportDate, displayedComponents: .date)
+                        .labelsHidden()
+                }
+                .padding(.vertical, 6)
+
+                Divider()
+
+                HStack {
+                    Label("Your name", systemImage: "person")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("", selection: $photographer) {
+                        ForEach(DesignLabSampleData.crew.map(\.name), id: \.self) { Text($0).tag($0) }
                     }
-                    Spacer(minLength: 0)
-                    Image(systemName: knownExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+                    .pickerStyle(.menu)
+                    .labelsHidden()
                 }
-            }
-            .buttonStyle(.plain)
+                .padding(.vertical, 6)
 
-            if knownExpanded { knownDetail }
-        }
-        .ambientCard(density: .roomy, fillWidth: true)
-    }
+                Divider()
 
-    private var knownSummary: String {
-        let day = Formatters.relativeDay(reportDate)
-        let place = sessionLabel ?? "Off-schedule"
-        return "\(day) · \(photographer) · \(place) · \(mileage) miles"
-    }
-
-    private var knownDetail: some View {
-        VStack(spacing: 0) {
-            Divider()
-            knownRow("Date", Formatters.mediumDate.string(from: reportDate), "calendar")
-            Divider()
-            knownRow("Your name", photographer, "person")
-            Divider()
-
-            // The session picker, live. Choosing "off-schedule" unlocks the
-            // school — which is the real branch in the app, not a cosmetic one.
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Label("Session", systemImage: "clock")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    Spacer()
-                }
-                Picker("Session", selection: $sessionLabel) {
-                    Text("No scheduled session (off-schedule)").tag(String?.none)
-                    Text("Riverside Middle — 3:30 PM (Fall Sports)")
-                        .tag(String?.some("Riverside Middle — 3:30 PM (Fall Sports)"))
-                    Text("Lincoln High — 7:45 AM (Fall Original)")
-                        .tag(String?.some("Lincoln High — 7:45 AM (Fall Original)"))
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-            }
-            .padding(.vertical, 7)
-
-            Divider()
-
-            if sessionLabel != nil {
-                HStack {
-                    Label("School", systemImage: "building.2")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(schoolFromSession).font(.subheadline)
-                    Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.tertiary)
-                }
-                .padding(.vertical, 7)
-                Text("Locked because it comes from the session. Choose off-schedule to pick schools yourself.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
+                // An OPTIONAL link, not the thing the report is built from.
+                // Whether a session is usually there is the operator's question
+                // to answer — the design does not depend on it either way.
+                VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Label("Schools", systemImage: "building.2")
+                        Label("Session", systemImage: "clock")
                             .font(.subheadline).foregroundStyle(.secondary)
                         Spacer()
-                        Button {} label: {
-                            Label("Add", systemImage: "plus")
+                        Picker("", selection: $sessionLabel) {
+                            Text("Not linked").tag(String?.none)
+                            Text("Riverside Middle — 3:30 PM")
+                                .tag(String?.some("Riverside Middle — 3:30 PM (Fall Sports)"))
+                            Text("Lincoln High — 7:45 AM")
+                                .tag(String?.some("Lincoln High — 7:45 AM (Fall Original)"))
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                    }
+                    Text("Optional. Linking a session is how the report gets tied to the schedule — it does not lock anything below.")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 6)
+            }
+            .ambientCard(density: .roomy, fillWidth: true)
+        }
+    }
+
+    // MARK: 2 — schools, as many as the day had
+
+    private var schoolsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AmbientSectionTitle("Schools", trailing: stops.isEmpty ? nil : "\(stops.count)")
+
+            VStack(alignment: .leading, spacing: 8) {
+                if stops.isEmpty {
+                    Text("No schools yet. A report can cover as many as the day had.")
+                        .font(.subheadline).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ForEach(Array(stops.enumerated()), id: \.element.id) { index, school in
+                        stopRow(school, index: index)
+                        if index < stops.count - 1 { Divider() }
+                    }
+                }
+
+                Button { showSchoolPicker = true } label: {
+                    Label("Add School", systemImage: "plus.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(ReportsMockup.featureTint)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+            }
+            .ambientCard(density: .roomy, fillWidth: true)
+        }
+    }
+
+    private func stopRow(_ school: LabSchool, index: Int) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            // Stop order matters — it is what the route is computed along.
+            Text("\(index + 1)")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(ReportsMockup.featureTint))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(school.name)
+                    .font(.subheadline.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(school.address).font(.caption).foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                withAnimation(AmbientMotion.snappy) {
+                    stops.removeAll { $0.id == school.id }
+                }
+                lastEdit = Date()
+                AmbientHaptics.impact(.light)
+            } label: {
+                Image(systemName: "minus.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// A searchable sheet, matching the picker the rest of the app already uses
+    /// rather than the plain menu Photoshoot Notes grew its own version of.
+    private var schoolPicker: some View {
+        SchoolPickerSheet(
+            chosen: stops.map(\.id),
+            onPick: { school in
+                withAnimation(AmbientMotion.snappy) { stops.append(school) }
+                lastEdit = Date()
+                showSchoolPicker = false
+            },
+            onCancel: { showSchoolPicker = false })
+    }
+
+    // MARK: 3 — mileage
+
+    private var mileageSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AmbientSectionTitle("Mileage")
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Total").font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    TextField("0.0", text: Binding(
+                        get: { mileageText },
+                        set: { mileageOverride = $0; lastEdit = Date() }))
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .frame(width: 92)
+                    Text("miles").font(.subheadline).foregroundStyle(.secondary)
+                }
+
+                Divider()
+
+                if let override = mileageOverride, !override.isEmpty {
+                    // The behaviour the live app gets wrong: a typed value is
+                    // silently replaced the next time anything recalculates.
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "hand.raised.fill").font(.caption2.weight(.bold))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("You typed this. It will not be overwritten.")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(ReportsMockup.featureTint)
+                            Text("The route works out to \(computedMiles, specifier: "%.1f") miles.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Button {
+                            withAnimation(AmbientMotion.snappy) { mileageOverride = nil }
+                        } label: {
+                            Text("Use route").font(.caption.weight(.semibold))
                         }
                         .buttonStyle(.plain)
                     }
-                    Text("Select school")
-                        .font(.subheadline).foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10).padding(.vertical, 9)
-                        // ambient-allow: an input well, not a card.
-                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.secondary.opacity(0.1)))
+                    .foregroundStyle(.orange)
+                } else if stops.isEmpty {
+                    Text("Add a school and the route is calculated from home and back.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Calculated from your route").font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(routeDescription)
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .padding(.vertical, 7)
             }
-
-            Divider()
-
-            // Mileage is editable and typed-over values must survive — in the
-            // live app a recalculation silently overwrites what you typed, and
-            // clears it entirely if you have no home address set.
-            HStack {
-                Label("Mileage", systemImage: "car")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                Spacer()
-                TextField("0.0", text: $mileage)
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
-                    .frame(width: 70)
-                Text("mi").font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 7)
-            Text("Calculated from your route. Type over it if it is wrong — and it should then stay typed.")
-                .font(.caption2).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            .ambientCard(density: .roomy, fillWidth: true)
         }
     }
 
-    private var schoolFromSession: String {
-        guard let label = sessionLabel else { return "" }
-        return label.components(separatedBy: " — ").first ?? label
+    private var routeDescription: String {
+        (["Home"] + stops.map(\.name) + ["Home"]).joined(separator: " → ")
     }
 
-    private func knownRow(_ label: String, _ value: String, _ icon: String) -> some View {
-        HStack {
-            Label(label, systemImage: icon).font(.subheadline).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).font(.subheadline)
-        }
-        .padding(.vertical, 7)
-    }
-
-    // MARK: 2 — the questions only the photographer can answer
+    // MARK: 4 — the questions
 
     private var questionsHeader: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("What only you can answer").font(.headline)
+            Text("The rest of the report").font(.headline)
             Text("None of this is required — the vehicle at the bottom is the only thing that is.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -776,61 +832,38 @@ private struct DailyJobReportMockup: View {
     }
 
     private var shotSection: some View {
-        questionCard(
-            number: 1,
-            title: "What did you shoot?",
-            tint: .orange,
-            count: jobDescriptions.count
-        ) {
+        questionCard(number: 1, title: "What did you shoot?", tint: .orange,
+                     count: jobDescriptions.count) {
             VStack(alignment: .leading, spacing: 10) {
-                if jobDescriptions.contains(suggested) {
-                    Text("\(suggested) is ticked already — it comes from your session.")
-                        .font(.caption2).foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
                 optionGrid(DesignLabSampleData.jobDescriptionOptions,
-                           selection: $jobDescriptions,
-                           expanded: $showAllDescriptions,
-                           collapsedCount: 8,
-                           tint: .orange)
-
+                           selection: $jobDescriptions, expanded: $showAllDescriptions,
+                           collapsedCount: 8, tint: .orange)
                 noneWarning(jobDescriptions)
             }
         }
     }
 
     private var extrasSection: some View {
-        questionCard(
-            number: 2,
-            title: "Anything extra, not on the schedule?",
-            tint: .pink,
-            count: extraItems.count
-        ) {
+        questionCard(number: 2, title: "Anything extra, not on the schedule?", tint: .pink,
+                     count: extraItems.count) {
             VStack(alignment: .leading, spacing: 10) {
                 optionGrid(DesignLabSampleData.extraItemOptions,
-                           selection: $extraItems,
-                           expanded: $showAllExtras,
-                           collapsedCount: 6,
-                           tint: .pink)
+                           selection: $extraItems, expanded: $showAllExtras,
+                           collapsedCount: 6, tint: .pink)
                 noneWarning(extraItems)
             }
         }
     }
 
     private var scanSection: some View {
-        questionCard(
-            number: 3,
-            title: "Cards and job box",
-            tint: .teal,
-            count: [cardsScanned, jobBox, sportsBackground].compactMap { $0 }.count,
-            countSuffix: " of 3"
-        ) {
+        questionCard(number: 3, title: "Cards and job box", tint: .teal,
+                     count: [cardsScanned, jobBox, sportsBackground].compactMap { $0 }.count,
+                     countSuffix: " of 3") {
             VStack(alignment: .leading, spacing: 12) {
                 radioRow("Cards scanned", ["Yes", "No"], $cardsScanned)
                 radioRow("Job box and camera cards turned in", ["Yes", "No", "NA"], $jobBox)
                 radioRow("Sports background shot", ["Yes", "No", "NA"], $sportsBackground)
-                Text("Two of these arrive answered as NA, and none of them can be cleared once tapped — both are the live form's behaviour, kept.")
+                Text("Two of these arrive answered as NA, and none can be cleared once tapped — both are the live form's behaviour, kept.")
                     .font(.caption2).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -838,42 +871,30 @@ private struct DailyJobReportMockup: View {
     }
 
     private var notesSection: some View {
-        questionCard(
-            number: 4,
-            title: "Anything worth writing down?",
-            tint: .indigo,
-            count: notes.isEmpty ? 0 : 1,
-            countSuffix: notes.isEmpty ? "" : " note"
-        ) {
-            VStack(alignment: .leading, spacing: 6) {
-                TextEditor(text: $notes)
-                    .frame(minHeight: 90)
-                    .font(.subheadline)
-                    .scrollContentBackground(.hidden)
-                    .padding(8)
-                    // ambient-allow: an input well, not a card.
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.secondary.opacity(0.1)))
-                    .overlay(alignment: .topLeading) {
-                        if notes.isEmpty {
-                            Text("Bent stand, a student missed the session, anything the lab or the next photographer needs.")
-                                .font(.subheadline)
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 13).padding(.vertical, 16)
-                                .allowsHitTesting(false)
-                        }
+        questionCard(number: 4, title: "Anything worth writing down?", tint: .indigo,
+                     count: notes.isEmpty ? 0 : 1,
+                     countSuffix: notes.isEmpty ? "" : " note") {
+            TextEditor(text: $notes)
+                .frame(minHeight: 90)
+                .font(.subheadline)
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                // ambient-allow: an input well, not a card.
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.secondary.opacity(0.1)))
+                .overlay(alignment: .topLeading) {
+                    if notes.isEmpty {
+                        Text("Bent stand, a student missed the session, anything the lab or the next photographer needs.")
+                            .font(.subheadline).foregroundStyle(.tertiary)
+                            .padding(.horizontal, 13).padding(.vertical, 16)
+                            .allowsHitTesting(false)
                     }
-            }
+                }
         }
     }
 
     private var photosSection: some View {
-        questionCard(
-            number: 5,
-            title: "Photos",
-            tint: .red,
-            count: photos.count
-        ) {
+        questionCard(number: 5, title: "Photos", tint: .red, count: photos.count) {
             VStack(alignment: .leading, spacing: 8) {
                 if photos.isEmpty {
                     Button { addPhoto() } label: {
@@ -902,8 +923,7 @@ private struct DailyJobReportMockup: View {
                     Text("\(photos.count) photo\(photos.count == 1 ? "" : "s") selected")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-
-                Text("One image per pick, photo library only — there is no camera on this screen. Photoshoot Notes is the only surface in this family that offers one.")
+                Text("One image per pick, photo library only — there is no camera on this screen.")
                     .font(.caption2).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -933,14 +953,12 @@ private struct DailyJobReportMockup: View {
 
     private func addPhoto() {
         let palette: [Color] = [.blue, .green, .orange, .purple, .teal, .pink]
-        withAnimation(AmbientMotion.snappy) {
-            photos.append(palette[photos.count % palette.count])
-        }
+        withAnimation(AmbientMotion.snappy) { photos.append(palette[photos.count % palette.count]) }
         lastEdit = Date()
         AmbientHaptics.impact(.light)
     }
 
-    // MARK: 3 — the one requirement
+    // MARK: 5 — the one requirement
 
     private var vehicleSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -951,18 +969,15 @@ private struct DailyJobReportMockup: View {
                 AmbientBadge(text: "Required", tint: .orange)
                 Spacer(minLength: 0)
             }
-
             Text(vehicle.isEmpty
                  ? "The only thing on this form that has to be answered. It sets your mileage reimbursement."
                  : "Set to \(vehicle.capitalized). Tap again to change it — it will ask you to confirm.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-
             HStack(spacing: 8) {
                 vehicleButton("Personal", "car.fill")
                 vehicleButton("Company", "bus.fill")
             }
-
             if vehicle.isEmpty {
                 Text("Tap a vehicle, then confirm the selection. The first tap deliberately does not commit it.")
                     .font(.caption).foregroundStyle(.tertiary)
@@ -993,7 +1008,7 @@ private struct DailyJobReportMockup: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: 4 — submit
+    // MARK: 6 — submit
 
     private var submitFooter: some View {
         VStack(spacing: 8) {
@@ -1005,7 +1020,7 @@ private struct DailyJobReportMockup: View {
                     .foregroundStyle(canSubmit ? .green : .secondary)
                 Spacer(minLength: 0)
             }
-            Text("Submit is in the navigation bar, top right — as it is today. Nothing else on this form blocks it: no school, no mileage, no job descriptions, no scan answers.")
+            Text("Submit is in the navigation bar, top right — as it is today. Nothing else blocks it: no school, no mileage, no job descriptions, no scan answers.")
                 .font(.caption2).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1015,49 +1030,48 @@ private struct DailyJobReportMockup: View {
 
     // MARK: success
 
-    /// The live app does not dismiss on success — it posts a notification the
-    /// shell turns into a toast and jumps you to Home, which is also the moment
-    /// everything you typed is discarded. Drawn here so the end of the flow is
-    /// judged too, rather than stopping at the tap.
     private var successState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 52))
-                .foregroundStyle(.green)
-            Text("Report submitted").font(.title3.weight(.semibold))
-            Text("\(Formatters.mediumDate.string(from: reportDate)) · \(schoolFromSession.isEmpty ? "Off-schedule" : schoolFromSession)")
-                .font(.subheadline).foregroundStyle(.secondary)
+        ScrollView {
+            VStack(spacing: 12) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 52)).foregroundStyle(.green)
+                Text("Report submitted").font(.title3.weight(.semibold))
+                Text(Formatters.mediumDate.string(from: reportDate))
+                    .font(.subheadline).foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 5) {
-                summaryLine("Mileage", "\(mileage) mi · \(vehicle.capitalized)")
-                summaryLine("Shot", jobDescriptions.isEmpty ? "Nothing ticked" : jobDescriptions.sorted().joined(separator: ", "))
-                if !extraItems.isEmpty {
-                    summaryLine("Extra", extraItems.sorted().joined(separator: ", "))
+                VStack(alignment: .leading, spacing: 5) {
+                    summaryLine("Schools", stops.isEmpty ? "None" : stops.map(\.name).joined(separator: ", "))
+                    summaryLine("Mileage", "\(mileageText) mi · \(vehicle.capitalized)")
+                    summaryLine("Shot", jobDescriptions.isEmpty ? "Nothing ticked" : jobDescriptions.sorted().joined(separator: ", "))
+                    if !extraItems.isEmpty {
+                        summaryLine("Extra", extraItems.sorted().joined(separator: ", "))
+                    }
+                    summaryLine("Photos", photos.isEmpty ? "None" : "\(photos.count)")
                 }
-                summaryLine("Photos", photos.isEmpty ? "None" : "\(photos.count)")
-            }
-            .ambientCard(density: .roomy, fillWidth: true)
-            .padding(.top, 4)
+                .ambientCard(density: .roomy, fillWidth: true)
+                .padding(.top, 4)
 
-            Button {
-                withAnimation(AmbientMotion.gentle) { submitted = false }
-            } label: {
-                Text("Fill in another")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18).padding(.vertical, 11)
-                    // ambient-allow: a control.
-                    .background(Capsule().fill(ReportsMockup.featureTint))
+                Button {
+                    withAnimation(AmbientMotion.gentle) { submitted = false }
+                } label: {
+                    Text("Fill in another")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18).padding(.vertical, 11)
+                        // ambient-allow: a control.
+                        .background(Capsule().fill(ReportsMockup.featureTint))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
             }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 40)
         }
-        .padding(.horizontal, 24)
     }
 
     private func summaryLine(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top) {
-            Text(label).font(.caption).foregroundStyle(.secondary).frame(width: 60, alignment: .leading)
+            Text(label).font(.caption).foregroundStyle(.secondary).frame(width: 62, alignment: .leading)
             Text(value).font(.caption).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
@@ -1066,12 +1080,8 @@ private struct DailyJobReportMockup: View {
     // MARK: shared question chrome
 
     private func questionCard<Content: View>(
-        number: Int,
-        title: String,
-        tint: Color,
-        count: Int,
-        countSuffix: String = "",
-        @ViewBuilder content: () -> Content
+        number: Int, title: String, tint: Color, count: Int,
+        countSuffix: String = "", @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 9) {
@@ -1084,8 +1094,7 @@ private struct DailyJobReportMockup: View {
                 Spacer(minLength: 0)
                 if count > 0 {
                     Text("\(count)\(countSuffix)")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(tint)
+                        .font(.caption.weight(.bold)).foregroundStyle(tint)
                         .contentTransition(.numericText())
                 }
             }
@@ -1094,17 +1103,11 @@ private struct DailyJobReportMockup: View {
         .ambientCard(density: .roomy, fillWidth: true)
     }
 
-    /// The full option list, with the tail folded away until asked for.
-    ///
-    /// Twenty-two checkboxes is the single biggest wall in this form. Every one
-    /// of them is still here and still reachable — the fold is a default, not a
-    /// filter — and anything already ticked is always shown regardless of where
-    /// it sits in the list, so a fold can never hide your own answer.
-    private func optionGrid(_ options: [String],
-                            selection: Binding<Set<String>>,
-                            expanded: Binding<Bool>,
-                            collapsedCount: Int,
-                            tint: Color) -> some View {
+    /// Every option is still here and still reachable — the fold is a default,
+    /// not a filter — and anything already ticked is always shown regardless of
+    /// where it sits, so a fold can never hide your own answer.
+    private func optionGrid(_ options: [String], selection: Binding<Set<String>>,
+                            expanded: Binding<Bool>, collapsedCount: Int, tint: Color) -> some View {
         let visible: [String] = expanded.wrappedValue
             ? options
             : options.enumerated()
@@ -1118,16 +1121,12 @@ private struct DailyJobReportMockup: View {
                     checkbox(option, selection: selection, tint: tint)
                 }
             }
-
             if options.count > visible.count || expanded.wrappedValue {
                 Button {
                     withAnimation(AmbientMotion.snappy) { expanded.wrappedValue.toggle() }
                 } label: {
-                    Text(expanded.wrappedValue
-                         ? "Show fewer"
-                         : "Show all \(options.count)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(tint)
+                    Text(expanded.wrappedValue ? "Show fewer" : "Show all \(options.count)")
+                        .font(.caption.weight(.semibold)).foregroundStyle(tint)
                 }
                 .buttonStyle(.plain)
             }
@@ -1149,26 +1148,22 @@ private struct DailyJobReportMockup: View {
                     .font(.system(size: 16))
                     .foregroundStyle(on ? tint : .secondary)
                 Text(option)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
+                    .font(.caption).foregroundStyle(.primary)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
             // The whole row is the target. In the live edit screen the tap
-            // gesture is on the ICON only, which is a 20pt target in a
-            // two-column grid.
+            // gesture is on the ICON only — a 20pt target in a two-column grid.
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    /// A state that should exist and does not.
-    ///
     /// "NONE" is an ordinary option in both lists with no exclusivity logic, so
     /// it can be ticked alongside six other things and the report is stored
-    /// saying both. This does not change that behaviour — that is a data rule
-    /// and out of scope (D12) — it just stops the screen being silent about it.
+    /// saying both. This does not change that — exclusivity is a data rule and
+    /// out of scope (D12) — it stops the screen being silent about it.
     @ViewBuilder
     private func noneWarning(_ selection: Set<String>) -> some View {
         if selection.contains("NONE") && selection.count > 1 {
@@ -1208,6 +1203,79 @@ private struct DailyJobReportMockup: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - School picker
+
+/// Searchable, matching the picker the report form already uses today rather
+/// than the plain menu Photoshoot Notes grew its own version of. Schools already
+/// on the report are shown as chosen and cannot be added twice.
+private struct SchoolPickerSheet: View {
+    let chosen: [String]
+    let onPick: (LabSchool) -> Void
+    let onCancel: () -> Void
+
+    @State private var search = ""
+
+    private var results: [LabSchool] {
+        let all = DesignLabSampleData.schools.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        guard !search.isEmpty else { return all }
+        return all.filter {
+            $0.name.localizedCaseInsensitiveContains(search)
+                || $0.address.localizedCaseInsensitiveContains(search)
+        }
+    }
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if results.isEmpty {
+                    AmbientEmptyState(
+                        title: "No schools found",
+                        message: "Nothing matches \"\(search)\".",
+                        systemImage: "magnifyingglass")
+                } else {
+                    List(results) { school in
+                        Button { onPick(school) } label: { row(school) }
+                            .buttonStyle(.plain)
+                            .disabled(chosen.contains(school.id))
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .searchable(text: $search, prompt: "Search schools")
+            .navigationTitle("Add School")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+            }
+        }
+    }
+
+    private func row(_ school: LabSchool) -> some View {
+        let already = chosen.contains(school.id)
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(school.name)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(already ? .secondary : .primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(school.address).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if already {
+                Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.green)
+            } else {
+                Text("\(school.milesFromHome, specifier: "%.1f") mi")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 3)
     }
 }
 

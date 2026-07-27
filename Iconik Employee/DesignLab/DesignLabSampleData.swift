@@ -757,6 +757,21 @@ struct LabReportTemplate: Identifiable {
     let version: Int
 }
 
+/// A school you can pick on a report.
+///
+/// Carries a distance from home so the mockup's mileage can actually RESPOND to
+/// what you select — add a stop and the number moves. The live form computes
+/// this with real driving directions; the arithmetic here is fake, but it has to
+/// be live, because "does the mileage update when I add a school" is one of the
+/// things this screen is being judged on.
+struct LabSchool: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let address: String
+    /// One-way miles from the photographer's home address.
+    let milesFromHome: Double
+}
+
 /// A photoshoot note. Local-first, one school NAME (not an id), no categories
 /// and no session binding — which is the real model, and thinner than the screen
 /// makes it look.
@@ -774,6 +789,43 @@ struct LabPhotoshootNote: Identifiable {
 }
 
 extension DesignLabSampleData {
+
+    /// The org's schools. Long enough that the picker needs its search, and
+    /// seeded with a name long enough to break a row that assumes one line.
+    static let schools: [LabSchool] = [
+        .init(id: "s1", name: "Lincoln High School",
+              address: "2400 W Lincoln Ave", milesFromHome: 21.3),
+        .init(id: "s2", name: "Riverside Middle School",
+              address: "870 Riverside Dr", milesFromHome: 9.1),
+        .init(id: "s3", name: "Oakmont Elementary",
+              address: "115 Oakmont Rd", milesFromHome: 33.7),
+        .init(id: "s4", name: "Pine Ridge Elementary",
+              address: "4402 Pine Ridge Pkwy", milesFromHome: 16.5),
+        .init(id: "s5", name: "District Office",
+              address: "1 Education Plaza", milesFromHome: 4.9),
+        .init(id: "s6", name: "St. Catherine of Siena Preparatory Academy",
+              address: "9915 Cathedral Way", milesFromHome: 27.2),
+        .init(id: "s7", name: "Westbrook Junior High",
+              address: "600 Westbrook Ln", milesFromHome: 12.8),
+        .init(id: "s8", name: "Harbor View Christian School",
+              address: "77 Harbor View Ter", milesFromHome: 41.4),
+        .init(id: "s9", name: "Maple Grove Elementary",
+              address: "3300 Maple Grove Ave", milesFromHome: 7.6),
+        .init(id: "s10", name: "Northgate Academy",
+              address: "1250 Northgate Blvd", milesFromHome: 18.9),
+    ]
+
+    /// Home to the first stop, between each pair, then back home. The constant
+    /// on the cross-town legs stops two nearby schools reading as a zero-mile
+    /// hop, which is the shape that makes fake numbers look fake.
+    static func routeMiles(_ stops: [LabSchool]) -> Double {
+        guard let first = stops.first, let last = stops.last else { return 0 }
+        var total = first.milesFromHome + last.milesFromHome
+        for (a, b) in zip(stops, stops.dropFirst()) {
+            total += abs(a.milesFromHome - b.milesFromHome) + 4.2
+        }
+        return (total * 10).rounded() / 10
+    }
 
     /// Filed reports, NEWEST FIRST — the real order of every list query.
     ///
