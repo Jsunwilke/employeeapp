@@ -91,7 +91,6 @@ struct TimeOffMockup: View {
     @State private var filter: LabTimeOffStatus?
     @State private var state: TimeOffListState = .populated
     @State private var destination: TimeOffDestination?
-    @State private var showBalanceDetail = false
 
     private var requests: [LabTimeOffRequest] {
         let all = DesignLabSampleData.myTimeOff
@@ -870,6 +869,7 @@ private struct TimeOffApprovalMockup: View {
     @State private var tab: Tab = .pending
     @State private var access: Access = .manager
     @State private var denying: LabTimeOffRequest?
+    @State private var denialReason = ""
 
     private var queue: [LabTimeOffRequest] {
         let all = DesignLabSampleData.approvalQueue
@@ -917,6 +917,84 @@ private struct TimeOffApprovalMockup: View {
         }
         .navigationTitle("Time Off Approvals")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $denying) { request in
+            denialSheet(request)
+        }
+    }
+
+    /// Denying requires a reason — enforced client-side AND in the service, and
+    /// the photographer sees the text on their own list under "Reason:".
+    ///
+    /// The live app collects it in an ALERT with an inline field. This is a
+    /// sheet instead, which is a deliberate change with a reason: an alert
+    /// cannot show whose request is being denied, cannot say that the reason is
+    /// required until you have already failed, and cannot say that the person
+    /// will read it. All three matter here, because this text is the only thing
+    /// the photographer is told about why their time off was refused.
+    private func denialSheet(_ request: LabTimeOffRequest) -> some View {
+        let trimmed = denialReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        return NavigationView {
+            ZStack {
+                AmbientBackdrop(tint: .red, intensity: 0.5)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Denying \(request.photographer)'s request")
+                                .font(.headline)
+                            Text("\(request.dateLabel) · \(request.durationLabel) · \(request.reason.rawValue)")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        .ambientCard(density: .roomy, fillWidth: true)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            AmbientSectionTitle("Reason", trailing: "required")
+                            TextEditor(text: $denialReason)
+                                .frame(minHeight: 110)
+                                .font(.subheadline)
+                                .scrollContentBackground(.hidden)
+                                .ambientCard(density: .compact, fillWidth: true)
+                            Text("\(request.photographer) will see this on their own list. Say enough that they can plan around it.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Button {
+                            denying = nil
+                            denialReason = ""
+                            AmbientHaptics.impact(.medium)
+                        } label: {
+                            Text("Deny Request")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity).padding(.vertical, 14)
+                                // ambient-allow: a control, not a card.
+                                .background(Capsule().fill(trimmed.isEmpty ? Color.gray : Color.red))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(trimmed.isEmpty)
+
+                        if trimmed.isEmpty {
+                            Text("A reason is required before this can be sent.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 16)
+                }
+            }
+            .navigationTitle("Deny")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        denying = nil
+                        denialReason = ""
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     private var labControl: some View {

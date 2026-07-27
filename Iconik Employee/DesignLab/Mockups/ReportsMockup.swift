@@ -473,96 +473,500 @@ private struct ReportRow: View {
         .foregroundStyle(.secondary)
     }
 }
-
 // MARK: - The standard daily job report
 
+/// THE ONE THAT HAS TO BE FILLED IN, so this mockup is fillable.
+///
+/// The first cut of this screen was a specimen: eight sections with their values
+/// already in place. That is the wrong thing to judge, because this is the
+/// surface a photographer completes at the end of every shoot, tired, on a
+/// phone, and the only question that matters is what COMPLETING it feels like.
+/// Every control below is live. Tick the boxes, type the mileage, add photos,
+/// pick a vehicle, submit it.
+///
+/// WHAT THE REDESIGN CLAIMS ABOUT THE ACT OF FILLING ONE IN
+///
+///     The app already knows most of this report.
+///
+///     Of the eight sections in the live form, FIVE are things the app either
+///     already has or computes for itself: the date is today, the photographer
+///     is you, the session comes from your schedule, the school is derived from
+///     that session and shown locked, and the mileage is calculated from the
+///     route between them. The form still makes you scroll through all five as
+///     equals before reaching the parts only you can answer.
+///
+///     So this design splits the report in two. What the app knows collapses
+///     into ONE confirmable block at the top — open it if something is wrong,
+///     ignore it if it is right. What is left is the actual work: what you shot,
+///     anything extra, the cards, a note, photos, and the vehicle.
+///
+///     That turns a wall of eight into a check and four questions. Nothing is
+///     removed: every field, option and rule from the live form is still here
+///     and still reachable.
+///
+/// WHAT IS KEPT EXACTLY
+///     All 22 job descriptions and all 12 extra items, verbatim and in the
+///     shipped order. The three scan radios with their real option sets and
+///     their real defaults. The two-step vehicle confirmation, including its
+///     exact wording. The fact that the vehicle is the ONLY thing that blocks
+///     submission. Submit living in the navigation bar.
 private struct DailyJobReportMockup: View {
-    @State private var expanded: Set<String> = Set(DesignLabSampleData.reportSections.map(\.title))
-    @State private var vehicle: String = ""
+
+    // Everything the app already knows. Editable, but folded away by default.
+    @State private var knownExpanded = false
+    @State private var reportDate = Date()
+    @State private var photographer = "Maria Alvarez"
+    @State private var sessionLabel: String? = "Riverside Middle — 3:30 PM (Fall Sports)"
+    @State private var mileage = "18.2"
+
+    // The part that is actually work.
+    @State private var jobDescriptions: Set<String> = ["Fall Sports"]
+    @State private var extraItems: Set<String> = []
+    @State private var cardsScanned: String?
+    @State private var jobBox: String? = "NA"
+    @State private var sportsBackground: String? = "NA"
+    @State private var notes = ""
+    @State private var photos: [Color] = []
+    @State private var showAllDescriptions = false
+    @State private var showAllExtras = false
+
+    // The one requirement.
+    @State private var vehicle = ""
     @State private var showVehicleConfirm = false
 
-    private var sections: [(title: String, symbol: String, tint: Color, required: Bool, done: Bool)] {
-        DesignLabSampleData.reportSections
-    }
+    @State private var submitted = false
+    @State private var lastEdit = Date()
+
+    private var canSubmit: Bool { !vehicle.isEmpty }
+
+    /// The live form's own suggestion, made visible: the session's type is a job
+    /// description, so it is pre-ticked rather than left for you to find in a
+    /// list of 22.
+    private let suggested = "Fall Sports"
 
     var body: some View {
         ZStack {
             AmbientBackdrop(tint: ReportsMockup.featureTint, intensity: 0.7)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    draftStrip
-                    requirementLead
-                    ForEach(sections, id: \.title) { section in
-                        sectionCard(section)
-                    }
-                    submitNote
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
+            if submitted {
+                successState
+            } else {
+                form
             }
         }
         .navigationTitle("Daily Job Report")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Submit") {
+                    withAnimation(AmbientMotion.gentle) { submitted = true }
+                    AmbientHaptics.impact(.medium)
+                }
+                .font(.body.weight(.semibold))
+                .disabled(!canSubmit)
+            }
+        }
         .confirmationDialog("Confirm Vehicle", isPresented: $showVehicleConfirm, titleVisibility: .visible) {
-            Button("Personal") { vehicle = "personal" }
-            Button("Company") { vehicle = "company" }
+            Button("Personal") { commitVehicle("personal") }
+            Button("Company") { commitVehicle("company") }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Select the vehicle again to confirm — this sets your mileage reimbursement and can't be changed by an accidental tap.")
         }
     }
 
-    /// PROPOSED. There is NO draft and no autosave in this form today: every
-    /// field is plain view state, and leaving the screen — including the jump to
-    /// Home the app performs after a successful submit — discards everything
-    /// typed. The only thing that persists a keystroke is the photoshoot note
-    /// editor, which writes to shared storage on every character.
+    private func commitVehicle(_ value: String) {
+        withAnimation(AmbientMotion.snappy) { vehicle = value }
+        lastEdit = Date()
+        AmbientHaptics.impact(.medium)
+    }
+
+    private var form: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                draftStrip
+                knownBlock
+                questionsHeader
+                shotSection
+                extrasSection
+                scanSection
+                notesSection
+                photosSection
+                vehicleSection
+                submitFooter
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+        }
+        .ambientNoBounceWhenShort()
+    }
+
+    // MARK: draft
+
+    /// PROPOSED. There is no draft and no autosave in the live form — every
+    /// field is plain view state, so leaving the screen (including the jump to
+    /// Home the app performs after submitting) discards everything typed. This
+    /// strip is what it would look like if that were fixed; it is marked so an
+    /// approval here is not mistaken for an approval of the persistence work.
     private var draftStrip: some View {
         HStack(spacing: 7) {
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.caption.weight(.semibold))
-            Text("Draft saved 2 minutes ago")
-                .font(.caption.weight(.semibold))
+            Image(systemName: "arrow.triangle.2.circlepath").font(.caption.weight(.semibold))
+            // Live, and driven by the same edits you make below — so the claim
+            // "your work is safe" is demonstrated rather than asserted.
+            Text("Draft saved ").font(.caption.weight(.semibold))
+                + Text(lastEdit, style: .relative).font(.caption.weight(.semibold))
             Spacer(minLength: 0)
-            Text("PROPOSED")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.tertiary)
+            Text("PROPOSED").font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary)
         }
         .foregroundStyle(.secondary)
         .ambientCard(density: .compact, border: .dashed(Color.secondary.opacity(0.35)), fillWidth: true)
     }
 
-    /// The redesign's central move on this screen: separate the ONE requirement
-    /// from the seven suggestions, instead of averaging them into a progress bar
-    /// that can read 7/7 on a form the app will refuse.
-    private var requirementLead: some View {
+    // MARK: 1 — what the app already knows
+
+    private var knownBlock: some View {
+        VStack(alignment: .leading, spacing: knownExpanded ? 10 : 0) {
+            Button {
+                withAnimation(AmbientMotion.snappy) { knownExpanded.toggle() }
+                AmbientHaptics.impact(.light)
+            } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("We filled this in").font(.headline)
+                        Text(knownSummary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: knownExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if knownExpanded { knownDetail }
+        }
+        .ambientCard(density: .roomy, fillWidth: true)
+    }
+
+    private var knownSummary: String {
+        let day = Formatters.relativeDay(reportDate)
+        let place = sessionLabel ?? "Off-schedule"
+        return "\(day) · \(photographer) · \(place) · \(mileage) miles"
+    }
+
+    private var knownDetail: some View {
+        VStack(spacing: 0) {
+            Divider()
+            knownRow("Date", Formatters.mediumDate.string(from: reportDate), "calendar")
+            Divider()
+            knownRow("Your name", photographer, "person")
+            Divider()
+
+            // The session picker, live. Choosing "off-schedule" unlocks the
+            // school — which is the real branch in the app, not a cosmetic one.
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("Session", systemImage: "clock")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                Picker("Session", selection: $sessionLabel) {
+                    Text("No scheduled session (off-schedule)").tag(String?.none)
+                    Text("Riverside Middle — 3:30 PM (Fall Sports)")
+                        .tag(String?.some("Riverside Middle — 3:30 PM (Fall Sports)"))
+                    Text("Lincoln High — 7:45 AM (Fall Original)")
+                        .tag(String?.some("Lincoln High — 7:45 AM (Fall Original)"))
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+            }
+            .padding(.vertical, 7)
+
+            Divider()
+
+            if sessionLabel != nil {
+                HStack {
+                    Label("School", systemImage: "building.2")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(schoolFromSession).font(.subheadline)
+                    Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 7)
+                Text("Locked because it comes from the session. Choose off-schedule to pick schools yourself.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("Schools", systemImage: "building.2")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        Button {} label: {
+                            Label("Add", systemImage: "plus")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(ReportsMockup.featureTint)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Text("Select school")
+                        .font(.subheadline).foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10).padding(.vertical, 9)
+                        // ambient-allow: an input well, not a card.
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.secondary.opacity(0.1)))
+                }
+                .padding(.vertical, 7)
+            }
+
+            Divider()
+
+            // Mileage is editable and typed-over values must survive — in the
+            // live app a recalculation silently overwrites what you typed, and
+            // clears it entirely if you have no home address set.
+            HStack {
+                Label("Mileage", systemImage: "car")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                TextField("0.0", text: $mileage)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .frame(width: 70)
+                Text("mi").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 7)
+            Text("Calculated from your route. Type over it if it is wrong — and it should then stay typed.")
+                .font(.caption2).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var schoolFromSession: String {
+        guard let label = sessionLabel else { return "" }
+        return label.components(separatedBy: " — ").first ?? label
+    }
+
+    private func knownRow(_ label: String, _ value: String, _ icon: String) -> some View {
+        HStack {
+            Label(label, systemImage: icon).font(.subheadline).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).font(.subheadline)
+        }
+        .padding(.vertical, 7)
+    }
+
+    // MARK: 2 — the questions only the photographer can answer
+
+    private var questionsHeader: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("What only you can answer").font(.headline)
+            Text("None of this is required — the vehicle at the bottom is the only thing that is.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
+    }
+
+    private var shotSection: some View {
+        questionCard(
+            number: 1,
+            title: "What did you shoot?",
+            tint: .orange,
+            count: jobDescriptions.count
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                if jobDescriptions.contains(suggested) {
+                    Text("\(suggested) is ticked already — it comes from your session.")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                optionGrid(DesignLabSampleData.jobDescriptionOptions,
+                           selection: $jobDescriptions,
+                           expanded: $showAllDescriptions,
+                           collapsedCount: 8,
+                           tint: .orange)
+
+                noneWarning(jobDescriptions)
+            }
+        }
+    }
+
+    private var extrasSection: some View {
+        questionCard(
+            number: 2,
+            title: "Anything extra, not on the schedule?",
+            tint: .pink,
+            count: extraItems.count
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                optionGrid(DesignLabSampleData.extraItemOptions,
+                           selection: $extraItems,
+                           expanded: $showAllExtras,
+                           collapsedCount: 6,
+                           tint: .pink)
+                noneWarning(extraItems)
+            }
+        }
+    }
+
+    private var scanSection: some View {
+        questionCard(
+            number: 3,
+            title: "Cards and job box",
+            tint: .teal,
+            count: [cardsScanned, jobBox, sportsBackground].compactMap { $0 }.count,
+            countSuffix: " of 3"
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                radioRow("Cards scanned", ["Yes", "No"], $cardsScanned)
+                radioRow("Job box and camera cards turned in", ["Yes", "No", "NA"], $jobBox)
+                radioRow("Sports background shot", ["Yes", "No", "NA"], $sportsBackground)
+                Text("Two of these arrive answered as NA, and none of them can be cleared once tapped — both are the live form's behaviour, kept.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var notesSection: some View {
+        questionCard(
+            number: 4,
+            title: "Anything worth writing down?",
+            tint: .indigo,
+            count: notes.isEmpty ? 0 : 1,
+            countSuffix: notes.isEmpty ? "" : " note"
+        ) {
+            VStack(alignment: .leading, spacing: 6) {
+                TextEditor(text: $notes)
+                    .frame(minHeight: 90)
+                    .font(.subheadline)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    // ambient-allow: an input well, not a card.
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.secondary.opacity(0.1)))
+                    .overlay(alignment: .topLeading) {
+                        if notes.isEmpty {
+                            Text("Bent stand, a student missed the session, anything the lab or the next photographer needs.")
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 13).padding(.vertical, 16)
+                                .allowsHitTesting(false)
+                        }
+                    }
+            }
+        }
+    }
+
+    private var photosSection: some View {
+        questionCard(
+            number: 5,
+            title: "Photos",
+            tint: .red,
+            count: photos.count
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                if photos.isEmpty {
+                    Button { addPhoto() } label: {
+                        Label("Add Photos", systemImage: "photo.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            // ambient-allow: a control, not a card.
+                            .background(Capsule().fill(Color.red))
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                        ForEach(Array(photos.enumerated()), id: \.offset) { index, colour in
+                            photoTile(colour, index: index)
+                        }
+                        Button { addPhoto() } label: {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(Color.secondary.opacity(0.4),
+                                              style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                                .frame(height: 92)
+                                .overlay(Image(systemName: "plus").font(.title3).foregroundStyle(.secondary))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Text("\(photos.count) photo\(photos.count == 1 ? "" : "s") selected")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Text("One image per pick, photo library only — there is no camera on this screen. Photoshoot Notes is the only surface in this family that offers one.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func photoTile(_ colour: Color, index: Int) -> some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(colour.opacity(0.35))
+            .frame(height: 92)
+            .overlay(Image(systemName: "photo").font(.title3).foregroundStyle(colour))
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    // `remove(at:)` returns the element, which would make this
+                    // closure non-Void and the animation's result unused.
+                    withAnimation(AmbientMotion.snappy) { _ = photos.remove(at: index) }
+                    AmbientHaptics.impact(.light)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 19))
+                        .foregroundStyle(.white, .black.opacity(0.55))
+                        .padding(5)
+                }
+                .buttonStyle(.plain)
+            }
+    }
+
+    private func addPhoto() {
+        let palette: [Color] = [.blue, .green, .orange, .purple, .teal, .pink]
+        withAnimation(AmbientMotion.snappy) {
+            photos.append(palette[photos.count % palette.count])
+        }
+        lastEdit = Date()
+        AmbientHaptics.impact(.light)
+    }
+
+    // MARK: 3 — the one requirement
+
+    private var vehicleSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: vehicle.isEmpty ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                     .foregroundStyle(vehicle.isEmpty ? .orange : .green)
-                Text(vehicle.isEmpty ? "One thing is required" : "Ready to submit")
-                    .font(.headline)
+                Text("Vehicle").font(.headline)
+                AmbientBadge(text: "Required", tint: .orange)
                 Spacer(minLength: 0)
             }
 
             Text(vehicle.isEmpty
-                 ? "Everything else on this form is optional. Only the vehicle has to be answered — it sets your mileage reimbursement."
-                 : "The rest of the form is optional. You can submit whenever you're ready.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                 ? "The only thing on this form that has to be answered. It sets your mileage reimbursement."
+                 : "Set to \(vehicle.capitalized). Tap again to change it — it will ask you to confirm.")
+                .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // The two-step confirmation, kept exactly. The segment does NOT
-            // commit the value — it raises the dialog.
             HStack(spacing: 8) {
                 vehicleButton("Personal", "car.fill")
                 vehicleButton("Company", "bus.fill")
             }
 
             if vehicle.isEmpty {
-                Text("Tap a vehicle, then confirm the selection.")
+                Text("Tap a vehicle, then confirm the selection. The first tap deliberately does not commit it.")
                     .font(.caption).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .ambientCard(density: .hero, state: .highlighted,
@@ -573,195 +977,237 @@ private struct DailyJobReportMockup: View {
         let selected = vehicle == title.lowercased()
         return Button {
             showVehicleConfirm = true
+            AmbientHaptics.impact(.light)
         } label: {
             Label(title, systemImage: icon)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(selected ? .white : .primary)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
+                .padding(.vertical, 12)
                 // ambient-allow: a segmented control, not a container.
                 .background(Capsule().fill(selected
                                            ? AnyShapeStyle(ReportsMockup.featureTint)
                                            : AnyShapeStyle(.ultraThinMaterial)))
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(selected ? 0 : 0.1)))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(selected ? 0 : 0.12)))
         }
         .buttonStyle(.plain)
     }
 
-    /// The eight sections, all always present, all starting expanded — as today.
-    /// What changes is that a section says whether it is REQUIRED rather than
-    /// wearing a checkmark that means nothing.
-    private func sectionCard(_ section: (title: String, symbol: String, tint: Color, required: Bool, done: Bool)) -> some View {
-        let isOpen = expanded.contains(section.title)
-        return VStack(alignment: .leading, spacing: isOpen ? 10 : 0) {
+    // MARK: 4 — submit
+
+    private var submitFooter: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: canSubmit ? "checkmark.circle.fill" : "circle.dashed")
+                    .foregroundStyle(canSubmit ? .green : .secondary)
+                Text(canSubmit ? "Ready to submit" : "Pick a vehicle to submit")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(canSubmit ? .green : .secondary)
+                Spacer(minLength: 0)
+            }
+            Text("Submit is in the navigation bar, top right — as it is today. Nothing else on this form blocks it: no school, no mileage, no job descriptions, no scan answers.")
+                .font(.caption2).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .ambientCard(density: .compact, fillWidth: true)
+        .padding(.bottom, 8)
+    }
+
+    // MARK: success
+
+    /// The live app does not dismiss on success — it posts a notification the
+    /// shell turns into a toast and jumps you to Home, which is also the moment
+    /// everything you typed is discarded. Drawn here so the end of the flow is
+    /// judged too, rather than stopping at the tap.
+    private var successState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 52))
+                .foregroundStyle(.green)
+            Text("Report submitted").font(.title3.weight(.semibold))
+            Text("\(Formatters.mediumDate.string(from: reportDate)) · \(schoolFromSession.isEmpty ? "Off-schedule" : schoolFromSession)")
+                .font(.subheadline).foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 5) {
+                summaryLine("Mileage", "\(mileage) mi · \(vehicle.capitalized)")
+                summaryLine("Shot", jobDescriptions.isEmpty ? "Nothing ticked" : jobDescriptions.sorted().joined(separator: ", "))
+                if !extraItems.isEmpty {
+                    summaryLine("Extra", extraItems.sorted().joined(separator: ", "))
+                }
+                summaryLine("Photos", photos.isEmpty ? "None" : "\(photos.count)")
+            }
+            .ambientCard(density: .roomy, fillWidth: true)
+            .padding(.top, 4)
+
             Button {
-                withAnimation(AmbientMotion.snappy) {
-                    if isOpen { expanded.remove(section.title) } else { expanded.insert(section.title) }
-                }
-                AmbientHaptics.impact(.light)
+                withAnimation(AmbientMotion.gentle) { submitted = false }
             } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: section.symbol)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(section.tint)
-                        .frame(width: 24)
-                    Text(section.title).font(AmbientDensity.roomy.titleFont)
-                    if section.required {
-                        AmbientBadge(text: "Required", tint: .orange)
-                    }
-                    Spacer(minLength: 0)
-                    if section.done && !section.required {
-                        Image(systemName: "checkmark")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.green)
-                    }
-                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.tertiary)
-                }
+                Text("Fill in another")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18).padding(.vertical, 11)
+                    // ambient-allow: a control.
+                    .background(Capsule().fill(ReportsMockup.featureTint))
             }
             .buttonStyle(.plain)
+            .padding(.top, 4)
+        }
+        .padding(.horizontal, 24)
+    }
 
-            if isOpen {
-                sectionBody(section.title)
+    private func summaryLine(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label).font(.caption).foregroundStyle(.secondary).frame(width: 60, alignment: .leading)
+            Text(value).font(.caption).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: shared question chrome
+
+    private func questionCard<Content: View>(
+        number: Int,
+        title: String,
+        tint: Color,
+        count: Int,
+        countSuffix: String = "",
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 9) {
+                Text("\(number)")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(tint))
+                Text(title).font(AmbientDensity.roomy.titleFont)
+                Spacer(minLength: 0)
+                if count > 0 {
+                    Text("\(count)\(countSuffix)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(tint)
+                        .contentTransition(.numericText())
+                }
             }
+            content()
         }
         .ambientCard(density: .roomy, fillWidth: true)
     }
 
+    /// The full option list, with the tail folded away until asked for.
+    ///
+    /// Twenty-two checkboxes is the single biggest wall in this form. Every one
+    /// of them is still here and still reachable — the fold is a default, not a
+    /// filter — and anything already ticked is always shown regardless of where
+    /// it sits in the list, so a fold can never hide your own answer.
+    private func optionGrid(_ options: [String],
+                            selection: Binding<Set<String>>,
+                            expanded: Binding<Bool>,
+                            collapsedCount: Int,
+                            tint: Color) -> some View {
+        let visible: [String] = expanded.wrappedValue
+            ? options
+            : options.enumerated()
+                .filter { $0.offset < collapsedCount || selection.wrappedValue.contains($0.element) }
+                .map(\.element)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading),
+                                GridItem(.flexible(), alignment: .leading)], spacing: 9) {
+                ForEach(visible, id: \.self) { option in
+                    checkbox(option, selection: selection, tint: tint)
+                }
+            }
+
+            if options.count > visible.count || expanded.wrappedValue {
+                Button {
+                    withAnimation(AmbientMotion.snappy) { expanded.wrappedValue.toggle() }
+                } label: {
+                    Text(expanded.wrappedValue
+                         ? "Show fewer"
+                         : "Show all \(options.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func checkbox(_ option: String, selection: Binding<Set<String>>, tint: Color) -> some View {
+        let on = selection.wrappedValue.contains(option)
+        return Button {
+            withAnimation(AmbientMotion.snappy) {
+                if on { selection.wrappedValue.remove(option) }
+                else { selection.wrappedValue.insert(option) }
+            }
+            lastEdit = Date()
+            AmbientHaptics.selection()
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 16))
+                    .foregroundStyle(on ? tint : .secondary)
+                Text(option)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            // The whole row is the target. In the live edit screen the tap
+            // gesture is on the ICON only, which is a 20pt target in a
+            // two-column grid.
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// A state that should exist and does not.
+    ///
+    /// "NONE" is an ordinary option in both lists with no exclusivity logic, so
+    /// it can be ticked alongside six other things and the report is stored
+    /// saying both. This does not change that behaviour — that is a data rule
+    /// and out of scope (D12) — it just stops the screen being silent about it.
     @ViewBuilder
-    private func sectionBody(_ title: String) -> some View {
-        switch title {
-        case "Basic Information":
-            VStack(spacing: 0) {
-                row("Report Date", Formatters.monthDay.string(from: Date()))
-                Divider()
-                row("Your Name", "Maria Alvarez")
-                Divider()
-                row("Session", "Riverside Middle — 3:30 PM (Fall Sports)")
+    private func noneWarning(_ selection: Set<String>) -> some View {
+        if selection.contains("NONE") && selection.count > 1 {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill").font(.caption2.weight(.bold))
+                Text("\"NONE\" is ticked along with \(selection.count - 1) other item\(selection.count == 2 ? "" : "s"). The report will be saved saying both.")
+                    .font(.caption2).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
-        case "Photoshoot Note":
-            // Three real states: none available, exactly one (auto-selected,
-            // with NO way to deselect), or several behind a picker.
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Using note from \(Formatters.shortTime.string(from: DesignLabSampleData.at(11, 20)))")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("Lincoln High School").font(.subheadline.weight(.semibold))
-                Text("Auto-selected because it is the only note. There is no way to deselect it once this happens — kept, but worth seeing.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        case "Schools & Mileage":
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "building.2").font(.caption).foregroundStyle(.secondary)
-                    Text("Riverside Middle School").font(.subheadline)
-                    Spacer(minLength: 0)
-                    Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.tertiary)
-                }
-                Text("Derived from the session and locked. With no session chosen this becomes a multi-school picker with Add School.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Divider()
-                HStack {
-                    Text("Total Mileage").font(.subheadline).foregroundStyle(.secondary)
-                    Spacer()
-                    Text("18.2").font(.system(size: 17, weight: .semibold, design: .rounded))
-                    Text("miles").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        case "Job Description":
-            checkboxGrid(DesignLabSampleData.jobDescriptionOptions, preselected: ["Fall Sports"])
-        case "Extra Items":
-            checkboxGrid(DesignLabSampleData.extraItemOptions, preselected: [])
-        case "Scan Status":
-            VStack(alignment: .leading, spacing: 10) {
-                radioGroup("Cards Scanned", ["Yes", "No"], selected: "Yes")
-                radioGroup("Job Box and Camera Cards Turned In", ["Yes", "No", "NA"], selected: nil)
-                radioGroup("Sports Background Shot", ["Yes", "No", "NA"], selected: nil)
-                Text("None of these can be cleared once answered, and none of them blocks submission.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-            }
-        case "Notes":
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Additional Notes").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text("Backdrop stand from Kit A is bent — used the loaner.")
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .topLeading)
-            }
-        case "Photos":
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.secondary.opacity(0.18))
-                            .frame(width: 68, height: 68)
-                            .overlay(Image(systemName: "photo").foregroundStyle(.tertiary))
-                    }
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                        .frame(width: 68, height: 68)
-                        .overlay(Image(systemName: "plus").foregroundStyle(.secondary))
-                }
-                Text("3 photos selected. One image per pick, photo library only — there is no camera on this screen.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        default:
-            EmptyView()
+            .foregroundStyle(.orange)
         }
     }
 
-    private func checkboxGrid(_ options: [String], preselected: Set<String>) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading),
-                            GridItem(.flexible(), alignment: .leading)], spacing: 7) {
-            ForEach(options, id: \.self) { option in
-                HStack(spacing: 6) {
-                    Image(systemName: preselected.contains(option) ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 14))
-                        .foregroundStyle(preselected.contains(option) ? ReportsMockup.featureTint : .secondary)
-                    Text(option)
-                        .font(.caption)
-                        .lineLimit(2)
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-    }
-
-    private func radioGroup(_ title: String, _ options: [String], selected: String?) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+    private func radioRow(_ title: String, _ options: [String], _ selection: Binding<String?>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 ForEach(options, id: \.self) { option in
-                    Text(option)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(selected == option ? .white : .primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        // ambient-allow: a radio control, not a container.
-                        .background(Capsule().fill(selected == option
-                                                   ? AnyShapeStyle(ReportsMockup.featureTint)
-                                                   : AnyShapeStyle(.ultraThinMaterial)))
+                    Button {
+                        withAnimation(AmbientMotion.snappy) { selection.wrappedValue = option }
+                        lastEdit = Date()
+                        AmbientHaptics.selection()
+                    } label: {
+                        Text(option)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(selection.wrappedValue == option ? .white : .primary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            // ambient-allow: a radio control, not a container.
+                            .background(Capsule().fill(selection.wrappedValue == option
+                                                       ? AnyShapeStyle(Color.teal)
+                                                       : AnyShapeStyle(.ultraThinMaterial)))
+                            .overlay(Capsule().strokeBorder(Color.primary.opacity(
+                                selection.wrappedValue == option ? 0 : 0.1)))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
-    }
-
-    private var submitNote: some View {
-        Text("Submit lives in the navigation bar, as today — there is no button at the bottom of this form.")
-            .font(.caption2).foregroundStyle(.tertiary)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 4)
-    }
-
-    private func row(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).font(.subheadline).multilineTextAlignment(.trailing)
-        }
-        .padding(.vertical, 7)
     }
 }
 
