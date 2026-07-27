@@ -974,12 +974,12 @@ extension DesignLabSampleData {
     /// against `jobDescriptionOptions` in the mockup so a typo cannot silently
     /// drop an option.
     static let jobDescriptionGroups: [(String, [String])] = [
-        ("Fall portraits", ["Fall Original Day", "Fall Makeup Day"]),
+        ("Portraits", ["Fall Original Day", "Fall Makeup Day", "Spring Photos", "In Studio Photos"]),
         ("Sports", ["Fall Sports", "Winter Sports", "Spring Sports", "Sports League"]),
-        ("Groups & yearbook", ["Classroom Groups", "Yearbook Candid's", "Yearbook Groups and Clubs"]),
-        ("Events", ["Spring Photos", "Homecoming", "Prom", "Graduation"]),
-        ("Commercial", ["District Office Photos", "Banner Photos", "In Studio Photos", "School Board Photos"]),
-        ("Dr. office", ["Dr. Office Head Shots", "Dr. Office Cards", "Dr. Office Candid's"]),
+        ("Groups and yearbook", ["Classroom Groups", "Yearbook Candid's", "Yearbook Groups and Clubs"]),
+        ("Events", ["Homecoming", "Prom", "Graduation"]),
+        ("Commercial", ["District Office Photos", "Banner Photos", "School Board Photos",
+                        "Dr. Office Head Shots", "Dr. Office Cards", "Dr. Office Candid's"]),
         ("Other", ["Deliveries", "NONE"]),
     ]
 

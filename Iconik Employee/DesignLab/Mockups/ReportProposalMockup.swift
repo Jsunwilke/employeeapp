@@ -48,11 +48,15 @@
 //        3. ANYTHING EXTRA — all 12, same treatment.
 //        4. Cards and job box, notes, photos.
 //
-//      Chips rather than a two-column checkbox grid because chips wrap to the
-//      width of their words, so the whole vocabulary fits in roughly a third of
-//      the height a grid needs — which is what makes "everything visible"
-//      possible at all. A checkmark appears inside a selected chip so a chip row
-//      never reads as single-select.
+//      The two lists are grouped VERTICAL LISTS. An earlier cut used chips for
+//      density and the verdict was "still just very confusing looking and not
+//      grouped and separated well" — correct, and the guidance I already had had
+//      said list vertically, make the whole row the tap target, and use
+//      subheadings for long lists. A chip cloud has no shared left edge, so
+//      there is nothing for the eye to run down; and its group labels ended up
+//      the smallest text on screen while doing the most structural work.
+//      Now: one option per row on a common left edge, a real bold subheading
+//      with a rule above each family, and the whole row tappable.
 //
 //  WHAT SURVIVED TWO REWRITES, AND WHY
 //
@@ -362,39 +366,46 @@ struct ReportProposalMockup: View {
     // MARK: - 2 & 3. The work: both lists, entirely visible
 
     private var shotSection: some View {
-        chipSection(title: "What did you shoot?",
+        listSection(title: "What did you shoot?",
                     groups: DesignLabSampleData.jobDescriptionGroups,
                     selection: $shot,
                     tint: .orange)
     }
 
     private var extrasSection: some View {
-        chipSection(title: "Anything extra?",
+        listSection(title: "Anything extra?",
                     groups: DesignLabSampleData.extraItemGroups,
                     selection: $extras,
                     tint: .pink)
     }
 
     /// Every option on screen, grouped, nothing behind a disclosure control.
-    private func chipSection(title: String, groups: [(String, [String])],
+    /// A grouped VERTICAL LIST, not a chip cloud.
+    ///
+    /// The previous cut used chips in a flow layout, chosen for density, and the
+    /// operator's verdict was "still just very confusing looking and not grouped
+    /// and separated well". They were right, and the guidance I already had said
+    /// so: NN/g's checkbox guidelines are list vertically, make the whole row the
+    /// tap target, and use subheadings to break up a long list. A ragged chip
+    /// cloud has no shared left edge, so there is nothing for the eye to run
+    /// down, and the group labels ended up as the weakest thing on screen while
+    /// doing the most structural work.
+    ///
+    /// So: one option per row, all sharing a left edge, checkmark on the right,
+    /// full-width target, and a real heading with a rule above each family.
+    private func listSection(title: String, groups: [(String, [String])],
                              selection: Binding<Set<String>>, tint: Color) -> some View {
         section(title,
                 status: selection.wrappedValue.isEmpty
                     ? "select all that apply"
                     : "\(selection.wrappedValue.count) selected",
                 statusTint: selection.wrappedValue.isEmpty ? nil : tint) {
-            VStack(alignment: .leading, spacing: 14) {
-                ForEach(groups, id: \.0) { group in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(group.0)
-                            .font(.system(size: 10, weight: .bold))
-                            .textCase(.uppercase)
-                            .foregroundStyle(.tertiary)
-                        AmbientFlowLayout(spacing: 6, lineSpacing: 6) {
-                            ForEach(group.1, id: \.self) { option in
-                                chip(option, selection: selection, tint: tint)
-                            }
-                        }
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(groups.enumerated()), id: \.element.0) { index, group in
+                    groupHeader(group.0, first: index == 0)
+                    ForEach(group.1, id: \.self) { option in
+                        optionRow(option, selection: selection, tint: tint,
+                                  last: option == group.1.last)
                     }
                 }
 
@@ -403,12 +414,28 @@ struct ReportProposalMockup: View {
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 12)
                 }
             }
         }
     }
 
-    private func chip(_ option: String, selection: Binding<Set<String>>, tint: Color) -> some View {
+    /// Readable, not decorative. The label that organises the list should not be
+    /// the smallest text in it.
+    private func groupHeader(_ title: String, first: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !first {
+                Divider().padding(.vertical, 10)
+            }
+            Text(title)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 4)
+        }
+    }
+
+    private func optionRow(_ option: String, selection: Binding<Set<String>>,
+                           tint: Color, last: Bool) -> some View {
         let on = selection.wrappedValue.contains(option)
         return Button {
             withAnimation(AmbientMotion.snappy) {
@@ -417,21 +444,28 @@ struct ReportProposalMockup: View {
             }
             AmbientHaptics.selection()
         } label: {
-            HStack(spacing: 5) {
-                // The checkmark is what stops a chip row reading as single-select.
-                if on {
-                    Image(systemName: "checkmark").font(.system(size: 10, weight: .heavy))
-                }
+            HStack(spacing: 12) {
                 Text(option)
-                    .font(.system(size: 13, weight: on ? .semibold : .regular))
-                    .fixedSize(horizontal: false, vertical: true)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
                     .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                ZStack {
+                    Circle()
+                        .strokeBorder(on ? Color.clear : Color.secondary.opacity(0.4), lineWidth: 1.5)
+                        .frame(width: 22, height: 22)
+                    if on {
+                        Circle().fill(tint).frame(width: 22, height: 22)
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .heavy))
+                            .foregroundStyle(.white)
+                    }
+                }
             }
-            .foregroundStyle(on ? .white : .primary)
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            // ambient-allow: a filter chip is a control, not a container.
-            .background(Capsule().fill(on ? AnyShapeStyle(tint) : AnyShapeStyle(.ultraThinMaterial)))
-            .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.12)))
+            // The WHOLE row, per the guidance — not the 22pt circle.
+            .contentShape(Rectangle())
+            .padding(.vertical, 9)
         }
         .buttonStyle(.plain)
     }
