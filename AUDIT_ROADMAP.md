@@ -992,9 +992,21 @@ other rebases onto it.
   `session_types` match the 22 job descriptions. The approved v3 design prefills nothing
   from them, so nothing depended on the answer.
 
-- [x] **AMB.8 Time off** (8 views, 3,763 lines) — CONVERTED 2026-07-27, commits
-  88d01a1 (conversion) + dc1ca19 (fix round). **NOT PUSHED — both device smokes and
-  the review gate are still open.** Mockup was built + approved on iPhone 2026-07-26.
+- [ ] **AMB.8 Time off** (8 views, 3,763 lines) — CONVERTED 2026-07-27, EIGHT commits
+  88d01a1..ca28a85. **NOT PUSHED, AND NOT YET CLEARED FOR A SMOKE.** Mockup built +
+  approved on iPhone 2026-07-26.
+
+  **STATE, STATED PLAINLY: SIX FIX ROUNDS, SEVEN AUDITS, AND EVERY SINGLE AUDIT FOUND
+  A REAL DEFECT.** The round-5 audit's verdict was that the phase was NOT safe to hand
+  to the operator, because a smoke on a fast connection would not reproduce a
+  double-tap window and would convert "untested" into "smoke passed". Its two
+  CRITICALs are fixed in round 6 (ca28a85). **ROUND 6 IS ITSELF UNAUDITED.** On a
+  seven-for-seven record the honest expectation is that it is not clean either, so
+  THE NEXT SESSION STARTS BY AUDITING ca28a85, before any device smoke.
+
+  ⚠️ **BATCH-3 MOCKUPS NOT BUILT.** The source inventories for Mileage/Stats and
+  Groups/Yearbook were gathered in this session but are not yet a repo document.
+  Named as unbuilt rather than half-done, the same call AMB.6 made.
 
   **FIVE SURFACES CONVERTED:** My Time Off, the approvals queue, the request form
   (create and edit, one form), the detail sheet, and the PTO balance.
