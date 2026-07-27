@@ -126,7 +126,7 @@ struct ReportProposalMockup: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: Self.featureTint, intensity: 0.65)
+            AmbientBackdrop(tint: Self.featureTint, intensity: 0.3)
             if submitted { successState } else { form }
         }
         .navigationTitle("Daily Job Report")
@@ -165,7 +165,7 @@ struct ReportProposalMockup: View {
 
     private var form: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 24) {
                 whenSection
                 schoolsSection
                 mileageSection
@@ -201,7 +201,13 @@ struct ReportProposalMockup: View {
                     .multilineTextAlignment(.trailing)
             }
             content()
-                .ambientCard(density: .roomy, fillWidth: true)
+                // A hairline edge on EVERY section. Ambient separates cards with
+                // a lit edge rather than a drop shadow, and without it a glass
+                // card over a tinted wash is the same value as the page behind
+                // it — which is what made eight sections read as one clump.
+                .ambientCard(density: .roomy,
+                             border: .hairline(Color.primary.opacity(0.14)),
+                             fillWidth: true)
         }
     }
 
@@ -403,9 +409,15 @@ struct ReportProposalMockup: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(groups.enumerated()), id: \.element.0) { index, group in
                     groupHeader(group.0, first: index == 0)
-                    ForEach(group.1, id: \.self) { option in
-                        optionRow(option, selection: selection, tint: tint,
-                                  last: option == group.1.last)
+                    // TWO COLUMNS. A single column turned 22 + 12 options into 34
+                    // scrolled rows; paired up it is 12 + 7. The header still
+                    // spans the full width, so the grouping survives the split.
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10, alignment: .leading),
+                                        GridItem(.flexible(), spacing: 10, alignment: .leading)],
+                              alignment: .leading, spacing: 2) {
+                        ForEach(group.1, id: \.self) { option in
+                            optionRow(option, selection: selection, tint: tint)
+                        }
                     }
                 }
 
@@ -434,8 +446,11 @@ struct ReportProposalMockup: View {
         }
     }
 
+    /// The box leads, so both columns have a hard left edge to run down. In a
+    /// two-column grid a trailing control would leave the eye chasing a ragged
+    /// gutter, which is the failure the chip cloud had.
     private func optionRow(_ option: String, selection: Binding<Set<String>>,
-                           tint: Color, last: Bool) -> some View {
+                           tint: Color) -> some View {
         let on = selection.wrappedValue.contains(option)
         return Button {
             withAnimation(AmbientMotion.snappy) {
@@ -444,28 +459,29 @@ struct ReportProposalMockup: View {
             }
             AmbientHaptics.selection()
         } label: {
-            HStack(spacing: 12) {
-                Text(option)
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
+            HStack(alignment: .top, spacing: 9) {
                 ZStack {
-                    Circle()
-                        .strokeBorder(on ? Color.clear : Color.secondary.opacity(0.4), lineWidth: 1.5)
-                        .frame(width: 22, height: 22)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(on ? Color.clear : Color.secondary.opacity(0.45), lineWidth: 1.5)
+                        .frame(width: 21, height: 21)
                     if on {
-                        Circle().fill(tint).frame(width: 22, height: 22)
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(tint).frame(width: 21, height: 21)
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .heavy))
                             .foregroundStyle(.white)
                     }
                 }
+                Text(option)
+                    .font(.footnote)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
-            // The WHOLE row, per the guidance — not the 22pt circle.
+            // The WHOLE cell, per the guidance — not the 21pt box.
             .contentShape(Rectangle())
-            .padding(.vertical, 9)
+            .padding(.vertical, 7)
         }
         .buttonStyle(.plain)
     }
