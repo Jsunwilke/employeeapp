@@ -620,11 +620,24 @@ struct TemplateReportView: View {
                 formData[field.id] = templateService.calculateSmartField(field, formData: formData)
             } else if field.type == "toggle", field.required {
                 // A REQUIRED toggle is seeded with its own resting state, so
-                // "answered No" is stored as `false` rather than as NOTHING.
-                // Letting an untouched toggle pass validation (see `isValid`)
-                // without this would turn a form that could not submit into a
-                // row where "answered No" and "never answered" are the same
-                // absence — on a JSONB column the web app also reads.
+                // "answered No" is stored as `false` rather than as the empty
+                // string every field otherwise gets. Letting an untouched toggle
+                // pass validation (see `isValid`) without this would turn a form
+                // that could not submit into a row where a boolean question is
+                // answered with `""`.
+                //
+                // WHO READS `form_data` IS UNVERIFIED, and the honest version is
+                // worth writing down: the web app writes template answers as
+                // TOP-LEVEL columns rather than into this object
+                // (CreateReportModal builds a flat spread), and a search of that
+                // repo finds no reader of `form_data` at all. So the reason to
+                // store `false` is that it is the true answer to a yes/no
+                // question — not, as an earlier version of this comment claimed,
+                // that another client is reading it. An untouched OPTIONAL
+                // toggle still stores `""` from the `defaultValue` branch, which
+                // is an asymmetry left deliberately: no defect depends on it,
+                // and changing what an optional field writes is a shared-table
+                // shape change this phase has no reason to make.
                 //
                 // TYPE IS TESTED BEFORE `defaultValue`, and that ORDER is the
                 // whole fix. Both web template builders write `defaultValue: ""`
