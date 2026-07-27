@@ -594,7 +594,6 @@ private struct DailyJobReportMockup: View {
                 scanSection
                 notesSection
                 photosSection
-                vehicleSection
                 submitFooter
             }
             .padding(.horizontal, 16)
@@ -758,9 +757,22 @@ private struct DailyJobReportMockup: View {
 
     // MARK: 3 — mileage
 
+    /// MILEAGE AND VEHICLE ARE ONE DECISION (operator, 2026-07-26).
+    ///
+    /// They were two: mileage sat up here with the schools, and the vehicle was
+    /// its own card at the far end of the form, on the grounds that it is the
+    /// only required field and deserved the emphasis. That was the wrong reason.
+    /// The two values are multiplied together to produce a reimbursement — they
+    /// are read together, checked together and got wrong together, and putting
+    /// the miles at the top and the rate-setting question five sections below it
+    /// meant nobody ever saw both at once.
+    ///
+    /// So the requirement moves to where the number is, and the card carries the
+    /// required signal instead of a card of its own. The two-step confirmation
+    /// and its exact wording are untouched.
     private var mileageSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            AmbientSectionTitle("Mileage")
+            AmbientSectionTitle("Mileage and vehicle")
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text("Total").font(.subheadline).foregroundStyle(.secondary)
@@ -810,8 +822,40 @@ private struct DailyJobReportMockup: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+
+                Divider()
+
+                vehicleBlock
             }
-            .ambientCard(density: .roomy, fillWidth: true)
+            .ambientCard(density: .roomy, state: .highlighted,
+                         glow: vehicle.isEmpty ? .orange : nil, fillWidth: true)
+        }
+    }
+
+    /// The one required answer, now sitting against the number it prices.
+    private var vehicleBlock: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Text("Vehicle").font(.subheadline.weight(.semibold))
+                if vehicle.isEmpty {
+                    AmbientBadge(text: "Required", tint: .orange)
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption).foregroundStyle(.green)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                vehicleButton("Personal", "car.fill")
+                vehicleButton("Company", "bus.fill")
+            }
+
+            Text(vehicle.isEmpty
+                 ? "The only thing on this form that has to be answered — it sets the rate the miles above are paid at. Tap a vehicle, then confirm; the first tap deliberately does not commit it."
+                 : "\(mileageText) miles on your \(vehicle) vehicle. Tap again to change it — it will ask you to confirm.")
+                .font(.caption).foregroundStyle(vehicle.isEmpty ? .secondary : .tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -956,36 +1000,6 @@ private struct DailyJobReportMockup: View {
         withAnimation(AmbientMotion.snappy) { photos.append(palette[photos.count % palette.count]) }
         lastEdit = Date()
         AmbientHaptics.impact(.light)
-    }
-
-    // MARK: 5 — the one requirement
-
-    private var vehicleSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: vehicle.isEmpty ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(vehicle.isEmpty ? .orange : .green)
-                Text("Vehicle").font(.headline)
-                AmbientBadge(text: "Required", tint: .orange)
-                Spacer(minLength: 0)
-            }
-            Text(vehicle.isEmpty
-                 ? "The only thing on this form that has to be answered. It sets your mileage reimbursement."
-                 : "Set to \(vehicle.capitalized). Tap again to change it — it will ask you to confirm.")
-                .font(.subheadline).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
-                vehicleButton("Personal", "car.fill")
-                vehicleButton("Company", "bus.fill")
-            }
-            if vehicle.isEmpty {
-                Text("Tap a vehicle, then confirm the selection. The first tap deliberately does not commit it.")
-                    .font(.caption).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .ambientCard(density: .hero, state: .highlighted,
-                     glow: vehicle.isEmpty ? .orange : .green, fillWidth: true)
     }
 
     private func vehicleButton(_ title: String, _ icon: String) -> some View {
