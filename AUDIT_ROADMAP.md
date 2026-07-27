@@ -992,11 +992,89 @@ other rebases onto it.
   `session_types` match the 22 job descriptions. The approved v3 design prefills nothing
   from them, so nothing depended on the answer.
 
-- [ ] **AMB.8 Time off** (8 views, 3,763 lines) — closes batch 2 and mocks batch 3.
-  **MOCKUP BUILT + APPROVED 2026-07-26** — five surfaces in the lab, approved with
-  the Reports set. NOTE it was built BEFORE the feedback that reshaped Reports, so
-  it does not yet carry the v3 lessons (nothing collapsed, two-column option lists,
-  opaque cards, peer sections). Worth re-checking against those at conversion.
+- [x] **AMB.8 Time off** (8 views, 3,763 lines) — CONVERTED 2026-07-27, commits
+  88d01a1 (conversion) + dc1ca19 (fix round). **NOT PUSHED — both device smokes and
+  the review gate are still open.** Mockup was built + approved on iPhone 2026-07-26.
+
+  **FIVE SURFACES CONVERTED:** My Time Off, the approvals queue, the request form
+  (create and edit, one form), the detail sheet, and the PTO balance.
+
+  **THE DESIGN LIVES IN PRODUCTION CODE AND THE LAB IMPORTS IT** —
+  `TimeOff/TimeOffKit.swift` owns the shared card, the balance lead, the chips, the
+  rows, the failure banner and panel. The mockup's own 145-line copy of the card is
+  DELETED, along with the lab's private `LabTimeOffStatus` / `LabTimeOffReason`
+  vocabularies. AMB.7's mechanism, applied again: there is no copying step, so
+  there is nothing to drift. `TimeOff/TimeOffRules.swift` is SwiftUI-free and
+  `scripts/test_timeoff_rules.sh` compiles and RUNS it — **121 checks**, and every
+  rule was proved to fail when broken (nine mutations, each reverting one rule in a
+  scratch copy). `scripts/parity_timeoff.sh` is the parity walk as one command:
+  **144 checks against the NEW screens**, re-runnable every fix round, and itself
+  proved able to detect a loss.
+
+  **THE AUDIT THAT LEFT THE REPO FOUND THE MOST, for the second phase running.**
+  Reading the web app's time-off code turned up three defects invisible from either
+  side alone: the two clients share **ZERO reason strings** (web writes "Vacation",
+  iOS writes "vacation", so every web-created request drew a grey "Other" — and the
+  approved card design leans on the reason icon as its fastest read); **web denials
+  stamp the APPROVAL columns** and leave `denied_by`/`denied_at` NULL, so the card's
+  `if let name, let date` dropped the denial reason with the attribution; and
+  `partially_approved`, which the web really writes, rendered as an orange
+  **"Pending"** badge with live Edit and Cancel on an already-decided request.
+
+  **AUDITING MY OWN WORK FOUND THE WORST DEFECTS — EIGHT PHASES RUNNING, and this
+  time BOTH were payroll bugs I introduced.** (1) I deleted the double-submit guard
+  without noticing: the old screen swapped the list for a spinner on `isLoading`, I
+  changed the test to `isLoading && requests.isEmpty`, which is never true on a
+  screen that has rows. `usePTOHours` is a read-modify-write over a 300-second
+  cache, so two taps on a 48-hour request debit 96 hours. (2) My edit-mode seeding
+  froze the PTO hours field at zero, because **the web app always writes a number,
+  never null**, so `isUserEdited: ptoHoursRequested != nil` was always true —
+  editing a web-created request submitted `pto_hours_requested: 0`, and approving
+  it granted paid days off with nothing deducted. The old rule tested the VALUE and
+  was memoryless; my state machine replaced it with a sticky flag and lost the zero
+  case.
+
+  **RECORDED AND DELIBERATELY NOT FIXED — TOF.1 owns all of it**, because a style
+  phase must not move an authorization boundary in either direction:
+  the approvals screen still has no permission check; a PTO shortfall still does
+  not block submission; `TimeOffDetailView`'s ownership test still reads a
+  `UserDefaults "userID"` key nothing writes, so a photographer cannot cancel their
+  own time off from the calendar and a manager who sees the button gets a 403.
+  **Consequence for the smoke: a missing Cancel button on the detail sheet is
+  PRE-EXISTING, not a regression from this phase.**
+
+  **FURTHER NON-STYLE FINDINGS, recorded not fixed** (each needs the data layer or
+  a cross-client change, and several are new to this phase's research):
+  - `organizations.pto_settings` — the web writes **snake_case** keys, iOS decodes
+    **camelCase**. Only `enabled` matches, so every accrual rate, cap and rollover
+    an admin configures is silently ignored on iOS, which falls back to hardcoded
+    defaults that happen to equal the web's seeded ones. Invisible until an org
+    changes a value.
+  - **Approving or denying on the WEB never releases `pending_balance`** — the web's
+    entire PTO write surface is dead code (zero callers), so an iOS-submitted PTO
+    request actioned on the web leaves the hours reserved permanently.
+  - `pto_balances.used` is written by nobody — iOS drops it on every update and the
+    web never touches it. The "Used This Year" tile was REMOVED rather than pointed
+    at it, because that would swap a wrong number for a differently wrong number
+    that looks authoritative on a payroll screen.
+  - iOS writes `"underReview"`; the web only ever matches `'under_review'`. An iOS
+    "Put in Review" request disappears from the web calendar and from every tab of
+    the web approval queue.
+  - `TimeOffService` inserts `UUID().uuidString` — **uppercase** — as the row id,
+    against the project's lowercase-UUID rule.
+  - Sign-out does not clear `TimeOffService.currentUserId` / `currentOrgId`, so
+    signing in as a different user in the same app run can subscribe to the
+    PREVIOUS organization.
+  - `checkForConflicts` declares an empty array, loops the date range doing
+    nothing, and returns it — the whole "Schedule Conflicts" section was
+    unreachable and is deleted. `blocked_dates` exists on the web and iOS never
+    honours it; these are the same unbuilt idea.
+
+  **Card-drift sweep clean, both AMB.8 rows deleted.** Worth keeping: PTOBalanceView,
+  TimeOffRequestView and TimeOffDetailView carried four hand-rolled containers
+  between them and had NO allowlist rows, because the gate matches a rounded FILL
+  and they used `.background(Color…)` + `.cornerRadius(…)`. An empty allowlist row
+  still means nothing about whether a surface is converted.
 
 **Batch 3**
 
@@ -1059,7 +1137,41 @@ thing that quietly closes an authorization hole. Full file references in
   nothing in the app writes**, so it is always false and the buttons appear only for
   holders of `timeOffApprovals` edit.
 - [ ] "Delete Time Off" is shown only for **approved** entries and calls a function
-  that rejects approved — every press is a 403.
+  that rejects approved — every press is a 403. **AMB.8 DELETED THE BUTTON** (a
+  control whose every press fails is not a capability to preserve); what remains
+  for TOF.1 is whether a real delete should exist at all.
+
+**Added by AMB.8's research, 2026-07-27 — all cross-client, none fixed:**
+
+- [ ] **`organizations.pto_settings` key casing does not match.** The web writes
+  snake_case (`accrual_rate`, `max_accrual`, `rollover_policy`); iOS decodes
+  camelCase and every field is optional, so the decode SUCCEEDS with all nils and
+  substitutes hardcoded defaults. Only `enabled` matches. Invisible at default
+  configuration because the two default sets coincide — it appears the moment an
+  admin changes a number.
+- [ ] **Approving or denying on the web never releases `pending_balance`.** The
+  web's PTO mutators (`reservePTOHours`, `usePTOHours`, `releasePTOHours`,
+  `adjustPTOBalance`) have ZERO callers, and its approve/deny paths touch only
+  `time_off_requests`. iOS is the only client that moves PTO hours, so a request
+  it reserved for and a manager actioned on the web leaves the hours reserved for
+  the life of the account. No reconciliation path exists in either repo.
+- [ ] **`pto_balances.used` is maintained by nobody.** `PTOBalance.useHours()`
+  increments it in memory and `usePTOHours` writes only `balance`,
+  `pending_balance` and `updated_at`. The web never reads or writes it.
+- [ ] **`"underReview"` vs `'under_review'`.** iOS writes camelCase; the web only
+  ever matches snake_case, in its calendar projection and all three approval tabs.
+  An iOS "Put in Review" request is invisible to the web app.
+- [ ] **The web writes `'partially_approved'`**, which no iOS enum case covers.
+  AMB.8 stopped it rendering as "Pending", but it still matches no filter chip and
+  is excluded from the iOS calendar fetch's status list.
+- [ ] **Uppercase row ids.** `TimeOffService` inserts `UUID().uuidString` as the
+  primary key, against the project's lowercase-UUID rule.
+- [ ] **Sign-out leaves `TimeOffService.currentUserId` / `currentOrgId` set**, so a
+  second sign-in in the same app run can fetch and subscribe for the PREVIOUS
+  organization on a shared multi-tenant database.
+- [ ] **`blocked_dates` is honoured by the web and ignored by iOS** — an employee
+  can request time off on a blocked date from the phone. Same unbuilt idea as the
+  dead "Schedule Conflicts" section AMB.8 removed.
 
 Server-side auth goes through `role_permissions` + `has_permission()`; read the
 rls-remediation memory before touching it.

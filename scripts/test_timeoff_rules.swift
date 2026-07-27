@@ -139,6 +139,47 @@ check(!shortRange.meetsMinimum, "…and it fails the 30-minute minimum instead")
 check(!PartialDayRange(start: TimeOfDay("09:00")!, end: TimeOfDay("09:29")!).meetsMinimum,
       "29 minutes fails the minimum")
 
+print("\n  the clamp boundary — a fix round created this case, so it gets a test")
+
+// The fix round changed TimeOfDay's clamp from 24*60 to 24*60-1, because hour 24
+// made `Calendar.date(bySettingHour: 24, …)` return nil and silently defeated the
+// end-time repair. That fix creates a NEW edge: a start late enough that start+1h
+// clamps back onto the start itself.
+eq(TimeOfDay(minutes: 24 * 60).storageString, "23:59", "the clamp lands on 23:59, never 24:00")
+check(TimeOfDay(TimeOfDay(minutes: 24 * 60).storageString) != nil,
+      "the clamped value ROUND-TRIPS through the parser — 24:00 did not")
+eq(TimeOfDay(minutes: 24 * 60 + 500).storageString, "23:59", "an overshoot still lands on 23:59")
+
+// 23:59 start: the repair has nowhere to go, so it produces a zero-length range.
+// That is NOT silently accepted — the 30-minute gate blocks it, and the duration
+// reads 0.0 rather than a negative number, which is what the old clamp produced.
+var lateRange = PartialDayRange(start: TimeOfDay("23:59")!, end: TimeOfDay("23:00")!)
+eq(lateRange.end.storageString, "23:59", "a 23:59 start clamps the repaired end back onto itself")
+eq(lateRange.minutes, 0, "…giving a zero-length range, not a negative one")
+check(!lateRange.meetsMinimum, "…which the 30-minute minimum blocks")
+
+// 23:00 start: this is the case that was BROKEN before the clamp fix — the repair
+// computed 24:00, the date conversion returned nil, and the range stayed inverted
+// so the form rendered a negative duration.
+lateRange = PartialDayRange(start: TimeOfDay("23:00")!, end: TimeOfDay("22:00")!)
+eq(lateRange.end.storageString, "23:59", "a 23:00 start repairs to 23:59, not to a nil hour 24")
+check(lateRange.minutes > 0, "…and the range is no longer inverted")
+
+// 23:00 -> 23:59 is 59 minutes, which CLEARS the 30-minute floor. I asserted the
+// opposite here first and the harness caught it — the second time in this file
+// that running the rules beat reasoning about them.
+let lateSpan = TimeOffSpan(startDay: day(1), endDay: day(1), isPartialDay: true,
+                           start: TimeOfDay("23:00"), end: TimeOfDay("23:59"))
+eq(lateSpan.partialMinutes, 59, "23:00 to 23:59 is 59 minutes")
+check((lateSpan.partialMinutes ?? -1) >= 0, "a late-evening span never reports NEGATIVE minutes")
+check(SubmitGate.evaluate(span: lateSpan).isAllowed, "…and 59 minutes is allowed")
+
+// The genuinely blocked one is the 23:59 start, whose repair has nowhere to go.
+let zeroSpan = TimeOffSpan(startDay: day(1), endDay: day(1), isPartialDay: true,
+                           start: TimeOfDay("23:59"), end: TimeOfDay("23:59"))
+eq(SubmitGate.evaluate(span: zeroSpan), .blockedByPartialDayMinimum,
+   "a zero-length range at the clamp boundary is BLOCKED, not submitted")
+
 // ---------------------------------------------------------------------------
 print("\nFULL DAY RANGE — moving the start past the end DRAGS THE END WITH IT")
 
