@@ -884,14 +884,14 @@ other rebases onto it.
   very hard to fill out"), v3 is one screen where nothing collapses, both option
   lists fully visible in two columns under grouped families, nine peer sections with
   no visual hierarchy between them, and an inline vehicle confirmation with no
-  default vehicle. Operator: "yep all looks good" (iPhone).
+  default vehicle. **OPERATOR APPROVED 2026-07-26 — D10 SATISFIED for batch 2.**
   **THE MOCKUP IS THE SPEC** — operator requirement that the real screen "act
   EXACTLY as the mockup does". The behaviour contract is in AMB_BATCH2_PARITY.md;
   the school-ownership rule is real tested code (`DesignLab/ReportSchoolLink.swift`,
   `scripts/test_report_school_link.sh`, 16 checks, proved to fail when the rule is
   broken) and should be CARRIED OVER at conversion rather than reimplemented.
-  ⚠️ STILL OPEN before conversion: iPad review (D7), whether the org's session_types
-  match the 22 hardcoded job descriptions, and the loading/offline states the mockup
+  STILL OPEN, and neither blocks the design: whether the org's session_types match
+  the 22 hardcoded job descriptions, and the loading/offline states the mockup
   deliberately does not specify.
   ⚠️ FIVE CAPABILITIES were lost inside these redesigns and restored — the denial
   reason, the report date, the photographer, the session link, the photoshoot note.
@@ -901,10 +901,10 @@ other rebases onto it.
   "slow and disorientating" for daily professionals. DJR.1 and AMB.7 now contradict
   each other and DJR.1 should be rewritten or dropped.
 - [ ] **AMB.8 Time off** (8 views, 3,763 lines) — closes batch 2 and mocks batch 3.
-  **MOCKUP BUILT 2026-07-26** — five surfaces in the lab, NOT YET REVIEWED by the
-  operator. It was built before the feedback that reshaped the Reports design, so it
-  likely carries the same faults: collapsed content, weak card separation, and
-  hierarchy between sections. Expect to re-cut it against the v3 lessons.
+  **MOCKUP BUILT + APPROVED 2026-07-26** — five surfaces in the lab, approved with
+  the Reports set. NOTE it was built BEFORE the feedback that reshaped Reports, so
+  it does not yet carry the v3 lessons (nothing collapsed, two-column option lists,
+  opaque cards, peer sections). Worth re-checking against those at conversion.
 
 **Batch 3**
 
