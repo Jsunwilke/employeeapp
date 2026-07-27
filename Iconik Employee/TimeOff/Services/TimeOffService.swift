@@ -90,6 +90,15 @@ class TimeOffService: ObservableObject {
             return
         }
 
+        // AMB.8: the fetch below never touched `isLoading`, so every screen's
+        // "loading" branch was unreachable and the EMPTY state rendered during the
+        // initial network load — "You haven't submitted any time off requests yet"
+        // with a Create CTA, and "All Caught Up!" on a manager's queue, both while
+        // the request was still in flight. Same family as the failure-that-looks-
+        // like-emptiness this phase exists to remove.
+        isLoading = true
+        defer { isLoading = false }
+
         // Check if we already have an active listener
         if hasActiveListener {
             print("📅 TimeOffService: Reusing existing listener")

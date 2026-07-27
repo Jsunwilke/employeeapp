@@ -54,7 +54,12 @@ struct MyTimeOffRequestsView: View {
     @State private var showingAlert = false
     /// Held while ANYTHING is presented, flushed when nothing is — see
     /// `isPresentingSomething`.
-    @State private var queuedAlert: String?
+    ///
+    /// AN ARRAY, NOT A SLOT. A single slot silently dropped the middle of three
+    /// results, which contradicted the "queued, never discarded" contract this
+    /// queue was built to honour — and the dropped one can be a failed payroll
+    /// write.
+    @State private var queuedAlerts: [String] = []
     /// THE DOUBLE-SUBMIT GUARD, on this screen too.
     ///
     /// It was added to the approvals queue and not here, which is the instance
@@ -135,6 +140,11 @@ struct MyTimeOffRequestsView: View {
         }
         .navigationTitle("My Time Off")
         .navigationBarTitleDisplayMode(.large)
+        .onChange(of: destination) { newValue in
+            // The push popped. Anything queued while it was up would otherwise sit
+            // there until an unrelated sheet happened to dismiss.
+            if newValue == nil { flushQueuedAlert() }
+        }
         .ambientPush(item: $destination) { destination in
             switch destination {
             case .balance: PTOBalanceView(isPushed: true)
@@ -166,6 +176,11 @@ struct MyTimeOffRequestsView: View {
             await loadBalance()
         }
         .onDisappear {
+            // NOT WHEN WE ARE PUSHING. `ambientPush` is a real NavigationLink, so
+            // this fires when the PTO balance screen covers us — and tearing down
+            // the shared realtime channel there raced the resubscribe on the way
+            // back. A regression introduced by adding that push in the first place.
+            guard destination == nil else { return }
             Task { await timeOffService.stopListening() }
         }
     }
@@ -307,9 +322,9 @@ struct MyTimeOffRequestsView: View {
     /// phase has repeatedly proved is that a silently discarded failure is worse
     /// than a late one.
     private func flushQueuedAlert() {
-        guard let queued = queuedAlert else { return }
-        queuedAlert = nil
-        alertMessage = queued
+        guard !queuedAlerts.isEmpty else { return }
+        // Oldest first, one per dismissal — the alert's OK button calls back in.
+        alertMessage = queuedAlerts.removeFirst()
         // A tick, so the alert that just dismissed is fully gone before the next
         // is raised on the same presenter.
         DispatchQueue.main.async { showingAlert = true }
@@ -370,7 +385,7 @@ struct MyTimeOffRequestsView: View {
             await MainActor.run {
                 requestToCancel = nil
                 if isPresentingSomething {
-                    queuedAlert = alertMessage
+                    queuedAlerts.append(alertMessage)
                 } else {
                     showingAlert = true
                 }

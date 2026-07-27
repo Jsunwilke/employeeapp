@@ -28,8 +28,10 @@ struct TimeOffApprovalView: View {
     @State private var denialReason = ""
     /// Shown inside the denial sheet — see `denyRequest`.
     @State private var denialError = ""
-    /// A message that arrived while the deny sheet was up. Flushed when it closes.
-    @State private var queuedAlert: String?
+    /// Messages that arrived while something was presented. AN ARRAY, NOT A SLOT:
+    /// three rapid approvals dropped the middle result, which can be a failed
+    /// payroll write, and that contradicted the contract this queue exists for.
+    @State private var queuedAlerts: [String] = []
     @State private var showingAlert = false
     @State private var alertMessage = ""
     /// THE DOUBLE-SUBMIT GUARD. The OLD screen swapped the whole list for a
@@ -123,6 +125,25 @@ struct TimeOffApprovalView: View {
             // (.basedOnSize), which removes the very bounce .refreshable needs, so
             // pull-to-refresh silently died whenever the content fit on screen.
             .refreshable { await timeOffService.refreshRequests() }
+            // SWIPE BETWEEN TABS, RESTORED. The shipped screen was a real
+            // `TabView` with `PageTabViewStyle`, so the three queues could be
+            // paged horizontally. The conversion replaced it with a button row and
+            // dropped the gesture — a genuine capability loss that I recorded and
+            // then neither restored nor declared, which is the "writing it down
+            // felt like diligence and functioned as a decision to ship it" trap.
+            // `highPriorityGesture` is deliberate: a parent DragGesture loses to
+            // child Buttons, and this needs 12pt of travel so it cannot steal a tap.
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 12)
+                    .onEnded { value in
+                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                        let all = QueueTab.allCases
+                        guard let i = all.firstIndex(of: tab) else { return }
+                        let next = value.translation.width < 0 ? i + 1 : i - 1
+                        guard all.indices.contains(next) else { return }
+                        withAnimation(AmbientMotion.snappy) { tab = all[next] }
+                        AmbientHaptics.selection()
+                    })
         }
         .navigationTitle("Time Off Approvals")
         .navigationBarTitleDisplayMode(.large)
@@ -143,9 +164,8 @@ struct TimeOffApprovalView: View {
             // `!showingAlert` matters: the deny success path dismisses the sheet
             // AND raises its own alert in one transaction, so without this the
             // flush would immediately overwrite it.
-            guard newValue == nil, !showingAlert, let queued = queuedAlert else { return }
-            queuedAlert = nil
-            alertMessage = queued
+            guard newValue == nil, !showingAlert, !queuedAlerts.isEmpty else { return }
+            alertMessage = queuedAlerts.removeFirst()
             showingAlert = true
         }
         .alert("Time Off Management", isPresented: $showingAlert) {
@@ -509,9 +529,8 @@ struct TimeOffApprovalView: View {
     /// Shows whatever was held back, once nothing is in the way. Never drops it.
     @MainActor
     private func flushQueuedAlert() {
-        guard let queued = queuedAlert else { return }
-        queuedAlert = nil
-        alertMessage = queued
+        guard !queuedAlerts.isEmpty else { return }
+        alertMessage = queuedAlerts.removeFirst()
         DispatchQueue.main.async { showingAlert = true }
     }
 
@@ -524,7 +543,7 @@ struct TimeOffApprovalView: View {
         if requestToDeny == nil && !showingAlert {
             showingAlert = true
         } else {
-            queuedAlert = message
+            queuedAlerts.append(message)
         }
     }
 }

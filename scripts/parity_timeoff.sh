@@ -276,7 +276,7 @@ kept "…nor cancelled mid-write"                       "$APPR" 'disabled(inFlig
 # `showingAlert = (requestToDeny == nil)`, which DISCARDED the message when a sheet
 # was up — so a failed approve vanished silently, which is worse than the problem
 # it solved. The message is now held and flushed when the sheet closes.
-kept "a message arriving while a sheet is up is QUEUED" "$APPR" 'queuedAlert = message'
+kept "a message arriving while a sheet is up is QUEUED" "$APPR" 'queuedAlerts.append(message)'
 keptIn "…and the flush is reachable from the alert"   "$APPR" flushQueuedAlert 'showingAlert = true'
 kept "the deny sheet shows its own busy state"        "$APPR" 'Denying…'
 kept "Retry forces a network fetch, not a cache hit"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'lastCacheUpdate = nil'
@@ -290,7 +290,7 @@ kept "accrual footnote only for an accrual org"       "$PTO" 'settings.usesAccru
 
 keptIn "approve reports FAILURE as failure, not success" "$APPR" approveRequest 'raise(error.localizedDescription)'
 keptIn "review reports FAILURE as failure too"         "$APPR" putRequestInReview 'raise(error.localizedDescription)'
-keptIn "the flush CLEARS the slot it just consumed"    "$APPR" flushQueuedAlert 'queuedAlert = nil'
+keptIn "the flush CONSUMES what it shows"              "$APPR" flushQueuedAlert 'queuedAlerts.removeFirst()'
 kept "the flush will not fire over a live alert"       "$APPR" 'newValue == nil, !showingAlert'
 kept "the LIST screen enumerates ALL its presentations" "$LIST" 'private var isPresentingSomething'
 keptIn "…and queues against that enumeration"         "$LIST" cancelRequest 'if isPresentingSomething'
@@ -302,6 +302,17 @@ kept "…and the card shows it"                         "$LIST" 'actionsBusy: in
 keptCount "BOTH card branches honour actionsBusy"     "$KIT" 'if actionsBusy {' 2
 kept "the detail sheet guards double-cancel"          "$DETAIL" 'guard !isCancelling'
 kept "raise() has no unread success parameter"         "$APPR" 'private func raise(_ message: String)'
+
+echo
+echo "Operator /code-review round — 8 findings, asserted so they cannot return"
+keptIn "the fetch reports isLoading, so the empty state cannot lie" "Iconik Employee/TimeOff/Services/TimeOffService.swift" startListeningToRequests 'isLoading = true'
+kept "edit mode does not double-subtract its own reservation" "$FORM" 'available: availableForThisRequest'
+kept "…and the row above it uses the same figure"     "$FORM" 'mathRow("Available now", availableForThisRequest'
+keptCount "the queues are ARRAYS, not single slots"   "$APPR" 'queuedAlerts' 4
+keptCount "…on the list screen too"                   "$LIST" 'queuedAlerts' 3
+kept "pushing does NOT tear down the realtime channel" "$LIST" 'guard destination == nil else { return }'
+kept "the queue is flushed when the push pops"        "$LIST" 'if newValue == nil { flushQueuedAlert() }'
+kept "swipe between the three tabs is restored"       "$APPR" 'highPriorityGesture'
 
 echo
 echo "EXPECTED-GONE — dropped deliberately, each with a reason in the file"

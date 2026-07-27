@@ -138,9 +138,28 @@ struct TimeOffRequestView: View {
 
     private var calculatedHours: Double { PTOMath.calculatedHours(for: span) ?? 0 }
 
+    /// THE BALANCE THIS REQUEST IS MEASURED AGAINST.
+    ///
+    /// In EDIT mode the request being edited is itself pending, so its hours are
+    /// already inside `pending_balance` and therefore already excluded from
+    /// `availableBalance`. Subtracting `ptoHours.value` on top of that counted the
+    /// same reservation twice: editing any existing paid request showed a false
+    /// orange "you are N hours short" where the shipped form showed a benign blue
+    /// accrual note, and a "Left afterwards" figure that was wrong by the
+    /// request's own size. Adding its stored hours back makes the comparison
+    /// "what would I have if I replaced this request with the edited one".
+    private var availableForThisRequest: Double {
+        guard let balance = currentPTOBalance else { return 0 }
+        guard let editingRequest,
+              editingRequest.isPaidTimeOff,
+              TimeOffRuleStatus.parse(editingRequest.status)?.isEditable == true,
+              let alreadyReserved = editingRequest.ptoHoursRequested
+        else { return balance.availableBalance }
+        return balance.availableBalance + alreadyReserved
+    }
+
     private var remaining: Double {
-        PTOMath.remaining(available: currentPTOBalance?.availableBalance ?? 0,
-                          requested: ptoHours.value)
+        PTOMath.remaining(available: availableForThisRequest, requested: ptoHours.value)
     }
 
     /// BOTH FIGURES ON THE SAME BASE.
@@ -158,7 +177,8 @@ struct TimeOffRequestView: View {
     /// as the number beside it, and that defect is recorded under TOF.1.
     private var projectedAvailable: Double {
         guard let balance = currentPTOBalance else { return 0 }
-        return max(0, projectedPTOBalance - balance.pendingBalance)
+        let ownReservation = availableForThisRequest - balance.availableBalance
+        return max(0, projectedPTOBalance - balance.pendingBalance + ownReservation)
     }
 
     private var standing: PTOStanding {
@@ -413,7 +433,7 @@ struct TimeOffRequestView: View {
                     if let balance = currentPTOBalance {
                         Divider()
                         VStack(spacing: 6) {
-                            mathRow("Available now", balance.availableBalance, .secondary)
+                            mathRow("Available now", availableForThisRequest, .secondary)
                             mathRow("This request", -ptoHours.value, .secondary)
                             Divider()
                             mathRow("Left afterwards", remaining,
