@@ -241,6 +241,14 @@ class TemplateService: ObservableObject {
     // `Reports/ReportSchoolItem.make(from:)`, and leaving a private copy behind
     // is how two of them disagreed in the first place. `schoolOptions` went with
     // it — it was written by that method and read by nothing.
+    //
+    // TWO MORE SURVIVE OUTSIDE Reports/, and neither is this phase's to change:
+    // `DatabaseManager+NFC.fetchAndProcessSchools`, which still falls back to
+    // the school's NAME as its address (the fallback AMB.7 removed from the
+    // report screens because a bare name geocodes to whatever the world has most
+    // of — it is display-only on its one consumer, NFC/ManualEntryView), and
+    // `DashboardWidgets`, which reads a different column again and DROPS any
+    // school missing it. Recorded, not repaired.
 
     // MARK: - Smart Field Calculations
     

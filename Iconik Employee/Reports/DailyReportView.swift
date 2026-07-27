@@ -129,6 +129,9 @@ struct DailyReportView: View {
     /// storage is never in the upload count either. The snapshot is what the
     /// report falls back to.
     @State private var attachedNoteSnapshot: PhotoshootNote?
+    /// The photographer chose "No photoshoot note". Distinct from never having
+    /// chosen, which is what auto-attach is allowed to act on.
+    @State private var hasDeclinedNote = false
     /// URLs from the attached note the photographer has removed from the grid.
     /// The report's photo list is the note's list MINUS these — derived from the
     /// note, not from what downloaded.
@@ -150,6 +153,8 @@ struct DailyReportView: View {
     @State private var usualMiles: [String: Double] = [:]
     /// Which route measurement is current. See `recalculateMileage`.
     @State private var mileageRun = 0
+    /// `reapplyLinkedSchools` runs once — see its own note.
+    @State private var hasReappliedSchools = false
     @FocusState private var fieldFocused: Bool
     @ObservedObject private var tabBarManager = TabBarManager.shared
 
@@ -196,6 +201,21 @@ struct DailyReportView: View {
     }
 
     private var miles: Double { mileage.value }
+
+    /// Stops that can be measured — they carry coordinates, or an address to
+    /// geocode. A school with neither contributes no leg.
+    private var measurableStops: [SchoolItem] {
+        stops.filter { stop in
+            if let coordinates = stop.coordinates, !coordinates.isEmpty { return true }
+            return !stop.address.isEmpty
+        }
+    }
+
+    /// Stops the route cannot include. Silently dropping these produced a
+    /// confident 0.0 with the full route still printed underneath it.
+    private var unmeasurableStops: [SchoolItem] {
+        stops.filter { stop in !measurableStops.contains { $0.id == stop.id } }
+    }
 
     /// Is the figure well out of line with what this photographer usually claims
     /// at this school? Only meaningful for a single-stop day.
@@ -487,17 +507,33 @@ struct DailyReportView: View {
     /// form did and this conversion had dropped. Only when nothing is attached
     /// yet — a deliberate choice is never overridden.
     private func attachNoteMatching(_ session: Session?) {
-        guard attachedNoteID == nil, let session else { return }
+        guard attachedNoteID == nil, !hasDeclinedNote, let session else { return }
         guard let match = availableNotes.first(where: { $0.school == session.schoolName }) else { return }
         attach(match)
     }
 
-    /// Apply the attached note's school once the school list exists. Guarded on
-    /// the note source holding nothing, so it cannot undo a removal — and a
-    /// removal is impossible before the list has loaded.
-    private func reapplyNoteSchool() {
-        guard let note = attachedNote, link.noteSchool == nil else { return }
-        link.set(schoolID(named: note.school), for: .note)
+    /// Apply whatever the session and the note point at, once the school list
+    /// exists to resolve it against.
+    ///
+    /// BOTH sources need this, and only the note got it last round. A session
+    /// tapped while "Loading schools…" is on screen resolves to nil, and
+    /// `runAutoSelect` then refuses to touch the link because a manual pick has
+    /// LATCHED — so the school never arrived, the route had no stops, and the
+    /// report filed 0.0 miles.
+    ///
+    /// Runs ONCE. The `noteSchool == nil` guard alone was a coincidence of the
+    /// call site rather than a property of the function: the photographer can
+    /// restore that state any time by removing the chip, and a second call would
+    /// then undo a deliberate removal.
+    private func reapplyLinkedSchools() {
+        guard !hasReappliedSchools, !schoolOptions.isEmpty else { return }
+        hasReappliedSchools = true
+        if sessionPick.selection != nil, link.sessionSchool == nil {
+            link.set(schoolID(for: session), for: .session)
+        }
+        if let note = attachedNote, link.noteSchool == nil {
+            link.set(schoolID(named: note.school), for: .note)
+        }
     }
 
     private func schoolID(for session: Session?) -> String? {
@@ -603,12 +639,19 @@ struct DailyReportView: View {
                 }
             }
 
-            // The route, always — but only when there IS one. Drawing
-            // "Home → School → Home" directly above "the route cannot be
-            // measured" is the screen contradicting itself.
-            if !stops.isEmpty && !mileage.isOverridden && !storedUserHomeAddress.isEmpty {
-                Text((["Home"] + stops.map(\.name) + ["Home"]).joined(separator: " → "))
+            // The route, always — but only what was actually MEASURED, and only
+            // when there is a route at all. Printing "Home → Lincoln → Home"
+            // above a 0.0 that skipped Lincoln is the screen contradicting
+            // itself, which is the thing this line exists to prevent.
+            if !measurableStops.isEmpty && !mileage.isOverridden && !storedUserHomeAddress.isEmpty {
+                Text((["Home"] + measurableStops.map(\.name) + ["Home"]).joined(separator: " → "))
                     .font(.caption).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !unmeasurableStops.isEmpty && !mileage.isOverridden {
+                Label("\(unmeasurableStops.map(\.name).joined(separator: ", ")) has no address or coordinates on file, so it is not in this figure. Type the mileage in yourself.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if storedUserHomeAddress.isEmpty {
@@ -716,8 +759,13 @@ struct DailyReportView: View {
                 }
 
                 if let attached = attachedNote, !attachedNoteIsLive {
+                    // The note has left the shared blob — submitted or deleted
+                    // elsewhere. Its TEXT is still filed with the report; its
+                    // photos are only still there if it was submitted, because
+                    // deleting a note deletes its storage objects. The message
+                    // says exactly that rather than promising both.
                     Divider()
-                    Label("This note was submitted or deleted somewhere else. Its photos and text are still on this report and will be filed with it.",
+                    Label("This note is no longer in your notes list. Its text will still be filed with this report; any photos it had may already have been removed.",
                           systemImage: "exclamationmark.circle")
                         .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -744,6 +792,10 @@ struct DailyReportView: View {
                             guard let index = photoshootNotes.firstIndex(where: { $0.id == attachedID })
                             else { return }
                             photoshootNotes[index].noteText = newValue
+                            // The snapshot is a FALLBACK, not a second story —
+                            // it has to keep up, or a note that later left the
+                            // blob would file the text as it was before editing.
+                            attachedNoteSnapshot = photoshootNotes[index]
                             savePhotoshootNotes()
                         }))
                         .frame(minHeight: 72)
@@ -875,7 +927,7 @@ struct DailyReportView: View {
         // write, and repairing it belongs with that storage, not with a restyle.
         photoshootNotes = (try? JSONDecoder().decode([PhotoshootNote].self, from: storedNotesData)) ?? []
         // Auto-select ONLY when there is exactly one, which is the live rule.
-        if attachedNoteID == nil, availableNotes.count == 1 {
+        if attachedNoteID == nil, !hasDeclinedNote, availableNotes.count == 1 {
             attach(availableNotes[0])
         }
     }
@@ -932,7 +984,7 @@ struct DailyReportView: View {
                     // returns, so without this its school never reaches the
                     // report and an off-schedule day files with no school at all.
                     self.runAutoSelect()
-                    self.reapplyNoteSchool()
+                    self.reapplyLinkedSchools()
                     self.recalculateMileage()
                     self.loadUsualMileage()
                 }
@@ -1003,9 +1055,9 @@ struct DailyReportView: View {
         }
 
         let route: [String] = [storedUserHomeAddress]
-            + stops.compactMap { stop -> String? in
+            + measurableStops.map { stop -> String in
                 if let coordinates = stop.coordinates, !coordinates.isEmpty { return coordinates }
-                return stop.address.isEmpty ? nil : stop.address
+                return stop.address
             }
             + [storedUserHomeAddress]
 
@@ -1076,6 +1128,10 @@ struct DailyReportView: View {
         droppedNoteURLs.removeAll()
         attachedNoteID = note?.id
         attachedNoteSnapshot = note
+        // Choosing "No photoshoot note" is a DECISION, not the absence of one.
+        // Without this, adjusting the session afterwards re-attached the note
+        // the photographer had just declined.
+        if note == nil { hasDeclinedNote = true }
         // Same rule as the session: replace this source's school, remove it when
         // you choose none, leave everything else alone.
         link.set(schoolID(named: note?.school), for: .note)
@@ -1221,7 +1277,11 @@ struct DailyReportView: View {
             do {
                 let created = try await DailyJobReportService.shared.createReport(report)
 
-                if let note {
+                // Only a DRAFT is linked. `attachToReport` is an unconditional
+                // UPDATE of `daily_report_id`, so doing this to a note that was
+                // already submitted against another report would repoint that
+                // row away from it, on the shared database.
+                if let note, note.status == .draft {
                     do {
                         try await PhotoshootNoteService.shared.attachToReport(noteId: note.id,
                                                                              reportId: created.id)

@@ -75,8 +75,16 @@ struct ReportMileage: Equatable {
         // can — and a NaN reaches the JSON encoder, which refuses it, so the
         // submit dies with something nobody can act on. A mileage is digits and
         // at most one separator.
-        guard !cleaned.contains(where: \.isLetter) else { return nil }
-        if let plain = Double(cleaned), plain.isFinite { return plain }
+        // A mileage is digits and at most one separator. `Double` also accepts
+        // "nan", "inf", "1e3", "0x1p4" and a leading sign — a decimal pad can
+        // type none of them, but a paste, a hardware keyboard and dictation all
+        // can. A NaN reaches the JSON encoder, which refuses it, so the submit
+        // died with something nobody could act on; a negative reached the shared
+        // `daily_job_reports.total_mileage` and was then excluded from the very
+        // history the screen flags against.
+        guard !cleaned.contains(where: \.isLetter),
+              !cleaned.contains("-"), !cleaned.contains("+") else { return nil }
+        if let plain = Double(cleaned), plain.isFinite, plain >= 0 { return plain }
         guard !cleaned.contains(".") else { return nil }
         let groups = cleaned.split(separator: ",", omittingEmptySubsequences: false)
         // One comma only, and what follows it must look like a DECIMAL — one or
