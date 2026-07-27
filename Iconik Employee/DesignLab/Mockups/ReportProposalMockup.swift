@@ -103,6 +103,7 @@ struct ReportProposalMockup: View {
     @State private var session: LabSession? = DesignLabSampleData.todaysSessions
         .first { !$0.alreadyReported }
     @State private var stops: [LabSchool] = [DesignLabSampleData.schools[1]]
+
     @State private var mileage = ""
     @State private var mileageEdited = false
     @State private var vehicle = DesignLabSampleData.History.usualVehicle
@@ -115,11 +116,23 @@ struct ReportProposalMockup: View {
     @State private var sportsBackground: String? = "NA"
     @State private var notes = ""
     @State private var photos: [Color] = []
-    /// The photoshoot note attached to this report. Auto-selected when there is
-    /// exactly one, which is what the live form does.
-    @State private var attachedNote: LabPhotoshootNote? = DesignLabSampleData
-        .photoshootNotes.first { !$0.submitted && !$0.school.isEmpty }
+    /// The photoshoot note attached to this report.
+    ///
+    /// Starts EMPTY here on purpose: the live form auto-selects a note only when
+    /// there is exactly one, and this sample set has three unsubmitted, so the
+    /// picker correctly opens on "No photoshoot note".
+    @State private var attachedNote: LabPhotoshootNote?
     @State private var attachedNoteText = ""
+
+    /// Which school each autofill source contributed, so changing a session or
+    /// a note REPLACES its own school rather than piling another one on — and
+    /// never removes one the photographer added themselves.
+    /// Seeded to match the auto-selected session, so the screen is consistent
+    /// before the first tap: the session owns the school already on the report.
+    @State private var sessionSchoolID: String? = DesignLabSampleData.schools
+        .first { $0.name == DesignLabSampleData.todaysSessions
+            .first { !$0.alreadyReported }?.school }?.id
+    @State private var noteSchoolID: String?
 
 
     @State private var showVehicleConfirm = false
@@ -288,20 +301,39 @@ struct ReportProposalMockup: View {
         }
     }
 
+    /// Replace the school contributed by ONE autofill source.
+    ///
+    /// The old one comes out unless the other source is also holding it; the new
+    /// one goes in unless it is already on the report. Schools the photographer
+    /// added by hand are never in `owned`, so they are never removed.
+    private func applySchool(named name: String?,
+                             from owned: inout String?,
+                             alsoClaimedBy other: String?) {
+        if let old = owned, old != other {
+            stops.removeAll { $0.id == old }
+        }
+        owned = nil
+        guard let name,
+              let match = DesignLabSampleData.schools.first(where: { $0.name == name })
+        else { return }
+        if !stops.contains(where: { $0.id == match.id }) {
+            stops.append(match)
+        }
+        owned = match.id
+    }
+
     /// `nil` renders the off-schedule row.
     private func sessionRow(_ option: LabSession?) -> some View {
         let on = session?.id == option?.id
         return Button {
             withAnimation(AmbientMotion.snappy) {
                 session = option
-                // Picking a session fills the school in — the autofill that has
-                // to survive any redesign. It ADDS rather than replaces, because
-                // a multi-school day is normal.
-                if let option,
-                   let match = DesignLabSampleData.schools.first(where: { $0.name == option.school }),
-                   !stops.contains(where: { $0.id == match.id }) {
-                    stops.append(match)
-                }
+                // Picking a different session REPLACES its school. Choosing
+                // off-schedule removes it. Schools you added yourself are never
+                // touched, and neither is one the photoshoot note is holding.
+                applySchool(named: option?.school,
+                            from: &sessionSchoolID,
+                            alsoClaimedBy: noteSchoolID)
             }
             AmbientHaptics.selection()
         } label: {
@@ -349,6 +381,8 @@ struct ReportProposalMockup: View {
                             Button {
                                 withAnimation(AmbientMotion.snappy) {
                                     stops.removeAll { $0.id == school.id }
+                                    if sessionSchoolID == school.id { sessionSchoolID = nil }
+                                    if noteSchoolID == school.id { noteSchoolID = nil }
                                 }
                             } label: {
                                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
@@ -678,13 +712,11 @@ struct ReportProposalMockup: View {
             withAnimation(AmbientMotion.snappy) {
                 attachedNote = note
                 attachedNoteText = ""
-                // Attaching fills the school in — the same autofill the session
-                // does, and it ADDS rather than replaces.
-                if let note,
-                   let match = DesignLabSampleData.schools.first(where: { $0.name == note.school }),
-                   !stops.contains(where: { $0.id == match.id }) {
-                    stops.append(match)
-                }
+                // Same rule as the session: replace this source's school,
+                // remove it when you choose none, leave everything else alone.
+                applySchool(named: note?.school,
+                            from: &noteSchoolID,
+                            alsoClaimedBy: sessionSchoolID)
             }
             AmbientHaptics.selection()
         } label: {
@@ -694,7 +726,7 @@ struct ReportProposalMockup: View {
                     .foregroundStyle(on ? Self.featureTint : .secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(note.map { "\(Formatters.shortTime.string(from: $0.timestamp)) — \($0.school)" }
-                         ?? "Don't attach a note")
+                         ?? "No photoshoot note")
                         .font(.subheadline)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
