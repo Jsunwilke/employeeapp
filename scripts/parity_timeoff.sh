@@ -27,8 +27,10 @@ KIT="Iconik Employee/TimeOff/TimeOffKit.swift"
 RULES="Iconik Employee/TimeOff/TimeOffRules.swift"
 PRES="Iconik Employee/TimeOff/TimeOffPresentation.swift"
 
-kept () { # $1 = capability, $2 = file, $3 = pattern
-  if grep -q "$3" "$2" 2>/dev/null; then
+kept () { # $1 = capability, $2 = file, [-i] $3 = pattern
+  local flags=""
+  if [ "$3" = "-i" ]; then flags="-i"; set -- "$1" "$2" "$4"; fi
+  if grep -q $flags "$3" "$2" 2>/dev/null; then
     PASS=$((PASS+1)); printf '  ok    %s\n' "$1"
   else
     FAIL=$((FAIL+1)); printf '  LOST  %s   [%s ~ %s]\n' "$1" "$(basename "$2")" "$3"
@@ -78,7 +80,11 @@ kept "time label"                                     "$KIT" 'model.timeLabel'
 kept "duration label"                                 "$KIT" 'model.durationLabel'
 kept "PTO hours on the card"                          "$KIT" 'PTO hours'
 kept "status badge"                                   "$KIT" 'model.status.label'
-kept "notes, max 2 lines"                             "$KIT" 'lineLimit(2)'
+# The capability is that the note is SHOWN, not that it is truncated. The fix
+# round removed `.lineLimit(2)` because neither list navigates to the detail
+# screen, so the hidden remainder was unreachable — a manager read two lines of a
+# four-line family-emergency explanation and had no way to see the rest.
+kept "notes shown in full (no route to the rest existed)" "$KIT" 'model.notes'
 kept "Approved by NAME"                               "$RULES" 'Approved by'
 kept "In review by NAME"                              "$RULES" 'In review by'
 kept "Denied by NAME"                                 "$RULES" 'Denied by'
@@ -150,7 +156,13 @@ kept "time range or Full Day"                         "$DETAIL" 'Full Day'
 kept "photographer row"                               "$DETAIL" 'Photographer'
 kept "reason shown"                                   "$DETAIL" 'reasonDisplay.label'
 kept "notes row omitted when empty"                   "$DETAIL" 'if !timeOffEntry.notes.isEmpty'
-kept "partial/full day request line"                  "$DETAIL" 'Partial Day Request'
+# Case-insensitive deliberately: the ORIGINAL app wrote "Partial Day Request" and
+# the approved mockup wrote "Partial day request". The design audit flagged the
+# capitalisation as a divergence from the spec and the fix round adopted the
+# mockup's. The CAPABILITY being asserted is that the screen says which kind of
+# request this is — not which house style it says it in. A parity check that
+# pins prose exactly turns every approved copy edit into a false loss.
+kept "partial/full day request line"                  "$DETAIL" -i 'partial day request'
 kept "status shown"                                   "$DETAIL" 'statusDisplay.label'
 kept "Cancel Request, conditional on pending"         "$DETAIL" 'timeOffEntry.status == .pending'
 kept "confirmation says it cannot be undone"          "$DETAIL" 'cannot be undone'
@@ -163,8 +175,8 @@ kept "Total Balance"                                  "$PTO" 'Total Balance'
 kept "Pending Requests, conditional on > 0"           "$PTO" 'balance.pendingBalance > 0'
 kept "Available to Use"                               "$PTO" 'Available to Use'
 kept "Banking Balance, conditional"                   "$PTO" 'balance.bankingBalance > 0'
-kept "Used this year"                                 "$PTO" 'Used this year'
 kept "Total accrued"                                  "$PTO" 'Total accrued'
+kept "…and it says so where the used figure was"      "$PTO" 'are not tracked on this device'
 kept "accrual policy card, conditional on enabled"    "$PTO" 'settings.enabled'
 kept "accrual rate copy"                              "$PTO" 'formattedAccrualRate'
 kept "max accrual copy"                               "$PTO" 'formattedMaxAccrual'
@@ -181,7 +193,7 @@ kept "a full day is 8 PTO hours"                      "$RULES" 'hoursPerFullDay:
 kept "the manager queue is FIFO"                      "$RULES" 'static func managerQueue'
 kept "the employee list is newest-first"              "$RULES" 'static func employeeList'
 kept "PTO defaults ON for a new request"              "$FORM" 'isPaidTimeOff = true'
-kept "denial requires a reason"                       "$APPR" 'guard !reason.isEmpty else { return }'
+kept "denial requires a reason"                       "$APPR" 'guard !reason.isEmpty'
 
 echo
 echo "NEW — states that did not exist and should have"
@@ -198,12 +210,36 @@ kept "an unknown status is not shown as Pending"      "$KIT" 'case unrecognised'
 kept "empty-string photographer name handled"         "$PRES" 'name.isEmpty ? "Unknown"'
 
 echo
+echo "Fix round — findings from the three audits, asserted so they cannot silently return"
+kept "double-submit guard on approve/deny/review"     "$APPR" 'inFlight'
+kept "…and the card shows the write is in flight"     "$KIT" 'actionsBusy'
+kept "a failed deny is shown INSIDE the sheet"        "$APPR" 'denialError'
+kept "the typed denial reason is cleared on dismiss"  "$APPR" 'onDismiss:'
+kept "errorMessage is cleared on a successful fetch"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'errorMessage = ""'
+kept "PTO hours refill when the stored value is zero" "$FORM" 'isUserEdited: storedHours != 0'
+kept "the PTO toggle recalculates"                    "$FORM" 'onChange(of: isPaidTimeOff)'
+kept "TimeOfDay clamps to 23:59 so it round-trips"    "$RULES" '24 \* 60 - 1'
+kept "unparseable partial-day times say so"           "$PRES" 'Time not set'
+kept "the reason LABEL is on the card, not just an icon" "$KIT" 'model.reason.label'
+kept "attribution dates carry the year"               "$KIT" 'Formatters.mediumDate'
+kept "main-actor hops on every state write after await" "$APPR" 'await MainActor.run'
+kept "accrual footnote only for an accrual org"       "$PTO" 'settings.usesAccrualSystem'
+
+echo
 echo "EXPECTED-GONE — dropped deliberately, each with a reason in the file"
 gone "Schedule Conflicts section (checkForConflicts always returns [])" "$FORM" 'Schedule Conflicts'
 gone "Delete Time Off (every press was a guaranteed 403)"               "$DETAIL" 'Delete Time Off'
 gone "the old hand-rolled card in the list file"                        "$LIST" 'struct TimeOffRequestCard'
 gone "Color(colorName) asset lookups that never resolved"               "$LIST" 'Color(request.statusEnum.colorName)'
 gone "rawValue.capitalized, which shipped as \"Underreview\""             "$DETAIL" 'rawValue.capitalized'
+# A REMOVAL, not a loss: the old tile rendered `usedThisYear`, which sits outside
+# CodingKeys and is always 0. Pointing it at the real `used` column made it a
+# differently wrong number, because nothing writes that column either — iOS drops
+# it on every update and the web app never touches it. A confident wrong number on
+# a payroll screen is worse than none, so the tile is gone and the screen says why.
+gone "the Used This Year tile (a column nothing maintains)"              "$PTO" 'Used this year'
+gone "bounce suppression that killed pull-to-refresh"                   "$LIST" 'ambientNoBounceWhenShort'
+gone "the dead onDelete parameter"                                      "$DETAIL" 'onDelete'
 
 echo
 echo "$PASS passed, $FAIL lost"

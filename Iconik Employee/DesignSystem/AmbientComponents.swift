@@ -299,6 +299,14 @@ struct AmbientFormSection<Content: View>: View {
     let status: String
     /// Nil leaves the status tertiary, which is how "nothing here yet" reads.
     var statusTint: Color?
+    /// AMB.8 ADDED THIS, and it was a real regression that added it. The section
+    /// was hardcoded to `.compact` because every report section is a list of
+    /// controls. Time Off's PTO block is a block of ARITHMETIC the operator
+    /// approved at `.roomy` — 16/16 padding at radius 22 — and routing it through
+    /// a hardcoded `.compact` silently shrank it to 12/10 at radius 14. Caught by
+    /// the design-fidelity audit, which is exactly the class of miss that has
+    /// reached the operator on this arc before.
+    var density: AmbientDensity = .compact
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -320,7 +328,7 @@ struct AmbientFormSection<Content: View>: View {
                 // added to AmbientCard for this rather than hand-rolling a
                 // background or abusing `state: .highlighted` for a heavier
                 // material it does not mean.
-                .ambientCard(density: .compact,
+                .ambientCard(density: density,
                              fill: .surface,
                              border: .hairline(Color.primary.opacity(0.10)),
                              fillWidth: true)

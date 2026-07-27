@@ -217,9 +217,10 @@ struct ScheduleTimeOffRow: View {
     let entry: TimeOffCalendarEntry
 
     private var scheduleTimeLabel: String {
-        guard entry.isPartialDay,
-              let start = TimeOfDay(entry.startTime),
-              let end = TimeOfDay(entry.endTime) else { return "All day" }
+        guard entry.isPartialDay else { return "All day" }
+        // Not "All day" — a partial day with unreadable times is not a whole day.
+        guard let start = TimeOfDay(entry.startTime),
+              let end = TimeOfDay(entry.endTime) else { return "Time not set" }
         return "\(start.displayString)–\(end.displayString)"
     }
 

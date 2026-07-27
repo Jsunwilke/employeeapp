@@ -121,8 +121,7 @@ struct ScheduleView: View {
         .sheet(item: $selectedTimeOff) { entry in
             TimeOffDetailView(
                 timeOffEntry: entry,
-                onCancel: { selectedTimeOff = nil; loadTimeOff() },
-                onDelete: { selectedTimeOff = nil; loadTimeOff() }
+                onCancel: { selectedTimeOff = nil; loadTimeOff() }
             )
         }
         .ambientPush(item: $pushedSession) { session in

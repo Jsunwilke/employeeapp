@@ -47,7 +47,13 @@ struct TimeOfDay: Equatable, Comparable, Codable {
     }()
 
     init(minutes: Int) {
-        self.minutes = max(0, min(24 * 60, minutes))
+        // CLAMPED TO 23:59, NOT 24:00. The old ceiling of 24*60 produced hour 24,
+        // whose `storageString` is "24:00" — which this type's own `init?(_:)`
+        // REJECTS, so a supposedly round-trip-safe value did not round-trip at its
+        // own boundary. It also made `Calendar.date(bySettingHour: 24, …)` return
+        // nil, which silently defeated the end-time repair for any start at or
+        // after 23:00. Found by the correctness audit, which ran it.
+        self.minutes = max(0, min(24 * 60 - 1, minutes))
     }
 
     init(hour: Int, minute: Int) {

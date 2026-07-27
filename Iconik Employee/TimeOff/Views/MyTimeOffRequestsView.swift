@@ -16,10 +16,28 @@
 //      That is the shape that hid Chat for a year, and drawing it is a view
 //      change, not a service change.
 //
-//  WHAT IT DELIBERATELY DID NOT GAIN: an entry to the approvals queue. The lab
-//  mockup carries one so the operator could reach the other mockup, and that
-//  mockup's own comment says surfacing it for real is a navigation question
-//  rather than a design one. D3 says navigation stays as it is, so it is not here.
+//  WHAT IT DELIBERATELY DID NOT GAIN, each named because the design audit was
+//  right that leaving them unsaid is how a silent omission becomes permanent:
+//
+//    - AN ENTRY TO THE APPROVALS QUEUE. The lab mockup carries one so the operator
+//      could reach the other mockup, and that mockup's own comment says surfacing
+//      it for real is a navigation question rather than a design one. D3 says
+//      navigation stays as it is.
+//
+//    - TAPPABLE CARDS. The mockup wraps each card in a Button that pushes the
+//      detail screen. The real detail screen takes a `TimeOffCalendarEntry` — one
+//      per DAY, built by the Schedule — not a request, so making these rows push
+//      it would mean inventing a second entry point into a screen that does not
+//      accept what this list holds. That is a navigation change (D3) and a data
+//      change, not a restyle.
+//
+//    - THE OFFLINE STATE. The mockup draws one and marks it PROPOSED, and it is
+//      proposed for a concrete reason: nothing in this data layer can tell
+//      "offline" from "the request failed". TimeOffService has no reachability
+//      check and no cache to serve stale rows from, so an honest offline state
+//      needs both — which is the OFF arc's work, not a style phase's. Drawing it
+//      without them would mean labelling every failure "offline", which is the
+//      same class of confident-wrong-answer this phase exists to remove.
 
 import SwiftUI
 
@@ -79,7 +97,9 @@ struct MyTimeOffRequestsView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
             }
-            .ambientNoBounceWhenShort()
+            // NO .ambientNoBounceWhenShort() here: it is scrollBounceBehavior
+            // (.basedOnSize), which removes the very bounce .refreshable needs, so
+            // pull-to-refresh silently died whenever the content fit on screen.
             .refreshable { await refresh() }
         }
         .navigationTitle("My Time Off")
@@ -164,10 +184,16 @@ struct MyTimeOffRequestsView: View {
     @ViewBuilder
     private var content: some View {
         if hasFailed && timeOffService.myRequests.isEmpty {
-            // A FAILURE IS NOT AN EMPTY LIST. The banner is the whole story here —
-            // rendering the empty state underneath would restate the exact lie
-            // this screen shipped with for years.
-            failureBanner
+            // A FAILURE IS NOT AN EMPTY LIST. Rendering the empty state underneath
+            // would restate the exact lie this screen shipped with for years. The
+            // mockup drew a full PANEL for this case, not a banner.
+            TimeOffFailurePanel(title: "Couldn't load your requests",
+                                message: timeOffService.errorMessage.isEmpty
+                                    ? "The server didn't answer. Your requests are safe — this screen just can't show them right now."
+                                    : timeOffService.errorMessage,
+                                tint: tint) {
+                Task { await refresh() }
+            }
         } else {
             if hasFailed {
                 // A failed REFRESH over a list we already have: say so, keep the
@@ -251,18 +277,25 @@ struct MyTimeOffRequestsView: View {
         let userId = UserManager.shared.getCurrentUserIDUnified()
         let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
         guard let userId, !userId.isEmpty, !organizationID.isEmpty else {
-            balance = nil
-            balanceFailed = true
+            await MainActor.run {
+                balance = nil
+                balanceFailed = true
+            }
             return
         }
         do {
-            balance = try await ptoService.getPTOBalance(userId: userId, organizationID: organizationID)
-            balanceFailed = false
+            let loaded = try await ptoService.getPTOBalance(userId: userId, organizationID: organizationID)
+            await MainActor.run {
+                balance = loaded
+                balanceFailed = false
+            }
         } catch {
             // Recorded as a failure rather than left nil, so the lead card shows
             // "Balance unavailable" instead of a permanent spinner.
-            balance = nil
-            balanceFailed = true
+            await MainActor.run {
+                balance = nil
+                balanceFailed = true
+            }
         }
     }
 
@@ -270,12 +303,17 @@ struct MyTimeOffRequestsView: View {
         Task {
             do {
                 try await timeOffService.cancelTimeOffRequest(requestId: request.id)
-                alertMessage = "Request cancelled successfully"
+                await MainActor.run { alertMessage = "Request cancelled successfully" }
             } catch {
-                alertMessage = error.localizedDescription
+                await MainActor.run { alertMessage = error.localizedDescription }
             }
-            showingAlert = true
-            requestToCancel = nil
+            // These are @State writes from a nonisolated continuation — a `View`
+            // isolates `body`, not its methods, so the code after `await` lands
+            // off the main actor. The old screen wrapped every one of these.
+            await MainActor.run {
+                showingAlert = true
+                requestToCancel = nil
+            }
         }
     }
 }

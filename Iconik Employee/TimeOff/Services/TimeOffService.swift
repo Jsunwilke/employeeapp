@@ -97,6 +97,7 @@ class TimeOffService: ObservableObject {
             if let lastUpdate = lastCacheUpdate,
                Date().timeIntervalSince(lastUpdate) < cacheValidityDuration,
                !timeOffRequests.isEmpty {
+                errorMessage = ""
                 updateFilteredLists()
                 return
             }
@@ -112,9 +113,17 @@ class TimeOffService: ObservableObject {
 
                 self.timeOffRequests = response
                 self.lastCacheUpdate = Date()
+                // AMB.8: errorMessage was only ever SET, never cleared — nothing
+                // in this file assigned "" anywhere. That was invisible while no
+                // view read it. Now that the screens DISPLAY it, a single failure
+                // would pin an orange banner for the rest of the app session and
+                // suppress the empty state behind it, which is the same class of
+                // defect the conversion exists to remove. Cleared on success.
+                errorMessage = ""
                 updateFilteredLists()
             } catch {
                 print("❌ TimeOffService refresh error: \(error)")
+                errorMessage = "Error loading requests: \(error.localizedDescription)"
             }
             return
         }
@@ -151,6 +160,7 @@ class TimeOffService: ObservableObject {
 
             self.timeOffRequests = response
             self.lastCacheUpdate = Date()
+            errorMessage = ""
             updateFilteredLists()
 
         } catch {

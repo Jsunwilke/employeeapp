@@ -73,7 +73,8 @@ struct PTOBalanceView: View {
         }
         .modifier(PTOBalanceClearance(active: isPushed))
         .navigationTitle("PTO Balance")
-        .navigationBarTitleDisplayMode(.large)
+        // Inline, as the mockup specified and as every pushed AMB.7 screen does.
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear(perform: loadPTOData)
     }
 
@@ -157,19 +158,30 @@ struct PTOBalanceView: View {
         }
     }
 
+    /// THE "USED THIS YEAR" TILE IS GONE, and removing it is the point.
+    ///
+    /// The old screen rendered `usedThisYear`, which is declared OUTSIDE
+    /// `CodingKeys` and therefore always decoded as 0 — it displayed a hardcoded
+    /// zero. My first fix pointed it at `balance.used`, the real column. The data
+    /// audit then established that NOTHING MAINTAINS THAT COLUMN either:
+    /// `PTOService.usePTOHours` writes only `balance`, `pending_balance` and
+    /// `updated_at`, so `useHours()` increments `used` in memory and drops it; and
+    /// the web app never reads or writes it at all.
+    ///
+    /// So the "fix" swapped a wrong number for a differently wrong number that
+    /// LOOKS authoritative. On a payroll screen that is worse. The tile is removed
+    /// rather than shown, which is the same judgement the balance lead makes about
+    /// a failed load. Making it real is a data-layer change — TOF.1.
     private func yearToDate(_ balance: PTOBalance) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             AmbientSectionTitle("Year to date")
-            HStack(spacing: 10) {
-                AmbientStatTile(value: Int(balance.used.rounded()),
-                                label: "Used this year",
-                                systemImage: "calendar.badge.minus",
-                                tint: .orange)
-                AmbientStatTile(value: Int(balance.totalAccrued.rounded()),
-                                label: "Total accrued",
-                                systemImage: "plus.circle",
-                                tint: .green)
-            }
+            AmbientStatTile(value: Int(balance.totalAccrued.rounded()),
+                            label: "Total accrued (hours)",
+                            systemImage: "plus.circle",
+                            tint: .green)
+            Text("Hours used this year are not tracked on this device — the figure the app stored was never written to the database. Payroll has the authoritative number.")
+                .font(.caption2).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -188,9 +200,14 @@ struct PTOBalanceView: View {
                     TimeOffDetailRow(label: "Rollover Policy", value: settings.formattedRolloverPolicy)
                 }
                 .ambientCard(density: .compact, fillWidth: true)
-                Text("Accrual counts business days only, Monday to Friday, at 8 hours a day.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Only true for an ACCRUAL org. A yearly-allotment org gets its
+                // hours in a lump and `calculateProjectedAccrual` returns 0 for it,
+                // so stating this unconditionally was an introduced false claim.
+                if settings.usesAccrualSystem {
+                    Text("Accrual counts business days only, Monday to Friday, at 8 hours a day.")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

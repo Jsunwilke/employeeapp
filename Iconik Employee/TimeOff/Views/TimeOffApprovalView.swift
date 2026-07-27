@@ -26,8 +26,22 @@ struct TimeOffApprovalView: View {
     @State private var tab: QueueTab = .pending
     @State private var requestToDeny: TimeOffRequest?
     @State private var denialReason = ""
+    /// Shown inside the denial sheet — see `denyRequest`.
+    @State private var denialError = ""
     @State private var showingAlert = false
     @State private var alertMessage = ""
+    /// THE DOUBLE-SUBMIT GUARD. The OLD screen swapped the whole list for a
+    /// spinner whenever `TimeOffService.isLoading` was true, so a second tap on
+    /// Approve was physically impossible. This conversion changed the loading test
+    /// to `isLoading && requests.isEmpty` — which is never true on a screen that
+    /// HAS rows, i.e. every screen where these buttons exist — and so deleted that
+    /// guard without noticing.
+    ///
+    /// It matters because the write is not idempotent: `approveTimeOffRequest` has
+    /// no status guard, and `PTOService.usePTOHours` is a read-modify-write that
+    /// serves from a 300-second cache AND writes the debited balance back into it.
+    /// Two taps two seconds apart on a 48-hour request debit 96 hours.
+    @State private var inFlight: Set<String> = []
 
     private enum QueueTab: String, CaseIterable, Identifiable {
         case pending = "Pending"
@@ -103,12 +117,20 @@ struct TimeOffApprovalView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
             }
-            .ambientNoBounceWhenShort()
+            // NO .ambientNoBounceWhenShort() here: it is scrollBounceBehavior
+            // (.basedOnSize), which removes the very bounce .refreshable needs, so
+            // pull-to-refresh silently died whenever the content fit on screen.
             .refreshable { await timeOffService.refreshRequests() }
         }
         .navigationTitle("Time Off Approvals")
         .navigationBarTitleDisplayMode(.large)
-        .sheet(item: $requestToDeny) { request in
+        .sheet(item: $requestToDeny, onDismiss: {
+            // A swipe-down does not run the toolbar's Cancel, so without this the
+            // sentence typed about one photographer was pre-filled — and the
+            // button pre-enabled — on the next one.
+            denialReason = ""
+            denialError = ""
+        }) { request in
             denialSheet(request)
         }
         .alert("Time Off Management", isPresented: $showingAlert) {
@@ -175,7 +197,13 @@ struct TimeOffApprovalView: View {
     private var content: some View {
         if hasFailed && timeOffService.timeOffRequests.isEmpty {
             // "All Caught Up!" over a failed fetch is a lie a manager would act on.
-            failureBanner
+            TimeOffFailurePanel(title: "Couldn't load the queue",
+                                message: timeOffService.errorMessage.isEmpty
+                                    ? "The server didn't answer. Requests are safe — this screen just can't show them right now."
+                                    : timeOffService.errorMessage,
+                                tint: tint) {
+                Task { await timeOffService.refreshRequests() }
+            }
         } else {
             if hasFailed { failureBanner }
             if timeOffService.isLoading && timeOffService.timeOffRequests.isEmpty {
@@ -238,6 +266,7 @@ struct TimeOffApprovalView: View {
                         showsActions: tab != .history,
                         managerActions: true,
                         showsPhotographer: true,
+                        actionsBusy: inFlight.contains(request.id),
                         onApprove: { approveRequest(request) },
                         onDeny: { requestToDeny = request },
                         // "Put in Review" is wired ONLY on the Pending tab,
@@ -291,6 +320,7 @@ struct TimeOffApprovalView: View {
                         }
 
                         Button {
+                            AmbientHaptics.impact(.medium)
                             denyRequest(request)
                         } label: {
                             Text("Deny Request")
@@ -303,7 +333,11 @@ struct TimeOffApprovalView: View {
                         .buttonStyle(.plain)
                         .disabled(trimmed.isEmpty)
 
-                        if trimmed.isEmpty {
+                        if !denialError.isEmpty {
+                            TimeOffInlineNote(text: denialError,
+                                              icon: "exclamationmark.triangle.fill",
+                                              tint: .orange)
+                        } else if trimmed.isEmpty {
                             Text("A reason is required before this can be sent.")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity)
@@ -330,45 +364,60 @@ struct TimeOffApprovalView: View {
     // MARK: - Actions
 
     private func approveRequest(_ request: TimeOffRequest) {
+        guard !inFlight.contains(request.id) else { return }
+        inFlight.insert(request.id)
         Task {
+            defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.approveTimeOffRequest(requestId: request.id)
-                alertMessage = "Request approved successfully"
+                await MainActor.run { alertMessage = "Request approved successfully" }
             } catch {
-                alertMessage = error.localizedDescription
+                await MainActor.run { alertMessage = error.localizedDescription }
             }
-            showingAlert = true
+            await MainActor.run { showingAlert = true }
         }
     }
 
     private func denyRequest(_ request: TimeOffRequest) {
         let reason = denialReason.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !reason.isEmpty else { return }
+        guard !reason.isEmpty, !inFlight.contains(request.id) else { return }
+        inFlight.insert(request.id)
         Task {
+            defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.denyTimeOffRequest(requestId: request.id, denialReason: reason)
-                alertMessage = "Request denied successfully"
-                // Dismissed and cleared only on SUCCESS. A failed deny keeps the
-                // sheet and the typed reason, so the manager can retry instead of
-                // rewriting it — the alert version discarded both either way.
-                requestToDeny = nil
-                denialReason = ""
+                await MainActor.run {
+                    // Dismissed and cleared only on SUCCESS. A failed deny keeps
+                    // the sheet and the typed reason, so the manager can retry
+                    // instead of rewriting it.
+                    requestToDeny = nil
+                    denialReason = ""
+                    denialError = ""
+                    alertMessage = "Request denied successfully"
+                    showingAlert = true
+                }
             } catch {
-                alertMessage = error.localizedDescription
+                // NOT an alert. The sheet is still up, and an alert raised on the
+                // view that is presenting a sheet does not appear — so the old
+                // arrangement made a failed deny completely silent, and the
+                // manager's only feedback was to tap Deny again.
+                await MainActor.run { denialError = error.localizedDescription }
             }
-            showingAlert = true
         }
     }
 
     private func putRequestInReview(_ request: TimeOffRequest) {
+        guard !inFlight.contains(request.id) else { return }
+        inFlight.insert(request.id)
         Task {
+            defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.putTimeOffRequestInReview(requestId: request.id)
-                alertMessage = "Request placed in review"
+                await MainActor.run { alertMessage = "Request placed in review" }
             } catch {
-                alertMessage = error.localizedDescription
+                await MainActor.run { alertMessage = error.localizedDescription }
             }
-            showingAlert = true
+            await MainActor.run { showingAlert = true }
         }
     }
 }

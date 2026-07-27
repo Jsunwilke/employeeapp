@@ -17,6 +17,19 @@
 //    - a partial day has a 30-minute minimum, and it is the ONLY thing that
 //      disables Submit
 //
+//  ONE DELIBERATE DEPARTURE FROM THE APPROVED MOCKUP, named because it changes
+//  chrome the operator signed off. The mockup drew each section as a bare
+//  `AmbientSectionTitle` over a GLASS card. Every section here goes through
+//  `AmbientFormSection` instead — an opaque `.surface` panel with a headline and a
+//  state summary. That is not drift: AUDIT_ROADMAP.md flags that this mockup "was
+//  built BEFORE the feedback that reshaped Reports, so it does not yet carry the
+//  v3 lessons (nothing collapsed, two-column option lists, opaque cards, peer
+//  sections)" and says to re-check against them at conversion. The v3 feedback was
+//  the operator's own: glass over a wash "practically blends in with the
+//  background", and eight of them read as one clump. This form has six sections.
+//  THE OPERATOR SHOULD JUDGE THIS ON THE DEVICE — it is the one thing here that
+//  looks different from what they approved, and it is flagged rather than hoped.
+//
 //  TWO DELIBERATE OMISSIONS, both named rather than slipped past:
 //
 //  1. THE "SCHEDULE CONFLICTS" SECTION IS GONE. `TimeOffService.checkForConflicts`
@@ -79,11 +92,23 @@ struct TimeOffRequestView: View {
         _selectedReason = State(initialValue: request.reasonEnum)
         _notes = State(initialValue: request.notes ?? "")
         _isPaidTimeOff = State(initialValue: request.isPaidTimeOff)
-        // Seeded as ALREADY user-edited: a saved request's hours are a decision
-        // somebody made, and re-deriving them from the dates on open would quietly
-        // overwrite a figure payroll may have agreed.
-        _ptoHours = State(initialValue: PTOHoursField(value: request.ptoHoursRequested ?? 0,
-                                                      isUserEdited: request.ptoHoursRequested != nil))
+        // SEEDED USER-EDITED ONLY WHEN THE STORED VALUE IS NON-ZERO, and the
+        // distinction is a payroll bug I shipped in the first cut of this file.
+        //
+        // I reasoned that a saved request's hours are a decision somebody made, so
+        // I seeded `isUserEdited: request.ptoHoursRequested != nil`. THE WEB APP
+        // ALWAYS WRITES A NUMBER, NEVER NULL — `pto_hours_requested: ... || 0` in
+        // its request modal — so for every web-created request that test was true,
+        // the field froze, and editing one wrote `pto_hours_requested: 0`. A
+        // manager approving it would then call `usePTOHours(hours: 0)`: paid days
+        // off, nothing deducted from the balance.
+        //
+        // The old form's rule was `if value == 0 || value == calculated { refill }`,
+        // so a stored zero ALWAYS refilled from the dates. That is what this
+        // restores. A stored non-zero figure is still left alone.
+        let storedHours = request.ptoHoursRequested ?? 0
+        _ptoHours = State(initialValue: PTOHoursField(value: storedHours,
+                                                      isUserEdited: storedHours != 0))
 
         // Times parse through TimeOfDay, which pins a POSIX locale. The old init
         // used a bare `DateFormatter` with dateFormat "HH:mm" and no locale, which
@@ -149,7 +174,7 @@ struct TimeOffRequestView: View {
                 AmbientBackdrop(tint: tint, intensity: 0.7)
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 14) {
                         typeSection
                         datesSection
                         reasonSection
@@ -272,7 +297,7 @@ struct TimeOffRequestView: View {
                 .labelsHidden()
                 .onChange(of: value.wrappedValue) { newValue in onChange(newValue) }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
     }
 
     private func timePickerRow(_ label: String, _ value: Binding<Date>) -> some View {
@@ -286,7 +311,7 @@ struct TimeOffRequestView: View {
                     updatePTOCalculations()
                 }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
     }
 
     // MARK: - Reason
@@ -327,14 +352,23 @@ struct TimeOffRequestView: View {
     // MARK: - PTO
 
     private var ptoSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
         AmbientFormSection(title: "Paid time off",
                            status: isPaidTimeOff ? String(format: "%.1f hours", ptoHours.value) : "Unpaid",
-                           statusTint: isPaidTimeOff ? tint : nil) {
+                           statusTint: isPaidTimeOff ? tint : nil,
+                           // The mockup drew this block at .roomy. It is arithmetic,
+                           // not a list of controls, and it is the one part of this
+                           // form the redesign actually changed.
+                           density: .roomy) {
             VStack(alignment: .leading, spacing: 10) {
                 Toggle(isOn: $isPaidTimeOff) {
                     Text("Use PTO Balance").font(.subheadline.weight(.semibold))
                 }
                 .tint(tint)
+                // The old form recalculated on this toggle and the conversion
+                // dropped it. Turning PTO on for a request that stored 0 hours
+                // would otherwise submit 0.
+                .onChange(of: isPaidTimeOff) { _ in updatePTOCalculations() }
 
                 if isPaidTimeOff {
                     Divider()
@@ -366,10 +400,28 @@ struct TimeOffRequestView: View {
                             Divider()
                             mathRow("Left afterwards", remaining,
                                     remaining < 0 ? .orange : .green, emphasised: true)
+                            // The shortfall/accrual message below is evaluated
+                            // against the PROJECTED balance, and without this row
+                            // the two contradict each other on screen: "Left
+                            // afterwards −5.0 h" in orange above a blue note
+                            // saying you will have enough. This is the number that
+                            // reconciles them, and the old form showed it.
+                            if projectedPTOBalance != balance.availableBalance {
+                                Divider()
+                                mathRow("Projected by \(Formatters.monthDay.string(from: startDate))",
+                                        projectedPTOBalance - ptoHours.value,
+                                        projectedPTOBalance - ptoHours.value < 0 ? .orange : .green)
+                            }
                         }
                     }
                 }
             }
+        }
+
+            // Directly beneath the PTO card, as the mockup drew it. It sat at the
+            // bottom of the form next to Submit, three sections from the number it
+            // describes — the audit called that a section-order break and was right.
+            ptoMessage
         }
     }
 
@@ -425,7 +477,7 @@ struct TimeOffRequestView: View {
     private var summarySection: some View {
         AmbientFormSection(title: "Summary", status: "", statusTint: nil) {
             VStack(spacing: 0) {
-                TimeOffDetailRow(label: "Type", value: isPartialDay ? "Partial Day" : "Full Day")
+                TimeOffDetailRow(label: "Type", value: isPartialDay ? "Partial day" : "Full day")
                 Divider()
                 TimeOffDetailRow(label: "Dates", value: dateRangeLabel)
                 Divider()
@@ -439,14 +491,13 @@ struct TimeOffRequestView: View {
     // MARK: - Submit
 
     private var submitButton: some View {
-        VStack(spacing: 8) {
-            ptoMessage
-
+        VStack(spacing: 6) {
             TimeOffPrimaryButton(
                 title: isSubmitting
                     ? "Submitting…"
                     : (editingRequest != nil ? "Update Request" : "Submit Request"),
                 tint: tint,
+                verticalPadding: 14,
                 enabled: submitGate.isAllowed && !isSubmitting) {
                     submitRequest()
                 }
@@ -468,7 +519,15 @@ struct TimeOffRequestView: View {
     private func repairTimes() {
         guard let start = TimeOfDay(from: startTime), let end = TimeOfDay(from: endTime) else { return }
         let range = PartialDayRange(start: start, end: end)
-        if range.end != end, let repaired = Self.date(from: range.end) {
+        guard range.end != end else { return }
+        // The repair now ALWAYS lands, because TimeOfDay clamps to 23:59 rather
+        // than 24:00. Before that fix a start at or after 23:00 produced hour 24,
+        // `Self.date(from:)` returned nil, the `if let` quietly failed, and the
+        // range stayed inverted — so the form rendered a NEGATIVE duration
+        // ("−0.5 hours") and autofilled 0.0 PTO hours. A late-evening partial day
+        // is now clamped to 23:59 and simply fails the 30-minute minimum, which
+        // the Submit gate already states.
+        if let repaired = Self.date(from: range.end) {
             endTime = repaired
         }
     }

@@ -49,7 +49,10 @@ extension TimeOffRequest {
     }
 
     private var displayPhotographerName: String {
-        let name = (photographer_name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var name = (photographer_name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // The web app builds this as `${first_name} ${last_name}` with no guard,
+        // so a row with neither arrives as the literal "undefined undefined".
+        if name == "undefined undefined" || name == "null null" { name = "" }
         // Empty string is not nil. The web app writes "" into several text
         // columns, and `photographer_name ?? ""` would happily hand an empty
         // string to a label that then renders a blank gap where a person's name
@@ -66,9 +69,15 @@ extension TimeOffRequest {
     }
 
     private var presentedTimeLabel: String {
-        guard isPartialDay,
-              let start = start_time.flatMap(TimeOfDay.init),
-              let end = end_time.flatMap(TimeOfDay.init) else { return "Full day" }
+        guard isPartialDay else { return "Full day" }
+        // A PARTIAL DAY WHOSE TIMES WILL NOT PARSE IS NOT A FULL DAY. Returning
+        // "Full day" here made the card contradict itself — the headline said a
+        // whole day while the duration beside it said "Time not set" — and the
+        // headline was the confident wrong answer. Legacy rows written by an old
+        // iOS build on an Arabic or Persian locale hold non-ASCII digits
+        // ("٠٩:٠٠"), which is exactly the case that reaches this branch.
+        guard let start = start_time.flatMap(TimeOfDay.init),
+              let end = end_time.flatMap(TimeOfDay.init) else { return "Time not set" }
         return "\(start.displayString) – \(end.displayString)"
     }
 

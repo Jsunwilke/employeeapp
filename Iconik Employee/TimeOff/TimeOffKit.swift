@@ -72,7 +72,10 @@ enum TimeOffStatusDisplay: Equatable {
             let spaced = raw
                 .replacingOccurrences(of: "_", with: " ")
                 .replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
-            return spaced.split(separator: " ").map(\.capitalized).joined(separator: " ")
+            let humanised = spaced.split(separator: " ").map(\.capitalized).joined(separator: " ")
+            // An empty or whitespace-only status would otherwise render a badge
+            // with no text at all.
+            return humanised.isEmpty ? "Unknown" : humanised
         }
     }
 
@@ -207,6 +210,9 @@ struct TimeOffRequestCard: View {
     var managerActions: Bool = false
     /// The manager queue shows WHOSE request it is; your own list does not.
     var showsPhotographer: Bool = false
+    /// True while a write for this request is in flight. The pills go inert and
+    /// say so, rather than silently swallowing the tap.
+    var actionsBusy: Bool = false
     var onEdit: (() -> Void)?
     var onCancel: (() -> Void)?
     var onApprove: (() -> Void)?
@@ -222,7 +228,6 @@ struct TimeOffRequestCard: View {
                 Text(notes)
                     .font(density.subtitleFont)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
             attribution
@@ -248,6 +253,9 @@ struct TimeOffRequestCard: View {
                         AmbientBadge(text: "Partial", tint: .indigo)
                     }
                 }
+                Text(model.reason.label)
+                    .font(density.subtitleFont.weight(.semibold))
+                    .foregroundStyle(model.reason.color)
                 HStack(spacing: 6) {
                     if showsPhotographer {
                         Text(model.photographer).font(density.subtitleFont.weight(.semibold))
@@ -285,7 +293,7 @@ struct TimeOffRequestCard: View {
                         Image(systemName: model.status.symbol)
                             .font(.system(size: 10, weight: .bold))
                         Text(attribution.verb).font(.caption)
-                        Text(Formatters.monthDay.string(from: attribution.date))
+                        Text(Formatters.mediumDate.string(from: attribution.date))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -310,12 +318,18 @@ struct TimeOffRequestCard: View {
     private var actions: some View {
         if managerActions {
             HStack(spacing: 8) {
-                if model.status == .known(.pending), let onReview {
-                    pill("Put in Review", "magnifyingglass", .blue, onReview)
+                if actionsBusy {
+                    ProgressView().scaleEffect(0.7)
+                    Text("Working…").font(.caption).foregroundStyle(.secondary)
                 }
-                if model.status.isEditable {
-                    if let onApprove { pill("Approve", "checkmark", .green, onApprove) }
-                    if let onDeny { pill("Deny", "xmark", .red, onDeny) }
+                if !actionsBusy {
+                    if model.status == .known(.pending), let onReview {
+                        pill("Put in Review", "magnifyingglass", .blue, onReview)
+                    }
+                    if model.status.isEditable {
+                        if let onApprove { pill("Approve", "checkmark", .green, onApprove) }
+                        if let onDeny { pill("Deny", "xmark", .red, onDeny) }
+                    }
                 }
             }
         } else if model.status.isEditable {
@@ -376,7 +390,6 @@ struct TimeOffBalanceLead: View {
             .ambientCard(density: .hero, state: .highlighted, glow: tint, fillWidth: true)
         }
         .buttonStyle(.plain)
-        .disabled(failed)
     }
 
     private func figure(_ available: Double) -> some View {
@@ -495,7 +508,7 @@ struct TimeOffDetailRow: View {
                 .font(emphasised ? .subheadline.weight(.semibold) : .subheadline)
                 .multilineTextAlignment(.trailing)
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, 8)
     }
 }
 
@@ -549,6 +562,47 @@ struct TimeOffInlineNote: View {
 /// `errorMessage`, sets it on every failure path, and not one view reads it — so
 /// a failed load renders as "You haven't submitted any time off requests yet."
 /// That is the defect that hid Chat for a year, sitting in this surface too.
+/// THE FULL PANEL, for when there is nothing else on the screen.
+///
+/// The mockup drew this shape for a failed load — 30pt triangle, headline,
+/// centred body, a filled Try Again capsule. The banner below is the right shape
+/// when there are still rows to keep, and the wrong one when the failure IS the
+/// whole page. The first cut of this conversion used the banner for both; the
+/// design audit caught it.
+struct TimeOffFailurePanel: View {
+    let title: String
+    let message: String
+    let tint: Color
+    var retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(.orange)
+            Text(title).font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: retry) {
+                Label("Try Again", systemImage: "arrow.clockwise")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    // ambient-allow: a control, not a card.
+                    .background(Capsule().fill(tint))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+    }
+}
+
+/// The BANNER, for when a refresh failed but there are still rows worth keeping.
 struct TimeOffFailureBanner: View {
     let message: String
     let tint: Color
@@ -590,6 +644,11 @@ struct TimeOffPrimaryButton: View {
     let title: String
     var systemImage: String?
     let tint: Color
+    /// The mockup used 13 for "New Time Off Request" and 14 for "Submit Request".
+    /// Collapsing both to 13 was a silent 1pt regression on the form's primary
+    /// action — small, but exactly the class of drift that has reached the
+    /// operator on this arc twice.
+    var verticalPadding: CGFloat = 13
     var enabled: Bool = true
     var action: () -> Void
 
@@ -605,7 +664,7 @@ struct TimeOffPrimaryButton: View {
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
+            .padding(.vertical, verticalPadding)
             // ambient-allow: a filled primary action is a control, not a card —
             // it needs a solid tint to read as tappable over the wash.
             .background(Capsule().fill(enabled ? tint : Color.gray))

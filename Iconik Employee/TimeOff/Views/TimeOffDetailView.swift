@@ -35,7 +35,10 @@ import SwiftUI
 struct TimeOffDetailView: View {
     let timeOffEntry: TimeOffCalendarEntry
     var onCancel: (() -> Void)?
-    var onDelete: (() -> Void)?
+    // `onDelete` is GONE, along with the "Delete Time Off" button it served.
+    // Delete-first covers what a deletion ORPHANS, not just the file being
+    // replaced — a parameter nothing can invoke is the same dead wiring in
+    // smaller print. ScheduleView's call site is updated in this commit.
 
     @Environment(\.presentationMode) private var presentationMode
     @StateObject private var timeOffService = TimeOffService.shared
@@ -71,10 +74,17 @@ struct TimeOffDetailView: View {
         timeOffService.timeOffRequests.first { $0.id == timeOffEntry.requestId }
     }
 
+    /// Only when the backing request is in memory — the calendar entry itself
+    /// carries no duration. Empty rather than invented when it is not.
+    private var durationSuffix: String {
+        backingRequest?.cardModel.durationLabel ?? ""
+    }
+
     private var timeLabel: String {
-        guard timeOffEntry.isPartialDay,
-              let start = TimeOfDay(timeOffEntry.startTime),
-              let end = TimeOfDay(timeOffEntry.endTime) else { return "Full Day" }
+        guard timeOffEntry.isPartialDay else { return "Full Day" }
+        // Not "Full Day" — see TimeOffPresentation.presentedTimeLabel.
+        guard let start = TimeOfDay(timeOffEntry.startTime),
+              let end = TimeOfDay(timeOffEntry.endTime) else { return "Time not set" }
         return "\(start.displayString) – \(end.displayString)"
     }
 
@@ -135,7 +145,9 @@ struct TimeOffDetailView: View {
             }
             Text(Formatters.longDate.string(from: timeOffEntry.date))
                 .font(.system(size: 22, weight: .bold))
-            Text(timeLabel)
+            // The mockup drew "time · duration". Dropping the duration lost the
+            // one number that says how much time off this actually is.
+            Text(durationSuffix.isEmpty ? timeLabel : "\(timeLabel) · \(durationSuffix)")
                 .font(.subheadline).foregroundStyle(.secondary)
         }
         .ambientCard(density: .hero, state: .highlighted, glow: tint, fillWidth: true)
@@ -151,7 +163,14 @@ struct TimeOffDetailView: View {
                                  : timeOffEntry.photographerName)
             Divider()
             TimeOffDetailRow(label: "Type",
-                             value: timeOffEntry.isPartialDay ? "Partial Day Request" : "Full Day Request")
+                             value: timeOffEntry.isPartialDay ? "Partial day request" : "Full day request")
+            // The mockup drew PTO hours here. `TimeOffCalendarEntry` has no PTO
+            // fields, so it is drawn only when the backing request is loaded —
+            // shown when known, absent when not, never guessed.
+            if let request = backingRequest, request.isPaidTimeOff, let hours = request.ptoHoursRequested {
+                Divider()
+                TimeOffDetailRow(label: "PTO hours", value: String(format: "%.1f", hours))
+            }
             // The notes row is OMITTED ENTIRELY when empty — the app's real
             // behaviour, and better than an empty labelled row.
             if !timeOffEntry.notes.isEmpty {
