@@ -875,8 +875,8 @@ other rebases onto it.
 
 **Batch 2**
 
-- [x] **AMB.7 Reports family** — DONE 2026-07-27, NOT YET PUSHED (five commits,
-  b5679dc..2ac8927). Seven screens converted, TEN files deleted in the same commit:
+- [x] **AMB.7 Reports family** — DONE 2026-07-27, NOT YET PUSHED (ten commits,
+  b5679dc..b16cddd). Seven screens converted, TEN files deleted in the same commit:
   DailyJobReportView, MyJobReportsView, EditDailyJobReportView, CustomDailyReportsView,
   TemplateFormView, PhotoshootNotesView, LocationPhotoAttachmentView, the ORPHANED
   TemplateReportListView, plus UIComponents.swift and JobNotesView.swift, which the
@@ -890,7 +890,7 @@ other rebases onto it.
   descriptions and 12 extra items are deleted — `DesignLabSampleData` forwards to
   `ReportOptions` — so the mockup and the real screen cannot disagree about what a
   photographer may tick. `scripts/test_report_rules.sh` compiles and RUNS those real
-  files: **76 checks**, up from 44, with every new rule fix proved to FAIL without it.
+  files: **99 checks**, up from 44, with every new rule fix proved to FAIL without it.
 
   **THE ORPHANED SCREEN'S CAPABILITIES MOVED INTO THE LIVE ONE.** TemplateReportListView
   was 558 lines, compiled, shipped and unreachable, and it held the search, date filter,
@@ -898,11 +898,16 @@ other rebases onto it.
   can actually open — did not have. All of it is in ReportsHomeView now, which also leads
   with the question the surface never answered: have I filed today's report yet.
 
-  **THE PARITY WALK RAN THREE TIMES**, 103 capability checks against the NEW screens,
-  before showing the operator anything. That is the standing rule and it held.
+  **THE PARITY WALK RAN NINE TIMES**, 103 capability checks against the NEW screens,
+  once after every round, before showing the operator anything. That is the standing
+  rule and it held: nothing in the inventory was lost across eight rounds of churn.
 
-  **SIX AUDITS, THREE FIX ROUNDS, AND THE FIX-ROUND AUDIT FOUND THE PHASE'S WORST
-  DEFECT TWICE — SEVEN PHASES RUNNING.** Three adversarial passes (correctness/
+  **THE CONVERSION ITSELF WAS STABLE FROM THE FIRST COMMIT.** Worth separating from the
+  churn above: seven screens, ten files deleted, the executable rules and the shared
+  components have not needed a correction since b5679dc. Every one of the eight fix
+  rounds was data-layer plumbing on ONE screen, and five of the eight were one loop.
+
+  **TEN AUDITS, EIGHT FIX ROUNDS, RUN UNTIL ONE CAME BACK CLEAN.** Three adversarial passes (correctness/
   concurrency, data integrity, design fidelity) found 40+ real findings. The audit of
   the FIX round found a CRITICAL one the fix itself had introduced: the report's
   note-photo list derived from the thumbnails that had downloaded, so a failed download
@@ -910,8 +915,18 @@ other rebases onto it.
   submit deletes the note, so they had nowhere else to be. The audit of the SECOND fix
   round found a DIFFERENT photo-loss path in the same code: the attached note can leave
   the shared blob it was being resolved through (submitted or deleted on the notes
-  screen), and its photos went with it, unsaid. **Repeat the fix-round audit until it
-  comes back clean — that is now a law, not a habit.**
+  screen), and its photos went with it, unsaid.
+
+  **AND THEN IT KEPT FINDING THEM.** Eight fix rounds. Rounds four through eight were
+  ALL in one feedback loop — the warning that tells a photographer when a route could
+  not be measured — and each one fixed the instance rather than reasoning through the
+  state machine. The low point: a round whose commit said it cleared state "in both
+  early returns" had put the clear on the UNCONDITIONAL path, which made the branch it
+  was protecting unreachable and turned an accurate 9.1 into a submitted 0.0 on the
+  exact sequence the round was named for. **The lesson is not "be careful": it is that
+  a fix must be judged by reading what the code DOES, not by trusting the edit — and
+  that a feedback loop is a STATE MACHINE, to be enumerated once rather than patched
+  five times.** The tenth audit walked every transition and came back clean.
 
   **REGRESSIONS THE CONVERSION INTRODUCED AND FIXED:** a session resolved its school by
   NAME only (the deleted form preferred `school_id`, deliberately) so a renamed school
