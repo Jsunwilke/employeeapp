@@ -60,6 +60,7 @@ do {
     link.addStop("lincoln")
     link.set("lincoln", for: .session)          // the session happens to agree
     eq(link.stops, ["lincoln"], "no duplicate when a source agrees with a hand-add")
+    check(link.handAdded.contains("lincoln"), "and the hand-add is still recorded as the owner")
     link.set(nil, for: .session)
     eq(link.stops, ["lincoln"], "going off-schedule does NOT take the hand-added stop")
 
@@ -70,6 +71,7 @@ do {
 
     link.removeStop("lincoln")
     eq(link.stops, [], "the photographer can still remove their own")
+    check(!link.handAdded.contains("lincoln"), "and removing it releases the hand-add")
     link.set("lincoln", for: .note)
     link.set(nil, for: .note)
     eq(link.stops, [], "and after that it is the note's to remove again")
@@ -212,6 +214,18 @@ do {
 // existing — and the screen still builds, still looks right, and still submits.
 // That is the exact failure shape this arc keeps finding, so it is a test.
 
+print("\nSCHOOL OWNERSHIP — hand-adding a school a source already holds")
+do {
+    var link = ReportSchoolLink()
+    link.set("riverside", for: .session)
+    link.addStop("riverside")                   // adding what is already there
+    eq(link.stops, ["riverside"], "still one stop")
+    check(!link.handAdded.contains("riverside"),
+          "the source keeps ownership — a hand-add does not steal it")
+    link.set(nil, for: .session)
+    eq(link.stops, [], "so the session can still clear its own school")
+}
+
 // THE SILENT SUBSTITUTION. The screen says "You typed this — it won't be
 // overwritten" while `value` fell back to the calculated figure whenever the
 // text would not parse. A decimal pad on a non-US locale emits a comma, and a
@@ -230,11 +244,15 @@ do {
     check(m.typedIsUnreadable, "text that is not a number IS flagged")
     eq(m.value, 18.2, "and the report falls back to the calculated figure")
 
+    m.type("1,234")
+    check(m.typedIsUnreadable, "a grouped number is refused rather than read as 1.234")
+    m.type("1.234,5")
+    check(m.typedIsUnreadable, "and so is a number carrying both separators")
     m.type("12.")
     eq(m.value, 12.0, "a half-typed number still parses")
-    m.type("")
-    check(!m.isOverridden, "clearing the field hands the number back to the route")
-    eq(m.value, 18.2, "which is the calculated figure again")
+    m.type("0")
+    eq(m.value, 0, "a deliberate zero is honoured rather than treated as empty")
+    check(!m.typedIsUnreadable, "and is not flagged")
 }
 
 print("\nOPTIONS — 22 job descriptions, grouped, nothing lost")

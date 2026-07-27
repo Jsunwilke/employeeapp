@@ -325,9 +325,7 @@ struct LocationPhotosView: View {
             do {
                 let schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
                 await MainActor.run {
-                    schoolOptions = schools
-                        .map { SchoolItem(id: $0.id, name: $0.name, address: $0.address ?? "", coordinates: $0.coordinates) }
-                        .sorted { $0.name.lowercased() < $1.name.lowercased() }
+                    schoolOptions = ReportSchoolItem.make(from: schools)
                     isLoadingSchools = false
                 }
             } catch {

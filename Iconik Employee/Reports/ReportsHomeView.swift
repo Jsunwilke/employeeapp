@@ -39,6 +39,12 @@ struct ReportsHomeView: View {
     @State private var reports: [DailyJobReport] = []
     @State private var isLoading = false
     @State private var errorMessage = ""
+    /// Which reload is current. This runs on every appearance now, so a
+    /// pop-back and a pull-to-refresh can overlap and resolve in either order —
+    /// the slower one's rows would land last and the faster one's `defer` would
+    /// clear the spinner while the other was still in flight. The neighbouring
+    /// lookup got this guard in the same round; this one needed it too.
+    @State private var reloadRun = 0
     @State private var search = ""
     @State private var window: ReportWindow = .all
     @State private var groupByTemplate = false
@@ -178,9 +184,9 @@ struct ReportsHomeView: View {
             filterRow.modifier(ReportListRow())
 
             if !errorMessage.isEmpty && reports.isEmpty {
-                // A failure has already drawn its banner above. Adding an empty
-                // state under it would say "you have no reports" about a query
-                // that never answered — the same shape in a new place.
+                // The banner above is the whole story: a query that failed must
+                // not also be told as "you have no reports". Nothing is drawn
+                // here, deliberately.
                 EmptyView()
             } else if reports.isEmpty {
                 // The state MyJobReportsView did not have at all: an empty list
@@ -419,14 +425,19 @@ struct ReportsHomeView: View {
             return
         }
 
+        reloadRun += 1
+        let run = reloadRun
         isLoading = true
-        defer { isLoading = false }
+        defer { if run == reloadRun { isLoading = false } }
         do {
             // Newest first, from the query's own ordering.
-            reports = try await DailyJobReportService.shared.getReports(
+            let fetched = try await DailyJobReportService.shared.getReports(
                 userId: userID, organizationID: storedUserOrganizationID)
+            guard run == reloadRun else { return }
+            reports = fetched
             errorMessage = ""
         } catch {
+            guard run == reloadRun else { return }
             errorMessage = "Failed to load reports: \(error.localizedDescription)"
         }
 

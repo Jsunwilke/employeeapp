@@ -314,7 +314,11 @@ struct PhotoshootNotesView: View {
 
     /// The ONLY screen in this family that offers the camera, and that stays.
     private func photos(_ index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // Captured ONCE, here — not read out of `notes[index]` inside a button
+        // that fires later. Submitting or deleting a note shrinks the array, and
+        // the tap handler would then subscript it out of range.
+        let noteID = notes[index].id
+        return VStack(alignment: .leading, spacing: 8) {
             AmbientSectionTitle("Photos",
                                 trailing: notes[index].photoURLs.isEmpty ? nil : "\(notes[index].photoURLs.count)")
 
@@ -351,7 +355,7 @@ struct PhotoshootNotesView: View {
                     HStack(spacing: 10) {
                         ForEach(notes[index].photoURLs, id: \.self) { urlString in
                             thumbnail(urlString, size: 100) {
-                                deletePhoto(urlString, from: notes[index].id)
+                                deletePhoto(urlString, from: noteID)
                             }
                         }
                     }
@@ -737,9 +741,7 @@ struct PhotoshootNotesView: View {
             do {
                 let schools = try await SchoolService.shared.getSchools(organizationID: organizationID)
                 await MainActor.run {
-                    schoolOptions = schools.map {
-                        SchoolItem(id: $0.id, name: $0.name, address: $0.address ?? "", coordinates: $0.coordinates)
-                    }
+                    schoolOptions = ReportSchoolItem.make(from: schools)
                     isLoadingSchools = false
                     if let index = selectedIndex, notes[index].school.isEmpty {
                         setSchoolFromSchedule(for: notes[index].id)

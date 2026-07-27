@@ -120,6 +120,10 @@ struct DailyReportView: View {
 
     @State private var photoshootNotes: [PhotoshootNote] = []
     @State private var attachedNoteID: UUID?
+    /// URLs from the attached note the photographer has removed from the grid.
+    /// The report's photo list is the note's list MINUS these — derived from the
+    /// note, not from what downloaded.
+    @State private var droppedNoteURLs: Set<String> = []
 
     // MARK: - Sheets, alerts, submission
 
@@ -392,6 +396,18 @@ struct DailyReportView: View {
                     Text("Not linked to the schedule. The report still files normally.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if schedule.reportedLookupFailed && !schedule.sessions.isEmpty {
+                    // Auto-select ran against an answer we do not have, so a
+                    // session it offered may already be filed. Saying so is the
+                    // difference between "nothing is filed" and "we could not
+                    // find out" — the distinction this app lost a feature to.
+                    Label("Couldn't check which of these you have already reported.",
+                          systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
                 }
 
                 if !schedule.sessions.isEmpty {
@@ -676,16 +692,23 @@ struct DailyReportView: View {
                     }
                 }
 
-                if let attached = attachedNote,
-                   let index = photoshootNotes.firstIndex(where: { $0.id == attached.id }) {
+                if let attached = attachedNote {
+                    let attachedID = attached.id
                     Divider()
                     Text(attached.school.isEmpty ? "Note" : "Note for \(attached.school)")
                         .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     // THE ONLY AUTOSAVE ON THIS SCREEN, and it is the live
                     // behaviour: every keystroke writes back to the shared blob.
+                    // Resolved by ID on every read and every write. Submitting
+                    // REMOVES this note while the field can still be first
+                    // responder, so an index captured when the body was built is
+                    // a crash waiting for one more keystroke. Same hazard the
+                    // notes screen was fixed for; this was its second site.
                     TextEditor(text: Binding(
-                        get: { photoshootNotes[index].noteText },
+                        get: { photoshootNotes.first { $0.id == attachedID }?.noteText ?? "" },
                         set: { newValue in
+                            guard let index = photoshootNotes.firstIndex(where: { $0.id == attachedID })
+                            else { return }
                             photoshootNotes[index].noteText = newValue
                             savePhotoshootNotes()
                         }))
@@ -693,8 +716,9 @@ struct DailyReportView: View {
                         .font(.subheadline)
                         .scrollContentBackground(.hidden)
                         .focused($fieldFocused)
-                    if !attached.photoURLs.isEmpty {
-                        Label("\(attached.photoURLs.count) photo\(attached.photoURLs.count == 1 ? "" : "s") from this note will be copied onto the report.",
+                    let carried = attached.photoURLs.filter { !droppedNoteURLs.contains($0) }.count
+                    if carried > 0 {
+                        Label("\(carried) photo\(carried == 1 ? "" : "s") from this note will be copied onto the report.",
                               systemImage: "photo.on.rectangle.angled")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -776,6 +800,7 @@ struct DailyReportView: View {
                         .overlay(alignment: .topTrailing) {
                             Button {
                                 withAnimation(AmbientMotion.snappy) {
+                                    if let url = photo.sourceURL { droppedNoteURLs.insert(url) }
                                     photos.removeAll { $0.id == photo.id }
                                 }
                             } label: {
@@ -865,14 +890,7 @@ struct DailyReportView: View {
             do {
                 let schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
                 await MainActor.run {
-                    self.schoolOptions = schools
-                        .map { school in
-                            SchoolItem(id: school.id,
-                                       name: school.value,
-                                       address: Self.address(of: school),
-                                       coordinates: school.coordinates)
-                        }
-                        .sorted { $0.name.lowercased() < $1.name.lowercased() }
+                    self.schoolOptions = ReportSchoolItem.make(from: schools)
                     self.rememberSchools()
                     self.isLoadingSchools = false
                     // A session may already be picked but unresolvable until now.
@@ -892,15 +910,6 @@ struct DailyReportView: View {
     /// Fold the current option list into the cache the report resolves through.
     private func rememberSchools() {
         for school in schoolOptions { knownSchools[school.id] = school }
-    }
-
-    /// The same address assembly the live form used, so a school reads the same
-    /// here as everywhere else and the coordinate fallback is unchanged.
-    private static func address(of school: School) -> String {
-        let parts = [school.street, school.city, school.state, school.zip]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
-        return parts.isEmpty ? school.value : parts.joined(separator: ", ")
     }
 
     private func refreshReported() {
@@ -1021,10 +1030,12 @@ struct DailyReportView: View {
     // MARK: - Attaching a note
 
     private func attach(_ note: PhotoshootNote?) {
+        guard attachedNoteID != note?.id else { return }
         // Anything the PREVIOUS note put here goes with it. Switching notes used
         // to leave the old note's photos on the report, so the report
         // accumulated the photos of every note the photographer looked at.
         photos.removeAll { $0.noteID != nil }
+        droppedNoteURLs.removeAll()
         attachedNoteID = note?.id
         // Same rule as the session: replace this source's school, remove it when
         // you choose none, leave everything else alone.
@@ -1032,14 +1043,19 @@ struct DailyReportView: View {
         if let note { importPhotos(from: note) }
     }
 
-    /// Photos on a note are shown on the report by downloading each URL — the
-    /// live behaviour, kept.
+    /// Photos on a note are shown on the report by downloading each URL.
     ///
-    /// They carry the URL they came from, and that is load-bearing: submit
-    /// UPLOADS only photos that have no URL yet. The old form re-uploaded these
-    /// as brand-new storage objects AND appended the note's original URLs, so a
-    /// note with three photos put SIX entries on the report and three duplicate
-    /// objects in the bucket.
+    /// THIS IS DISPLAY ONLY, and that distinction is the whole point. What ends
+    /// up on the report is the NOTE's own URL list minus anything the
+    /// photographer deleted — never the set of downloads that happened to
+    /// succeed. An earlier version of this fix derived the report's photos from
+    /// the downloaded thumbnails, so one failed download on a weak connection
+    /// dropped a photo from the report silently, and submitting before the
+    /// downloads landed dropped ALL of them — and the note is deleted on submit,
+    /// so those photos had nowhere else to be.
+    ///
+    /// A photo that already has a URL is already in storage, which is what stops
+    /// submit uploading it a second time.
     private func importPhotos(from note: PhotoshootNote) {
         let noteID = note.id
         for urlString in note.photoURLs {
@@ -1112,7 +1128,9 @@ struct DailyReportView: View {
         // Photos already carrying a URL came from the attached note and are
         // already in storage; only the rest are uploaded.
         let toUpload = photos.filter { $0.sourceURL == nil }.map(\.image)
-        let existingURLs = photos.compactMap(\.sourceURL)
+        // The note's OWN list is authoritative — not the downloads that
+        // succeeded. Minus whatever the photographer deleted from the grid.
+        let existingURLs = (note?.photoURLs ?? []).filter { !droppedNoteURLs.contains($0) }
 
         Task {
             var photoURLs: [String] = []

@@ -418,15 +418,16 @@ struct TemplateReportView: View {
             // silently showed *now* and any touch overwrote the real value.
             // `DesignTokens` says it outright: never parse with a display
             // formatter, never persist its output.
-            DatePicker("", selection: Binding(
-                get: { Self.parseTime(formData[field.id] as? String) ?? Date() },
-                set: { formData[field.id] = Formatters.time24.string(from: $0) }),
-                displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .disabled(readOnly)
-                .overlay(alignment: .bottomLeading) { EmptyView() }
-            unsetHint(field, store: { formData[field.id] = Formatters.time24.string(from: Date()) })
+            VStack(alignment: .leading, spacing: 4) {
+                DatePicker("", selection: Binding(
+                    get: { Self.parseTime(formData[field.id] as? String) ?? Date() },
+                    set: { formData[field.id] = Formatters.time24.string(from: $0) }),
+                    displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .disabled(readOnly)
+                unsetHint(field, store: { formData[field.id] = Formatters.time24.string(from: Date()) })
+            }
 
         case "file":
             filePicker

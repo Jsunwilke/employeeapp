@@ -255,6 +255,18 @@ struct ReportEditorView: View {
                     Text("miles").font(.subheadline).foregroundStyle(.secondary)
                 }
 
+                // The same warning the create screen carries. Without it this
+                // field silently wrote the record's ORIGINAL mileage back
+                // whenever the text would not parse — which is the exact defect
+                // the create screen was fixed for, at its second site.
+                if mileage.typedIsUnreadable {
+                    Label(String(format: "That is not a number the report can use — it will save %.1f miles.",
+                                 mileage.value),
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Divider()
 
                 ReportVehiclePicker(selection: $vehicle, tint: feature)

@@ -44,10 +44,11 @@ struct TemplatePickerView: View {
     @State private var templates: [ReportTemplate] = []
     @State private var search = ""
     @State private var isLoading = false
+    /// Which template fetch is current — this reloads on every appearance.
+    @State private var loadRun = 0
     /// A real failure. Separate from "this organisation has no templates", which
     /// is not a failure and must not be drawn as one.
     @State private var failure = ""
-    @State private var hasLoaded = false
     @State private var opening: ReportTemplate?
 
     private var feature: Color { FeatureTheme.color(for: "customDailyReports") }
@@ -105,9 +106,9 @@ struct TemplatePickerView: View {
         }
         .onAppear {
             // Every appearance, so a template edited in the web app is picked up
-            // when the photographer comes back to this screen. `isLoading`
-            // stops two overlapping fetches; `hasLoaded` only decides whether a
-            // spinner replaces the content.
+            // when the photographer comes back to this screen. The spinner only
+            // replaces the content when there is nothing to show yet, so a
+            // refresh over an existing list is invisible.
             Task { await loadTemplates() }
         }
         .ambientPush(item: $opening) { template in
@@ -275,24 +276,26 @@ struct TemplatePickerView: View {
     private func loadTemplates() async {
         guard !storedUserOrganizationID.isEmpty else {
             failure = "No organization found."
-            hasLoaded = true
             return
         }
         guard !isLoading else { return }
         isLoading = true
-        defer {
-            isLoading = false
-            hasLoaded = true
-        }
+        loadRun += 1
+        let run = loadRun
+        defer { if run == loadRun { isLoading = false } }
         do {
-            templates = try await TemplateService.shared.fetchTemplates(for: storedUserOrganizationID)
+            let fetched = try await TemplateService.shared.fetchTemplates(for: storedUserOrganizationID)
+            guard run == loadRun else { return }
+            templates = fetched
             failure = ""
         } catch TemplateError.noTemplatesFound {
             // NOT a failure. This is the empty state, and it is the first thing
             // a new organisation sees.
+            guard run == loadRun else { return }
             templates = []
             failure = ""
         } catch {
+            guard run == loadRun else { return }
             // A real failure does NOT clear what is already on screen.
             failure = error.localizedDescription
         }

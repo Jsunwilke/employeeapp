@@ -54,19 +54,32 @@ struct ReportMileage: Equatable {
 
     /// What the photographer typed, read as a number.
     ///
-    /// LENIENT ON PURPOSE. `Double("12,5")` is nil, and a decimal pad on a
-    /// non-US locale emits a comma; `Double(" 12.5")` is nil too, and a paste
-    /// carries whitespace. The screen said "You typed this — it won't be
-    /// overwritten" while `value` quietly fell back to the calculated figure,
-    /// so a comma meant the report filed a DIFFERENT number from the one on
-    /// screen. This is reimbursement data.
+    /// LENIENT ON PURPOSE, BUT NOT GUESSING. `Double("12,5")` is nil, and a
+    /// decimal pad on a non-US locale emits a comma; `Double(" 12.5")` is nil
+    /// too, and a paste carries whitespace. The screen said "You typed this — it
+    /// won't be overwritten" while `value` quietly fell back to the calculated
+    /// figure, so a comma meant the report filed a DIFFERENT number from the one
+    /// on screen. This is reimbursement data.
+    ///
+    /// A comma is read as a decimal point ONLY when there is no other
+    /// separator. "1,234" carries both meanings depending on where you are, so
+    /// it is refused rather than filed as 1.234 miles — an unreadable value is
+    /// SAID on screen, and saying "I don't know what you meant" beats picking
+    /// one and being wrong about a reimbursement.
     var typedValue: Double? {
         guard let typed else { return nil }
-        let cleaned = typed
-            .trimmingCharacters(in: .whitespaces)
-            .replacingOccurrences(of: ",", with: ".")
+        let cleaned = typed.trimmingCharacters(in: .whitespaces)
         guard !cleaned.isEmpty else { return nil }
-        return Double(cleaned)
+        if let plain = Double(cleaned) { return plain }
+        guard !cleaned.contains(".") else { return nil }
+        let groups = cleaned.split(separator: ",", omittingEmptySubsequences: false)
+        // One comma only, and what follows it must look like a DECIMAL — one or
+        // two digits. "1,234" is a thousands group in most of the world and a
+        // decimal in some, so it is refused rather than filed as 1.234 miles.
+        guard groups.count == 2,
+              (1...2).contains(groups[1].count),
+              groups[1].allSatisfy(\.isNumber) else { return nil }
+        return Double(cleaned.replacingOccurrences(of: ",", with: "."))
     }
 
     /// The photographer has typed something that is not a number at all.
