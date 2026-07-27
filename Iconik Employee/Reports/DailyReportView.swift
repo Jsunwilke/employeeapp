@@ -153,11 +153,23 @@ struct DailyReportView: View {
     @State private var usualMiles: [String: Double] = [:]
     /// Which route measurement is current. See `recalculateMileage`.
     @State private var mileageRun = 0
-    /// How many legs of the last route could not be measured at all — the
-    /// geocoder or the directions request failed, which offline means ALL of
-    /// them. Having an address is not the same as the leg being measured, and
-    /// treating them as the same put a confident 0.0 under a full route.
+    /// How many legs of the last route could not be measured — the geocoder or
+    /// the directions request failed, which offline means ALL of them. Having an
+    /// address is not the same as the leg being measured, and treating them as
+    /// the same put a confident 0.0 under a full route.
     @State private var unmeasuredLegs = 0
+    /// How many legs that route had, so a PARTIAL failure can be told apart from
+    /// a total one. Reporting a partial as total sent the photographer looking
+    /// for signal when a real, merely short, figure was already on screen.
+    @State private var lastRouteLegs = 0
+    /// The route the figure on screen was actually measured along.
+    ///
+    /// Without this, refusing to overwrite a failed measurement with zero left a
+    /// number measured for a DIFFERENT route sitting there as though it were
+    /// current — plausible, unreviewable, and submitted. A stale measured figure
+    /// is byte-identical to a fresh one, which is the "failure indistinguishable
+    /// from a legitimate value" shape in a new place.
+    @State private var measuredRoute: [String] = []
     /// `reapplyLinkedSchools` runs once — see its own note.
     @State private var hasReappliedSchools = false
     @FocusState private var fieldFocused: Bool
@@ -222,6 +234,33 @@ struct DailyReportView: View {
         stops.filter { stop in !measurableStops.contains { $0.id == stop.id } }
     }
 
+    /// What is wrong with the mileage figure, if anything.
+    ///
+    /// ONE notice with an explicit precedence, because three independent labels
+    /// stacked: two of them ended in the identical instruction, and a partial
+    /// failure was announced with the wording for a total one. A screen that
+    /// says the same thing twice, or says the wrong one of two true things, is
+    /// the same defect as a screen that says nothing.
+    private enum MileageNotice: Equatable {
+        case none
+        case noHomeAddress
+        case routeFailed
+        case routePartial(Int)
+        case stopsWithoutLocation([String])
+    }
+
+    private var mileageNotice: MileageNotice {
+        guard !mileage.isOverridden, !isCalculatingMileage else { return .none }
+        if storedUserHomeAddress.isEmpty { return .noHomeAddress }
+        if unmeasuredLegs > 0 {
+            return unmeasuredLegs >= lastRouteLegs ? .routeFailed : .routePartial(unmeasuredLegs)
+        }
+        if !unmeasurableStops.isEmpty {
+            return .stopsWithoutLocation(unmeasurableStops.map(\.name))
+        }
+        return .none
+    }
+
     /// Is the figure well out of line with what this photographer usually claims
     /// at this school? Only meaningful for a single-stop day.
     private var mileageLooksOff: Bool {
@@ -264,6 +303,11 @@ struct DailyReportView: View {
             // reset auto-select — a listener re-fire that clobbers a manual pick
             // is the bug SessionAutoSelect's latch exists to prevent.
             schedule.start(for: reportDate, onChange: runAutoSelect)
+            // Coming back to the app is the commonest moment to have signal
+            // again. Nothing else re-measures — the only other trigger is a
+            // route change — so without this a failed measurement stayed failed
+            // for the life of the screen.
+            if unmeasuredLegs > 0 { recalculateMileage() }
         }
         // The route changed, so the calculated figure changes. ReportMileage is
         // what guarantees this cannot clobber a value the photographer typed.
@@ -653,32 +697,7 @@ struct DailyReportView: View {
                     .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // Not repeated when there is no home address — that line already
-            // says the route cannot be measured, and two identical instructions
-            // stacked is the screen talking over itself.
-            if !unmeasurableStops.isEmpty && !mileage.isOverridden && !storedUserHomeAddress.isEmpty {
-                let names = unmeasurableStops.map(\.name).joined(separator: ", ")
-                Label("\(names) \(unmeasurableStops.count == 1 ? "has" : "have") no address or coordinates on file, so \(unmeasurableStops.count == 1 ? "it is" : "they are") not in this figure. Type the mileage in yourself.",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            // A leg that FAILED to measure. Offline this is every leg, and
-            // without saying so the figure reads as a measured zero.
-            if unmeasuredLegs > 0 && !mileage.isOverridden && !isCalculatingMileage {
-                Label(unmeasuredLegs == 1
-                      ? "One leg of this route couldn't be measured, so the figure is short. Check it before submitting."
-                      : "The route couldn't be measured — no signal, most likely. Type the mileage in yourself.",
-                      systemImage: "wifi.exclamationmark")
-                    .font(.caption).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if storedUserHomeAddress.isEmpty {
-                Label("No home address on your profile, so the route cannot be measured. Type the mileage in yourself.",
-                      systemImage: "info.circle")
-                    .font(.caption).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            mileageNoticeLabel
             // A typed value the report cannot read is the one case where "you
             // typed this, it won't be overwritten" would be a lie.
             if mileage.typedIsUnreadable {
@@ -711,6 +730,46 @@ struct DailyReportView: View {
     }
 
     // MARK: - 5 and 6. The two lists
+
+    @ViewBuilder
+    private var mileageNoticeLabel: some View {
+        switch mileageNotice {
+        case .none:
+            EmptyView()
+        case .noHomeAddress:
+            Label("No home address on your profile, so the route cannot be measured. Type the mileage in yourself.",
+                  systemImage: "info.circle")
+                .font(.caption).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        case .routeFailed:
+            HStack(alignment: .top, spacing: 6) {
+                Label("The route couldn't be measured — no signal, most likely. Type the mileage in yourself.",
+                      systemImage: "wifi.exclamationmark")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Try again") { recalculateMileage() }
+                    .font(.caption.weight(.bold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(feature)
+            }
+        case .routePartial(let count):
+            HStack(alignment: .top, spacing: 6) {
+                Label("\(count) leg\(count == 1 ? "" : "s") of this route couldn't be measured, so the figure is short. Check it before submitting.",
+                      systemImage: "wifi.exclamationmark")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Try again") { recalculateMileage() }
+                    .font(.caption.weight(.bold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(feature)
+            }
+        case .stopsWithoutLocation(let names):
+            Label("\(names.joined(separator: ", ")) \(names.count == 1 ? "has" : "have") no address or coordinates on file, so \(names.count == 1 ? "it is" : "they are") not in this figure. Type the mileage in yourself.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
     private var shotSection: some View {
         listSection(title: "What did you shoot?",
@@ -1101,13 +1160,25 @@ struct DailyReportView: View {
             await MainActor.run {
                 guard run == self.mileageRun else { return }
                 self.unmeasuredLegs = failed
-                // If NOTHING could be measured — which is what no signal looks
-                // like — do not overwrite a figure that was measured earlier
-                // with a zero. A partial result is still written, and the
-                // shortfall is said on screen rather than filed silently.
+                self.lastRouteLegs = route.count - 1
+
                 if failed < route.count - 1 {
+                    // Something was measured. Even a partial figure describes
+                    // THIS route, so it is recorded as such.
                     self.mileage.recalculate(to: total)
+                    self.measuredRoute = route
+                } else if route != self.measuredRoute {
+                    // Nothing was measured AND this is not the route the figure
+                    // on screen was measured along. Keeping it would show a
+                    // number for a route that no longer exists — plausible,
+                    // unreviewable, and submitted. Zero is honest, and the
+                    // notice below says why and offers a retry.
+                    self.mileage.recalculate(to: 0)
+                    self.measuredRoute = []
                 }
+                // The remaining case — nothing measured, same route as the
+                // figure already on screen — is a failed RE-check of a number
+                // that is still correct, so it is left alone.
                 self.isCalculatingMileage = false
             }
         }
@@ -1314,8 +1385,12 @@ struct DailyReportView: View {
                 // Linked only while the note is still in the shared list.
                 // `attachToReport` is an unconditional UPDATE of
                 // `daily_report_id`, so touching a note that has already left —
-                // submitted or deleted somewhere else — would repoint a row this
-                // report has no claim on, on the shared database.
+                // submitted or deleted on ANOTHER SCREEN OF THIS DEVICE — would
+                // repoint a row this report has no claim on, on the shared
+                // database. It cannot see a note submitted on a DIFFERENT
+                // device: the drafts live in this device's own UserDefaults and
+                // nothing reconciles them, which is part of what the photoshoot-
+                // note repair (findings R1/R2/R3/R8) has to settle.
                 if let note, noteIsLive {
                     do {
                         try await PhotoshootNoteService.shared.attachToReport(noteId: note.id,

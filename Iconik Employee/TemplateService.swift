@@ -246,8 +246,9 @@ class TemplateService: ObservableObject {
     // `DatabaseManager+NFC.fetchAndProcessSchools`, which still falls back to
     // the school's NAME as its address (the fallback AMB.7 removed from the
     // report screens because a bare name geocodes to whatever the world has most
-    // of — it reaches five NFC and picker call sites, none of which reads
-    // `.address`, so there it is inert rather than wrong), and
+    // of — its one reader is SearchableSchoolPicker, which suppresses the
+    // address when it EQUALS the name, so the fallback is filtered out at the
+    // point of display rather than being harmless at the source), and
     // `DashboardWidgets`, which reads a different column again and DROPS any
     // school missing it. Recorded, not repaired.
 
