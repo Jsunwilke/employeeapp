@@ -57,7 +57,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
         case .reports: return "Reports Family"
-        case .reportProposal: return "Daily Report — proposal model"
+        case .reportProposal: return "Daily Report — everything visible"
         case .timeOff: return "Time Off"
         }
     }
@@ -69,7 +69,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
         case .reports: return "AMB.7"
-        case .reportProposal: return "AMB.7 · v2"
+        case .reportProposal: return "AMB.7 · v3"
         case .timeOff: return "AMB.8"
         }
     }
@@ -83,7 +83,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .reports:
             return "Six surfaces and TWO parallel report systems that an org flag switches between. Flip the workflow switch at the top — the whole screen changes."
         case .reportProposal:
-            return "The SECOND design, after \"you prettied up what I already had\". The report writes itself and you correct it — open, glance, submit. Compare it against Reports Family."
+            return "Third attempt. Nothing collapses, nothing expands — all 22 job descriptions and all 12 extra items on screen as grouped chips, because those are what you fill in every day."
         case .timeOff:
             return "Five surfaces. The balance moves out of Settings to the top of the screen it is about, status gets ONE rendering instead of three, and the manager queue admits it is a queue."
         }

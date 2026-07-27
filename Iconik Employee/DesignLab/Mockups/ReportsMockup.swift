@@ -1225,7 +1225,8 @@ private struct DailyJobReportMockup: View {
 /// Searchable, matching the picker the report form already uses today rather
 /// than the plain menu Photoshoot Notes grew its own version of. Schools already
 /// on the report are shown as chosen and cannot be added twice.
-private struct SchoolPickerSheet: View {
+/// Shared with ReportProposalMockup, so not fileprivate.
+struct SchoolPickerSheet: View {
     let chosen: [String]
     let onPick: (LabSchool) -> Void
     let onCancel: () -> Void

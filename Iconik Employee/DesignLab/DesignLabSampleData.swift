@@ -964,6 +964,33 @@ extension DesignLabSampleData {
         "Deliveries", "NONE",
     ]
 
+    /// The 22 job descriptions, GROUPED so 22 options can be scanned instead of
+    /// read. Order inside each group is the shipped order, and the groups never
+    /// reorder themselves — a list that moves under a daily user is measurably
+    /// slower than one that stays put (Findlater & McGrenere, CHI 2004).
+    ///
+    /// Grouping is presentation only. Every one of the 22 strings appears here
+    /// exactly once and unchanged; `jobDescriptionGroups.flatMap` is asserted
+    /// against `jobDescriptionOptions` in the mockup so a typo cannot silently
+    /// drop an option.
+    static let jobDescriptionGroups: [(String, [String])] = [
+        ("Fall portraits", ["Fall Original Day", "Fall Makeup Day"]),
+        ("Sports", ["Fall Sports", "Winter Sports", "Spring Sports", "Sports League"]),
+        ("Groups & yearbook", ["Classroom Groups", "Yearbook Candid's", "Yearbook Groups and Clubs"]),
+        ("Events", ["Spring Photos", "Homecoming", "Prom", "Graduation"]),
+        ("Commercial", ["District Office Photos", "Banner Photos", "In Studio Photos", "School Board Photos"]),
+        ("Dr. office", ["Dr. Office Head Shots", "Dr. Office Cards", "Dr. Office Candid's"]),
+        ("Other", ["Deliveries", "NONE"]),
+    ]
+
+    /// The 12 extra items, grouped on the same terms.
+    static let extraItemGroups: [(String, [String])] = [
+        ("Makeup", ["Underclass Makeup", "Staff Makeup", "Sports Makeup"]),
+        ("Additional shoots", ["ID card Images", "Class Groups", "Yearbook Groups and Clubs", "Class Candids"]),
+        ("People", ["Students from other schools", "Siblings", "Office Staff Photos"]),
+        ("Other", ["Deliveries", "NONE"]),
+    ]
+
     /// Every field type the template form can render, with a real label — so the
     /// dynamic form can be judged against the whole vocabulary rather than the
     /// three types a nice-looking sample would have contained.
