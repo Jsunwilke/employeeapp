@@ -829,6 +829,33 @@ extension DesignLabSampleData {
         return (total * 10).rounded() / 10
     }
 
+    /// What the app can work out about YOUR habits from reports you already
+    /// filed. This is the raw material for reviewing a report BY EXCEPTION —
+    /// "you drove 68 miles and you usually drive 18 here" — which the research
+    /// says is the only kind of review a daily user still reads on day 200.
+    ///
+    /// Deliberately derived from `jobReports` rather than typed out, because the
+    /// point being demonstrated is that the app already HAS this.
+    enum History {
+        /// Median-ish miles previously claimed for a school.
+        static func usualMiles(_ school: String) -> Double? {
+            let past = DesignLabSampleData.jobReports
+                .filter { $0.school == school && $0.mileage > 0 }
+                .map(\.mileage)
+            guard !past.isEmpty else { return nil }
+            return (past.reduce(0, +) / Double(past.count) * 10).rounded() / 10
+        }
+
+        /// The vehicle you almost always use. Confirming it EVERY time is what
+        /// wears the safeguard out; confirming it when it CHANGES is what keeps
+        /// it meaningful.
+        static var usualVehicle: String {
+            let counts = Dictionary(grouping: DesignLabSampleData.jobReports, by: \.vehicle)
+                .mapValues(\.count)
+            return counts.max { $0.value < $1.value }?.key ?? "personal"
+        }
+    }
+
     /// Filed reports, NEWEST FIRST — the real order of every list query.
     ///
     /// Deliberately MIXED standard and template reports, because that mix is

@@ -43,6 +43,11 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     /// never to have worked. D10 blocks AMB.7 from touching a real screen until
     /// they are approved, so they are the first thing batch 2 does.
     case reports
+    /// The SECOND daily-report design, built after the operator's verdict that
+    /// the first "prettied up what I already had". Kept BESIDE it rather than
+    /// replacing it, because the point is to compare two architectures on a
+    /// device — which is what the switcher at the bottom right is for.
+    case reportProposal
     case timeOff
 
     var id: String { rawValue }
@@ -52,6 +57,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
         case .reports: return "Reports Family"
+        case .reportProposal: return "Daily Report — proposal model"
         case .timeOff: return "Time Off"
         }
     }
@@ -63,6 +69,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
         case .reports: return "AMB.7"
+        case .reportProposal: return "AMB.7 · v2"
         case .timeOff: return "AMB.8"
         }
     }
@@ -75,6 +82,8 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
         case .reports:
             return "Six surfaces and TWO parallel report systems that an org flag switches between. Flip the workflow switch at the top — the whole screen changes."
+        case .reportProposal:
+            return "The SECOND design, after \"you prettied up what I already had\". The report writes itself and you correct it — open, glance, submit. Compare it against Reports Family."
         case .timeOff:
             return "Five surfaces. The balance moves out of Settings to the top of the screen it is about, status gets ONE rendering instead of three, and the manager queue admits it is a queue."
         }
@@ -85,6 +94,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
         case .reports: return "doc.text.fill"
+        case .reportProposal: return "wand.and.stars"
         case .timeOff: return "calendar.badge.clock"
         }
     }
@@ -98,6 +108,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return .purple
         case .palette: return .pink
         case .reports: return ReportsMockup.featureTint
+        case .reportProposal: return ReportProposalMockup.featureTint
         case .timeOff: return TimeOffMockup.featureTint
         }
     }
@@ -108,6 +119,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
         case .reports: ReportsMockup()
+        case .reportProposal: ReportProposalMockup()
         case .timeOff: TimeOffMockup()
         }
     }
