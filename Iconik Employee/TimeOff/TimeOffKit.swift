@@ -334,8 +334,21 @@ struct TimeOffRequestCard: View {
             }
         } else if model.status.isEditable {
             HStack(spacing: 8) {
-                if let onEdit { pill("Edit", "pencil", .blue, onEdit) }
-                if let onCancel { pill("Cancel", "xmark", .red, onCancel) }
+                // THE EMPLOYEE BRANCH HONOURS `actionsBusy` TOO. It did not, and
+                // that was the double-submit guard being fixed on the manager
+                // screen only while the identical hazard sat on this one:
+                // `cancelTimeOffRequest` reaches `PTOService.releasePTOHours`,
+                // which is a read-modify-write over a 300-second cache that also
+                // writes the released balance BACK into that cache. Two taps on a
+                // 16-hour request release 32 hours of reservation, and the balance
+                // is then overstated for every later request.
+                if actionsBusy {
+                    ProgressView().scaleEffect(0.7)
+                    Text("Working…").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    if let onEdit { pill("Edit", "pencil", .blue, onEdit) }
+                    if let onCancel { pill("Cancel", "xmark", .red, onCancel) }
+                }
             }
         }
     }

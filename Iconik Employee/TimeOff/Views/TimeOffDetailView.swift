@@ -46,6 +46,10 @@ struct TimeOffDetailView: View {
     @State private var showingAlert = false
     @State private var alertMessage = ""
     @State private var showingCancelConfirmation = false
+    /// THE THIRD CALLER of `cancelTimeOffRequest`, and the third place the
+    /// double-submit guard belongs. Same read-modify-write over the same cached
+    /// balance as the other two.
+    @State private var isCancelling = false
 
     private var tint: Color { TimeOffStyle.requests }
 
@@ -221,7 +225,8 @@ struct TimeOffDetailView: View {
             Button {
                 showingCancelConfirmation = true
             } label: {
-                Label("Cancel Request", systemImage: "xmark.circle.fill")
+                Label(isCancelling ? "Cancelling…" : "Cancel Request",
+                      systemImage: "xmark.circle.fill")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity)
@@ -230,11 +235,15 @@ struct TimeOffDetailView: View {
                     .background(Capsule().fill(Color.red.opacity(0.12)))
             }
             .buttonStyle(.plain)
+            .disabled(isCancelling)
         }
     }
 
     private func cancelRequest() {
+        guard !isCancelling else { return }
+        isCancelling = true
         Task {
+            defer { isCancelling = false }
             do {
                 try await timeOffService.cancelTimeOffRequest(requestId: timeOffEntry.requestId)
                 await MainActor.run {

@@ -149,7 +149,9 @@ struct TimeOffApprovalView: View {
             showingAlert = true
         }
         .alert("Time Off Management", isPresented: $showingAlert) {
-            Button("OK", role: .cancel) { }
+            // Flushing from the alert's dismissal is what makes a message queued
+            // behind ANOTHER alert reachable at all.
+            Button("OK", role: .cancel) { flushQueuedAlert() }
         } message: {
             Text(alertMessage)
         }
@@ -460,13 +462,15 @@ struct TimeOffApprovalView: View {
                 requestToDeny = nil
                 denialReason = ""
                 denialError = ""
-                // Anything queued while this sheet was up is DROPPED, not shown
-                // after it. Otherwise the `.onChange` flush fires on the same
-                // dismissal and overwrites this confirmation with, say, an approve
-                // result from another card — which is round 2's lost-confirmation
-                // defect rebuilt with different plumbing. The queued message has
-                // already been superseded by the action the manager just completed.
-                queuedAlert = nil
+                // ANYTHING QUEUED IS KEPT, NOT DROPPED. I nulled it here to stop
+                // the `.onChange` flush overwriting this confirmation — and that
+                // DESTROYED a different card's result. A failed approve on card B,
+                // queued while this sheet was open, is not superseded by a deny on
+                // card A: different row, different photographer, different payroll
+                // write. Discarding it is the exact defect the round before this
+                // one was titled for. The `!showingAlert` guard on the flush is
+                // what protects this confirmation; the queue is flushed from the
+                // alert's own OK button instead.
                 alertMessage = "Request denied successfully"
                 showingAlert = true
             } catch {
@@ -502,10 +506,22 @@ struct TimeOffApprovalView: View {
     /// it, which is how the caller above came to pass `success: true` on a failure
     /// path without anything complaining. A parameter that cannot change behaviour
     /// is a comment that looks like code.
+    /// Shows whatever was held back, once nothing is in the way. Never drops it.
+    @MainActor
+    private func flushQueuedAlert() {
+        guard let queued = queuedAlert else { return }
+        queuedAlert = nil
+        alertMessage = queued
+        DispatchQueue.main.async { showingAlert = true }
+    }
+
     @MainActor
     private func raise(_ message: String) {
         alertMessage = message
-        if requestToDeny == nil {
+        // The same enumeration as the list screen: a message shows only when
+        // NOTHING is presented over this view. Two surfaces here — the deny sheet
+        // and a result alert already up.
+        if requestToDeny == nil && !showingAlert {
             showingAlert = true
         } else {
             queuedAlert = message

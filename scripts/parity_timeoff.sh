@@ -43,6 +43,24 @@ kept () { # $1 = capability, $2 = file, [-i] $3 = pattern
   fi
 }
 
+keptIn () { # $1 = capability, $2 = file, $3 = function name, $4 = pattern
+  # SCOPED TO ONE FUNCTION. A bare file-wide grep is why three checks passed with
+  # the very defect they named re-inserted: `raise(error.localizedDescription)`
+  # lives in TWO functions, so reverting approve's left review's behind and the
+  # check never noticed. A check that cannot distinguish the site it names is not
+  # a check. Extracts the function body by brace depth, then greps inside it.
+  local body
+  body=$(awk -v fn="func $3(" '
+    index($0, fn) { inside=1 }
+    inside { print; n=gsub(/\{/,"{"); m=gsub(/\}/,"}"); depth+=n-m; if (depth<=0 && seen) exit; if (n>0) seen=1 }
+  ' "$2" 2>/dev/null | sed -e 's|//.*||')
+  if printf '%s' "$body" | grep -q "$4"; then
+    PASS=$((PASS+1)); printf '  ok    %s\n' "$1"
+  else
+    FAIL=$((FAIL+1)); printf '  LOST  %s   [%s in %s() ~ %s]\n' "$1" "$(basename "$2")" "$3" "$4"
+  fi
+}
+
 keptCount () { # $1 = capability, $2 = file, $3 = pattern, $4 = minimum occurrences
   # FOR A PATTERN THAT LEGITIMATELY APPEARS MORE THAN ONCE. A bare grep for
   # `errorMessage = ""` passed on the @Published property declaration alone, so the
@@ -259,7 +277,7 @@ kept "…nor cancelled mid-write"                       "$APPR" 'disabled(inFlig
 # was up — so a failed approve vanished silently, which is worse than the problem
 # it solved. The message is now held and flushed when the sheet closes.
 kept "a message arriving while a sheet is up is QUEUED" "$APPR" 'queuedAlert = message'
-kept "…and flushed when the sheet closes"             "$APPR" 'queuedAlert = nil'
+keptIn "…and the flush is reachable from the alert"   "$APPR" flushQueuedAlert 'showingAlert = true'
 kept "the deny sheet shows its own busy state"        "$APPR" 'Denying…'
 kept "Retry forces a network fetch, not a cache hit"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'lastCacheUpdate = nil'
 keptCount "errorMessage cleared on ALL FOUR success paths" "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'errorMessage = ""' 5
@@ -270,10 +288,19 @@ kept "the shortfall is measured on the displayed base" "$FORM" 'projectedAvailab
 kept "the accrual line is measured from its own base"  "$PTO" 'projectedBalance - balance.balance'
 kept "accrual footnote only for an accrual org"       "$PTO" 'settings.usesAccrualSystem'
 
-kept "approve reports FAILURE as failure, not success"  "$APPR" 'raise(error.localizedDescription)'
-kept "the deny confirmation is not overwritten by a flush" "$APPR" 'queuedAlert = nil'
+keptIn "approve reports FAILURE as failure, not success" "$APPR" approveRequest 'raise(error.localizedDescription)'
+keptIn "review reports FAILURE as failure too"         "$APPR" putRequestInReview 'raise(error.localizedDescription)'
+keptIn "the flush CLEARS the slot it just consumed"    "$APPR" flushQueuedAlert 'queuedAlert = nil'
 kept "the flush will not fire over a live alert"       "$APPR" 'newValue == nil, !showingAlert'
-kept "the LIST screen queues behind its sheets too"    "$LIST" 'flushQueuedAlert'
+kept "the LIST screen enumerates ALL its presentations" "$LIST" 'private var isPresentingSomething'
+keptIn "…and queues against that enumeration"         "$LIST" cancelRequest 'if isPresentingSomething'
+kept "the list screen guards double-cancel"           "$LIST" 'inFlight.insert(request.id)'
+kept "…and the card shows it"                         "$LIST" 'actionsBusy: inFlight.contains'
+# BOTH branches, counted: `if actionsBusy {` appears in the manager branch too, so
+# a file-wide grep passed with the employee branch sabotaged. The whole point of
+# this check is that the guard is on BOTH.
+keptCount "BOTH card branches honour actionsBusy"     "$KIT" 'if actionsBusy {' 2
+kept "the detail sheet guards double-cancel"          "$DETAIL" 'guard !isCancelling'
 kept "raise() has no unread success parameter"         "$APPR" 'private func raise(_ message: String)'
 
 echo

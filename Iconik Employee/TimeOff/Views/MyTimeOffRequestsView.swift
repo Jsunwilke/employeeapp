@@ -52,8 +52,20 @@ struct MyTimeOffRequestsView: View {
     @State private var showingCancelAlert = false
     @State private var alertMessage = ""
     @State private var showingAlert = false
-    /// Held when a sheet is up, flushed when it closes — see `cancelRequest`.
+    /// Held while ANYTHING is presented, flushed when nothing is — see
+    /// `isPresentingSomething`.
     @State private var queuedAlert: String?
+    /// THE DOUBLE-SUBMIT GUARD, on this screen too.
+    ///
+    /// It was added to the approvals queue and not here, which is the instance
+    /// being fixed instead of the class for the fifth round running.
+    /// `cancelTimeOffRequest` reaches `PTOService.releasePTOHours` — a
+    /// read-modify-write that serves from a 300-second cache AND writes the
+    /// released balance back into it — and its own status guard reads the LOCAL
+    /// array, so a second tap inside the refresh window still sees "pending" and
+    /// passes. Two taps on a 16-hour request release 32 hours of reservation and
+    /// the balance is overstated from then on.
+    @State private var inFlight: Set<String> = []
     @State private var destination: TimeOffDestination?
 
     // The balance is loaded here so the lead card can show it. Nil while loading;
@@ -82,6 +94,23 @@ struct MyTimeOffRequestsView: View {
     }
 
     private var hasFailed: Bool { !timeOffService.errorMessage.isEmpty }
+
+    /// EVERY PRESENTATION SURFACE ON THIS SCREEN, ENUMERATED ONCE.
+    ///
+    /// An alert raised while something else is presented does not appear. Five
+    /// rounds of this phase extended the guard one surface at a time — the deny
+    /// sheet, then the two list sheets — and each round the audit found the
+    /// surface that had not been added yet. The project already has the rule for
+    /// this shape: a feedback loop is a STATE MACHINE, enumerate it once. These
+    /// are the four things that can be on screen over this view. If a fifth is
+    /// ever added it belongs in this list and nowhere else.
+    private var isPresentingSomething: Bool {
+        showingNewRequest                 // the new-request sheet
+            || editingRequest != nil      // the edit sheet
+            || showingCancelAlert         // the cancel confirmation alert
+            || showingAlert               // a result alert already up
+            || destination != nil         // pushed to the PTO balance screen
+    }
 
     var body: some View {
         ZStack {
@@ -126,7 +155,9 @@ struct MyTimeOffRequestsView: View {
             Text("Are you sure you want to cancel this time off request? This action cannot be undone.")
         }
         .alert("Time Off", isPresented: $showingAlert) {
-            Button("OK", role: .cancel) { }
+            // Flushing from the alert's own dismissal is what makes a queued
+            // message reachable when the thing blocking it was ANOTHER alert.
+            Button("OK", role: .cancel) { flushQueuedAlert() }
         } message: {
             Text(alertMessage)
         }
@@ -258,6 +289,7 @@ struct MyTimeOffRequestsView: View {
                 TimeOffRequestCard(
                     model: request.cardModel,
                     showsActions: true,
+                    actionsBusy: inFlight.contains(request.id),
                     onEdit: { editingRequest = request },
                     onCancel: {
                         requestToCancel = request
@@ -270,11 +302,17 @@ struct MyTimeOffRequestsView: View {
 
     // MARK: - Actions
 
+    /// Shows whatever was held back, once nothing is in the way. Never drops it:
+    /// a queued message is the outcome of a payroll write, and the one thing this
+    /// phase has repeatedly proved is that a silently discarded failure is worse
+    /// than a late one.
     private func flushQueuedAlert() {
-        guard !showingAlert, let queued = queuedAlert else { return }
+        guard let queued = queuedAlert else { return }
         queuedAlert = nil
         alertMessage = queued
-        showingAlert = true
+        // A tick, so the alert that just dismissed is fully gone before the next
+        // is raised on the same presenter.
+        DispatchQueue.main.async { showingAlert = true }
     }
 
     private func refresh() async {
@@ -309,7 +347,10 @@ struct MyTimeOffRequestsView: View {
     }
 
     private func cancelRequest(_ request: TimeOffRequest) {
+        guard !inFlight.contains(request.id) else { return }
+        inFlight.insert(request.id)
         Task {
+            defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.cancelTimeOffRequest(requestId: request.id)
                 await MainActor.run { alertMessage = "Request cancelled successfully" }
@@ -328,7 +369,7 @@ struct MyTimeOffRequestsView: View {
             // swallowed the result — including a FAILURE. Queued, not discarded.
             await MainActor.run {
                 requestToCancel = nil
-                if showingNewRequest || editingRequest != nil {
+                if isPresentingSomething {
                     queuedAlert = alertMessage
                 } else {
                     showingAlert = true
