@@ -11,14 +11,28 @@
 //      so they can be compared on a device rather than argued about.
 //
 //  THE ONE IDEA
-//      A daily job report is not a form. It is a CLAIM ABOUT A DAY THE APP
-//      ALREADY KNOWS MOST OF — and it is filed by the same person, at the same
-//      schools, doing the same kinds of shoot, roughly 200 times a year.
+//      IT IS A FORM THAT THE APP PREFILLS SOME OF (operator, 2026-07-26 — this
+//      corrects my own first framing, which called it "not a form" and claimed
+//      the app already knew most of it. It does not. It knows the date, who you
+//      are, and — when there is a session — the school and the mileage between
+//      them. What you shot, whether the cards were scanned, the notes and the
+//      photos are still yours to enter, every day.)
 //
-//      So the app writes the report and the photographer CORRECTS IT. The
-//      default path is: open, glance, submit. The screen's real job is not
-//      collecting answers — it is making the two or three things that are
-//      UNUSUAL about today impossible to miss.
+//      That ratio drives the layout, and getting it wrong is what made the
+//      first version of THIS screen wrong too: it presented everything as a
+//      readable line you tap to open, which is fine for the parts already
+//      filled in and is pure friction for the parts you have to complete every
+//      single time. NN/g on accordions — they raise interaction cost and cut
+//      visibility, and should be avoided where users need to work with most of
+//      the content.
+//
+//      So the screen splits by STATE, not by topic:
+//        - Anything the app filled in renders as ONE COMPACT LINE, marked with
+//          where it came from, tappable if it is wrong.
+//        - Anything still waiting on you renders as THE ACTUAL CONTROL, already
+//          open, no tap required.
+//      On a day where the app knew a lot, the screen is short. On a day where it
+//      knew little, it is a form — which is what it is.
 //
 //  WHAT THE RESEARCH ACTUALLY SAID, and how each finding is spent here
 //
@@ -75,7 +89,10 @@
 //       walks only the FLAGGED responses. A full "check your answers" screen on
 //       day 200 is scrolled past unread — and the tax research showed a generic
 //       confirmation step does not catch errors that favour the user.
-//       -> The top of the screen is an exceptions strip, and nothing else.
+//       -> An exceptions strip sits above the form. It is a WARNING LAYER, not
+//          the organising principle — that was the mistake in this file's first
+//          version, which treated anomalies as the main event and buried the
+//          daily work behind taps.
 //
 //    8. SOFT GATE, ALWAYS. The products that hard-block on required fields are
 //       the ones whose reviews carry the data-loss stories. Fulcrum offers
@@ -162,6 +179,8 @@ struct ReportProposalMockup: View {
     @State private var typesMatch = true
 
     // The report itself.
+    @State private var reportDate = Date()
+    @State private var photographer = "Maria Alvarez"
     @State private var stops: [LabSchool] = [DesignLabSampleData.schools[1]]
     @State private var jobTypes: Set<String> = ["Fall Sports"]
     @State private var mileage: String = ""
@@ -172,9 +191,10 @@ struct ReportProposalMockup: View {
     @State private var notes = ""
     @State private var photos = 0
 
-    // Which row is open for editing. Nil means the whole thing is a summary,
-    // which is the state it should be in almost every day.
-    @State private var editing: String?
+    /// Which rows are open. Rows that still NEED the photographer start open —
+    /// the work is never behind a tap — and rows the app filled in start closed
+    /// as a single confirmable line. Tapping toggles either way.
+    @State private var open: Set<String> = []
     @State private var showVehicleConfirm = false
     @State private var pendingVehicle: String?
     @State private var submitted = false
@@ -251,7 +271,6 @@ struct ReportProposalMockup: View {
 
     private func applyDay() {
         withAnimation(AmbientMotion.gentle) {
-            editing = nil
             mileageEdited = false
             notes = ""
             photos = 0
@@ -282,14 +301,26 @@ struct ReportProposalMockup: View {
                 cardsScanned = nil
                 jobBox = nil
             }
+            open = outstandingKeys
         }
+    }
+
+    /// The rows that are genuinely waiting on the photographer. Notes and photos
+    /// are deliberately NOT here — they are optional most days, and opening a
+    /// text editor and a photo grid every time would make the common case
+    /// longer, not shorter. Their collapsed line carries its own add button.
+    private var outstandingKeys: Set<String> {
+        var keys: Set<String> = ["scan"]
+        if jobTypes.isEmpty { keys.insert("shot") }
+        if stops.isEmpty { keys.insert("schools") }
+        return keys
     }
 
     // MARK: the header — what day this is
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(Formatters.longDate.string(from: Date()))
+            Text(Formatters.longDate.string(from: reportDate))
                 .font(.system(size: 20, weight: .bold))
             if day == .offSchedule {
                 Text("Nothing on your schedule — this one is yours to write.")
@@ -376,7 +407,9 @@ struct ReportProposalMockup: View {
                 }
                 ForEach(items, id: \.key) { item in
                     Button {
-                        withAnimation(AmbientMotion.snappy) { editing = item.key }
+                        // Set.insert returns (inserted:memberAfterInsert:), which
+                        // would make this closure non-Void.
+                        withAnimation(AmbientMotion.snappy) { _ = open.insert(item.key) }
                         AmbientHaptics.impact(.light)
                     } label: {
                         HStack(alignment: .top, spacing: 8) {
@@ -396,7 +429,7 @@ struct ReportProposalMockup: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Text("These are the only things asking for you. Everything else is already right or already known.")
+                Text("These are the only things asking for you. Everything else is already right or already known — and anything the app filled in can still be changed below.")
                     .font(.caption2).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -410,8 +443,13 @@ struct ReportProposalMockup: View {
 
     private var theDay: some View {
         VStack(alignment: .leading, spacing: 8) {
-            AmbientSectionTitle("The day", trailing: "tap anything to change it")
+            AmbientSectionTitle("The report",
+                                trailing: open.isEmpty ? "tap to change" : "\(open.count) waiting on you")
             VStack(spacing: 0) {
+                dateRow
+                Divider()
+                photographerRow
+                Divider()
                 schoolsRow
                 Divider()
                 mileageRow
@@ -431,6 +469,54 @@ struct ReportProposalMockup: View {
     }
 
     // MARK: rows
+
+    /// Prefilled with today, and changeable — filing yesterday's report the next
+    /// morning is a real thing photographers do.
+    private var dateRow: some View {
+        row(key: "date", icon: "calendar", title: "Date",
+            value: Formatters.relativeDay(reportDate) == Formatters.weekdayFull.string(from: reportDate)
+                ? Formatters.mediumDate.string(from: reportDate)
+                : "\(Formatters.relativeDay(reportDate)), \(Formatters.mediumDate.string(from: reportDate))",
+            provenance: Calendar.current.isDateInToday(reportDate) ? .calculated : .entered) {
+            VStack(alignment: .leading, spacing: 8) {
+                DatePicker("", selection: $reportDate, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                if !Calendar.current.isDateInToday(reportDate) {
+                    Text("Back-dated. The schedule and mileage above are still the ones loaded for that day.")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Prefilled with you. Changeable, because the live app allows it — someone
+    /// filing on behalf of another photographer is the case it exists for.
+    private var photographerRow: some View {
+        row(key: "photographer", icon: "person", title: "Photographer",
+            value: photographer,
+            provenance: photographer == "Maria Alvarez" ? .habit : .entered) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(DesignLabSampleData.crew.map(\.name), id: \.self) { name in
+                    Button {
+                        withAnimation(AmbientMotion.snappy) { photographer = name }
+                        AmbientHaptics.selection()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: photographer == name ? "largecircle.fill.circle" : "circle")
+                                .font(.system(size: 16))
+                                .foregroundStyle(photographer == name ? Self.featureTint : .secondary)
+                            Text(name).font(.subheadline)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
 
     private var schoolsRow: some View {
         row(key: "schools", icon: "building.2", title: "Schools",
@@ -704,7 +790,7 @@ struct ReportProposalMockup: View {
 
     private var notesRow: some View {
         row(key: "notes", icon: "text.bubble", title: "Notes",
-            value: notes.isEmpty ? "None" : notes,
+            value: notes.isEmpty ? "Add a note" : notes,
             provenance: notes.isEmpty ? .empty : .entered) {
             TextEditor(text: $notes)
                 .frame(minHeight: 90)
@@ -719,7 +805,7 @@ struct ReportProposalMockup: View {
 
     private var photosRow: some View {
         row(key: "photos", icon: "photo", title: "Photos",
-            value: photos == 0 ? "None" : "\(photos)",
+            value: photos == 0 ? "Attach photos" : "\(photos) attached",
             provenance: photos == 0 ? .empty : .entered) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -761,10 +847,12 @@ struct ReportProposalMockup: View {
     private func row<Editor: View>(key: String, icon: String, title: String,
                                    value: String, provenance: Provenance,
                                    @ViewBuilder editor: () -> Editor) -> some View {
-        let open = editing == key
-        VStack(alignment: .leading, spacing: open ? 10 : 0) {
+        let isOpen = open.contains(key)
+        VStack(alignment: .leading, spacing: isOpen ? 10 : 0) {
             Button {
-                withAnimation(AmbientMotion.snappy) { editing = open ? nil : key }
+                withAnimation(AmbientMotion.snappy) {
+                    if isOpen { open.remove(key) } else { _ = open.insert(key) }
+                }
                 AmbientHaptics.impact(.light)
             } label: {
                 HStack(alignment: .top, spacing: 10) {
@@ -797,14 +885,14 @@ struct ReportProposalMockup: View {
                     }
 
                     Spacer(minLength: 0)
-                    Image(systemName: open ? "chevron.up" : "chevron.down")
+                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
                         .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
                 }
                 .padding(.vertical, 9)
             }
             .buttonStyle(.plain)
 
-            if open {
+            if isOpen {
                 editor()
                     .padding(.bottom, 10)
             }
