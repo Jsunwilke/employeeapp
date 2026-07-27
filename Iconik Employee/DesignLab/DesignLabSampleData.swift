@@ -464,6 +464,452 @@ extension DesignLabSampleData {
     }
 }
 
+// MARK: - Time off (AMB.8, mocked in batch 2)
+
+/// The five statuses, with the ONE rendering the redesign picks.
+///
+/// Today the app draws status three incompatible ways: the shared card uses a
+/// filled capsule from a `colorName` STRING that is passed to `Color(_:)` — the
+/// asset-catalog initialiser, which finds nothing, because AccentColor is the
+/// only colorset in the project; TimeOffDetailView uses real SwiftUI colours and
+/// prints `rawValue.capitalized`, so underReview reads as "Underreview"; and
+/// ScheduleStyleKit makes approved ORANGE when partial and GREY when not.
+/// Batch-2 parity finding 6 says a redesign has to pick one knowingly. This is
+/// the pick — real colours, and a label a person would actually say.
+enum LabTimeOffStatus: String, CaseIterable {
+    case pending, underReview, approved, denied, cancelled
+
+    /// Never `rawValue.capitalized` — that is where "Underreview" came from.
+    var label: String {
+        switch self {
+        case .pending: return "Pending"
+        case .underReview: return "In Review"
+        case .approved: return "Approved"
+        case .denied: return "Denied"
+        case .cancelled: return "Cancelled"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .pending: return .orange
+        case .underReview: return .blue
+        case .approved: return .green
+        case .denied: return .red
+        case .cancelled: return .gray
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .pending: return "clock.fill"
+        case .underReview: return "magnifyingglass"
+        case .approved: return "checkmark.circle.fill"
+        case .denied: return "xmark.circle.fill"
+        case .cancelled: return "slash.circle.fill"
+        }
+    }
+
+    /// Drives the Edit and Cancel pills — the app's real condition.
+    var isEditable: Bool { self == .pending || self == .underReview }
+}
+
+enum LabTimeOffReason: String, CaseIterable {
+    case vacation = "Vacation"
+    case sick = "Sick"
+    case personal = "Personal"
+    case family = "Family"
+    case bereavement = "Bereavement"
+    case other = "Other"
+
+    var symbol: String {
+        switch self {
+        case .vacation: return "beach.umbrella.fill"
+        case .sick: return "cross.case.fill"
+        case .personal: return "person.fill"
+        case .family: return "figure.2.and.child.holdinghands"
+        case .bereavement: return "heart.fill"
+        case .other: return "ellipsis.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .vacation: return .teal
+        case .sick: return .red
+        case .personal: return .indigo
+        case .family: return .purple
+        case .bereavement: return .brown
+        case .other: return .gray
+        }
+    }
+}
+
+/// One request. Fields taken from what the real card and detail actually render,
+/// including the three conditional attribution lines (approved by / in review by
+/// / denied by, with its own indented reason line).
+struct LabTimeOffRequest: Identifiable {
+    let id: String
+    let photographer: String
+    let status: LabTimeOffStatus
+    let reason: LabTimeOffReason
+    let startDate: Date
+    let endDate: Date
+    let isPartialDay: Bool
+    var startTime: Date?
+    var endTime: Date?
+    var notes: String?
+    var usesPTO: Bool = true
+    var ptoHours: Double?
+    /// Present only when BOTH the name and the date exist — the app's real
+    /// condition for drawing the attribution line at all.
+    var actionedBy: String?
+    var actionedAt: Date?
+    var denialReason: String?
+    /// Drives the employee list's newest-first sort and the manager History tab.
+    let createdAt: Date
+
+    /// INCLUSIVE of both endpoints — days + 1. A domain rule, not a formatting
+    /// choice, so it lives on the model where a mockup cannot quietly drop it.
+    var dayCount: Int {
+        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: startDate),
+                                                   to: Calendar.current.startOfDay(for: endDate)).day ?? 0
+        return days + 1
+    }
+
+    var durationLabel: String {
+        if isPartialDay, let start = startTime, let end = endTime {
+            let hours = end.timeIntervalSince(start) / 3600
+            return String(format: "%.1f hours", hours)
+        }
+        return dayCount == 1 ? "1 day" : "\(dayCount) days"
+    }
+
+    var dateLabel: String {
+        if isPartialDay || dayCount == 1 {
+            return Formatters.monthDay.string(from: startDate)
+        }
+        return "\(Formatters.monthDay.string(from: startDate)) – \(Formatters.monthDay.string(from: endDate))"
+    }
+
+    var timeLabel: String {
+        guard isPartialDay, let start = startTime, let end = endTime else { return "Full day" }
+        return "\(Formatters.shortTime.string(from: start)) – \(Formatters.shortTime.string(from: end))"
+    }
+}
+
+/// The balance, with every conditional the real screen carries: banking is
+/// omitted when absent, pending is omitted when zero, and the accrual policy card
+/// disappears entirely unless the org has enabled accrual — which DEFAULTS TO
+/// FALSE, so most orgs never see it.
+struct LabPTOBalance {
+    let totalBalance: Double
+    let pendingHours: Double
+    let bankingBalance: Double?
+    let usedThisYear: Double
+    let totalAccrued: Double
+    let accrualEnabled: Bool
+    let accrualRate: String
+    let accrualCap: String
+    let rolloverPolicy: String
+
+    var available: Double { totalBalance - pendingHours }
+}
+
+extension DesignLabSampleData {
+
+    /// A day at a fixed hour, N days from today. Time off is drawn against real
+    /// dates so the "past request outside the picker's range" case is real.
+    static func day(_ offset: Int, hour: Int = 9) -> Date {
+        at(hour, 0, dayOffset: offset)
+    }
+
+    /// Your own requests, NEWEST FIRST — which is the employee list's real order
+    /// and the deliberate opposite of the manager queue below.
+    ///
+    /// Seeded to contain every case that decides the design: all five statuses,
+    /// a partial day, a multi-day span, a single day, a request with no notes, a
+    /// denial WITH a reason and the indented line it needs, an approval whose
+    /// approver name is missing (so the attribution line must NOT draw), and a
+    /// PTO request that does not have the balance to cover it.
+    static let myTimeOff: [LabTimeOffRequest] = [
+        .init(id: "t1", photographer: "You", status: .pending, reason: .vacation,
+              startDate: day(24), endDate: day(28), isPartialDay: false,
+              notes: "Family trip — booked the flights already.",
+              ptoHours: 40, createdAt: day(-1)),
+        // Partial day, and the one that does NOT have the PTO to cover it.
+        .init(id: "t2", photographer: "You", status: .pending, reason: .personal,
+              startDate: day(9), endDate: day(9), isPartialDay: true,
+              startTime: at(13, 0, dayOffset: 9), endTime: at(17, 0, dayOffset: 9),
+              notes: nil, ptoHours: 4, createdAt: day(-2)),
+        .init(id: "t3", photographer: "You", status: .underReview, reason: .family,
+              startDate: day(16), endDate: day(17), isPartialDay: false,
+              notes: "Parent-teacher conferences both mornings.",
+              ptoHours: 16, actionedBy: "Alex Fontaine", actionedAt: day(-3),
+              createdAt: day(-5)),
+        .init(id: "t4", photographer: "You", status: .approved, reason: .sick,
+              startDate: day(-8), endDate: day(-8), isPartialDay: false,
+              notes: nil, ptoHours: 8,
+              actionedBy: "Alex Fontaine", actionedAt: day(-9), createdAt: day(-10)),
+        // Approved but the approver name never came back — the attribution line
+        // is conditional on BOTH the name and the date, so this row must draw
+        // WITHOUT it rather than showing "Approved by".
+        .init(id: "t5", photographer: "You", status: .approved, reason: .vacation,
+              startDate: day(-30), endDate: day(-26), isPartialDay: false,
+              notes: "Spring break.", ptoHours: 40, createdAt: day(-45)),
+        .init(id: "t6", photographer: "You", status: .denied, reason: .personal,
+              startDate: day(-14), endDate: day(-14), isPartialDay: false,
+              notes: nil, usesPTO: false,
+              actionedBy: "Alex Fontaine", actionedAt: day(-16),
+              denialReason: "Three photographers already off that day and it is a fall original day.",
+              createdAt: day(-20)),
+        .init(id: "t7", photographer: "You", status: .cancelled, reason: .other,
+              startDate: day(-40), endDate: day(-39), isPartialDay: false,
+              notes: "Changed my mind.", usesPTO: false, createdAt: day(-50)),
+    ]
+
+    /// The manager queue. THE ORDER IS THE POINT: pending and in-review sort
+    /// OLDEST FIRST because a manager works a queue, which is the deliberate
+    /// reverse of the employee list. History sorts by when it was ACTIONED.
+    static let approvalQueue: [LabTimeOffRequest] = [
+        .init(id: "a1", photographer: "Sam Okafor", status: .pending, reason: .sick,
+              startDate: day(1), endDate: day(1), isPartialDay: false,
+              notes: "Woke up with it — sorry for the short notice.",
+              ptoHours: 8, createdAt: day(-6)),
+        .init(id: "a2", photographer: "Priya Nair", status: .pending, reason: .vacation,
+              startDate: day(33), endDate: day(40), isPartialDay: false,
+              notes: "Wedding, out of state. Booked a year ago.",
+              ptoHours: 48, createdAt: day(-4)),
+        .init(id: "a3", photographer: "Devon Wright", status: .pending, reason: .personal,
+              startDate: day(5), endDate: day(5), isPartialDay: true,
+              startTime: at(8, 0, dayOffset: 5), endTime: at(10, 30, dayOffset: 5),
+              notes: nil, ptoHours: 2.5, createdAt: day(-1)),
+        .init(id: "a4", photographer: "Maria Alvarez", status: .underReview, reason: .family,
+              startDate: day(12), endDate: day(13), isPartialDay: false,
+              notes: "Can move it if the Lincoln retakes land that week.",
+              ptoHours: 16, actionedBy: "You", actionedAt: day(-2), createdAt: day(-7)),
+        .init(id: "a5", photographer: "June Castillo", status: .approved, reason: .vacation,
+              startDate: day(-3), endDate: day(-2), isPartialDay: false,
+              notes: nil, ptoHours: 16,
+              actionedBy: "You", actionedAt: day(-5), createdAt: day(-12)),
+        .init(id: "a6", photographer: "Alex Fontaine", status: .denied, reason: .other,
+              startDate: day(-6), endDate: day(-6), isPartialDay: false,
+              notes: nil, usesPTO: false,
+              actionedBy: "You", actionedAt: day(-8),
+              denialReason: "Homecoming — everyone is on that shoot.",
+              createdAt: day(-15)),
+    ]
+
+    /// Sufficient to cover most things and NOT sufficient to cover request t2 —
+    /// so the shortfall state has something real to fire against.
+    static let ptoBalance = LabPTOBalance(
+        totalBalance: 62.5,
+        pendingHours: 46.5,
+        bankingBalance: 12,
+        usedThisYear: 48,
+        totalAccrued: 110.5,
+        accrualEnabled: true,
+        accrualRate: "1 hour per 40 hours worked",
+        accrualCap: "240 hours (30 days)",
+        rolloverPolicy: "Up to 40 hours"
+    )
+}
+
+// MARK: - Reports family (AMB.7, mocked in batch 2)
+
+/// A filed report as the list renders it, plus the fields only the ORPHANED
+/// TemplateReportListView can currently show — template name and version, the
+/// smart-field count, the completed-field count. Those capabilities exist in the
+/// codebase and are unreachable; the redesign either builds them or drops them
+/// knowingly, so the sample data has to carry them either way.
+struct LabJobReport: Identifiable {
+    let id: String
+    let date: Date
+    /// Can be empty. The real row renders this line ALWAYS, even when the column
+    /// is null — so the sparse case has to be drawn, not avoided.
+    let school: String
+    let mileage: Double
+    let photoCount: Int
+    let vehicle: String
+    /// nil for a standard report; a name for a template-backed one.
+    var templateName: String?
+    var templateVersion: Int?
+    var smartFieldCount: Int = 0
+    var completedFieldCount: Int = 0
+    /// nil = filed off-schedule, which is a real and common case.
+    var sessionName: String?
+
+    var isTemplate: Bool { templateName != nil }
+}
+
+struct LabReportTemplate: Identifiable {
+    let id: String
+    let name: String
+    /// Never decoded from the database today (batch-2 finding R13), so every
+    /// card in the live app shows the italic placeholder. Kept optional here so
+    /// the mockup can show BOTH what it looks like now and what it looks like
+    /// once the field is decoded.
+    let detail: String?
+    let shootType: String
+    let fieldCount: Int
+    let smartFieldCount: Int
+    let isDefault: Bool
+    let version: Int
+}
+
+/// A photoshoot note. Local-first, one school NAME (not an id), no categories
+/// and no session binding — which is the real model, and thinner than the screen
+/// makes it look.
+struct LabPhotoshootNote: Identifiable {
+    let id: String
+    let timestamp: Date
+    /// Empty when the schedule could not fill it — the state that opens the
+    /// "which school?" dialog.
+    let school: String
+    let text: String
+    let photoCount: Int
+    var submitted: Bool = false
+    var syncedToServer: Bool = false
+    var submittedAt: Date?
+}
+
+extension DesignLabSampleData {
+
+    /// Filed reports, NEWEST FIRST — the real order of every list query.
+    ///
+    /// Deliberately MIXED standard and template reports, because that mix is
+    /// exactly what the one reachable list cannot currently tell apart, and it
+    /// is the case the redesign has to answer.
+    static let jobReports: [LabJobReport] = [
+        .init(id: "r1", date: day(-1), school: "Lincoln High School", mileage: 42.6,
+              photoCount: 3, vehicle: "personal",
+              sessionName: "Lincoln High School — 7:45 AM (Fall Original)"),
+        .init(id: "r2", date: day(-2), school: "Riverside Middle School", mileage: 18.2,
+              photoCount: 0, vehicle: "company",
+              templateName: "Sports Day", templateVersion: 1,
+              smartFieldCount: 4, completedFieldCount: 11,
+              sessionName: "Riverside Middle — 3:30 PM (Fall Sports)"),
+        // No school on the record at all — the row still draws the line.
+        .init(id: "r3", date: day(-3), school: "", mileage: 0,
+              photoCount: 0, vehicle: "personal"),
+        .init(id: "r4", date: day(-4), school: "Oakmont Elementary, Pine Ridge Elementary",
+              mileage: 71.4, photoCount: 12, vehicle: "personal",
+              sessionName: "Oakmont Elementary — 8:00 AM (Classroom Groups)"),
+        .init(id: "r5", date: day(-7), school: "Lincoln High School", mileage: 42.6,
+              photoCount: 1, vehicle: "personal",
+              templateName: "Yearbook Candids", templateVersion: 1,
+              smartFieldCount: 2, completedFieldCount: 7),
+        .init(id: "r6", date: day(-8), school: "District Office", mileage: 9.8,
+              photoCount: 0, vehicle: "company"),
+        .init(id: "r7", date: day(-14), school: "Riverside Middle School", mileage: 18.2,
+              photoCount: 5, vehicle: "personal",
+              templateName: "Sports Day", templateVersion: 1,
+              smartFieldCount: 4, completedFieldCount: 12),
+        .init(id: "r8", date: day(-21), school: "Pine Ridge Elementary", mileage: 33.1,
+              photoCount: 2, vehicle: "personal"),
+    ]
+
+    /// Templates. Note every one carries a real shoot type and description here —
+    /// which is what the screen was DESIGNED for and what it has never shown,
+    /// because six model properties are outside CodingKeys (finding R13).
+    static let reportTemplates: [LabReportTemplate] = [
+        .init(id: "tp1", name: "Sports Day", detail: "Fall and winter sports, team and individual.",
+              shootType: "sports", fieldCount: 14, smartFieldCount: 4, isDefault: true, version: 3),
+        .init(id: "tp2", name: "Sports League", detail: "Weekend league work, multiple teams per session.",
+              shootType: "sports", fieldCount: 11, smartFieldCount: 3, isDefault: false, version: 2),
+        .init(id: "tp3", name: "Yearbook Candids", detail: nil,
+              shootType: "yearbook", fieldCount: 9, smartFieldCount: 2, isDefault: false, version: 1),
+        .init(id: "tp4", name: "Yearbook Groups and Clubs", detail: "One entry per group, with the advisor's name.",
+              shootType: "yearbook", fieldCount: 12, smartFieldCount: 2, isDefault: true, version: 4),
+        .init(id: "tp5", name: "Classroom Groups", detail: "Class composites and teacher portraits.",
+              shootType: "portraits", fieldCount: 16, smartFieldCount: 5, isDefault: false, version: 2),
+        .init(id: "tp6", name: "Dr. Office Head Shots", detail: "Commercial work — invoice reference required.",
+              shootType: "commercial", fieldCount: 8, smartFieldCount: 1, isDefault: false, version: 1),
+    ]
+
+    /// Notes in CREATION order — oldest first, which is what the full screen
+    /// does and the opposite of what the iPad widget does. Both are real.
+    static let photoshootNotes: [LabPhotoshootNote] = [
+        .init(id: "n1", timestamp: at(7, 52), school: "Lincoln High School",
+              text: "Gym window blows out the left side after ten. Shot the stage end instead — flag it for next year.",
+              photoCount: 2, syncedToServer: true),
+        .init(id: "n2", timestamp: at(11, 20), school: "Lincoln High School",
+              text: "Two students missed the session, office has the list. Retakes are the 14th.",
+              photoCount: 0),
+        // No school yet — this is the note that opens the "which school?" dialog.
+        .init(id: "n3", timestamp: at(14, 5), school: "",
+              text: "", photoCount: 0),
+        .init(id: "n4", timestamp: at(9, 15, dayOffset: -1), school: "Riverside Middle School",
+              text: "Backdrop stand from Kit A is bent. Used the loaner.",
+              photoCount: 1, submitted: true, syncedToServer: true,
+              submittedAt: at(16, 40, dayOffset: -1)),
+    ]
+
+    /// The eight sections of the standard daily job report, with the ONE that is
+    /// actually required marked as such.
+    ///
+    /// The live form draws a progress bar over EIGHT sections with a denominator
+    /// of SEVEN, ticks sections by rules that gate nothing, and then blocks
+    /// submission on exactly one field: the vehicle. The mockup has to be able to
+    /// draw both the honest version and the current one.
+    static let reportSections: [(title: String, symbol: String, tint: Color, required: Bool, done: Bool)] = [
+        ("Basic Information", "info.circle", .blue, false, true),
+        ("Photoshoot Note", "note.text", .purple, false, true),
+        ("Schools & Mileage", "building.2", .green, true, false),
+        ("Job Description", "list.bullet", .orange, false, true),
+        ("Extra Items", "plus.circle", .pink, false, false),
+        ("Scan Status", "barcode.viewfinder", .teal, false, false),
+        ("Notes", "text.bubble", .indigo, false, true),
+        ("Photos", "photo", .red, false, true),
+    ]
+
+    /// The 22 job descriptions, verbatim and in the shipped order. A redesign
+    /// that reorders or prunes this list is changing a business vocabulary, not
+    /// a layout, so it is here in full where a mockup can be checked against it.
+    static let jobDescriptionOptions = [
+        "Fall Original Day", "Fall Makeup Day", "Classroom Groups", "Fall Sports",
+        "Winter Sports", "Spring Sports", "Spring Photos", "Homecoming", "Prom",
+        "Graduation", "Yearbook Candid's", "Yearbook Groups and Clubs",
+        "Sports League", "District Office Photos", "Banner Photos",
+        "In Studio Photos", "School Board Photos", "Dr. Office Head Shots",
+        "Dr. Office Cards", "Dr. Office Candid's", "Deliveries", "NONE",
+    ]
+
+    /// The 12 extra items, verbatim and in the shipped order.
+    static let extraItemOptions = [
+        "Underclass Makeup", "Staff Makeup", "ID card Images", "Sports Makeup",
+        "Class Groups", "Yearbook Groups and Clubs", "Class Candids",
+        "Students from other schools", "Siblings", "Office Staff Photos",
+        "Deliveries", "NONE",
+    ]
+
+    /// Every field type the template form can render, with a real label — so the
+    /// dynamic form can be judged against the whole vocabulary rather than the
+    /// three types a nice-looking sample would have contained.
+    static let templateFieldTypes: [(type: String, label: String, required: Bool, readOnly: Bool)] = [
+        ("user_name", "Photographer", false, true),
+        ("date_auto", "Date", false, true),
+        ("time_auto", "Start time", false, true),
+        ("text", "Team or group name", true, false),
+        ("email", "Coach email", false, false),
+        ("phone", "Coach phone", false, false),
+        ("number", "Athletes photographed", true, false),
+        ("currency", "Cash collected", false, false),
+        ("select", "Sport", true, false),
+        ("multiselect", "Packages sold", false, false),
+        ("radio", "Cards turned in", true, false),
+        ("toggle", "Background used", false, false),
+        ("date", "Retake date", false, false),
+        ("time", "Wrap time", false, false),
+        ("textarea", "Notes for the lab", false, false),
+        ("school_name", "School", false, true),
+        ("mileage", "Mileage", false, true),
+        ("photo_count", "Photos attached", false, true),
+        ("weather_conditions", "Weather", false, true),
+        ("file", "Reference photos", false, false),
+    ]
+}
+
 // MARK: - Shared lab helper, kept when its mockup went
 
 /// Binds a card with a kit's tape colour.
