@@ -440,6 +440,42 @@ check(iosRaw.allSatisfy { TimeOffReasonVocabulary.parse($0) != nil },
       "every string iOS can write is still recognised")
 
 // ---------------------------------------------------------------------------
+print("\nPTO TRACKING — does the stored figure mean anything yet")
+
+// The operator states PTO has never functioned. The code agrees: nothing accrues,
+// `used` is never persisted, and the web's PTO writes are dead code. So the
+// screens must not assert a number the system cannot support.
+eq(PTOTracking.evaluate(enabled: false, balance: 0, accrued: 0, used: 0, banking: 0),
+   .notConfigured, "PTO switched off is notConfigured")
+eq(PTOTracking.evaluate(enabled: false, balance: 40, accrued: 40, used: 8, banking: 0),
+   .notConfigured, "…even with figures on file — the org has turned it off")
+eq(PTOTracking.evaluate(enabled: true, balance: 0, accrued: 0, used: 0, banking: 0),
+   .noActivity, "enabled but nothing has ever accrued or been used")
+eq(PTOTracking.evaluate(enabled: true, balance: 40, accrued: 0, used: 0, banking: 0),
+   .tracked, "a real balance is tracked")
+eq(PTOTracking.evaluate(enabled: true, balance: 0, accrued: 40, used: 40, banking: 0),
+   .tracked, "fully spent but with history is tracked — the zero is REAL")
+eq(PTOTracking.evaluate(enabled: true, balance: 0, accrued: 0, used: 0, banking: 12),
+   .tracked, "banked hours count as activity")
+
+// THE CASE THIS TYPE EXISTS FOR, and the one a naive test would get backwards.
+// Reservations ARE written on create, so a person can have pending hours while
+// nothing has ever accrued. That is the BROKEN state. Treating pending as
+// evidence of a working system would make the shortfall warning fire hardest for
+// exactly the people it is most wrong about.
+eq(PTOTracking.evaluate(enabled: true, balance: 0, accrued: 0, used: 0, banking: 0),
+   .noActivity, "pending hours are NOT part of the test — see the doc comment")
+check(!PTOTracking.evaluate(enabled: true, balance: 0, accrued: 0, used: 0, banking: 0).showsFigures,
+      "…so no figure is shown for the never-accrued case")
+check(PTOTracking.evaluate(enabled: true, balance: 40, accrued: 40, used: 0, banking: 0).showsFigures,
+      "…and a real one is")
+
+// SELF-HEALING: the moment TOF.1 makes accrual work, this flips with no code
+// change. Asserted so nobody has to remember.
+check(PTOTracking.evaluate(enabled: true, balance: 0.5, accrued: 0, used: 0, banking: 0).showsFigures,
+      "half an hour of real balance is enough to start showing figures again")
+
+// ---------------------------------------------------------------------------
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
     print("FAILED")

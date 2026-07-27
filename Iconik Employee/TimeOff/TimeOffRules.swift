@@ -488,3 +488,53 @@ enum TimeOffRuleStatus: String, CaseIterable, Equatable {
         TimeOffRuleStatus(rawValue: raw)
     }
 }
+
+// MARK: - Whether the PTO figures mean anything yet
+
+/// PTO HAS NEVER FUNCTIONED IN THIS APP (operator, 2026-07-27), and the code
+/// agrees: `addAccruedHours` has NO CALLERS, so nothing ever accrues;
+/// `usePTOHours` never persists `used`; the web app's entire PTO write surface —
+/// reserve, use, release, adjust — is dead code with zero callers; and
+/// `pto_settings` is written snake_case by the web and read camelCase by iOS, so
+/// every accrual setting an admin configures is ignored.
+///
+/// The consequence for the SCREENS is concrete. Balances start at whatever a row
+/// was created with and never grow, so "Use PTO Balance" defaulting ON means every
+/// request computes as a shortfall — an orange "you are 8.0 hours short" on
+/// essentially every request anyone files — and the balance hero reads
+/// "0.0 hours available" for everyone, permanently.
+///
+/// An app that states a payroll number it cannot support is worse than one that
+/// says it does not know. This decides which.
+///
+/// IT IS SELF-HEALING BY DESIGN: the moment real hours accrue or are used, the
+/// figures become `.tracked` and the screens show them again with no code change.
+/// That matters because the fix (TOF.1) is a cross-client data change, and nobody
+/// should have to remember to come back and re-enable a screen.
+enum PTOTracking: Equatable {
+    /// Real figures. Show them.
+    case tracked
+    /// The organisation has PTO switched off. Nothing to show and nothing wrong.
+    case notConfigured
+    /// PTO is on, but no hours have ever entered the system for this person —
+    /// nothing accrued, nothing used, nothing banked. Any figure derived from
+    /// this is arithmetic on zeroes dressed up as a balance.
+    case noActivity
+
+    var showsFigures: Bool { self == .tracked }
+
+    /// `pending` is deliberately NOT part of the test. Reservations DO get written
+    /// on create, so a person can have pending hours while nothing has ever
+    /// accrued — which is precisely the broken state, not evidence of a working
+    /// one. Treating a non-zero pending as "tracked" would make the shortfall
+    /// warning fire hardest for exactly the people it is most wrong about.
+    static func evaluate(enabled: Bool,
+                         balance: Double,
+                         accrued: Double,
+                         used: Double,
+                         banking: Double) -> PTOTracking {
+        guard enabled else { return .notConfigured }
+        let anyActivity = balance != 0 || accrued != 0 || used != 0 || banking != 0
+        return anyActivity ? .tracked : .noActivity
+    }
+}

@@ -386,6 +386,11 @@ struct TimeOffBalanceLead: View {
     /// failure presentable as a legitimate value is the exact shape that hid a
     /// broken feature in this app for a year.
     let failed: Bool
+    /// Whether the stored figures mean anything yet. PTO HAS NEVER FUNCTIONED in
+    /// this app, so leading a daily-use screen with "0.0 hours available" would be
+    /// the most prominent thing on it and permanently false. When this is not
+    /// `.tracked` the card keeps its ROUTE and drops its CLAIM.
+    var tracking: PTOTracking = .tracked
     let tint: Color
     var action: () -> Void
 
@@ -394,13 +399,22 @@ struct TimeOffBalanceLead: View {
             VStack(alignment: .leading, spacing: 10) {
                 if failed {
                     unavailable
+                } else if !tracking.showsFigures {
+                    dormant
                 } else if let available {
                     figure(available)
                 } else {
                     loading
                 }
             }
-            .ambientCard(density: .hero, state: .highlighted, glow: tint, fillWidth: true)
+            // DEMOTED WHEN DORMANT. The design's first claim was that the balance
+            // LEADS this surface; leading with a number that has never been real
+            // is the claim doing harm. Hero treatment only when there is something
+            // real to lead with.
+            .ambientCard(density: tracking.showsFigures ? .hero : .compact,
+                         state: tracking.showsFigures ? .highlighted : .normal,
+                         glow: tracking.showsFigures ? tint : nil,
+                         fillWidth: true)
         }
         .buttonStyle(.plain)
     }
@@ -436,6 +450,31 @@ struct TimeOffBalanceLead: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        }
+    }
+
+    /// NO NUMBER. The row still opens the balance screen — nothing is taken away —
+    /// but it does not state hours the system has never actually tracked.
+    /// Self-healing: the moment real hours accrue this reverts to the figure with
+    /// no code change.
+    private var dormant: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "clock.badge.questionmark")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("PTO balance").font(.subheadline.weight(.semibold))
+                Text(tracking == .notConfigured
+                     ? "Paid time off isn't switched on for your organisation."
+                     : "No PTO hours have been tracked yet. Payroll has the authoritative figure.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.bold))
+                .foregroundStyle(.tertiary)
         }
     }
 

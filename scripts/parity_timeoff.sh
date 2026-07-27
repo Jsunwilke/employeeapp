@@ -351,6 +351,20 @@ keptCount "…and that is its ONLY write to alertMessage" "$APPR" 'alertMessage 
 kept "the flush consumes only once it presents"       "$LIST" 'guard let next = queuedAlerts.first'
 
 echo
+echo "PTO has never functioned — the screens must not assert figures it cannot support"
+kept "the tracking rule exists and is tested"         "$RULES" 'enum PTOTracking'
+kept "…and ignores PENDING, which is the broken state" "$RULES" 'banking: Double) -> PTOTracking'
+kept "the balance lead has a DORMANT state"           "$KIT" 'private var dormant'
+kept "…and demotes itself out of hero when dormant"   "$KIT" 'tracking.showsFigures ? .hero : .compact'
+keptIn "the list screen computes the tracking state"  "$LIST" ptoTracking 'PTOTracking.evaluate'
+keptIn "the form computes it too"                     "$FORM" ptoTracking 'PTOTracking.evaluate'
+# Scoped: the bare pattern also matched `if !ptoTracking.showsFigures {` in the
+# arithmetic block, so deleting the guard on the MESSAGE left it green.
+keptIn "the shortfall is SILENT when figures are not real" "$FORM" ptoMessage 'ptoTracking.showsFigures'
+kept "…and the arithmetic block says why instead"     "$FORM" 'No PTO hours have been tracked yet'
+kept "the route to the balance screen still works"    "$KIT" 'chevron.right'
+
+echo
 echo "EXPECTED-GONE — dropped deliberately, each with a reason in the file"
 gone "Schedule Conflicts section (checkForConflicts always returns [])" "$FORM" 'Schedule Conflicts'
 gone "Delete Time Off (every press was a guaranteed 403)"               "$DETAIL" 'Delete Time Off'

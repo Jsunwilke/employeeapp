@@ -222,6 +222,19 @@ struct TimeOffRequestView: View {
 
     private var submitGate: SubmitGate { SubmitGate.evaluate(span: span) }
 
+    /// See `PTOTracking`. With PTO non-functional every request computes as a
+    /// shortfall, so the form would show an orange "you are 8.0 hours short" on
+    /// essentially EVERY request anyone files. A warning that fires every time is
+    /// not a warning.
+    private var ptoTracking: PTOTracking {
+        guard let balance = currentPTOBalance else { return .tracked }
+        return PTOTracking.evaluate(enabled: ptoSettings?.enabled ?? false,
+                                    balance: balance.balance,
+                                    accrued: balance.totalAccrued,
+                                    used: balance.used,
+                                    banking: balance.bankingBalance)
+    }
+
     private var durationLabel: String {
         if isPartialDay {
             guard let hours = span.partialHours else { return "Time not set" }
@@ -425,7 +438,9 @@ struct TimeOffRequestView: View {
     private var ptoSection: some View {
         VStack(alignment: .leading, spacing: 8) {
         AmbientFormSection(title: "Paid time off",
-                           status: isPaidTimeOff ? String(format: "%.1f hours", ptoHours.value) : "Unpaid",
+                           status: isPaidTimeOff
+                               ? (ptoTracking.showsFigures ? String(format: "%.1f hours", ptoHours.value) : "Not tracked")
+                               : "Unpaid",
                            statusTint: isPaidTimeOff ? tint : nil,
                            // The mockup drew this block at .roomy. It is arithmetic,
                            // not a list of controls, and it is the one part of this
@@ -463,7 +478,14 @@ struct TimeOffRequestView: View {
                     // The balance rows are OMITTED when the balance could not be
                     // loaded — as today. What is new is that the arithmetic is
                     // stated rather than left for the user to assemble.
-                    if let balance = currentPTOBalance {
+                    if !ptoTracking.showsFigures {
+                        Divider()
+                        Text(ptoTracking == .notConfigured
+                             ? "Paid time off isn't switched on for your organisation, so no balance is shown. The request still records that you asked for it to be paid."
+                             : "No PTO hours have been tracked yet, so there is no balance to check this against. Payroll has the authoritative figure.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let balance = currentPTOBalance {
                         Divider()
                         VStack(spacing: 6) {
                             // NOT "Available now": in edit mode this is what you
@@ -529,7 +551,10 @@ struct TimeOffRequestView: View {
     /// about which balance they measured against.
     @ViewBuilder
     private var ptoMessage: some View {
-        if isPaidTimeOff, currentPTOBalance != nil {
+        // SILENT WHEN THE FIGURES ARE NOT REAL. Otherwise this fires on every
+        // request, which trains people to ignore it — and it would be loudest for
+        // exactly the people it is most wrong about.
+        if isPaidTimeOff, currentPTOBalance != nil, ptoTracking.showsFigures {
             switch standing {
             case .sufficient:
                 EmptyView()

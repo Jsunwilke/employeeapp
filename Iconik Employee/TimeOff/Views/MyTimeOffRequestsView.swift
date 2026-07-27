@@ -78,6 +78,7 @@ struct MyTimeOffRequestsView: View {
     // "0.0 hours available".
     @State private var balance: PTOBalance?
     @State private var balanceFailed = false
+    @State private var ptoSettings: PTOSettings?
 
     /// One enum, one `.ambientPush` — the AMB.3 rule. Two stacked
     /// `NavigationLink(isActive:)` is the shape that produced AMB.1's dead tap.
@@ -99,6 +100,17 @@ struct MyTimeOffRequestsView: View {
     }
 
     private var hasFailed: Bool { !timeOffService.errorMessage.isEmpty }
+
+    /// See `PTOTracking`. PTO has never functioned in this app, so the balance
+    /// leads only when there is a real figure to lead with.
+    private var ptoTracking: PTOTracking {
+        guard let balance else { return .tracked }
+        return PTOTracking.evaluate(enabled: ptoSettings?.enabled ?? false,
+                                    balance: balance.balance,
+                                    accrued: balance.totalAccrued,
+                                    used: balance.used,
+                                    banking: balance.bankingBalance)
+    }
 
     /// EVERY PRESENTATION SURFACE ON THIS SCREEN, ENUMERATED ONCE.
     ///
@@ -203,6 +215,7 @@ struct MyTimeOffRequestsView: View {
         TimeOffBalanceLead(available: balance?.availableBalance,
                            pendingHours: balance?.pendingBalance,
                            failed: balanceFailed,
+                           tracking: ptoTracking,
                            tint: tint) {
             destination = .balance
         }
@@ -365,8 +378,10 @@ struct MyTimeOffRequestsView: View {
         }
         do {
             let loaded = try await ptoService.getPTOBalance(userId: userId, organizationID: organizationID)
+            let loadedSettings = try? await ptoService.getPTOSettings(organizationID: organizationID)
             await MainActor.run {
                 balance = loaded
+                ptoSettings = loadedSettings
                 balanceFailed = false
             }
         } catch {
