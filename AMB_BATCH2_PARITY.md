@@ -676,6 +676,54 @@ filter, no grouping, and no empty state at all.
     Templates are read-only in this app; authoring is web-only
 
 
+## HOW THE CONVERSION IS HELD TO THIS — mechanism, not instruction
+
+Operator, 2026-07-26: "how will you ensure it creates these exactly as we have
+designed instead of just using them as inspiration?"
+
+The honest answer is that the mechanism we had already failed. Step 3b of the
+phase kickoff says to put the converted screen beside the mockup and account for
+EVERY difference — that instruction was in place when AMB.1 shipped a static day
+strip where the lab scrolled, and then shipped it scrolling at the wrong capsule
+width. Prose does not hold a design. So there are now three mechanisms, and the
+strongest one removes the matching step entirely.
+
+    1. THERE IS NOTHING TO MATCH. The design lives in production code that the
+       LAB imports, not the other way round:
+
+           Reports/ReportFormKit.swift     ReportSection, ReportMultiSelect,
+                                           ReportChoiceRow, ReportVehiclePicker
+           Reports/ReportRules.swift       ReportMileage, VehicleSelection,
+                                           SessionAutoSelect
+           Reports/ReportSchoolLink.swift  school ownership
+
+       The converted screen imports the SAME components. It cannot have
+       different padding, a different checkbox, a different heading weight or a
+       different confirm layout, because it does not draw them. The mockup went
+       from ~40 raw shape uses to 4 doing this — everything else is shared.
+       Same reasoning as AmbientCard and its drift gate: a design nobody is
+       forced to use is decoration.
+
+    2. THE BEHAVIOUR RULES ARE EXECUTABLE. scripts/test_report_rules.sh compiles
+       the REAL Reports/*.swift the app builds and runs them — 44 checks. Not a
+       reimplementation in another language, which is a mistake already made once
+       here and caught by the operator ("your logic was fake"). The suite covers
+       every rule the contract below asserts: a typed mileage surviving
+       recalculation, the first vehicle tap never committing, auto-select taking
+       the first unreported session once per date and latching on a manual pick,
+       and school ownership replacing rather than appending.
+       It has been proved to FAIL when a rule is broken; a test that cannot fail
+       is the same fake evidence in another costume.
+
+    3. PARITY-WALK THE NEW SCREEN, every round, with a grep-per-capability pass
+       rather than by reading. Five capabilities were lost inside these
+       redesigns and the operator found four of them.
+
+WHAT IS STILL ONLY PROSE, and therefore still at risk: spacing and type scale
+inside the sections the kit does not own, and the order of the nine sections.
+Judge those against the running mockup.
+
+
 ## THE BEHAVIOUR CONTRACT — what AMB.7 must build for real
 
 Operator, 2026-07-26: "the real deal will act EXACTLY as the mockup does", and

@@ -98,10 +98,9 @@ struct ReportProposalMockup: View {
     // What the app can prefill.
     @State private var reportDate = Date()
     @State private var photographer = "Maria Alvarez"
-    /// Auto-selected to the first session today NOT already reported — the live
-    /// app's rule, which runs once per date and is never undone by a refresh.
-    @State private var session: LabSession? = DesignLabSampleData.todaysSessions
-        .first { !$0.alreadyReported }
+    /// Session choice lives in SessionAutoSelect — first unreported session,
+    /// once per date, and a manual pick latches. Tested, not reimplemented here.
+    @State private var sessionPick = SessionAutoSelect()
     /// School ownership lives in ReportSchoolLink — a plain, testable type that
     /// scripts/test_report_school_link.sh compiles and RUNS. The view holds no
     /// copy of the rule, so the tests cannot pass while the screen misbehaves.
@@ -111,17 +110,13 @@ struct ReportProposalMockup: View {
             $0.name == DesignLabSampleData.todaysSessions.first { !$0.alreadyReported }?.school
         }?.id)
 
-    @State private var mileage = ""
-    @State private var mileageEdited = false
-    /// NO DEFAULT (operator, 2026-07-26). Nothing is pre-selected, the
-    /// photographer must choose, and BOTH choices take the second tap — which
-    /// is the live form's rule.
-    ///
-    /// This overrides my earlier "confirm only on a change from your usual"
-    /// proposal. That was aimed at alert fatigue, and it does not apply here:
-    /// with nothing pre-selected the confirm is the second half of a deliberate
-    /// choice you just made, not a dialog interrupting an already-correct value.
-    @State private var vehicle = ""
+    /// Mileage lives in ReportMileage, whose one rule — a typed value is never
+    /// overwritten by a recalculation — is tested rather than asserted.
+    @State private var mileage = ReportMileage(
+        calculated: DesignLabSampleData.routeMiles([DesignLabSampleData.schools[1]]))
+    /// Vehicle lives in VehicleSelection: no default, both options take a second
+    /// tap, and the first tap never commits. Tested.
+    @State private var vehicleChoice = VehicleSelection()
 
     // The work.
     @State private var shot: Set<String> = ["Fall Sports"]
@@ -141,10 +136,6 @@ struct ReportProposalMockup: View {
 
 
 
-    /// The vehicle awaiting its second tap. Non-nil means the inline confirm is
-    /// showing — and it remembers WHICH one you tapped, which the old dialog
-    /// did not: it re-offered both options as though you had asked for a menu.
-    @State private var pendingVehicle: String?
     @State private var showSchoolPicker = false
     @State private var submitted = false
 
@@ -153,8 +144,15 @@ struct ReportProposalMockup: View {
         link.stops.compactMap { id in DesignLabSampleData.schools.first { $0.id == id } }
     }
 
-    private var computed: Double { DesignLabSampleData.routeMiles(stops) }
-    private var miles: Double { Double(mileage) ?? computed }
+    private var computed: Double { mileage.calculated }
+    private var miles: Double { mileage.value }
+    /// Resolved back to a session for display.
+    private var session: LabSession? {
+        sessionPick.selection.flatMap { id in
+            DesignLabSampleData.todaysSessions.first { $0.id == id }
+        }
+    }
+    private var vehicle: String { vehicleChoice.confirmed?.rawValue ?? "" }
     private var usual: Double? { stops.first.flatMap { DesignLabSampleData.History.usualMiles($0.name) } }
     private var mileageLooksOff: Bool {
         guard let usual, usual > 0, stops.count == 1 else { return false }
@@ -168,6 +166,18 @@ struct ReportProposalMockup: View {
         }
         .navigationTitle("Daily Job Report")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            runAutoSelect()
+            syncMileage()
+        }
+        // The route changed, so the calculated figure changes. ReportMileage is
+        // what guarantees this cannot clobber a typed value.
+        .onChange(of: link) { _ in syncMileage() }
+        // A new date is a different day's sessions, so auto-select starts over.
+        .onChange(of: reportDate) { _ in
+            sessionPick.dateChanged()
+            runAutoSelect()
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Submit") {
@@ -188,8 +198,24 @@ struct ReportProposalMockup: View {
         }
     }
 
-    private func commit(_ value: String) {
-        withAnimation(AmbientMotion.snappy) { vehicle = value }
+    private var dateKey: String { Formatters.isoDate.string(from: reportDate) }
+
+    /// Runs the tested rule, then applies whatever it chose to the school list
+    /// through the other tested rule. Both are safe to call repeatedly.
+    private func runAutoSelect() {
+        sessionPick.run(for: dateKey,
+                        sessions: DesignLabSampleData.todaysSessions.map {
+                            .init(id: $0.id, alreadyReported: $0.alreadyReported)
+                        })
+        link.set(schoolID(named: session?.school), for: .session)
+    }
+
+    private func syncMileage() {
+        mileage.recalculate(to: DesignLabSampleData.routeMiles(stops))
+    }
+
+    private func commitVehicle() {
+        withAnimation(AmbientMotion.snappy) { vehicleChoice.confirm() }
         AmbientHaptics.impact(.medium)
     }
 
@@ -214,37 +240,30 @@ struct ReportProposalMockup: View {
         .ambientNoBounceWhenShort()
     }
 
-    // MARK: - Shared section chrome
+    // MARK: - Section chrome — delegated, not duplicated
 
-    /// EVERY section on this screen goes through here. That is deliberate: the
-    /// moment one part of the report gets its own heading treatment, the layout
-    /// starts ranking things again, which is exactly the mistake this replaced.
+    /// Thin pass-through to ReportFormKit's ReportSection. The mockup owns NO
+    /// layout of its own, so the converted screen cannot drift from it: both
+    /// draw with the same component.
     private func section<Content: View>(_ title: String, status: String,
                                         statusTint: Color? = nil,
-                                        @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.headline)
-                Spacer(minLength: 8)
-                Text(status)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(statusTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.tertiary))
-                    .contentTransition(.numericText())
-                    .multilineTextAlignment(.trailing)
-            }
-            content()
-                // An OPAQUE panel, plus a lit edge. The edge alone was not
-                // enough: at .material every section was ultraThinMaterial over
-                // a tinted wash, which sits at nearly the same value as the page
-                // — eight of them read as one mass. `.surface` was added to
-                // AmbientCard for exactly this, rather than hand-rolling a
-                // background here or abusing `state: .highlighted` to reach a
-                // heavier material.
-                .ambientCard(density: .compact,
-                             fill: .surface,
-                             border: .hairline(Color.primary.opacity(0.10)),
-                             fillWidth: true)
+                                        @ViewBuilder content: @escaping () -> Content) -> some View {
+        ReportSection(title: title, status: status, statusTint: statusTint, content: content)
+    }
+
+    private func listSection(title: String, groups: [(String, [String])],
+                             selection: Binding<Set<String>>, tint: Color) -> some View {
+        section(title,
+                status: selection.wrappedValue.isEmpty
+                    ? "select all that apply"
+                    : "\(selection.wrappedValue.count) selected",
+                statusTint: selection.wrappedValue.isEmpty ? nil : tint) {
+            ReportMultiSelect(groups: groups, selection: selection, tint: tint)
         }
+    }
+
+    private func radio(_ title: String, _ options: [String], _ selection: Binding<String?>) -> some View {
+        ReportChoiceRow(title: title, options: options, selection: selection)
     }
 
     // MARK: - The report, section by section, all equal
@@ -315,10 +334,10 @@ struct ReportProposalMockup: View {
 
     /// `nil` renders the off-schedule row.
     private func sessionRow(_ option: LabSession?) -> some View {
-        let on = session?.id == option?.id
+        let on = sessionPick.selection == option?.id
         return Button {
             withAnimation(AmbientMotion.snappy) {
-                session = option
+                sessionPick.pick(option?.id)
                 // Picking a different session REPLACES its school. Choosing
                 // off-schedule removes it. Schools you added yourself are never
                 // touched, and neither is one the photoshoot note is holding.
@@ -408,48 +427,34 @@ struct ReportProposalMockup: View {
             HStack(spacing: 10) {
                 Text("Total").font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
-                TextField(String(format: "%.1f", computed), text: $mileage)
+                TextField(String(format: "%.1f", computed),
+                          text: Binding(get: { mileage.displayText },
+                                        set: { mileage.type($0) }))
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                     .frame(width: 84)
-                    .onChange(of: mileage) { _ in mileageEdited = !mileage.isEmpty }
                 Text("miles").font(.subheadline).foregroundStyle(.secondary)
             }
 
             Divider()
 
-            // Vehicle lives with the mileage — one decision, per the operator.
-            HStack(spacing: 8) {
-                vehicleButton("Personal")
-                vehicleButton("Company")
-            }
-
-            // The confirmation appears HERE, under the control that raised it,
-            // rather than as a sheet anchored somewhere else on the screen. The
-            // vehicle selector can sit anywhere in a long scroll, and making the
-            // second tap happen where your thumb already is means no reaching.
-            if let pendingVehicle {
-                vehicleConfirm(pendingVehicle)
-            } else if vehicle.isEmpty {
-                Label("Required — pick a vehicle, then confirm it.",
-                      systemImage: "exclamationmark.circle.fill")
-                    .font(.caption).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            // Vehicle lives with the mileage — one decision, per the operator —
+            // and the control plus its inline confirm are one shared component.
+            ReportVehiclePicker(selection: $vehicleChoice, tint: Self.featureTint)
 
             // The route, always. A bare number is what gets accepted unread.
-            if !stops.isEmpty && !mileageEdited {
+            if !stops.isEmpty && !mileage.isOverridden {
                 Text((["Home"] + stops.map(\.name) + ["Home"]).joined(separator: " → "))
                     .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if mileageEdited {
+            if mileage.isOverridden {
                 HStack(spacing: 6) {
                     Text("You typed this — it won't be overwritten.")
                         .font(.caption).foregroundStyle(.orange)
                     Button {
-                        withAnimation(AmbientMotion.snappy) { mileage = ""; mileageEdited = false }
+                        withAnimation(AmbientMotion.snappy) { mileage.useCalculated() }
                     } label: {
                         Text("Use \(String(format: "%.1f", computed))")
                             .font(.caption.weight(.bold))
@@ -467,88 +472,6 @@ struct ReportProposalMockup: View {
         }
     }
 
-    /// The second half of the two-step, in place.
-    ///
-    /// It keeps everything the modal had — it does not commit on the first tap,
-    /// it says what the value does, and it can be cancelled — and drops the one
-    /// thing the modal added, which was making you reach to the top of the
-    /// screen to finish something you started at the bottom.
-    private func vehicleConfirm(_ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .top, spacing: 7) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption.weight(.bold))
-                Text("Confirm \(value.capitalized) — this sets your mileage reimbursement and can't be changed by an accidental tap.")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(.orange)
-
-            HStack(spacing: 8) {
-                Button {
-                    withAnimation(AmbientMotion.snappy) { pendingVehicle = nil }
-                } label: {
-                    Text("Cancel")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity).padding(.vertical, 10)
-                        // ambient-allow: a control, not a container.
-                        .background(Capsule().fill(.ultraThinMaterial))
-                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12)))
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    withAnimation(AmbientMotion.snappy) { pendingVehicle = nil }
-                    commit(value)
-                } label: {
-                    Text("Yes, \(value)")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity).padding(.vertical, 10)
-                        // ambient-allow: a control, not a container.
-                        .background(Capsule().fill(Color.orange))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.top, 2)
-        .transition(.opacity.combined(with: .move(edge: .top)))
-    }
-
-    private func vehicleButton(_ title: String) -> some View {
-        let on = vehicle == title.lowercased()
-        let armed = pendingVehicle == title.lowercased()
-        return Button {
-            // EVERY tap arms the confirm — there is no default, so both
-            // options are a real choice and both take the second tap. The first
-            // tap never commits.
-            withAnimation(AmbientMotion.snappy) { pendingVehicle = title.lowercased() }
-            AmbientHaptics.impact(.light)
-        } label: {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(on ? .white : (armed ? .orange : .primary))
-                .frame(maxWidth: .infinity).padding(.vertical, 11)
-                // ambient-allow: a segmented control, not a container.
-                .background(Capsule().fill(on
-                                           ? AnyShapeStyle(Self.featureTint)
-                                           : AnyShapeStyle(.ultraThinMaterial)))
-                // Armed but NOT committed — a dashed edge says "this is the one
-                // the confirm below is about", without pretending it is chosen.
-                .overlay(
-                    Capsule().strokeBorder(
-                        armed ? Color.orange : Color.primary.opacity(on ? 0 : 0.12),
-                        style: StrokeStyle(lineWidth: armed ? 2 : 1,
-                                           dash: armed ? [5, 3] : []))
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - 2 & 3. The work: both lists, entirely visible
-
     private var shotSection: some View {
         listSection(title: "What did you shoot?",
                     groups: DesignLabSampleData.jobDescriptionGroups,
@@ -564,109 +487,6 @@ struct ReportProposalMockup: View {
     }
 
     /// Every option on screen, grouped, nothing behind a disclosure control.
-    /// A grouped VERTICAL LIST, not a chip cloud.
-    ///
-    /// The previous cut used chips in a flow layout, chosen for density, and the
-    /// operator's verdict was "still just very confusing looking and not grouped
-    /// and separated well". They were right, and the guidance I already had said
-    /// so: NN/g's checkbox guidelines are list vertically, make the whole row the
-    /// tap target, and use subheadings to break up a long list. A ragged chip
-    /// cloud has no shared left edge, so there is nothing for the eye to run
-    /// down, and the group labels ended up as the weakest thing on screen while
-    /// doing the most structural work.
-    ///
-    /// So: one option per row, all sharing a left edge, checkmark on the right,
-    /// full-width target, and a real heading with a rule above each family.
-    private func listSection(title: String, groups: [(String, [String])],
-                             selection: Binding<Set<String>>, tint: Color) -> some View {
-        section(title,
-                status: selection.wrappedValue.isEmpty
-                    ? "select all that apply"
-                    : "\(selection.wrappedValue.count) selected",
-                statusTint: selection.wrappedValue.isEmpty ? nil : tint) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(groups.enumerated()), id: \.element.0) { index, group in
-                    groupHeader(group.0, first: index == 0)
-                    // TWO COLUMNS. A single column turned 22 + 12 options into 34
-                    // scrolled rows; paired up it is 12 + 7. The header still
-                    // spans the full width, so the grouping survives the split.
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10, alignment: .leading),
-                                        GridItem(.flexible(), spacing: 10, alignment: .leading)],
-                              alignment: .leading, spacing: 0) {
-                        ForEach(group.1, id: \.self) { option in
-                            optionRow(option, selection: selection, tint: tint)
-                        }
-                    }
-                }
-
-                if selection.wrappedValue.contains("NONE") && selection.wrappedValue.count > 1 {
-                    Label("\"NONE\" is selected alongside \(selection.wrappedValue.count - 1) other item\(selection.wrappedValue.count == 2 ? "" : "s").",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 12)
-                }
-            }
-        }
-    }
-
-    /// Readable, not decorative. The label that organises the list should not be
-    /// the smallest text in it.
-    private func groupHeader(_ title: String, first: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if !first {
-                Divider().padding(.vertical, 7)
-            }
-            Text(title)
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 2)
-        }
-    }
-
-    /// The box leads, so both columns have a hard left edge to run down. In a
-    /// two-column grid a trailing control would leave the eye chasing a ragged
-    /// gutter, which is the failure the chip cloud had.
-    private func optionRow(_ option: String, selection: Binding<Set<String>>,
-                           tint: Color) -> some View {
-        let on = selection.wrappedValue.contains(option)
-        return Button {
-            withAnimation(AmbientMotion.snappy) {
-                if on { selection.wrappedValue.remove(option) }
-                else { selection.wrappedValue.insert(option) }
-            }
-            AmbientHaptics.selection()
-        } label: {
-            HStack(alignment: .top, spacing: 9) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(on ? Color.clear : Color.secondary.opacity(0.45), lineWidth: 1.5)
-                        .frame(width: 21, height: 21)
-                    if on {
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(tint).frame(width: 21, height: 21)
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .heavy))
-                            .foregroundStyle(.white)
-                    }
-                }
-                Text(option)
-                    .font(.footnote)
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-            // The WHOLE cell, per the guidance — not the 21pt box.
-            .contentShape(Rectangle())
-            // 4pt each side keeps the row a comfortable target (label + 21pt box
-            // is already ~29pt tall) while giving back 6pt on every one of the
-            // 19 rows.
-            .padding(.vertical, 4)
-        }
-        .buttonStyle(.plain)
-    }
-
     // MARK: - 4. The rest
 
     private var scanSection: some View {
@@ -682,32 +502,6 @@ struct ReportProposalMockup: View {
         }
     }
 
-    private func radio(_ title: String, _ options: [String], _ selection: Binding<String?>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                ForEach(options, id: \.self) { option in
-                    let on = selection.wrappedValue == option
-                    Button {
-                        withAnimation(AmbientMotion.snappy) { selection.wrappedValue = option }
-                        AmbientHaptics.selection()
-                    } label: {
-                        Text(option)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(on ? .white : .primary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 9)
-                            // ambient-allow: a radio control, not a container.
-                            .background(Capsule().fill(on
-                                                       ? AnyShapeStyle(Color.teal)
-                                                       : AnyShapeStyle(.ultraThinMaterial)))
-                            .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.12)))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
 
     /// THE PHOTOSHOOT NOTE ATTACHMENT — missed entirely when this screen was
     /// rebuilt, and found by checking v3 against the parity inventory rather

@@ -1,11 +1,10 @@
 //  ReportSchoolLink.swift
 //  Iconik Employee — the daily job report's school-ownership rule
 //
-//  ARC SCAFFOLDING for now. Extracted from ReportProposalMockup so the rule can
-//  be EXECUTED rather than described. When AMB.7 converts the real screen this
-//  file moves out of DesignLab with it — the production form needs exactly this
-//  logic, and the operator's requirement is that the real screen behave exactly
-//  as the mockup does.
+//  PRODUCTION CODE, used by the lab. It lives in Reports/ rather than DesignLab/
+//  precisely so the conversion has nothing to move: the mockup and the real
+//  screen run the SAME rule, which is the only way "exactly as designed" is a
+//  property of the code rather than a promise someone has to keep.
 //
 //  WHY IT IS ITS OWN FILE
 //      I previously "verified" this rule by rewriting it in Python and testing
