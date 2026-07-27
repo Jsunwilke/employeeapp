@@ -245,7 +245,10 @@ struct DailyReportView: View {
         case none
         case noHomeAddress
         case routeFailed
-        case routePartial(Int)
+        /// Legs that failed, plus any stop that can never be in the figure —
+        /// they are different problems with different answers, and this
+        /// message's instruction ("check it") does not duplicate the other's.
+        case routePartial(legs: Int, excluded: [String])
         case stopsWithoutLocation([String])
     }
 
@@ -253,7 +256,13 @@ struct DailyReportView: View {
         guard !mileage.isOverridden, !isCalculatingMileage else { return .none }
         if storedUserHomeAddress.isEmpty { return .noHomeAddress }
         if unmeasuredLegs > 0 {
-            return unmeasuredLegs >= lastRouteLegs ? .routeFailed : .routePartial(unmeasuredLegs)
+            // A total failure ends in "type it yourself", which is what the
+            // stops message would also say, so it takes precedence alone. A
+            // PARTIAL failure ends in "check it", so it carries the excluded
+            // stops rather than hiding them — a stop with no location is
+            // permanently out of the figure and no retry will ever include it.
+            guard unmeasuredLegs < lastRouteLegs else { return .routeFailed }
+            return .routePartial(legs: unmeasuredLegs, excluded: unmeasurableStops.map(\.name))
         }
         if !unmeasurableStops.isEmpty {
             return .stopsWithoutLocation(unmeasurableStops.map(\.name))
@@ -307,7 +316,10 @@ struct DailyReportView: View {
             // again. Nothing else re-measures — the only other trigger is a
             // route change — so without this a failed measurement stayed failed
             // for the life of the screen.
-            if unmeasuredLegs > 0 { recalculateMileage() }
+            // Not while a typed value is in the field: the spinner would appear
+            // under their own number on every return to the app, and a failed
+            // run would quietly move the "Use N" button to "Use 0.0".
+            if unmeasuredLegs > 0 && !mileage.isOverridden { recalculateMileage() }
         }
         // The route changed, so the calculated figure changes. ReportMileage is
         // what guarantees this cannot clobber a value the photographer typed.
@@ -681,7 +693,7 @@ struct DailyReportView: View {
             // buttons that raised it.
             ReportVehiclePicker(selection: $vehicle, tint: feature)
 
-            if isCalculatingMileage {
+            if isCalculatingMileage && !mileage.isOverridden {
                 HStack(spacing: 8) {
                     ProgressView().scaleEffect(0.7)
                     Text("Calculating route distances…").font(.caption).foregroundStyle(.secondary)
@@ -712,6 +724,9 @@ struct DailyReportView: View {
                         .font(.caption).foregroundStyle(.orange)
                     Button {
                         withAnimation(AmbientMotion.snappy) { mileage.useCalculated() }
+                        // Handing the number back to the route is the moment to
+                        // measure it again, if the last attempt failed.
+                        if unmeasuredLegs > 0 { recalculateMileage() }
                     } label: {
                         Text("Use \(String(format: "%.1f", mileage.calculated))")
                             .font(.caption.weight(.bold))
@@ -752,23 +767,30 @@ struct DailyReportView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(feature)
             }
-        case .routePartial(let count):
-            HStack(alignment: .top, spacing: 6) {
-                Label("\(count) leg\(count == 1 ? "" : "s") of this route couldn't be measured, so the figure is short. Check it before submitting.",
-                      systemImage: "wifi.exclamationmark")
-                    .font(.caption).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Try again") { recalculateMileage() }
-                    .font(.caption.weight(.bold))
-                    .buttonStyle(.plain)
-                    .foregroundStyle(feature)
+        case .routePartial(let count, let excluded):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .top, spacing: 6) {
+                    Label("\(count) leg\(count == 1 ? "" : "s") of this route couldn't be measured, so the figure is short. Check it before submitting.",
+                          systemImage: "wifi.exclamationmark")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Try again") { recalculateMileage() }
+                        .font(.caption.weight(.bold))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(feature)
+                }
+                if !excluded.isEmpty { stopsWithoutLocationLabel(excluded) }
             }
         case .stopsWithoutLocation(let names):
-            Label("\(names.joined(separator: ", ")) \(names.count == 1 ? "has" : "have") no address or coordinates on file, so \(names.count == 1 ? "it is" : "they are") not in this figure. Type the mileage in yourself.",
-                  systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).foregroundStyle(.orange)
-                .fixedSize(horizontal: false, vertical: true)
+            stopsWithoutLocationLabel(names)
         }
+    }
+
+    private func stopsWithoutLocationLabel(_ names: [String]) -> some View {
+        Label("\(names.joined(separator: ", ")) \(names.count == 1 ? "has" : "have") no address or coordinates on file, so \(names.count == 1 ? "it is" : "they are") not in this figure — no retry will change that.",
+              systemImage: "exclamationmark.triangle.fill")
+            .font(.caption).foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var shotSection: some View {
@@ -1124,6 +1146,8 @@ struct DailyReportView: View {
         let run = mileageRun
 
         unmeasuredLegs = 0
+        lastRouteLegs = 0
+        measuredRoute = []
         guard !storedUserHomeAddress.isEmpty else {
             // No home address means no route to measure. The live form CLEARED
             // the field here, wiping a typed value; ReportMileage leaves a typed
@@ -1159,27 +1183,32 @@ struct DailyReportView: View {
             }
             await MainActor.run {
                 guard run == self.mileageRun else { return }
-                self.unmeasuredLegs = failed
-                self.lastRouteLegs = route.count - 1
+                self.isCalculatingMileage = false
 
                 if failed < route.count - 1 {
                     // Something was measured. Even a partial figure describes
                     // THIS route, so it is recorded as such.
                     self.mileage.recalculate(to: total)
                     self.measuredRoute = route
+                    self.unmeasuredLegs = failed
+                    self.lastRouteLegs = route.count - 1
                 } else if route != self.measuredRoute {
                     // Nothing was measured AND this is not the route the figure
                     // on screen was measured along. Keeping it would show a
                     // number for a route that no longer exists — plausible,
                     // unreviewable, and submitted. Zero is honest, and the
-                    // notice below says why and offers a retry.
+                    // notice says why and offers a retry.
                     self.mileage.recalculate(to: 0)
                     self.measuredRoute = []
+                    self.unmeasuredLegs = failed
+                    self.lastRouteLegs = route.count - 1
                 }
                 // The remaining case — nothing measured, same route as the
                 // figure already on screen — is a failed RE-check of a number
-                // that is still correct, so it is left alone.
-                self.isCalculatingMileage = false
+                // that is still there. THE COUNTERS ARE LEFT ALONE TOO: the
+                // notice describes the FIGURE, not the last attempt, and
+                // overwriting them relabelled a kept partial figure as a total
+                // failure, throwing away the accurate "this is short" warning.
             }
         }
     }
