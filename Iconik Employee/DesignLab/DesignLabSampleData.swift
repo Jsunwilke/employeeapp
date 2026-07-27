@@ -775,14 +775,16 @@ struct LabSchool: Identifiable, Hashable {
 /// A photoshoot note. Local-first, one school NAME (not an id), no categories
 /// and no session binding — which is the real model, and thinner than the screen
 /// makes it look.
+/// Mutable throughout, because the mockup lets you actually write a note —
+/// type in it, set its school, add photos and submit it.
 struct LabPhotoshootNote: Identifiable {
     let id: String
     let timestamp: Date
     /// Empty when the schedule could not fill it — the state that opens the
     /// "which school?" dialog.
-    let school: String
-    let text: String
-    let photoCount: Int
+    var school: String
+    var text: String
+    var photoCount: Int
     var submitted: Bool = false
     var syncedToServer: Bool = false
     var submittedAt: Date?

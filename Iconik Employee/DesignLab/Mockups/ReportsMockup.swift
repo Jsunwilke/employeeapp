@@ -1284,6 +1284,9 @@ private struct SchoolPickerSheet: View {
 private struct TemplatePickerMockup: View {
     @State private var search = ""
     @State private var decoded = true
+    /// One enum-free push is fine here: there is exactly ONE destination, and
+    /// the item itself carries which template was chosen.
+    @State private var opening: LabReportTemplate?
 
     /// The live app never decodes six of a template's properties, so every card
     /// shows "No description available", every version reads v1, no DEFAULT badge
@@ -1312,6 +1315,9 @@ private struct TemplatePickerMockup: View {
         }
         .navigationTitle("Custom Daily Reports")
         .navigationBarTitleDisplayMode(.inline)
+        .ambientPush(item: $opening) { template in
+            TemplateFormMockup(template: template)
+        }
     }
 
     private var labControl: some View {
@@ -1375,6 +1381,11 @@ private struct TemplatePickerMockup: View {
     /// most of each card empty. Templates are a list you pick one item from, and
     /// a list row reads faster and survives a long name.
     private func templateRow(_ template: LabReportTemplate, showDetail: Bool) -> some View {
+        Button { opening = template } label: { templateRowLabel(template, showDetail: showDetail) }
+            .buttonStyle(.plain)
+    }
+
+    private func templateRowLabel(_ template: LabReportTemplate, showDetail: Bool) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "doc.text.below.ecg")
                 .font(.system(size: 14, weight: .semibold))
@@ -1425,80 +1436,180 @@ private struct TemplatePickerMockup: View {
                      fillWidth: true)
     }
 }
-
 // MARK: - Template form
 
-/// The dynamic form, drawn against EVERY field type it can render rather than a
-/// convenient three. Four of these types are broken today in ways that stop the
-/// form being submittable at all; they are drawn in their broken state and
-/// labelled, because a design approved against a form that cannot submit is not
-/// an approval of anything.
+/// THE SECOND REPORT TYPE, and fillable for the same reason the first one is:
+/// an operator cannot tell whether a form works by looking at a picture of it.
+///
+/// Drawn against EVERY field type the template engine can render rather than a
+/// convenient three, because a template is authored in the web app and this
+/// screen has to survive whatever comes back. Fourteen render types plus the
+/// unknown-type fallback are all here and all live.
+///
+/// THE ONE THING THIS DESIGN ADDS: WHY SUBMIT IS DISABLED.
+///     The live form disables Submit whenever any field fails validation and
+///     says NOTHING — no per-field error, no message, just a greyed button at
+///     60% opacity. With required fields scattered across four auto-generated
+///     sections, a photographer can be left tapping a dead button with no way to
+///     find out which field is the problem. The strip above the button lists
+///     them and scrolls you to them.
+///
+/// Field types marked with the lab toggle are the four that are BROKEN in the
+/// live app in ways that make the form permanently unsubmittable. This mockup
+/// implements them CORRECTLY — an optional number left blank does not block
+/// submission here — so the design can be judged on what it should be, while
+/// the toggle still shows where the real defects are.
 private struct TemplateFormMockup: View {
+    var template: LabReportTemplate?
+
+    @State private var text: [String: String] = [:]
+    @State private var multi: [String: Set<String>] = [:]
+    @State private var flags: [String: Bool] = [:]
+    @State private var dates: [String: Date] = [:]
+    @State private var photos: [Color] = []
     @State private var showBroken = false
+    @State private var submitted = false
+
+    private var fields: [(type: String, label: String, required: Bool, readOnly: Bool)] {
+        DesignLabSampleData.templateFieldTypes
+    }
+
+    private var title: String { template?.name ?? "Sports Day" }
+    private var version: Int { template?.version ?? 3 }
+
+    /// The real rule, kept: a template report requires EVERY field to validate,
+    /// unlike the standard report which requires only the vehicle.
+    private var unfinished: [(type: String, label: String, required: Bool, readOnly: Bool)] {
+        fields.filter { !isValid($0) }
+    }
+
+    private func isValid(_ field: (type: String, label: String, required: Bool, readOnly: Bool)) -> Bool {
+        guard field.required, !field.readOnly else { return true }
+        switch field.type {
+        case "multiselect":
+            return !(multi[field.type] ?? []).isEmpty
+        case "toggle":
+            return true
+        case "file":
+            return !photos.isEmpty
+        case "date", "time":
+            return dates[field.type] != nil
+        case "email":
+            let value = text[field.type] ?? ""
+            return value.contains("@") && value.contains(".")
+        default:
+            return !(text[field.type] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+        }
+    }
 
     var body: some View {
         ZStack {
             AmbientBackdrop(tint: Color(hex: "#5471E0"), intensity: 0.7)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    labControl
-                    header
-                    fieldSections
-                    submitBlock
+            if submitted { successState } else { form }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Submit") {
+                    withAnimation(AmbientMotion.gentle) { submitted = true }
+                    AmbientHaptics.impact(.medium)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
+                .font(.body.weight(.semibold))
+                .disabled(!unfinished.isEmpty)
             }
         }
-        .navigationTitle("Sports Day")
-        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var form: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                labControl
+                header
+                blockingStrip
+                section("Basic Information", ["user_name", "date_auto", "time_auto"])
+                section("Calculated Fields", ["school_name", "mileage", "photo_count", "weather_conditions"])
+                section("Media & Location", ["file"])
+                section("Report Details", ["text", "email", "phone", "number", "currency",
+                                          "select", "multiselect", "radio", "toggle",
+                                          "date", "time", "textarea"])
+                footerNote
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+        }
+        .ambientNoBounceWhenShort()
     }
 
     private var labControl: some View {
         VStack(alignment: .leading, spacing: 6) {
             AmbientSectionTitle("Lab · field defects", trailing: "not a design element")
-            Toggle("Mark the four broken field types", isOn: $showBroken)
+            Toggle("Mark the field types that are broken today", isOn: $showBroken)
                 .font(.caption)
         }
     }
 
-    /// The live screen fakes a nav bar with a blue gradient because it is a sheet
-    /// with no navigation container. Here it is a real pushed screen with a real
-    /// bar, which is one fewer bespoke thing to maintain.
+    /// The live screen fakes a nav bar with a blue gradient because it is a
+    /// sheet with no navigation container. Here it is a real pushed screen with
+    /// a real bar — one fewer bespoke thing to maintain, and Submit sits where
+    /// it sits on the standard report.
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("14 fields · 4 automatic").font(.subheadline).foregroundStyle(.secondary)
+                Text("\(fields.count) fields · \(fields.filter(\.readOnly).count) automatic")
+                    .font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
-                Text("v3").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+                Text("v\(version)").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
             }
-            Text("Every field must pass before this form will submit — including the automatic ones you cannot edit.")
+            Text("Every field must pass before this form will submit — including the automatic ones you cannot edit. That is the live rule, and it is why the strip below exists.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .ambientCard(density: .roomy, fillWidth: true)
     }
 
-    /// Sections are auto-derived from field types and rendered ALPHABETICALLY —
-    /// which is why "Basic Information" precedes "Report Details" by accident
-    /// rather than by design. Kept as-is so the operator can see it and decide.
-    private var fieldSections: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            section("Basic Information", ["user_name", "date_auto", "time_auto"])
-            section("Calculated Fields", ["school_name", "mileage", "photo_count", "weather_conditions"])
-            section("Media & Location", ["file"])
-            section("Report Details", ["text", "email", "phone", "number", "currency",
-                                       "select", "multiselect", "radio", "toggle", "date", "time", "textarea"])
+    /// The state that should exist and does not.
+    @ViewBuilder
+    private var blockingStrip: some View {
+        if unfinished.isEmpty {
+            HStack(spacing: 7) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("Ready to submit").font(.subheadline.weight(.semibold)).foregroundStyle(.green)
+                Spacer(minLength: 0)
+            }
+            .ambientCard(density: .compact, fillWidth: true)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                    Text("\(unfinished.count) field\(unfinished.count == 1 ? "" : "s") still needed")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.orange)
+                AmbientFlowLayout(spacing: 6, lineSpacing: 6) {
+                    ForEach(unfinished, id: \.type) { field in
+                        AmbientBadge(text: field.label, tint: .orange)
+                    }
+                }
+                Text("Today the button simply greys out and says nothing, with the failing field possibly in a section you have not scrolled to.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .ambientCard(density: .compact,
+                         border: .hairline(Color.orange.opacity(0.4)), fillWidth: true)
         }
     }
 
-    private func section(_ title: String, _ types: [String]) -> some View {
-        let fields = DesignLabSampleData.templateFieldTypes.filter { types.contains($0.type) }
+    /// Sections are auto-derived from field TYPES and rendered ALPHABETICALLY —
+    /// which is why Basic Information precedes Report Details by accident rather
+    /// than design. Kept as-is so the operator can see it and decide.
+    private func section(_ name: String, _ types: [String]) -> some View {
+        let list = fields.filter { types.contains($0.type) }
         return VStack(alignment: .leading, spacing: 8) {
-            AmbientSectionTitle(title, trailing: "\(fields.count)")
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(fields, id: \.type) { field in
+            AmbientSectionTitle(name, trailing: "\(list.count)")
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(list, id: \.type) { field in
                     fieldRow(field)
                 }
             }
@@ -1507,27 +1618,26 @@ private struct TemplateFormMockup: View {
     }
 
     private func fieldRow(_ field: (type: String, label: String, required: Bool, readOnly: Bool)) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
                 Text(field.label).font(.subheadline.weight(.medium))
                 if field.required {
                     Text("*").font(.subheadline.weight(.bold)).foregroundStyle(.red)
                 }
-                if field.readOnly {
-                    AmbientBadge(text: "Auto", tint: .blue)
-                }
+                if field.readOnly { AmbientBadge(text: "Auto", tint: .blue) }
                 Spacer(minLength: 0)
                 Text(field.type)
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
 
-            control(for: field)
+            control(field)
 
             if showBroken, let note = defect(field.type) {
                 HStack(alignment: .top, spacing: 5) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9, weight: .bold))
                     Text(note).font(.caption2).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
                 }
                 .foregroundStyle(.orange)
             }
@@ -1535,79 +1645,190 @@ private struct TemplateFormMockup: View {
     }
 
     @ViewBuilder
-    private func control(for field: (type: String, label: String, required: Bool, readOnly: Bool)) -> some View {
+    private func control(_ field: (type: String, label: String, required: Bool, readOnly: Bool)) -> some View {
         switch field.type {
-        case "user_name", "date_auto", "time_auto", "school_name", "mileage", "photo_count", "weather_conditions":
-            Text(autoValue(field.type))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                // ambient-allow: a read-only input well, not a card.
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.secondary.opacity(0.1)))
+        case "user_name", "date_auto", "time_auto", "school_name", "mileage",
+             "photo_count", "weather_conditions":
+            readOnlyWell(autoValue(field.type))
+
         case "textarea":
-            Text("Placeholder text is ignored for this type.")
-                .font(.caption).foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, minHeight: 54, alignment: .topLeading)
-                .padding(10)
+            TextEditor(text: binding(field.type))
+                .frame(minHeight: 74)
+                .font(.subheadline)
+                .scrollContentBackground(.hidden)
+                .padding(8)
                 // ambient-allow: an input well, not a card.
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.secondary.opacity(0.1)))
+
+        case "number", "currency":
+            TextField(field.type == "currency" ? "0.00" : "0", text: binding(field.type))
+                .keyboardType(.decimalPad)
+                .font(.subheadline)
+                .padding(.horizontal, 10).padding(.vertical, 9)
+                // ambient-allow: an input well, not a card.
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.secondary.opacity(0.1)))
+
         case "select":
-            inputWell("Select sport", chevron: true)
-        case "multiselect":
-            VStack(alignment: .leading, spacing: 5) {
-                ForEach(["Basic", "Deluxe", "Team photo"], id: \.self) { option in
-                    HStack(spacing: 6) {
-                        Image(systemName: "square").font(.system(size: 13)).foregroundStyle(.secondary)
-                        Text(option).font(.caption)
-                        Spacer(minLength: 0)
-                    }
+            Picker("", selection: binding(field.type)) {
+                Text("Select \(field.label.lowercased())").tag("")
+                ForEach(["Football", "Volleyball", "Cross country", "Cheer"], id: \.self) {
+                    Text($0).tag($0)
                 }
             }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+        case "multiselect":
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(["Basic", "Deluxe", "Team photo", "Digital download"], id: \.self) { option in
+                    multiRow(option, key: field.type)
+                }
+            }
+
         case "radio":
             HStack(spacing: 6) {
                 ForEach(["Yes", "No", "NA"], id: \.self) { option in
-                    Text(option)
-                        .font(.caption.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        // ambient-allow: a radio control.
-                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                    let on = text[field.type] == option
+                    Button {
+                        withAnimation(AmbientMotion.snappy) { text[field.type] = option }
+                        AmbientHaptics.selection()
+                    } label: {
+                        Text(option)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(on ? .white : .primary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 9)
+                            // ambient-allow: a radio control, not a container.
+                            .background(Capsule().fill(on
+                                                       ? AnyShapeStyle(Color(hex: "#5471E0"))
+                                                       : AnyShapeStyle(.ultraThinMaterial)))
+                            .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.1)))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
+
         case "toggle":
-            Toggle("", isOn: .constant(false)).labelsHidden()
-        case "file":
-            HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                    .frame(width: 60, height: 60)
-                    .overlay(Image(systemName: "plus").foregroundStyle(.secondary))
-                Text("Photos are shared across every file field on the template — they are not stored per field.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Toggle("", isOn: Binding(
+                get: { flags[field.type] ?? false },
+                set: { flags[field.type] = $0 }))
+                .labelsHidden()
+                .tint(Color(hex: "#5471E0"))
+
         case "date", "time":
-            inputWell(field.type == "date" ? Formatters.monthDay.string(from: Date()) : "5:30 PM", chevron: false)
+            DatePicker("", selection: Binding(
+                get: { dates[field.type] ?? Date() },
+                set: { dates[field.type] = $0 }),
+                displayedComponents: field.type == "date" ? .date : .hourAndMinute)
+                .labelsHidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+        case "file":
+            filePicker
+
         default:
-            inputWell("Enter \(field.label.lowercased())", chevron: false)
+            TextField("Enter \(field.label.lowercased())", text: binding(field.type))
+                .font(.subheadline)
+                .padding(.horizontal, 10).padding(.vertical, 9)
+                // ambient-allow: an input well, not a card.
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.secondary.opacity(0.1)))
         }
     }
 
-    private func inputWell(_ placeholder: String, chevron: Bool) -> some View {
-        HStack {
-            Text(placeholder).font(.subheadline).foregroundStyle(.tertiary)
-            Spacer()
-            if chevron { Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.tertiary) }
+    private var filePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if photos.isEmpty {
+                Button { addPhoto() } label: {
+                    Label("Add Photos", systemImage: "photo.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color(hex: "#5471E0"))
+                        .frame(maxWidth: .infinity).padding(.vertical, 11)
+                        // ambient-allow: a control, not a card.
+                        .background(Capsule().fill(Color(hex: "#5471E0").opacity(0.13)))
+                }
+                .buttonStyle(.plain)
+            } else {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                    ForEach(Array(photos.enumerated()), id: \.offset) { index, colour in
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(colour.opacity(0.35))
+                            .frame(height: 78)
+                            .overlay(Image(systemName: "photo").foregroundStyle(colour))
+                            .overlay(alignment: .topTrailing) {
+                                Button {
+                                    withAnimation(AmbientMotion.snappy) { _ = photos.remove(at: index) }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 17))
+                                        .foregroundStyle(.white, .black.opacity(0.55))
+                                        .padding(4)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                    }
+                    Button { addPhoto() } label: {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.secondary.opacity(0.4),
+                                          style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                            .frame(height: 78)
+                            .overlay(Image(systemName: "plus").foregroundStyle(.secondary))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text("Photos are shared across every file field on a template — they are not stored per field.")
+                .font(.caption2).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 10).padding(.vertical, 9)
-        // ambient-allow: an input well, not a card.
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(Color.secondary.opacity(0.1)))
     }
 
+    private func addPhoto() {
+        let palette: [Color] = [.blue, .green, .orange, .purple, .teal, .pink]
+        withAnimation(AmbientMotion.snappy) { photos.append(palette[photos.count % palette.count]) }
+        AmbientHaptics.impact(.light)
+    }
+
+    private func multiRow(_ option: String, key: String) -> some View {
+        let on = (multi[key] ?? []).contains(option)
+        return Button {
+            withAnimation(AmbientMotion.snappy) {
+                var set = multi[key] ?? []
+                if on { set.remove(option) } else { set.insert(option) }
+                multi[key] = set
+            }
+            AmbientHaptics.selection()
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 15))
+                    .foregroundStyle(on ? Color(hex: "#5471E0") : .secondary)
+                Text(option).font(.caption)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func binding(_ key: String) -> Binding<String> {
+        Binding(get: { text[key] ?? "" }, set: { text[key] = $0 })
+    }
+
+    private func readOnlyWell(_ value: String) -> some View {
+        Text(value)
+            .font(.subheadline).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10).padding(.vertical, 9)
+            // ambient-allow: a read-only input well, not a card.
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.1)))
+    }
+
+    /// Note that photo_count is LIVE — add a photo above and this moves, which
+    /// is the one smart field the live form does keep up to date.
     private func autoValue(_ type: String) -> String {
         switch type {
         case "user_name": return "Maria Alvarez"
@@ -1615,7 +1836,7 @@ private struct TemplateFormMockup: View {
         case "time_auto": return Formatters.shortTime.string(from: Date())
         case "school_name": return "No schools selected"
         case "mileage": return "0.0"
-        case "photo_count": return "0"
+        case "photo_count": return "\(photos.count)"
         case "weather_conditions": return "Weather loading..."
         default: return ""
         }
@@ -1624,9 +1845,9 @@ private struct TemplateFormMockup: View {
     private func defect(_ type: String) -> String? {
         switch type {
         case "number":
-            return "An untouched number field fails validation even when it is optional, so Submit stays disabled forever. Finding R15."
+            return "An untouched number field fails validation even when optional, so Submit stays disabled forever. Implemented correctly here. Finding R15."
         case "file":
-            return "A required file field can never be satisfied — photos are never written to the field's own key. Finding R14."
+            return "A required file field can never be satisfied — photos are never written to the field's own key. Implemented correctly here. Finding R14."
         case "school_name", "mileage":
             return "This form has no school picker at all, so this always renders the fallback. Finding R17."
         case "weather_conditions":
@@ -1638,35 +1859,53 @@ private struct TemplateFormMockup: View {
         }
     }
 
-    private var submitBlock: some View {
-        VStack(spacing: 6) {
-            Button {} label: {
-                Text("Submit Report")
+    private var footerNote: some View {
+        Text("Leaving this screen discards everything typed — there is no draft, and in the live app swipe-to-dismiss is not blocked either.")
+            .font(.caption2).foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 8)
+    }
+
+    private var successState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 52)).foregroundStyle(.green)
+            Text("Report submitted").font(.title3.weight(.semibold))
+            Text("\(title) · v\(version)").font(.subheadline).foregroundStyle(.secondary)
+            Button {
+                withAnimation(AmbientMotion.gentle) { submitted = false }
+            } label: {
+                Text("Fill in another")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .padding(.horizontal, 18).padding(.vertical, 11)
                     // ambient-allow: a control.
                     .background(Capsule().fill(Color(hex: "#5471E0")))
             }
             .buttonStyle(.plain)
-            Text("Leaving this screen discards everything typed — there is no draft and swipe-to-dismiss is not blocked.")
-                .font(.caption2).foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
+            .padding(.top, 4)
         }
-        .padding(.top, 4)
+        .padding(.horizontal, 24)
     }
 }
 
 // MARK: - Photoshoot notes
 
+/// Live: write a note, set its school, add photos, submit it, start another.
+///
+/// The model underneath is thinner than the screen makes it look — a note is a
+/// timestamp, ONE school NAME (not an id), a body, and photo URLs. There are no
+/// categories, no tags, no note types, and nothing binds a note to a session.
 private struct PhotoshootNotesMockup: View {
     let notesOnlyOrg: Bool
-    @State private var selected: String = "n1"
 
-    private var notes: [LabPhotoshootNote] { DesignLabSampleData.photoshootNotes.filter { !$0.submitted } }
-    private var submitted: [LabPhotoshootNote] { DesignLabSampleData.photoshootNotes.filter(\.submitted) }
-    private var current: LabPhotoshootNote? { notes.first { $0.id == selected } }
+    @State private var notes: [LabPhotoshootNote] = DesignLabSampleData.photoshootNotes
+    @State private var selected: String? = "n1"
+    @State private var askingSchool = false
+    @State private var banner: String?
+
+    private var drafts: [LabPhotoshootNote] { notes.filter { !$0.submitted } }
+    private var submittedNotes: [LabPhotoshootNote] { notes.filter(\.submitted) }
+    private var index: Int? { notes.firstIndex { $0.id == selected } }
 
     var body: some View {
         ZStack {
@@ -1676,15 +1915,20 @@ private struct PhotoshootNotesMockup: View {
                 VStack(alignment: .leading, spacing: 14) {
                     actionRow
                     noteStrip
-                    if let note = current {
-                        editor(note)
-                        photos(note)
-                        syncRow(note)
-                        if notesOnlyOrg { submitButton(note) }
+                    if let index, !notes[index].submitted {
+                        editor(index)
+                        photos(index)
+                        syncRow(index)
+                        if notesOnlyOrg { submitButton(index) }
                     } else {
-                        AmbientEmptyState(title: "No note selected",
-                                          message: "Pick a note above, or start a new one.",
-                                          systemImage: "note.text")
+                        AmbientEmptyState(
+                            title: "No note selected",
+                            message: "Pick a note above, or start a new one.",
+                            systemImage: "note.text",
+                            actionTitle: "New Note",
+                            actionIcon: "plus.circle.fill",
+                            action: newNote,
+                            actionTint: Color(hex: "#6E56CF"))
                     }
                     if notesOnlyOrg { submittedSection }
                 }
@@ -1694,11 +1938,22 @@ private struct PhotoshootNotesMockup: View {
         }
         .navigationTitle("Photoshoot Notes")
         .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottom) { bannerView }
+        .confirmationDialog("Select School for Note", isPresented: $askingSchool, titleVisibility: .visible) {
+            ForEach(["Riverside Middle School", "Lincoln High School"], id: \.self) { name in
+                Button(name) { setSchool(name) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You have multiple photoshoots today. Which school would you like to use for this note?")
+        }
     }
+
+    // MARK: actions
 
     private var actionRow: some View {
         HStack(spacing: 8) {
-            Button {} label: {
+            Button(action: newNote) {
                 Label("New", systemImage: "plus")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
@@ -1708,7 +1963,7 @@ private struct PhotoshootNotesMockup: View {
             }
             .buttonStyle(.plain)
 
-            Button {} label: {
+            Button(action: deleteNote) {
                 Label("Delete", systemImage: "trash")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.red)
@@ -1717,7 +1972,8 @@ private struct PhotoshootNotesMockup: View {
                     .background(Capsule().fill(Color.red.opacity(0.12)))
             }
             .buttonStyle(.plain)
-            .opacity(current == nil ? 0.4 : 1)
+            .disabled(index == nil)
+            .opacity(index == nil ? 0.4 : 1)
 
             Spacer(minLength: 0)
 
@@ -1730,30 +1986,61 @@ private struct PhotoshootNotesMockup: View {
         }
     }
 
-    /// A horizontal strip, as today — but NEWEST FIRST. The full screen currently
-    /// shows insertion order (oldest first) while the iPad widget shows newest
-    /// first and caps at five. Two orders for one list is a bug in the design,
-    /// not a preference, and the note you want is nearly always the recent one.
+    private func newNote() {
+        let note = LabPhotoshootNote(
+            id: "n\(notes.count + 1)-\(drafts.count)",
+            timestamp: Date(), school: "", text: "", photoCount: 0)
+        withAnimation(AmbientMotion.snappy) {
+            notes.append(note)
+            selected = note.id
+        }
+        AmbientHaptics.impact(.light)
+        // The real behaviour: a new note immediately tries to set its school
+        // from the schedule, and with more than one session today it ASKS.
+        askingSchool = true
+    }
+
+    private func deleteNote() {
+        guard let index else { return }
+        withAnimation(AmbientMotion.snappy) {
+            notes.remove(at: index)
+            selected = drafts.first?.id
+        }
+        show("Note deleted")
+    }
+
+    private func setSchool(_ name: String) {
+        guard let index else { return }
+        withAnimation(AmbientMotion.snappy) { notes[index].school = name }
+        show("Selected \(name) for this note")
+    }
+
+    private func show(_ message: String) {
+        withAnimation(AmbientMotion.gentle) { banner = message }
+    }
+
+    // MARK: strip
+
+    /// NEWEST FIRST. The full screen currently shows insertion order (oldest
+    /// first) while the iPad widget shows newest first and caps at five. Two
+    /// orders for one list is a defect in the design, not a preference.
     private var noteStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(notes.reversed()) { note in
+                ForEach(drafts.reversed()) { note in
                     Button {
                         withAnimation(AmbientMotion.snappy) { selected = note.id }
                         AmbientHaptics.selection()
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(Formatters.shortTime.string(from: note.timestamp))
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.secondary)
+                                .font(.caption2.weight(.bold)).foregroundStyle(.secondary)
                             Text(note.school.isEmpty ? "No school yet" : note.school)
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(note.school.isEmpty ? .orange : .primary)
                                 .lineLimit(1)
                             Text(note.text.isEmpty ? "(No content)" : note.text)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
+                                .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
                         }
                         .frame(width: 168, alignment: .leading)
                         .ambientCard(density: .compact,
@@ -1771,58 +2058,72 @@ private struct PhotoshootNotesMockup: View {
         .padding(.horizontal, -16)
     }
 
-    private func editor(_ note: LabPhotoshootNote) -> some View {
+    // MARK: editor
+
+    private func editor(_ index: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             AmbientSectionTitle("School")
-            HStack {
-                Text(note.school.isEmpty ? "Choose a school" : note.school)
-                    .font(.subheadline)
-                    .foregroundStyle(note.school.isEmpty ? .tertiary : .primary)
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.tertiary)
-            }
-            .ambientCard(density: .compact, fillWidth: true)
 
-            if note.school.isEmpty {
-                // The real behaviour: with more than one session today, a
-                // confirmation dialog asks which school — and it can appear
-                // UNPROMPTED, because the schedule listener also triggers it.
+            Menu {
+                ForEach(DesignLabSampleData.schools) { school in
+                    Button(school.name) { setSchool(school.name) }
+                }
+            } label: {
+                HStack {
+                    Text(notes[index].school.isEmpty ? "Choose a school" : notes[index].school)
+                        .font(.subheadline)
+                        .foregroundStyle(notes[index].school.isEmpty ? .tertiary : .primary)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.tertiary)
+                }
+                .ambientCard(density: .compact, fillWidth: true)
+            }
+
+            if notes[index].school.isEmpty {
                 AmbientNoteCard(
                     title: "Which shoot is this?",
-                    text: "You have two photoshoots today. The app will ask which school this note belongs to — and it can ask on its own when the schedule finishes loading, not only when you tap.",
-                    accent: .orange,
-                    density: .compact)
+                    text: "You have two photoshoots today. The app asks which school this note belongs to — and it can ask on its own when the schedule finishes loading, not only when you tap.",
+                    accent: .orange, density: .compact)
             }
 
-            AmbientSectionTitle("Note", trailing: "\(note.text.count) characters")
-            Text(note.text.isEmpty ? "Type what happened on this shoot." : note.text)
+            AmbientSectionTitle("Note", trailing: "\(notes[index].text.count) characters")
+            TextEditor(text: Binding(
+                get: { notes[index].text },
+                set: { notes[index].text = $0 }))
+                .frame(minHeight: 120)
                 .font(.subheadline)
-                .foregroundStyle(note.text.isEmpty ? .tertiary : .primary)
-                .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)
+                .scrollContentBackground(.hidden)
                 .ambientCard(density: .compact, fillWidth: true)
+                .overlay(alignment: .topLeading) {
+                    if notes[index].text.isEmpty {
+                        Text("What happened on this shoot.")
+                            .font(.subheadline).foregroundStyle(.tertiary)
+                            .padding(.horizontal, 17).padding(.vertical, 18)
+                            .allowsHitTesting(false)
+                    }
+                }
 
             Text("Saves on every keystroke. There is no Save button.")
                 .font(.caption2).foregroundStyle(.tertiary)
         }
     }
 
-    private func photos(_ note: LabPhotoshootNote) -> some View {
+    private func photos(_ index: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            AmbientSectionTitle("Photos", trailing: note.photoCount == 0 ? nil : "\(note.photoCount)")
+            AmbientSectionTitle("Photos",
+                                trailing: notes[index].photoCount == 0 ? nil : "\(notes[index].photoCount)")
             HStack(spacing: 8) {
-                Button {} label: {
+                Button { addPhoto(index) } label: {
                     Label("Camera", systemImage: "camera")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .font(.caption.weight(.semibold)).foregroundStyle(.white)
                         .frame(maxWidth: .infinity).padding(.vertical, 9)
                         // ambient-allow: a control.
                         .background(Capsule().fill(Color.blue))
                 }
                 .buttonStyle(.plain)
-                Button {} label: {
+                Button { addPhoto(index) } label: {
                     Label("Library", systemImage: "photo.on.rectangle")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .font(.caption.weight(.semibold)).foregroundStyle(.white)
                         .frame(maxWidth: .infinity).padding(.vertical, 9)
                         // ambient-allow: a control.
                         .background(Capsule().fill(Color.green))
@@ -1832,13 +2133,28 @@ private struct PhotoshootNotesMockup: View {
             Text("The only screen in this family that offers the camera.")
                 .font(.caption2).foregroundStyle(.tertiary)
 
-            if note.photoCount > 0 {
+            if notes[index].photoCount > 0 {
                 HStack(spacing: 8) {
-                    ForEach(0..<note.photoCount, id: \.self) { _ in
+                    ForEach(0..<notes[index].photoCount, id: \.self) { slot in
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.secondary.opacity(0.18))
+                            .fill(Color.purple.opacity(0.25))
                             .frame(width: 76, height: 76)
-                            .overlay(Image(systemName: "photo").foregroundStyle(.tertiary))
+                            .overlay(Image(systemName: "photo").foregroundStyle(.purple))
+                            .overlay(alignment: .topTrailing) {
+                                Button {
+                                    withAnimation(AmbientMotion.snappy) {
+                                        notes[index].photoCount -= 1
+                                    }
+                                    show("Photo removed")
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 17))
+                                        .foregroundStyle(.white, .black.opacity(0.55))
+                                        .padding(4)
+                                }
+                                .buttonStyle(.plain)
+                                .id(slot)
+                            }
                     }
                 }
             } else {
@@ -1847,32 +2163,52 @@ private struct PhotoshootNotesMockup: View {
         }
     }
 
-    private func syncRow(_ note: LabPhotoshootNote) -> some View {
+    private func addPhoto(_ index: Int) {
+        withAnimation(AmbientMotion.snappy) { notes[index].photoCount += 1 }
+        show("Photo added successfully")
+        AmbientHaptics.impact(.light)
+    }
+
+    private func syncRow(_ index: Int) -> some View {
         HStack(spacing: 7) {
             Circle()
-                .fill(note.syncedToServer ? Color.green : Color.orange)
+                .fill(notes[index].syncedToServer ? Color.green : Color.orange)
                 .frame(width: 8, height: 8)
-            Text(note.syncedToServer ? "Synced to server" : "Local only (not synced)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            Text(notes[index].syncedToServer ? "Synced to server" : "Local only (not synced)")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
         .ambientCard(density: .compact, fillWidth: true)
     }
 
-    private func submitButton(_ note: LabPhotoshootNote) -> some View {
-        let ready = !note.school.isEmpty && !note.text.isEmpty
+    private func submitButton(_ index: Int) -> some View {
+        let ready = !notes[index].school.isEmpty && !notes[index].text.isEmpty
         return VStack(spacing: 6) {
-            Button {} label: {
+            Button {
+                withAnimation(AmbientMotion.gentle) {
+                    notes[index].submitted = true
+                    notes[index].submittedAt = Date()
+                    notes[index].syncedToServer = true
+                    selected = drafts.first?.id
+                }
+                show("Note submitted successfully!")
+                AmbientHaptics.impact(.medium)
+            } label: {
                 Label("Submit Note", systemImage: "checkmark.circle.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).padding(.vertical, 13)
                     // ambient-allow: a control.
                     .background(Capsule().fill(ready ? Color.green : Color.gray))
             }
             .buttonStyle(.plain)
             .disabled(!ready)
+
+            if !ready {
+                Text(notes[index].school.isEmpty
+                     ? "Please select a school before submitting"
+                     : "Please add some notes before submitting")
+                    .font(.caption).foregroundStyle(.orange)
+            }
 
             Text("PROPOSED — today submitting DELETES the local copy immediately, and the query that would fetch it back cannot succeed. Findings R1, R2 and R8.")
                 .font(.caption2).foregroundStyle(.orange)
@@ -1884,32 +2220,71 @@ private struct PhotoshootNotesMockup: View {
     private var submittedSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             AmbientSectionTitle("Submitted notes", trailing: "last 30 days")
-            ForEach(submitted) { note in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(note.school).font(.subheadline.weight(.semibold))
-                        Spacer()
-                        AmbientBadge(text: "Submitted", systemImage: "checkmark", tint: .green)
+            if submittedNotes.isEmpty {
+                Text("No submitted notes found").font(.caption).foregroundStyle(.tertiary)
+            } else {
+                ForEach(submittedNotes) { note in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(note.school.isEmpty ? "No school" : note.school)
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            AmbientBadge(text: "Submitted", systemImage: "checkmark", tint: .green)
+                        }
+                        Text(note.text).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(note.text).font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    .ambientCard(density: .compact,
+                                 border: .hairline(Color.green.opacity(0.35)), fillWidth: true)
                 }
-                .ambientCard(density: .compact,
-                             border: .hairline(Color.green.opacity(0.35)),
-                             fillWidth: true)
             }
             Text("In the live app this list is always empty — the fetch sends a malformed filter, and any row that did come back would be dropped on a date it cannot parse.")
                 .font(.caption2).foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
+
+    @ViewBuilder
+    private var bannerView: some View {
+        if let banner {
+            Text(banner)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                // ambient-allow: a transient banner, not a card.
+                .background(Capsule().fill(Color.green.opacity(0.9)))
+                .padding(.bottom, 20)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .task(id: banner) {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    withAnimation(AmbientMotion.gentle) { self.banner = nil }
+                }
+        }
+    }
 }
 
 // MARK: - Location photos
 
+/// Live: detect or pick a school, stage photos, label them, upload.
+///
+/// The thing to notice while using it: the staged photos exist only in memory
+/// until Upload is pressed, so leaving loses them — unlike Photoshoot Notes,
+/// which saves on every keystroke. Two sibling screens, opposite promises.
 private struct LocationPhotosMockup: View {
-    @State private var school: String? = nil
-    @State private var staged = 3
+    private struct Staged: Identifiable {
+        let id = UUID()
+        var label: String
+        let fromCamera: Bool
+        let colour: Color
+    }
+
+    @State private var school: LabSchool?
+    @State private var staged: [Staged] = []
+    @State private var showPicker = false
+    @State private var showSource = false
+    @State private var uploading = false
+    @State private var uploaded = false
+    @State private var detectMessage: String?
 
     var body: some View {
         ZStack {
@@ -1918,48 +2293,88 @@ private struct LocationPhotosMockup: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     locationSection
-                    if school == nil { emptyState } else { grid }
+                    if staged.isEmpty { emptyState } else { grid }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
             }
+
+            if uploading { uploadingOverlay }
+            if uploaded { uploadedOverlay }
         }
         .navigationTitle("Location Photos")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { showSource = true } label: { Image(systemName: "plus") }
+                    .disabled(school == nil)
+            }
+        }
+        .sheet(isPresented: $showPicker) {
+            SchoolPickerSheet(
+                chosen: [],
+                onPick: { picked in
+                    withAnimation(AmbientMotion.gentle) { school = picked }
+                    showPicker = false
+                },
+                onCancel: { showPicker = false })
+        }
+        .confirmationDialog("Add Photo", isPresented: $showSource, titleVisibility: .visible) {
+            Button("Take Photo") { add(camera: true) }
+            Button("Photo Library") { add(camera: false) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Choose a source")
+        }
+    }
+
+    private func add(camera: Bool) {
+        let palette: [Color] = [.purple, .blue, .teal, .orange, .green]
+        withAnimation(AmbientMotion.snappy) {
+            staged.append(Staged(label: "", fromCamera: camera,
+                                 colour: palette[staged.count % palette.count]))
+        }
+        AmbientHaptics.impact(.light)
+    }
+
+    private func detect() {
+        withAnimation(AmbientMotion.gentle) {
+            school = DesignLabSampleData.schools[0]
+            detectMessage = "You are at \(DesignLabSampleData.schools[0].name)"
+        }
+        AmbientHaptics.impact(.medium)
     }
 
     private var locationSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             AmbientSectionTitle("Location")
             HStack(spacing: 8) {
-                Button {
-                    withAnimation(AmbientMotion.gentle) { school = "Lincoln High School" }
-                } label: {
+                Button { showPicker = true } label: {
                     HStack {
-                        Text(school ?? "Select a school")
+                        Text(school?.name ?? "Select a school")
                             .font(.subheadline)
                             .foregroundStyle(school == nil ? .tertiary : .primary)
+                            .multilineTextAlignment(.leading)
                         Spacer()
-                        Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2).foregroundStyle(.tertiary)
                     }
                     .ambientCard(density: .compact, fillWidth: true)
                 }
                 .buttonStyle(.plain)
 
-                Button {
-                    withAnimation(AmbientMotion.gentle) { school = "Lincoln High School" }
-                } label: {
+                Button(action: detect) {
                     Image(systemName: "location.circle.fill")
-                        .font(.system(size: 22))
+                        .font(.system(size: 24))
                         .foregroundStyle(Color(hex: "#8E4EC6"))
                 }
                 .buttonStyle(.plain)
             }
 
-            if school != nil {
+            if let detectMessage {
                 HStack(spacing: 6) {
                     Image(systemName: "info.circle").font(.caption2)
-                    Text("You are at Lincoln High School").font(.caption)
+                    Text(detectMessage).font(.caption)
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(.secondary)
@@ -1972,43 +2387,50 @@ private struct LocationPhotosMockup: View {
             title: "No Photos Added",
             message: "Add photos to help others identify this location.",
             systemImage: "photo.on.rectangle.angled",
-            actionTitle: "Detect Current School",
-            actionIcon: "location.circle.fill",
-            action: { withAnimation(AmbientMotion.gentle) { school = "Lincoln High School" } },
+            actionTitle: school == nil ? "Detect Current School" : "Add Photo",
+            actionIcon: school == nil ? "location.circle.fill" : "plus.circle.fill",
+            action: { if school == nil { detect() } else { showSource = true } },
             actionTint: Color(hex: "#8E4EC6"))
     }
 
+    /// The one adaptive grid in the family — kept, because a location photo is
+    /// being looked AT rather than counted, so it earns the size.
     private var grid: some View {
         VStack(alignment: .leading, spacing: 10) {
-            AmbientSectionTitle("Photos", trailing: "\(staged) staged")
+            AmbientSectionTitle("Photos", trailing: "\(staged.count) staged")
 
-            // The one adaptive grid in the family — kept, because a location
-            // photo is being looked AT rather than counted, so it earns the size.
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 12)], spacing: 12) {
-                ForEach(0..<staged, id: \.self) { index in
+                ForEach($staged) { $item in
                     VStack(alignment: .leading, spacing: 6) {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.secondary.opacity(0.18))
+                            .fill(item.colour.opacity(0.3))
                             .frame(height: 130)
-                            .overlay(Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary))
+                            .overlay(Image(systemName: "photo").font(.title2).foregroundStyle(item.colour))
                             .overlay(alignment: .topTrailing) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 20))
-                                    .foregroundStyle(.white, .black.opacity(0.5))
-                                    .padding(6)
+                                Button {
+                                    withAnimation(AmbientMotion.snappy) {
+                                        staged.removeAll { $0.id == item.id }
+                                    }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 20))
+                                        .foregroundStyle(.white, .black.opacity(0.5))
+                                        .padding(6)
+                                }
+                                .buttonStyle(.plain)
                             }
+
                         HStack(spacing: 4) {
-                            Image(systemName: index == 0 ? "camera.fill" : "photo.fill")
+                            Image(systemName: item.fromCamera ? "camera.fill" : "photo.fill")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(Color(hex: "#8E4EC6"))
-                            Text(index == 0 ? "Camera" : "Library")
+                            Text(item.fromCamera ? "Camera" : "Library")
                                 .font(.caption2).foregroundStyle(.secondary)
                         }
-                        Text("Enter label")
+
+                        TextField("Enter label", text: $item.label)
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8).padding(.vertical, 6)
+                            .padding(.horizontal, 8).padding(.vertical, 7)
                             // ambient-allow: an input well, not a card.
                             .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(Color.secondary.opacity(0.1)))
@@ -2016,19 +2438,64 @@ private struct LocationPhotosMockup: View {
                 }
             }
 
-            Button {} label: {
+            Button {
+                uploading = true
+                Task {
+                    try? await Task.sleep(nanoseconds: 900_000_000)
+                    withAnimation(AmbientMotion.gentle) {
+                        uploading = false
+                        uploaded = true
+                    }
+                }
+            } label: {
                 Text("Upload Photos")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).padding(.vertical, 13)
                     // ambient-allow: a control.
-                    .background(Capsule().fill(Color(hex: "#8E4EC6")))
+                    .background(Capsule().fill(school == nil ? Color.gray : Color(hex: "#8E4EC6")))
             }
             .buttonStyle(.plain)
+            .disabled(school == nil)
 
-            Text("These photos exist only in memory until Upload is pressed — leaving the screen loses them. Deleting an already-uploaded photo happens in Settings, not here.")
+            Text("An unlabelled photo is stored as \"Location Photo\". These exist only in memory until Upload is pressed — leaving the screen loses them. Deleting an already-uploaded photo happens in Settings, not here.")
                 .font(.caption2).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var uploadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView().scaleEffect(1.4).tint(.white)
+                Text("Uploading Photos...").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+            }
+        }
+    }
+
+    private var uploadedOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.3).ignoresSafeArea()
+            VStack(spacing: 10) {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 60)).foregroundStyle(.green)
+                Text("Photos Uploaded!").font(.title3.weight(.bold))
+                Text("Your photos have been successfully uploaded to \(school?.name ?? "the location").")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .ambientCard(density: .hero, state: .highlighted, contentAlignment: .center)
+            .padding(.horizontal, 32)
+        }
+        .task(id: uploaded) {
+            guard uploaded else { return }
+            // Auto-dismisses after 2 seconds and CLEARS the staged photos —
+            // the live screen's only reset.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            withAnimation(AmbientMotion.gentle) {
+                uploaded = false
+                staged.removeAll()
+            }
         }
     }
 }
