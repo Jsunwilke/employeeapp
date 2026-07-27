@@ -113,7 +113,15 @@ struct ReportProposalMockup: View {
 
     @State private var mileage = ""
     @State private var mileageEdited = false
-    @State private var vehicle = DesignLabSampleData.History.usualVehicle
+    /// NO DEFAULT (operator, 2026-07-26). Nothing is pre-selected, the
+    /// photographer must choose, and BOTH choices take the second tap — which
+    /// is the live form's rule.
+    ///
+    /// This overrides my earlier "confirm only on a change from your usual"
+    /// proposal. That was aimed at alert fatigue, and it does not apply here:
+    /// with nothing pre-selected the confirm is the second half of a deliberate
+    /// choice you just made, not a dialog interrupting an already-correct value.
+    @State private var vehicle = ""
 
     // The work.
     @State private var shot: Set<String> = ["Fall Sports"]
@@ -133,7 +141,10 @@ struct ReportProposalMockup: View {
 
 
 
-    @State private var showVehicleConfirm = false
+    /// The vehicle awaiting its second tap. Non-nil means the inline confirm is
+    /// showing — and it remembers WHICH one you tapped, which the old dialog
+    /// did not: it re-offered both options as though you had asked for a menu.
+    @State private var pendingVehicle: String?
     @State private var showSchoolPicker = false
     @State private var submitted = false
 
@@ -174,13 +185,6 @@ struct ReportProposalMockup: View {
                     showSchoolPicker = false
                 },
                 onCancel: { showSchoolPicker = false })
-        }
-        .confirmationDialog("Confirm Vehicle", isPresented: $showVehicleConfirm, titleVisibility: .visible) {
-            Button("Personal") { commit("personal") }
-            Button("Company") { commit("company") }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You normally use your \(DesignLabSampleData.History.usualVehicle) vehicle. Confirm the change — this sets your mileage reimbursement.")
         }
     }
 
@@ -391,8 +395,10 @@ struct ReportProposalMockup: View {
 
     private var mileageSection: some View {
         section("Mileage and vehicle",
-                status: String(format: "%.1f mi · %@", miles, vehicle.capitalized),
-                statusTint: mileageLooksOff ? .orange : Self.featureTint) {
+                status: vehicle.isEmpty
+                    ? String(format: "%.1f mi · vehicle needed", miles)
+                    : String(format: "%.1f mi · %@", miles, vehicle.capitalized),
+                statusTint: (mileageLooksOff || vehicle.isEmpty) ? .orange : Self.featureTint) {
             mileageBody
         }
     }
@@ -417,6 +423,19 @@ struct ReportProposalMockup: View {
             HStack(spacing: 8) {
                 vehicleButton("Personal")
                 vehicleButton("Company")
+            }
+
+            // The confirmation appears HERE, under the control that raised it,
+            // rather than as a sheet anchored somewhere else on the screen. The
+            // vehicle selector can sit anywhere in a long scroll, and making the
+            // second tap happen where your thumb already is means no reaching.
+            if let pendingVehicle {
+                vehicleConfirm(pendingVehicle)
+            } else if vehicle.isEmpty {
+                Label("Required — pick a vehicle, then confirm it.",
+                      systemImage: "exclamationmark.circle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // The route, always. A bare number is what gets accepted unread.
@@ -448,27 +467,82 @@ struct ReportProposalMockup: View {
         }
     }
 
+    /// The second half of the two-step, in place.
+    ///
+    /// It keeps everything the modal had — it does not commit on the first tap,
+    /// it says what the value does, and it can be cancelled — and drops the one
+    /// thing the modal added, which was making you reach to the top of the
+    /// screen to finish something you started at the bottom.
+    private func vehicleConfirm(_ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.bold))
+                Text("Confirm \(value.capitalized) — this sets your mileage reimbursement and can't be changed by an accidental tap.")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.orange)
+
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(AmbientMotion.snappy) { pendingVehicle = nil }
+                } label: {
+                    Text("Cancel")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        // ambient-allow: a control, not a container.
+                        .background(Capsule().fill(.ultraThinMaterial))
+                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    withAnimation(AmbientMotion.snappy) { pendingVehicle = nil }
+                    commit(value)
+                } label: {
+                    Text("Yes, \(value)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        // ambient-allow: a control, not a container.
+                        .background(Capsule().fill(Color.orange))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.top, 2)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
     private func vehicleButton(_ title: String) -> some View {
         let on = vehicle == title.lowercased()
+        let armed = pendingVehicle == title.lowercased()
         return Button {
-            let value = title.lowercased()
-            // Fires on a CHANGE away from the usual, not on every report — a
-            // confirmation that appears every time stops being read.
-            if value != DesignLabSampleData.History.usualVehicle && value != vehicle {
-                showVehicleConfirm = true
-            } else {
-                commit(value)
-            }
+            // EVERY tap arms the confirm — there is no default, so both
+            // options are a real choice and both take the second tap. The first
+            // tap never commits.
+            withAnimation(AmbientMotion.snappy) { pendingVehicle = title.lowercased() }
+            AmbientHaptics.impact(.light)
         } label: {
             Text(title)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(on ? .white : .primary)
+                .foregroundStyle(on ? .white : (armed ? .orange : .primary))
                 .frame(maxWidth: .infinity).padding(.vertical, 11)
                 // ambient-allow: a segmented control, not a container.
                 .background(Capsule().fill(on
                                            ? AnyShapeStyle(Self.featureTint)
                                            : AnyShapeStyle(.ultraThinMaterial)))
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.12)))
+                // Armed but NOT committed — a dashed edge says "this is the one
+                // the confirm below is about", without pretending it is chosen.
+                .overlay(
+                    Capsule().strokeBorder(
+                        armed ? Color.orange : Color.primary.opacity(on ? 0 : 0.12),
+                        style: StrokeStyle(lineWidth: armed ? 2 : 1,
+                                           dash: armed ? [5, 3] : []))
+                )
         }
         .buttonStyle(.plain)
     }
@@ -810,7 +884,9 @@ struct ReportProposalMockup: View {
                 VStack(alignment: .leading, spacing: 6) {
                     line("Session", session?.label ?? "Off-schedule")
                     line("Schools", stops.isEmpty ? "None" : stops.map(\.name).joined(separator: ", "))
-                    line("Mileage", String(format: "%.1f mi · %@", miles, vehicle.capitalized))
+                    line("Mileage", vehicle.isEmpty
+                         ? String(format: "%.1f mi · no vehicle", miles)
+                         : String(format: "%.1f mi · %@", miles, vehicle.capitalized))
                     line("Shot", shot.isEmpty ? "Nothing selected" : shot.sorted().joined(separator: ", "))
                     if !extras.isEmpty { line("Extra", extras.sorted().joined(separator: ", ")) }
                     line("Note", attachedNote.map { "Attached — \($0.school)" } ?? "None")

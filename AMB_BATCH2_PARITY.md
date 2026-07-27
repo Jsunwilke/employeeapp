@@ -724,9 +724,20 @@ the operator found four of them, not the parity walk.
 
     VEHICLE
       lives WITH the mileage — one decision, not two sections
-      defaults to the photographer's usual
-      the two-step confirmation fires ON A CHANGE from that usual, not on every
-        report. Firing every time is what wears a safeguard out.
+      NO DEFAULT. Nothing is pre-selected and the photographer must choose.
+      BOTH options take the two-step, and the first tap never commits.
+      The confirmation appears INLINE, directly under the buttons that raised
+        it — never as a sheet or dialog anchored elsewhere. The vehicle sits in
+        a long scroll, and finishing at the top something you started at the
+        bottom means changing your grip.
+      The armed-but-unconfirmed option is drawn as armed (dashed edge), so it is
+        obvious which choice the confirmation belongs to, without pretending it
+        has been applied.
+      Superseded 2026-07-26: my earlier proposal was to default to the
+        photographer's usual vehicle and confirm only on a CHANGE, aimed at
+        alert fatigue. The operator's rule is better here — with nothing
+        pre-selected the confirm is the second half of a choice just made, not a
+        dialog interrupting an already-correct value.
 
     THE TWO LISTS
       all 22 job descriptions and all 12 extra items, visible, never behind a

@@ -862,15 +862,6 @@ extension DesignLabSampleData {
             guard !past.isEmpty else { return nil }
             return (past.reduce(0, +) / Double(past.count) * 10).rounded() / 10
         }
-
-        /// The vehicle you almost always use. Confirming it EVERY time is what
-        /// wears the safeguard out; confirming it when it CHANGES is what keeps
-        /// it meaningful.
-        static var usualVehicle: String {
-            let counts = Dictionary(grouping: DesignLabSampleData.jobReports, by: \.vehicle)
-                .mapValues(\.count)
-            return counts.max { $0.value < $1.value }?.key ?? "personal"
-        }
     }
 
     /// Today's sessions for this photographer, EARLIEST FIRST — the order the
