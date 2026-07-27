@@ -28,6 +28,8 @@ struct TimeOffApprovalView: View {
     @State private var denialReason = ""
     /// Shown inside the denial sheet — see `denyRequest`.
     @State private var denialError = ""
+    /// A message that arrived while the deny sheet was up. Flushed when it closes.
+    @State private var queuedAlert: String?
     @State private var showingAlert = false
     @State private var alertMessage = ""
     /// THE DOUBLE-SUBMIT GUARD. The OLD screen swapped the whole list for a
@@ -132,6 +134,16 @@ struct TimeOffApprovalView: View {
             denialError = ""
         }) { request in
             denialSheet(request)
+        }
+        // Keyed on the request ID rather than the request: `TimeOffRequest` is not
+        // Equatable, and the identity is the only part that matters here — whose
+        // sheet is up, or none.
+        .onChange(of: requestToDeny?.id) { newValue in
+            // The sheet just closed and something was waiting to be said.
+            guard newValue == nil, let queued = queuedAlert else { return }
+            queuedAlert = nil
+            alertMessage = queued
+            showingAlert = true
         }
         .alert("Time Off Management", isPresented: $showingAlert) {
             Button("OK", role: .cancel) { }
@@ -404,11 +416,13 @@ struct TimeOffApprovalView: View {
             } catch {
                 alertMessage = error.localizedDescription
             }
-            // Not while a sheet is up: an alert raised on a view that is
-            // presenting one does not appear. Approve and Deny are reachable on
-            // different cards at the same time, so this is a real interleaving,
-            // not a theoretical one. The class, not the instance.
-            showingAlert = (requestToDeny == nil)
+            // QUEUED, NOT SUPPRESSED. An alert raised on a view that is already
+            // presenting a sheet does not appear — and Approve and Deny are
+            // reachable on different cards at the same time, so this really can
+            // interleave. My first cut wrote `showingAlert = (requestToDeny == nil)`,
+            // which DISCARDS the message when a sheet is up: a failed approve would
+            // have vanished in silence, which is worse than the problem it solved.
+            raise("Request approved successfully", success: true)
         }
     }
 
@@ -461,11 +475,24 @@ struct TimeOffApprovalView: View {
             defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.putTimeOffRequestInReview(requestId: request.id)
-                alertMessage = "Request placed in review"
+                raise("Request placed in review", success: true)
             } catch {
-                alertMessage = error.localizedDescription
+                raise(error.localizedDescription, success: false)
             }
-            showingAlert = (requestToDeny == nil)
+        }
+    }
+
+    /// Shows the message now if nothing is presented, otherwise holds it until the
+    /// deny sheet closes. `.onChange(of: requestToDeny)` flushes it — deterministic
+    /// state, not a presentation callback that may or may not fire (round 2 lost a
+    /// confirmation exactly that way).
+    @MainActor
+    private func raise(_ message: String, success: Bool) {
+        alertMessage = message
+        if requestToDeny == nil {
+            showingAlert = true
+        } else {
+            queuedAlert = message
         }
     }
 }

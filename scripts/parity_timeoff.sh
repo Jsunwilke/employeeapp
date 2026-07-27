@@ -241,7 +241,12 @@ kept "approve/deny/review are @MainActor isolated"    "$APPR" '@MainActor'
 kept "the guard is released on every exit"            "$APPR" 'defer { inFlight.remove'
 kept "the deny sheet cannot be dismissed mid-write"   "$APPR" 'interactiveDismissDisabled'
 kept "…nor cancelled mid-write"                       "$APPR" 'disabled(inFlight.contains(request.id))'
-kept "an alert is not raised while a sheet is up"     "$APPR" 'showingAlert = (requestToDeny == nil)'
+# QUEUED, not suppressed. The first version of this fix wrote
+# `showingAlert = (requestToDeny == nil)`, which DISCARDED the message when a sheet
+# was up — so a failed approve vanished silently, which is worse than the problem
+# it solved. The message is now held and flushed when the sheet closes.
+kept "a message arriving while a sheet is up is QUEUED" "$APPR" 'queuedAlert = message'
+kept "…and flushed when the sheet closes"             "$APPR" 'guard newValue == nil, let queued = queuedAlert'
 kept "the deny sheet shows its own busy state"        "$APPR" 'Denying…'
 kept "Retry forces a network fetch, not a cache hit"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'lastCacheUpdate = nil'
 kept "the realtime path clears the failure banner too" "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'errorMessage = ""'
