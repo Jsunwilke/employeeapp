@@ -51,6 +51,27 @@ do {
     eq(link.stops, ["oakmont"], "released when both let go")
 }
 
+// ROUTE ORDER IS THE DRIVE. `set` was a remove-then-append, so pointing a
+// source at the school it ALREADY held moved that stop to the end — re-tapping
+// the selected session, or switching between two sessions at the same school on
+// one day, silently reordered the route and filed a different total mileage.
+print("\nSCHOOL OWNERSHIP — re-pointing a source at its own school changes nothing")
+do {
+    var link = ReportSchoolLink(stops: ["lincoln", "riverside"], sessionSchool: "lincoln")
+    link.set("lincoln", for: .session)
+    eq(link.stops, ["lincoln", "riverside"], "route order is preserved")
+    eq(link.sessionSchool, "lincoln", "and the source still holds it")
+
+    // The same school arriving from the OTHER source must still register, so
+    // it survives until both let go.
+    link.set("lincoln", for: .note)
+    eq(link.stops, ["lincoln", "riverside"], "no duplicate when the note agrees")
+    link.set(nil, for: .session)
+    eq(link.stops, ["lincoln", "riverside"], "and the note still holds it")
+    link.set(nil, for: .note)
+    eq(link.stops, ["riverside"], "released when both let go")
+}
+
 // A SOURCE MUST NOT REMOVE A SCHOOL IT DID NOT PUT THERE. Found by the AMB.7
 // audit: `set` claimed a school that was already in the list, so clearing that
 // source took the photographer's own stop away with it.

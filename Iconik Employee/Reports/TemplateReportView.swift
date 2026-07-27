@@ -67,6 +67,8 @@ struct TemplateReportView: View {
 
     @StateObject private var schedule = ReportSchedule()
     @State private var sessionPick = SessionAutoSelect()
+    /// The session as it was when it was picked. See the note in `submit`.
+    @State private var pickedSession: Session?
 
     @State private var isSubmitting = false
     @State private var showSuccess = false
@@ -218,7 +220,11 @@ struct TemplateReportView: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 blockingStrip
-                ReportSessionPicker(schedule: schedule, pick: $sessionPick, tint: feature)
+                ReportSessionPicker(schedule: schedule, pick: $sessionPick, tint: feature) { id in
+                    pickedSession = id.flatMap { picked in
+                        schedule.sessions.first { $0.id == picked }
+                    }
+                }
                 ForEach(sections, id: \.0) { name, fields in
                     VStack(alignment: .leading, spacing: 8) {
                         AmbientSectionTitle(name, trailing: "\(fields.count)")
@@ -619,6 +625,9 @@ struct TemplateReportView: View {
               !schedule.isLoadingSessions,
               schedule.hasCheckedReported else { return }
         sessionPick.run(for: schedule.dateKey, sessions: schedule.autoSelectCandidates)
+        pickedSession = sessionPick.selection.flatMap { id in
+            schedule.sessions.first { $0.id == id }
+        }
     }
 
     /// Photo count belongs to the field that asks for it — the smart
@@ -642,7 +651,12 @@ struct TemplateReportView: View {
         failure = ""
 
         var payload = formData
-        let session = sessionPick.selection.flatMap { id in schedule.sessions.first { $0.id == id } }
+        // Falls back to the session as PICKED — a refresh that delivers a list
+        // without it would otherwise file the link as NULL. Same regression the
+        // standard report had.
+        let session = sessionPick.selection.flatMap { id in
+            schedule.sessions.first { $0.id == id }
+        } ?? pickedSession
         if let session {
             payload["session_id"] = session.id
             payload["session_name"] = session.reportDisplayLabel
@@ -700,6 +714,9 @@ struct ReportSessionPicker: View {
     @ObservedObject var schedule: ReportSchedule
     @Binding var pick: SessionAutoSelect
     let tint: Color
+    /// Lets the owner hold the picked session, so a refresh that drops it from
+    /// the list cannot turn the link into a NULL at submit.
+    var onPick: (String?) -> Void = { _ in }
 
     var body: some View {
         // Only when the photographer actually has sessions today, as before.
@@ -724,6 +741,7 @@ struct ReportSessionPicker: View {
         let on = pick.selection == id
         return Button {
             withAnimation(AmbientMotion.snappy) { pick.pick(id) }
+            onPick(id)
             AmbientHaptics.selection()
         } label: {
             HStack(alignment: .top, spacing: 10) {

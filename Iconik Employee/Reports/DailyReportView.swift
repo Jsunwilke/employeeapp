@@ -94,6 +94,8 @@ struct DailyReportView: View {
     /// Which session this report is for. The rule — first unreported session,
     /// once per date, a manual pick latches — lives in the tested type.
     @State private var sessionPick = SessionAutoSelect()
+    /// The session as it was when it was picked. See `session`.
+    @State private var pickedSession: Session?
     /// Which schools are on the report and who put them there. Tested type.
     @State private var link = ReportSchoolLink()
     @State private var schoolOptions: [SchoolItem] = []
@@ -194,8 +196,18 @@ struct DailyReportView: View {
         link.stops.compactMap { knownSchools[$0] }
     }
 
+    /// The session this report is for.
+    ///
+    /// Resolved from the live list, falling back to the one that was PICKED.
+    /// Deriving it from `schedule.sessions` alone was a regression on the form
+    /// this replaced, which held the session itself: a refresh that delivers a
+    /// list without it — an offline first fetch answering with nothing, or a
+    /// realtime refetch after an admin unassigns or unpublishes the session —
+    /// made this nil, so the card flipped to "off-schedule", no row read as
+    /// selected, and submit filed `session_id` and `session_name` as NULL.
     private var session: Session? {
-        sessionPick.selection.flatMap { id in schedule.sessions.first { $0.id == id } }
+        guard let id = sessionPick.selection else { return nil }
+        return schedule.sessions.first { $0.id == id } ?? pickedSession
     }
 
     private var selectedPhotographer: PhotographerOption? {
@@ -527,6 +539,7 @@ struct DailyReportView: View {
         return Button {
             withAnimation(AmbientMotion.snappy) {
                 sessionPick.pick(option?.id)
+                pickedSession = option
                 // Picking a session REPLACES its school; choosing off-schedule
                 // removes it. A school added by hand, or one the photoshoot note
                 // is holding, is never touched. Tested rule.
@@ -1134,6 +1147,9 @@ struct DailyReportView: View {
               !schoolOptions.isEmpty else { return }
 
         sessionPick.run(for: dateKey, sessions: schedule.autoSelectCandidates)
+        pickedSession = sessionPick.selection.flatMap { id in
+            schedule.sessions.first { $0.id == id }
+        }
         // Only the deciding call touches the school list, so a school the
         // photographer removed by hand is not silently put back by a refresh.
         link.set(schoolID(for: session), for: .session)

@@ -70,6 +70,14 @@ struct ReportSchoolLink: Equatable {
         let owned = self[source]
         let other = self[source.other]
 
+        // POINTING A SOURCE AT THE SCHOOL IT ALREADY HOLDS MUST CHANGE NOTHING.
+        // Below is a remove-then-append, which moved that stop to the END of
+        // the list — and the list IS the route the mileage is measured along, so
+        // re-tapping the selected session, or switching between two sessions at
+        // the same school on one day, silently reordered the drive and filed a
+        // different total.
+        if let school, school == owned, stops.contains(school) { return }
+
         // Take out what this source was holding — unless the other source is
         // holding the same school, or the photographer put it there themselves.
         if let owned, owned != other, !handAdded.contains(owned) {
