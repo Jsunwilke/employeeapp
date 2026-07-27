@@ -228,7 +228,7 @@ struct TimeOffRequestView: View {
     /// not a warning.
     private var ptoTracking: PTOTracking {
         guard let balance = currentPTOBalance else { return .tracked }
-        return PTOTracking.evaluate(enabled: ptoSettings?.enabled ?? false,
+        return PTOTracking.evaluate(enabled: ptoSettings?.enabled,
                                     balance: balance.balance,
                                     accrued: balance.totalAccrued,
                                     used: balance.used,

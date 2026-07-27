@@ -251,8 +251,8 @@ struct ScheduleTimeOffRow: View {
             // on every other screen. The card's dashed border keeps the schedule's
             // accent, because that IS the calendar signal (AMB.1's language for
             // "not the same kind of thing as a shift").
-            AmbientBadge(text: TimeOffStatusDisplay.from(raw: entry.status.rawValue).label,
-                         tint: TimeOffStatusDisplay.from(raw: entry.status.rawValue).color)
+            AmbientBadge(text: TimeOffStatusDisplay.from(raw: entry.statusRaw).label,
+                         tint: TimeOffStatusDisplay.from(raw: entry.statusRaw).color)
         }
         .ambientCard(density: .roomy, border: .dashed(tint.opacity(0.3)))
     }

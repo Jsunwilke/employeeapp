@@ -840,6 +840,8 @@ class TimeOffService: ObservableObject {
                     photographerId: request.photographer_id,
                     photographerName: request.photographer_name ?? "",
                     status: request.statusEnum,
+                    // The RAW column, not the collapsed enum — see TimeOffCalendarEntry.
+                    statusRaw: request.status,
                     isPartialDay: isPartialDay,
                     reason: request.reasonEnum,
                     notes: request.notes ?? ""

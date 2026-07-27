@@ -333,7 +333,10 @@ kept "the queue is flushed when the push pops"        "$LIST" 'if newValue == ni
 # to 6 by guessing and left exactly one hook's worth of slack — the third time in
 # this phase a threshold I picked let a single-site regression through. Count it.
 keptCount "EVERY presentation surface has a flush hook" "$LIST" 'flushQueuedAlert' 7
-keptIn "…including both sheet drains"                 "$LIST" body 'onDismiss: flushQueuedAlert'
+# The two sheet drains became closures when they also gained a balance reload, so
+# the old `onDismiss: flushQueuedAlert` shorthand is gone — the capability is
+# intact and larger. Asserted by the exact count instead.
+keptCount "…including both sheet drains"              "$LIST" 'onDismiss: {' 2
 keptIn "…and the cancel confirmation's two buttons"   "$LIST" body 'Button("Keep Request", role: .cancel)'
 # `tabBar` is a computed var, so keptIn (which looks for `func name(`) cannot scope
 # to it. Asserted as a pair instead: the gesture exists, and it is NOT on the
@@ -363,6 +366,21 @@ keptIn "the form computes it too"                     "$FORM" ptoTracking 'PTOTr
 keptIn "the shortfall is SILENT when figures are not real" "$FORM" ptoMessage 'ptoTracking.showsFigures'
 kept "…and the arithmetic block says why instead"     "$FORM" 'No PTO hours have been tracked yet'
 kept "the route to the balance screen still works"    "$KIT" 'chevron.right'
+
+echo
+echo "Operator /code-review, second pass — 5 findings, all in the UI/data-layer seam"
+kept "the calendar entry carries the RAW status"      "Iconik Employee/TimeOff/Models/TimeOffRequest.swift" 'var statusRaw: String'
+kept "…populated from the column, not the enum"       "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'statusRaw: request.status'
+keptIn "the detail sheet reads the raw value"         "$DETAIL" statusDisplay 'timeOffEntry.statusRaw'
+kept "…and Cancel is gated on it, not the collapsed enum" "$DETAIL" 'statusDisplay == .known(.pending)'
+kept "the schedule badge reads it too"                "Iconik Employee/Schedule/ScheduleRows.swift" 'raw: entry.statusRaw'
+kept "unknown settings do not read as SWITCHED OFF"   "$RULES" 'guard let enabled else { return .noActivity }'
+keptCount "…and neither screen forces a false default" "$LIST" 'ptoSettings?.enabled,' 1
+kept "opening the list does NOT insert a balance row" "$LIST" 'createIfMissing: false'
+kept "…and the service honours that"                  "Iconik Employee/TimeOff/Services/PTOService.swift" 'guard createIfMissing else'
+keptCount "the balance reloads after every write"     "$LIST" 'loadBalance()' 4
+kept "the failure banner names what it could not load" "$KIT" 'var title: String = '
+kept "…and the queue passes its own"                  "$APPR" 'Couldn.t load the queue'
 
 echo
 echo "EXPECTED-GONE — dropped deliberately, each with a reason in the file"

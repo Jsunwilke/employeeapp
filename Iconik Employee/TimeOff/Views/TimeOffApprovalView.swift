@@ -266,7 +266,8 @@ struct TimeOffApprovalView: View {
     }
 
     private var failureBanner: some View {
-        TimeOffFailureBanner(message: timeOffService.errorMessage, tint: tint) {
+        TimeOffFailureBanner(title: "Couldn't load the queue",
+                             message: timeOffService.errorMessage, tint: tint) {
             Task { await timeOffService.refreshRequests() }
         }
     }

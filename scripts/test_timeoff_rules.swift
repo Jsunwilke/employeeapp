@@ -447,8 +447,17 @@ print("\nPTO TRACKING — does the stored figure mean anything yet")
 // screens must not assert a number the system cannot support.
 eq(PTOTracking.evaluate(enabled: false, balance: 0, accrued: 0, used: 0, banking: 0),
    .notConfigured, "PTO switched off is notConfigured")
+
+// A FAILED SETTINGS FETCH IS NOT "SWITCHED OFF". getPTOSettings swallows every
+// error and returns defaults with enabled:false, cached for the process — so one
+// flaky load told everybody their organisation had PTO disabled. nil means
+// unknown: still no figures, but no false claim about the org.
+eq(PTOTracking.evaluate(enabled: nil, balance: 0, accrued: 0, used: 0, banking: 0),
+   .noActivity, "UNKNOWN settings is noActivity, NOT notConfigured")
+eq(PTOTracking.evaluate(enabled: nil, balance: 40, accrued: 40, used: 0, banking: 0),
+   .tracked, "…and real hours win over an unknown setting")
 eq(PTOTracking.evaluate(enabled: false, balance: 40, accrued: 40, used: 8, banking: 0),
-   .notConfigured, "…even with figures on file — the org has turned it off")
+   .tracked, "…as they do over an explicit OFF: hours exist, so it demonstrably works")
 eq(PTOTracking.evaluate(enabled: true, balance: 0, accrued: 0, used: 0, banking: 0),
    .noActivity, "enabled but nothing has ever accrued or been used")
 eq(PTOTracking.evaluate(enabled: true, balance: 40, accrued: 0, used: 0, banking: 0),

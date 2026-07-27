@@ -280,6 +280,16 @@ struct TimeOffCalendarEntry: Identifiable, Codable {
     let photographerId: String
     let photographerName: String
     let status: TimeOffStatus
+    /// THE RAW STORED VALUE, carried alongside the collapsed enum.
+    ///
+    /// `status` is built from `statusEnum`, which is `TimeOffStatus(rawValue:) ??
+    /// .pending` — so by the time a calendar entry exists, a web-written
+    /// `partially_approved` has already become `.pending` and AMB.8's
+    /// unknown-status repair cannot see it. The consequence was not cosmetic: the
+    /// detail sheet offered a destructive **Cancel Request** on a request somebody
+    /// had already decided. Defaults to the enum's raw value so every existing
+    /// construction site is unchanged.
+    var statusRaw: String = ""
     let isPartialDay: Bool
     let reason: TimeOffReason
     let notes: String
@@ -294,6 +304,7 @@ struct TimeOffCalendarEntry: Identifiable, Codable {
         photographerId: String,
         photographerName: String,
         status: TimeOffStatus,
+        statusRaw: String = "",
         isPartialDay: Bool,
         reason: TimeOffReason,
         notes: String
@@ -307,6 +318,7 @@ struct TimeOffCalendarEntry: Identifiable, Codable {
         self.photographerId = photographerId
         self.photographerName = photographerName
         self.status = status
+        self.statusRaw = statusRaw.isEmpty ? status.rawValue : statusRaw
         self.isPartialDay = isPartialDay
         self.reason = reason
         self.notes = notes

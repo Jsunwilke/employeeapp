@@ -54,7 +54,10 @@ struct TimeOffDetailView: View {
     private var tint: Color { TimeOffStyle.requests }
 
     private var statusDisplay: TimeOffStatusDisplay {
-        TimeOffStatusDisplay.from(raw: timeOffEntry.status.rawValue)
+        // The RAW value. Reading `status.rawValue` re-derived from an enum that
+        // had ALREADY collapsed an unknown status to `.pending`, so the repair
+        // could never fire here.
+        TimeOffStatusDisplay.from(raw: timeOffEntry.statusRaw)
     }
 
     private var reasonDisplay: TimeOffReasonDisplay {
@@ -221,7 +224,10 @@ struct TimeOffDetailView: View {
     /// Conditional on pending, as today.
     @ViewBuilder
     private var cancelButton: some View {
-        if canModifyRequest && timeOffEntry.status == .pending {
+        // GATED ON THE RAW STATUS. A web-written `partially_approved` collapsed to
+        // `.pending`, so this offered a DESTRUCTIVE Cancel on a request somebody
+        // had already decided.
+        if canModifyRequest && statusDisplay == .known(.pending) {
             Button {
                 showingCancelConfirmation = true
             } label: {

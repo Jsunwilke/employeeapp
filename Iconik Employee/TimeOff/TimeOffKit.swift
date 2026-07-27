@@ -656,6 +656,9 @@ struct TimeOffFailurePanel: View {
 
 /// The BANNER, for when a refresh failed but there are still rows worth keeping.
 struct TimeOffFailureBanner: View {
+    /// Takes a title, like its sibling panel. It hardcoded "Couldn't load your
+    /// requests" and is reused on the MANAGER queue, where the rows are not yours.
+    var title: String = "Couldn't load your requests"
     let message: String
     let tint: Color
     var retry: () -> Void
@@ -666,7 +669,7 @@ struct TimeOffFailureBanner: View {
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Couldn't load your requests").font(.subheadline.weight(.semibold))
+                Text(title).font(.subheadline.weight(.semibold))
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)

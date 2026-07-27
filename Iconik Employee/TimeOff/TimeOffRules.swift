@@ -528,13 +528,25 @@ enum PTOTracking: Equatable {
     /// accrued — which is precisely the broken state, not evidence of a working
     /// one. Treating a non-zero pending as "tracked" would make the shortfall
     /// warning fire hardest for exactly the people it is most wrong about.
-    static func evaluate(enabled: Bool,
+    /// `enabled` is OPTIONAL, and nil means UNKNOWN rather than off.
+    ///
+    /// `PTOService.getPTOSettings` catches every error and returns
+    /// `defaultSettings`, whose `enabled` is FALSE — and caches that for the
+    /// process. So one flaky first load made both screens state "Paid time off
+    /// isn't switched on for your organisation" for the rest of the session. That
+    /// is a failure wearing the costume of a legitimate configuration, which is
+    /// the exact class this phase exists to remove, and I built on top of it.
+    /// Unknown still hides the figures — it just does not blame the org.
+    static func evaluate(enabled: Bool?,
                          balance: Double,
                          accrued: Double,
                          used: Double,
                          banking: Double) -> PTOTracking {
-        guard enabled else { return .notConfigured }
         let anyActivity = balance != 0 || accrued != 0 || used != 0 || banking != 0
-        return anyActivity ? .tracked : .noActivity
+        // Real figures win regardless: if hours exist, PTO is demonstrably working
+        // whatever a settings fetch did or did not say.
+        if anyActivity { return .tracked }
+        guard let enabled else { return .noActivity }
+        return enabled ? .noActivity : .notConfigured
     }
 }

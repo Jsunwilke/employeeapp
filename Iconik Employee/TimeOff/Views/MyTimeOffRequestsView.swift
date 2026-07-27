@@ -105,7 +105,7 @@ struct MyTimeOffRequestsView: View {
     /// leads only when there is a real figure to lead with.
     private var ptoTracking: PTOTracking {
         guard let balance else { return .tracked }
-        return PTOTracking.evaluate(enabled: ptoSettings?.enabled ?? false,
+        return PTOTracking.evaluate(enabled: ptoSettings?.enabled,
                                     balance: balance.balance,
                                     accrued: balance.totalAccrued,
                                     used: balance.used,
@@ -162,10 +162,19 @@ struct MyTimeOffRequestsView: View {
             case .balance: PTOBalanceView(isPushed: true)
             }
         }
-        .sheet(isPresented: $showingNewRequest, onDismiss: flushQueuedAlert) {
+        // Reload the balance after a write: "already requested and not yet
+        // decided" is the one figure this redesign ADDED, and it omitted the
+        // request you had just filed until the screen was left and reopened.
+        .sheet(isPresented: $showingNewRequest, onDismiss: {
+            flushQueuedAlert()
+            Task { await loadBalance() }
+        }) {
             TimeOffRequestView(timeOffService: timeOffService)
         }
-        .sheet(item: $editingRequest, onDismiss: flushQueuedAlert) { request in
+        .sheet(item: $editingRequest, onDismiss: {
+            flushQueuedAlert()
+            Task { await loadBalance() }
+        }) { request in
             TimeOffRequestView(timeOffService: timeOffService, editingRequest: request)
         }
         .alert("Cancel Request", isPresented: $showingCancelAlert) {
@@ -377,7 +386,8 @@ struct MyTimeOffRequestsView: View {
             return
         }
         do {
-            let loaded = try await ptoService.getPTOBalance(userId: userId, organizationID: organizationID)
+            // READ-ONLY: opening a list must not INSERT a row on the shared DB.
+            let loaded = try await ptoService.getPTOBalance(userId: userId, organizationID: organizationID, createIfMissing: false)
             let loadedSettings = try? await ptoService.getPTOSettings(organizationID: organizationID)
             await MainActor.run {
                 balance = loaded
@@ -408,6 +418,7 @@ struct MyTimeOffRequestsView: View {
             do {
                 try await timeOffService.cancelTimeOffRequest(requestId: request.id)
                 outcome = "Request cancelled successfully"
+                await loadBalance()
             } catch {
                 outcome = error.localizedDescription
             }

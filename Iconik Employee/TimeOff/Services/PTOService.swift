@@ -27,7 +27,15 @@ class PTOService: ObservableObject {
     // MARK: - PTO Balance Management
 
     // Get current PTO balance for a user
-    func getPTOBalance(userId: String, organizationID: String) async throws -> PTOBalance {
+    /// `createIfMissing` defaults TRUE so every existing caller is unchanged.
+    ///
+    /// AMB.8 put the balance on My Time Off's `.task` and its pull-to-refresh, and
+    /// this function INSERTS a `pto_balances` row when none exists — so merely
+    /// opening the list, and every pull after it, began writing to the shared
+    /// multi-tenant database. Before that only two deliberate screens (Settings
+    /// and the request form) could trigger the insert. A display that reads should
+    /// not write.
+    func getPTOBalance(userId: String, organizationID: String, createIfMissing: Bool = true) async throws -> PTOBalance {
         let balanceId = "\(organizationID)_\(userId)"
 
         // Check cache first
@@ -61,6 +69,11 @@ class PTOService: ObservableObject {
                     userId: userId,
                     organizationID: organizationID
                 )
+                // A READ-ONLY caller gets the in-memory shape and writes nothing.
+                guard createIfMissing else {
+                    isLoading = false
+                    return newBalance
+                }
                 try await createPTOBalance(newBalance)
                 self.currentBalance = newBalance
                 self.lastBalanceUpdate = Date()
