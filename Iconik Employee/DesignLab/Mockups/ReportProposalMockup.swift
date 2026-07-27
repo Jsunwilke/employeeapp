@@ -22,10 +22,19 @@
 //  WHAT BOTH VERSIONS GOT WRONG
 //      I kept treating the 22 job descriptions and the 12 extra items as a WALL
 //      to be hidden, folded, suggested away, or replaced by something cleverer.
-//      They are not the wall. THEY ARE THE JOB. A photographer fills those two
-//      lists on every single report. Everything else is either already known or
-//      three taps. So they get the screen, and everything else gets out of their
-//      way.
+//      They are not a wall — they are filled in on every single report.
+//
+//  AND THE CORRECTION AFTER THAT: "nothing is secondary. it is all important."
+//      v3's first cut still ranked things. The two lists got headline titles and
+//      full cards while the date, photographer, schools, mileage and vehicle
+//      were compressed into one cramped block of small type — a layout saying
+//      those matter less. They do not. A wrong school, a wrong vehicle or a
+//      wrong mileage is a payroll error; a missing job description is a billing
+//      error. Nothing here is background.
+//
+//      So EVERY part of the report is now a peer: the same heading, the same
+//      card, the same spacing, and the same kind of status line on the right of
+//      each heading. The only thing that varies is the control a field needs.
 //
 //  WHAT THIS DESIGN IS
 //      One scrolling form. NOTHING COLLAPSES. NOTHING EXPANDS. Every field is on
@@ -153,7 +162,9 @@ struct ReportProposalMockup: View {
     private var form: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                knownBlock
+                whenSection
+                schoolsSection
+                mileageSection
                 shotSection
                 extrasSection
                 scanSection
@@ -167,99 +178,129 @@ struct ReportProposalMockup: View {
         .ambientNoBounceWhenShort()
     }
 
-    // MARK: - 1. What the app knows — compact, live, editable in place
+    // MARK: - Shared section chrome
 
-    private var knownBlock: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Label("Date", systemImage: "calendar")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                Spacer()
-                DatePicker("", selection: $reportDate, displayedComponents: .date)
-                    .labelsHidden()
+    /// EVERY section on this screen goes through here. That is deliberate: the
+    /// moment one part of the report gets its own heading treatment, the layout
+    /// starts ranking things again, which is exactly the mistake this replaced.
+    private func section<Content: View>(_ title: String, status: String,
+                                        statusTint: Color? = nil,
+                                        @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.headline)
+                Spacer(minLength: 8)
+                Text(status)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(statusTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.tertiary))
+                    .contentTransition(.numericText())
+                    .multilineTextAlignment(.trailing)
             }
-            .padding(.vertical, 5)
-
-            Divider()
-
-            HStack {
-                Label("Photographer", systemImage: "person")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                Spacer()
-                Picker("", selection: $photographer) {
-                    ForEach(DesignLabSampleData.crew.map(\.name), id: \.self) { Text($0).tag($0) }
-                }
-                .pickerStyle(.menu).labelsHidden()
-            }
-            .padding(.vertical, 5)
-
-            Divider()
-            schoolsBlock
-            Divider()
-            mileageBlock
+            content()
+                .ambientCard(density: .roomy, fillWidth: true)
         }
-        .ambientCard(density: .roomy, fillWidth: true)
     }
 
-    private var schoolsBlock: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Label("Schools", systemImage: "building.2")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                Spacer()
-                Button { showSchoolPicker = true } label: {
-                    Label("Add", systemImage: "plus")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Self.featureTint)
-                }
-                .buttonStyle(.plain)
-            }
+    // MARK: - The report, section by section, all equal
 
+    private var whenSection: some View {
+        section("Date and photographer",
+                status: Formatters.relativeDay(reportDate)) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Date").font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    DatePicker("", selection: $reportDate, displayedComponents: .date)
+                        .labelsHidden()
+                }
+                .padding(.vertical, 7)
+
+                Divider()
+
+                HStack {
+                    Text("Photographer").font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("", selection: $photographer) {
+                        ForEach(DesignLabSampleData.crew.map(\.name), id: \.self) { Text($0).tag($0) }
+                    }
+                    .pickerStyle(.menu).labelsHidden()
+                }
+                .padding(.vertical, 7)
+            }
+        }
+    }
+
+    private var schoolsSection: some View {
+        section("Schools",
+                status: stops.isEmpty ? "none yet" : "\(stops.count) selected",
+                statusTint: stops.isEmpty ? nil : Self.featureTint) {
+            schoolsBody
+        }
+    }
+
+    private var schoolsBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
             if stops.isEmpty {
-                Text("None — off-schedule day")
+                Text("No schools on this report yet — an off-schedule day still needs one.")
                     .font(.subheadline).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                AmbientFlowLayout(spacing: 6, lineSpacing: 6) {
+                AmbientFlowLayout(spacing: 7, lineSpacing: 7) {
                     ForEach(stops) { school in
-                        HStack(spacing: 5) {
-                            Text(school.name).font(.caption.weight(.semibold))
+                        HStack(spacing: 6) {
+                            Text(school.name).font(.system(size: 13, weight: .semibold))
                             Button {
                                 withAnimation(AmbientMotion.snappy) {
                                     stops.removeAll { $0.id == school.id }
                                 }
                             } label: {
-                                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                             }
                             .buttonStyle(.plain)
                         }
                         .foregroundStyle(Self.featureTint)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .padding(.horizontal, 12).padding(.vertical, 9)
                         // ambient-allow: a token chip is a control, not a card.
                         .background(Capsule().fill(Self.featureTint.opacity(0.13)))
                     }
                 }
             }
+
+            Button { showSchoolPicker = true } label: {
+                Label("Add a school", systemImage: "plus.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Self.featureTint)
+            }
+            .buttonStyle(.plain)
         }
-        .padding(.vertical, 7)
     }
 
-    private var mileageBlock: some View {
-        VStack(alignment: .leading, spacing: 7) {
+    private var mileageSection: some View {
+        section("Mileage and vehicle",
+                status: String(format: "%.1f mi · %@", miles, vehicle.capitalized),
+                statusTint: mileageLooksOff ? .orange : Self.featureTint) {
+            mileageBody
+        }
+    }
+
+    private var mileageBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                Label("Mileage", systemImage: "car")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                Text("Total").font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
                 TextField(String(format: "%.1f", computed), text: $mileage)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
-                    .font(.system(size: 19, weight: .bold, design: .rounded))
-                    .frame(width: 74)
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .frame(width: 84)
                     .onChange(of: mileage) { _ in mileageEdited = !mileage.isEmpty }
-                Text("mi").font(.caption).foregroundStyle(.secondary)
+                Text("miles").font(.subheadline).foregroundStyle(.secondary)
             }
 
+            Divider()
+
             // Vehicle lives with the mileage — one decision, per the operator.
-            HStack(spacing: 7) {
+            HStack(spacing: 8) {
                 vehicleButton("Personal")
                 vehicleButton("Company")
             }
@@ -267,18 +308,18 @@ struct ReportProposalMockup: View {
             // The route, always. A bare number is what gets accepted unread.
             if !stops.isEmpty && !mileageEdited {
                 Text((["Home"] + stops.map(\.name) + ["Home"]).joined(separator: " → "))
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if mileageEdited {
                 HStack(spacing: 6) {
                     Text("You typed this — it won't be overwritten.")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(.orange)
                     Button {
                         withAnimation(AmbientMotion.snappy) { mileage = ""; mileageEdited = false }
                     } label: {
                         Text("Use \(String(format: "%.1f", computed))")
-                            .font(.caption2.weight(.bold))
+                            .font(.caption.weight(.bold))
                     }
                     .buttonStyle(.plain)
                     Spacer(minLength: 0)
@@ -287,11 +328,10 @@ struct ReportProposalMockup: View {
             if mileageLooksOff, let usual {
                 Label(String(format: "You usually claim %.1f at %@", usual, stops.first?.name ?? ""),
                       systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption2).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.vertical, 7)
     }
 
     private func vehicleButton(_ title: String) -> some View {
@@ -307,9 +347,9 @@ struct ReportProposalMockup: View {
             }
         } label: {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(on ? .white : .primary)
-                .frame(maxWidth: .infinity).padding(.vertical, 8)
+                .frame(maxWidth: .infinity).padding(.vertical, 11)
                 // ambient-allow: a segmented control, not a container.
                 .background(Capsule().fill(on
                                            ? AnyShapeStyle(Self.featureTint)
@@ -338,20 +378,12 @@ struct ReportProposalMockup: View {
     /// Every option on screen, grouped, nothing behind a disclosure control.
     private func chipSection(title: String, groups: [(String, [String])],
                              selection: Binding<Set<String>>, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(title).font(.headline)
-                Spacer()
-                Text(selection.wrappedValue.isEmpty
-                     ? "select all that apply"
-                     : "\(selection.wrappedValue.count) selected")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(selection.wrappedValue.isEmpty
-                                     ? AnyShapeStyle(.tertiary) : AnyShapeStyle(tint))
-                    .contentTransition(.numericText())
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
+        section(title,
+                status: selection.wrappedValue.isEmpty
+                    ? "select all that apply"
+                    : "\(selection.wrappedValue.count) selected",
+                statusTint: selection.wrappedValue.isEmpty ? nil : tint) {
+            VStack(alignment: .leading, spacing: 14) {
                 ForEach(groups, id: \.0) { group in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(group.0)
@@ -369,11 +401,10 @@ struct ReportProposalMockup: View {
                 if selection.wrappedValue.contains("NONE") && selection.wrappedValue.count > 1 {
                     Label("\"NONE\" is selected alongside \(selection.wrappedValue.count - 1) other item\(selection.wrappedValue.count == 2 ? "" : "s").",
                           systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .ambientCard(density: .roomy, fillWidth: true)
         }
     }
 
@@ -408,14 +439,15 @@ struct ReportProposalMockup: View {
     // MARK: - 4. The rest
 
     private var scanSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Cards and job box").font(.headline)
-            VStack(alignment: .leading, spacing: 13) {
+        let answered = [cardsScanned, jobBox, sportsBackground].compactMap { $0 }.count
+        return section("Cards and job box",
+                       status: "\(answered) of 3 answered",
+                       statusTint: answered == 3 ? .teal : nil) {
+            VStack(alignment: .leading, spacing: 14) {
                 radio("Cards scanned", ["Yes", "No"], $cardsScanned)
                 radio("Job box and camera cards turned in", ["Yes", "No", "NA"], $jobBox)
                 radio("Sports background shot", ["Yes", "No", "NA"], $sportsBackground)
             }
-            .ambientCard(density: .roomy, fillWidth: true)
         }
     }
 
@@ -447,18 +479,18 @@ struct ReportProposalMockup: View {
     }
 
     private var notesSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Notes").font(.headline)
+        section("Notes",
+                status: notes.isEmpty ? "nothing written" : "\(notes.count) characters",
+                statusTint: notes.isEmpty ? nil : Self.featureTint) {
             TextEditor(text: $notes)
                 .frame(minHeight: 96)
                 .font(.subheadline)
                 .scrollContentBackground(.hidden)
-                .ambientCard(density: .compact, fillWidth: true)
                 .overlay(alignment: .topLeading) {
                     if notes.isEmpty {
                         Text("Anything the lab or the next photographer needs to know.")
                             .font(.subheadline).foregroundStyle(.tertiary)
-                            .padding(.horizontal, 17).padding(.vertical, 18)
+                            .padding(.top, 8)
                             .allowsHitTesting(false)
                     }
                 }
@@ -466,14 +498,9 @@ struct ReportProposalMockup: View {
     }
 
     private var photosSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Photos").font(.headline)
-                Spacer()
-                if !photos.isEmpty {
-                    Text("\(photos.count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                }
-            }
+        section("Photos",
+                status: photos.isEmpty ? "none attached" : "\(photos.count) attached",
+                statusTint: photos.isEmpty ? nil : Self.featureTint) {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
                 ForEach(Array(photos.enumerated()), id: \.offset) { index, colour in
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
