@@ -21,6 +21,12 @@ class TimeOffService: ObservableObject {
     /// empty, which is luck rather than design — and shared mutable state that
     /// happens not to bite yet is precisely the shape this feature has been bitten
     /// by twice already.
+    /// A COUNTER, exposed as a Bool. A plain flag meant the first of two
+    /// overlapping fetches cleared it while the second was still running — pull to
+    /// refresh during a cold-start load and the list fell through to "You haven't
+    /// submitted any time off requests yet", the exact lie the flag exists to
+    /// prevent.
+    private var activeFetches = 0
     @Published var isFetchingList = false
     @Published var errorMessage = ""
 
@@ -91,8 +97,12 @@ class TimeOffService: ObservableObject {
         // SET BEFORE THE FIRST AWAIT. Placed after `resolveUserId()` it left the
         // empty state showing for the whole of a cold-start session lookup, which
         // is the exact lie the flag exists to prevent.
+        activeFetches += 1
         isFetchingList = true
-        defer { isFetchingList = false }
+        defer {
+            activeFetches -= 1
+            if activeFetches <= 0 { activeFetches = 0; isFetchingList = false }
+        }
 
         _ = try? await resolveUserId()
 

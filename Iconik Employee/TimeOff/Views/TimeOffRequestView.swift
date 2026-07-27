@@ -138,8 +138,6 @@ struct TimeOffRequestView: View {
 
     private var calculatedHours: Double { PTOMath.calculatedHours(for: span) ?? 0 }
 
-    /// THE BALANCE THIS REQUEST IS MEASURED AGAINST.
-    ///
     /// In EDIT mode the request being edited is itself pending, so its hours are
     /// already inside `pending_balance` and therefore already excluded from
     /// `availableBalance`. Subtracting `ptoHours.value` on top of that counted the
@@ -176,6 +174,14 @@ struct TimeOffRequestView: View {
     /// it means the reservations on file already exceed the balance.
     private var availableForThisRequest: Double {
         guard let balance = currentPTOBalance else { return 0 }
+        // CREATE STAYS CLAMPED. Collapsing both paths into the unclamped
+        // expression was a regression: on create there is no reservation to add
+        // back, so the figure IS `availableBalance` — and unclamping it made a row
+        // still labelled "Available now" read −6.0 h while the balance card one tap
+        // away showed 0.0 under the same wording. The unclamping exists ONLY so
+        // that adding a reservation back is meaningful; with nothing to add back it
+        // has no purpose and a real cost.
+        guard ownReservation > 0 else { return balance.availableBalance }
         return (balance.balance - balance.pendingBalance) + ownReservation
     }
 

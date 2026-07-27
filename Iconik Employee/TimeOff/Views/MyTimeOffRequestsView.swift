@@ -163,7 +163,11 @@ struct MyTimeOffRequestsView: View {
             // got into the queue enumeration and not into the drain, which is the
             // same half-swept class this round is named for.
             Button("Cancel Request", role: .destructive) {
-                if let requestToCancel { cancelRequest(requestToCancel) } else { flushQueuedAlert() }
+                if let requestToCancel {
+                    self.requestToCancel = nil
+                    cancelRequest(requestToCancel)
+                }
+                flushQueuedAlert()
             }
             Button("Keep Request", role: .cancel) {
                 requestToCancel = nil
@@ -330,12 +334,18 @@ struct MyTimeOffRequestsView: View {
     /// phase has repeatedly proved is that a silently discarded failure is worse
     /// than a late one.
     private func flushQueuedAlert() {
-        guard !queuedAlerts.isEmpty else { return }
-        // Oldest first, one per dismissal — the alert's OK button calls back in.
-        alertMessage = queuedAlerts.removeFirst()
+        guard let next = queuedAlerts.first else { return }
         // A tick, so the alert that just dismissed is fully gone before the next
-        // is raised on the same presenter.
-        DispatchQueue.main.async { showingAlert = true }
+        // is raised on the same presenter — and the message is REMOVED only once
+        // it is actually being presented. Removing first left a one-turn gap in
+        // which a resuming continuation could overwrite `alertMessage` and the
+        // flushed result was gone with no way to recover it.
+        DispatchQueue.main.async {
+            guard !queuedAlerts.isEmpty else { return }
+            queuedAlerts.removeFirst()
+            alertMessage = next
+            showingAlert = true
+        }
     }
 
     private func refresh() async {
@@ -397,7 +407,13 @@ struct MyTimeOffRequestsView: View {
             // Edit on another card while a cancel is in flight would have
             // swallowed the result — including a FAILURE. Queued, not discarded.
             await MainActor.run {
-                requestToCancel = nil
+                // DOES NOT TOUCH `requestToCancel`. It is the payload of a
+                // confirmation alert that may already be showing for a DIFFERENT
+                // card, and nilling it there left that alert's action with nothing
+                // to act on — so the second cancel silently did nothing and the
+                // flush showed the FIRST one's "Request cancelled successfully".
+                // Round 8 swept `alertMessage` out of shared state in this exact
+                // method and stopped at this line.
                 if isPresentingSomething {
                     queuedAlerts.append(outcome)
                 } else {

@@ -324,12 +324,31 @@ keptCount "the queues are ARRAYS, not single slots"   "$APPR" 'queuedAlerts' 6
 keptCount "…on the list screen too"                   "$LIST" 'queuedAlerts' 4
 kept "pushing does NOT tear down the realtime channel" "$LIST" 'guard destination == nil else { return }'
 kept "the queue is flushed when the push pops"        "$LIST" 'if newValue == nil { flushQueuedAlert() }'
-keptCount "EVERY presentation surface has a flush hook" "$LIST" 'flushQueuedAlert()' 4
+# FIVE surfaces, so five drains plus the declaration = 6 mentions. The old check
+# counted 'flushQueuedAlert()' WITH parens, which matched four call sites plus the
+# declaration and missed the two `onDismiss: flushQueuedAlert` references entirely
+# — so a hook could be deleted and the count still passed. Proved by sabotage.
+# SEVEN, counted exactly, not estimated: 6 drains (push-pop, two sheets, the
+# confirmation's two buttons, the result alert's OK) + the declaration. I set this
+# to 6 by guessing and left exactly one hook's worth of slack — the third time in
+# this phase a threshold I picked let a single-site regression through. Count it.
+keptCount "EVERY presentation surface has a flush hook" "$LIST" 'flushQueuedAlert' 7
+keptIn "…including both sheet drains"                 "$LIST" body 'onDismiss: flushQueuedAlert'
+keptIn "…and the cancel confirmation's two buttons"   "$LIST" body 'Button("Keep Request", role: .cancel)'
 # `tabBar` is a computed var, so keptIn (which looks for `func name(`) cannot scope
 # to it. Asserted as a pair instead: the gesture exists, and it is NOT on the
 # ScrollView — which is the property that matters, since attaching it there is what
 # this repo's own design system warns against.
 keptIn "swipe between tabs lives on the STRIP"        "$APPR" tabBar 'highPriorityGesture'
+
+keptIn "the fetch flag is set BEFORE the first await" "Iconik Employee/TimeOff/Services/TimeOffService.swift" startListeningToRequests 'activeFetches += 1'
+kept "…and counted, so overlapping fetches cannot clear it" "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'if activeFetches <= 0'
+keptIn "the cancel result uses a LOCAL, not shared state" "$LIST" cancelRequest 'var outcome: String'
+keptIn "…and does not nil another card's payload"     "$LIST" cancelRequest 'if isPresentingSomething'
+kept "create keeps the CLAMPED balance"               "$FORM" 'guard ownReservation > 0 else { return balance.availableBalance }'
+keptIn "raise() writes the message only when presenting" "$APPR" raise 'alertMessage = message'
+keptCount "…and that is its ONLY write to alertMessage" "$APPR" 'alertMessage = message' 1
+kept "the flush consumes only once it presents"       "$LIST" 'guard let next = queuedAlerts.first'
 
 echo
 echo "EXPECTED-GONE — dropped deliberately, each with a reason in the file"

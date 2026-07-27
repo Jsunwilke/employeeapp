@@ -541,18 +541,23 @@ struct TimeOffApprovalView: View {
     /// Shows whatever was held back, once nothing is in the way. Never drops it.
     @MainActor
     private func flushQueuedAlert() {
-        guard !queuedAlerts.isEmpty else { return }
-        alertMessage = queuedAlerts.removeFirst()
-        DispatchQueue.main.async { showingAlert = true }
+        guard let next = queuedAlerts.first else { return }
+        DispatchQueue.main.async {
+            guard !queuedAlerts.isEmpty else { return }
+            queuedAlerts.removeFirst()
+            alertMessage = next
+            showingAlert = true
+        }
     }
 
     @MainActor
     private func raise(_ message: String) {
-        alertMessage = message
-        // The same enumeration as the list screen: a message shows only when
-        // NOTHING is presented over this view. Two surfaces here — the deny sheet
-        // and a result alert already up.
+        // `alertMessage` is written ONLY on the branch that presents. Writing it
+        // first clobbered the text of an alert already on screen — so a failed
+        // approval could be overwritten by a later success and read as one, which
+        // is a defect this phase has already shipped once.
         if requestToDeny == nil && !showingAlert {
+            alertMessage = message
             showingAlert = true
         } else {
             queuedAlerts.append(message)
