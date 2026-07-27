@@ -105,7 +105,7 @@ enum ReportOptions {
 
     /// The three scan questions, with their real options in shipped order.
     /// Cards Scanned has no NA; the other two do. None can be cleared once set,
-    /// which is `ReportChoiceRow`'s behaviour and the live form's.
+    /// which is `AmbientChoiceRow`'s behaviour and the live form's.
     static let yesNo = ["Yes", "No"]
     static let yesNoNA = ["Yes", "No", "NA"]
 

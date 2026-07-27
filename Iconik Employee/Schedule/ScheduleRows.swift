@@ -216,6 +216,13 @@ struct ScheduleDraftHeading: View {
 struct ScheduleTimeOffRow: View {
     let entry: TimeOffCalendarEntry
 
+    private var scheduleTimeLabel: String {
+        guard entry.isPartialDay,
+              let start = TimeOfDay(entry.startTime),
+              let end = TimeOfDay(entry.endTime) else { return "All day" }
+        return "\(start.displayString)–\(end.displayString)"
+    }
+
     var body: some View {
         let tint = ScheduleStyle.accent(for: entry)
         return HStack(spacing: 14) {
@@ -226,12 +233,25 @@ struct ScheduleTimeOffRow: View {
                 .background(Circle().fill(tint.opacity(0.15)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.reason.displayName).font(.system(size: 16, weight: .semibold))
-                Text("\(entry.isPartialDay ? "\(entry.startTime)–\(entry.endTime)" : "All day") · \(entry.photographerName)")
+                // The times are stored as "09:00" and were printed RAW here, so a
+                // 12-hour-locale photographer read "13:00–17:00" on their own
+                // schedule. Formatted through TimeOfDay like everywhere else.
+                Text("\(scheduleTimeLabel) · \(entry.photographerName)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            AmbientBadge(text: entry.status.displayName, tint: tint)
+            // THE BADGE TAKES THE STATUS COLOUR, NOT THE SCHEDULE'S ACCENT.
+            // `ScheduleStyle.accent(for:)` deliberately maps by status AND
+            // partial-day — it makes approved ORANGE when partial and GREY when
+            // not — which is a useful signal for the ROW, and a wrong one for a
+            // badge that names a status. Feeding it to both meant an approved
+            // full-day request wore a grey "Approved" badge here and a green one
+            // on every other screen. The card's dashed border keeps the schedule's
+            // accent, because that IS the calendar signal (AMB.1's language for
+            // "not the same kind of thing as a shift").
+            AmbientBadge(text: TimeOffStatusDisplay.from(raw: entry.status.rawValue).label,
+                         tint: TimeOffStatusDisplay.from(raw: entry.status.rawValue).color)
         }
         .ambientCard(density: .roomy, border: .dashed(tint.opacity(0.3)))
     }

@@ -1,44 +1,92 @@
+//  MyTimeOffRequestsView.swift
+//  Iconik Employee — "My Time Off", converted to Ambient in AMB.8
+//
+//  The old screen and its 213-line hand-rolled `TimeOffRequestCard` are GONE from
+//  this file, not left beside the new one. The card now lives in
+//  `TimeOff/TimeOffKit.swift`, which the design lab's mockup also draws with, so
+//  the mockup and this screen cannot diverge.
+//
+//  WHAT THIS SCREEN GAINED, and why each is in scope for a design phase:
+//    - THE BALANCE LEADS (the design's first claim). The only dedicated balance
+//      screen lived in Settings; the number you need in order to decide anything
+//      about time off was in a different feature. Settings keeps its route.
+//    - AN ERROR STATE. `TimeOffService.errorMessage` has always existed, has
+//      always been set on failure, and had NEVER been read by any view — so a
+//      failed load rendered as "You haven't submitted any time off requests yet."
+//      That is the shape that hid Chat for a year, and drawing it is a view
+//      change, not a service change.
+//
+//  WHAT IT DELIBERATELY DID NOT GAIN: an entry to the approvals queue. The lab
+//  mockup carries one so the operator could reach the other mockup, and that
+//  mockup's own comment says surfacing it for real is a navigation question
+//  rather than a design one. D3 says navigation stays as it is, so it is not here.
+
 import SwiftUI
 
 struct MyTimeOffRequestsView: View {
     @StateObject private var timeOffService = TimeOffService.shared
-    @State private var selectedStatus: TimeOffStatus? = nil
+    private let ptoService = PTOService.shared
+
+    @State private var selectedStatus: TimeOffStatus?
     @State private var showingNewRequest = false
-    @State private var editingRequest: TimeOffRequest? = nil
+    @State private var editingRequest: TimeOffRequest?
+    @State private var requestToCancel: TimeOffRequest?
     @State private var showingCancelAlert = false
-    @State private var requestToCancel: TimeOffRequest? = nil
-    @State private var showingAlert = false
     @State private var alertMessage = ""
-    
-    private var filteredRequests: [TimeOffRequest] {
-        if let status = selectedStatus {
-            return timeOffService.getMyRequests(status: status)
-        }
-        return timeOffService.myRequests
+    @State private var showingAlert = false
+    @State private var destination: TimeOffDestination?
+
+    // The balance is loaded here so the lead card can show it. Nil while loading;
+    // `balanceFailed` is a SEPARATE state, because a failure must never render as
+    // "0.0 hours available".
+    @State private var balance: PTOBalance?
+    @State private var balanceFailed = false
+
+    /// One enum, one `.ambientPush` — the AMB.3 rule. Two stacked
+    /// `NavigationLink(isActive:)` is the shape that produced AMB.1's dead tap.
+    private enum TimeOffDestination: String, Identifiable {
+        case balance
+        var id: String { rawValue }
     }
-    
+
+    private var tint: Color { TimeOffStyle.requests }
+
+    /// Newest first — the order the fetch already returns (`created_at`
+    /// descending). Named through the tested rule type so the contrast with the
+    /// manager queue's FIFO order is explicit rather than an accident of two
+    /// different `.sorted` calls in two different files.
+    private var requests: [TimeOffRequest] {
+        let all = TimeOffOrder.employeeList(timeOffService.myRequests, createdAt: { $0.createdAt })
+        guard let selectedStatus else { return all }
+        return all.filter { $0.status == selectedStatus.rawValue }
+    }
+
+    private var hasFailed: Bool { !timeOffService.errorMessage.isEmpty }
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Header with filter
-            headerSection
-            
-            // Content
-            if timeOffService.isLoading {
-                loadingView
-            } else if filteredRequests.isEmpty {
-                emptyStateView
-            } else {
-                requestsList
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.8)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    balanceLead
+                    TimeOffPrimaryButton(title: "New Time Off Request",
+                                         systemImage: "plus.circle.fill",
+                                         tint: tint) { showingNewRequest = true }
+                    chipRow
+                    content
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
             }
+            .ambientNoBounceWhenShort()
+            .refreshable { await refresh() }
         }
         .navigationTitle("My Time Off")
         .navigationBarTitleDisplayMode(.large)
-        .task {
-            await timeOffService.startListeningToRequests()
-        }
-        .onDisappear {
-            Task {
-                await timeOffService.stopListening()
+        .ambientPush(item: $destination) { destination in
+            switch destination {
+            case .balance: PTOBalanceView(isPushed: true)
             }
         }
         .sheet(isPresented: $showingNewRequest) {
@@ -49,426 +97,185 @@ struct MyTimeOffRequestsView: View {
         }
         .alert("Cancel Request", isPresented: $showingCancelAlert) {
             Button("Cancel Request", role: .destructive) {
-                if let request = requestToCancel {
-                    cancelRequest(request)
-                }
+                if let requestToCancel { cancelRequest(requestToCancel) }
             }
-            Button("Keep Request", role: .cancel) {}
+            Button("Keep Request", role: .cancel) { requestToCancel = nil }
         } message: {
             Text("Are you sure you want to cancel this time off request? This action cannot be undone.")
         }
         .alert("Time Off", isPresented: $showingAlert) {
-            Button("OK") {}
+            Button("OK", role: .cancel) { }
         } message: {
             Text(alertMessage)
         }
+        .task {
+            await timeOffService.startListeningToRequests()
+            await loadBalance()
+        }
+        .onDisappear {
+            Task { await timeOffService.stopListening() }
+        }
     }
-    
-    // MARK: - Header Section
-    
-    private var headerSection: some View {
-        VStack(spacing: 16) {
-            // New Request Button
-            Button(action: {
-                showingNewRequest = true
-            }) {
-                HStack {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title2)
-                    Text("New Time Off Request")
-                        .font(.headline)
+
+    // MARK: - The balance, which today lives only in Settings
+
+    private var balanceLead: some View {
+        TimeOffBalanceLead(available: balance?.availableBalance,
+                           pendingHours: balance?.pendingBalance,
+                           failed: balanceFailed,
+                           tint: tint) {
+            destination = .balance
+        }
+    }
+
+    // MARK: - Chips
+
+    /// All six are ALWAYS rendered, even at zero — the app's real behaviour, and
+    /// the deliberate opposite of the call AMB.5 made for Tasks. A status you can
+    /// never see is a status you forget you can be in. Only the badge is
+    /// conditional.
+    private var chipRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                TimeOffChip(label: "All",
+                            count: timeOffService.myRequests.count,
+                            tint: .secondary,
+                            selected: selectedStatus == nil) {
+                    withAnimation(AmbientMotion.snappy) { selectedStatus = nil }
+                    AmbientHaptics.selection()
                 }
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.blue)
-                .cornerRadius(10)
+                ForEach(TimeOffStatus.filterOptions, id: \.self) { status in
+                    TimeOffChip(label: status.displayName,
+                                count: timeOffService.getMyRequests(status: status).count,
+                                tint: TimeOffStatusDisplay.from(raw: status.rawValue).color,
+                                selected: selectedStatus == status) {
+                        withAnimation(AmbientMotion.snappy) { selectedStatus = status }
+                        AmbientHaptics.selection()
+                    }
+                }
             }
-            .padding(.horizontal)
-            
-            // Status Filter
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    FilterButton(
-                        title: "All",
-                        isSelected: selectedStatus == nil,
-                        count: timeOffService.myRequests.count
-                    ) {
-                        selectedStatus = nil
-                    }
-                    
-                    ForEach(TimeOffStatus.filterOptions, id: \.self) { status in
-                        FilterButton(
-                            title: status.displayName,
-                            isSelected: selectedStatus == status,
-                            count: timeOffService.getMyRequests(status: status).count,
-                            color: Color(status.colorName)
-                        ) {
-                            selectedStatus = status
-                        }
-                    }
-                }
-                .padding(.horizontal)
+            .padding(.horizontal, 16)
+        }
+        .padding(.horizontal, -16)
+    }
+
+    // MARK: - The list and its states
+
+    @ViewBuilder
+    private var content: some View {
+        if hasFailed && timeOffService.myRequests.isEmpty {
+            // A FAILURE IS NOT AN EMPTY LIST. The banner is the whole story here —
+            // rendering the empty state underneath would restate the exact lie
+            // this screen shipped with for years.
+            failureBanner
+        } else {
+            if hasFailed {
+                // A failed REFRESH over a list we already have: say so, keep the
+                // rows. Silently showing stale data is how a broken realtime feed
+                // goes unnoticed.
+                failureBanner
+            }
+            if timeOffService.isLoading && timeOffService.myRequests.isEmpty {
+                loadingState
+            } else if requests.isEmpty {
+                emptyState
+            } else {
+                list
             }
         }
-        .padding(.vertical)
-        .background(Color(.systemGray6))
     }
-    
-    // MARK: - Content Views
-    
-    private var loadingView: some View {
-        VStack(spacing: 16) {
+
+    private var failureBanner: some View {
+        TimeOffFailureBanner(message: timeOffService.errorMessage, tint: tint) {
+            Task { await refresh() }
+        }
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 8) {
             ProgressView()
-                .scaleEffect(1.2)
             Text("Loading your requests...")
-                .foregroundColor(.secondary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 44)
     }
-    
-    private var emptyStateView: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "calendar.badge.plus")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
-            
-            VStack(spacing: 8) {
-                Text(selectedStatus == nil ? "No Time Off Requests" : "No \(selectedStatus?.displayName ?? "") Requests")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                
-                Text(selectedStatus == nil ? 
-                     "You haven't submitted any time off requests yet." :
-                     "You don't have any \(selectedStatus?.displayName.lowercased() ?? "") requests.")
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            
-            if selectedStatus == nil {
-                Button(action: {
-                    showingNewRequest = true
-                }) {
-                    Text("Create First Request")
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(Color.blue)
-                        .cornerRadius(8)
-                }
-            }
+
+    /// FIVE DISTINCT EMPTY STATES, as the app has always had: one unfiltered and
+    /// one per status. The filtered ones carry NO call to action, because "create
+    /// your first request" is wrong when you have six and are looking at a filter.
+    @ViewBuilder
+    private var emptyState: some View {
+        if let selectedStatus {
+            AmbientEmptyState(
+                title: "No \(selectedStatus.displayName) Requests",
+                message: "You don't have any \(selectedStatus.displayName.lowercased()) requests.",
+                systemImage: "line.3.horizontal.decrease.circle")
+        } else {
+            AmbientEmptyState(
+                title: "No Time Off Requests",
+                message: "You haven't submitted any time off requests yet.",
+                systemImage: "calendar.badge.clock",
+                actionTitle: "Create First Request",
+                actionIcon: "plus.circle.fill",
+                action: { showingNewRequest = true },
+                actionTint: tint)
         }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    
-    private var requestsList: some View {
-        List {
-            ForEach(filteredRequests) { request in
+
+    private var list: some View {
+        LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
+            ForEach(requests) { request in
                 TimeOffRequestCard(
-                    request: request,
-                    showActions: true,
-                    onEdit: {
-                        editingRequest = request
-                    },
+                    model: request.cardModel,
+                    showsActions: true,
+                    onEdit: { editingRequest = request },
                     onCancel: {
                         requestToCancel = request
                         showingCancelAlert = true
-                    }
-                )
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                .listRowSeparator(.hidden)
+                    })
+                .ambientScrollFade()
             }
         }
-        .listStyle(PlainListStyle())
-        .refreshable {
-            await timeOffService.refreshRequests()
+    }
+
+    // MARK: - Actions
+
+    private func refresh() async {
+        await timeOffService.refreshRequests()
+        await loadBalance()
+    }
+
+    private func loadBalance() async {
+        let userId = UserManager.shared.getCurrentUserIDUnified()
+        let organizationID = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        guard let userId, !userId.isEmpty, !organizationID.isEmpty else {
+            balance = nil
+            balanceFailed = true
+            return
+        }
+        do {
+            balance = try await ptoService.getPTOBalance(userId: userId, organizationID: organizationID)
+            balanceFailed = false
+        } catch {
+            // Recorded as a failure rather than left nil, so the lead card shows
+            // "Balance unavailable" instead of a permanent spinner.
+            balance = nil
+            balanceFailed = true
         }
     }
-    
-    // MARK: - Helper Methods
 
     private func cancelRequest(_ request: TimeOffRequest) {
         Task {
             do {
                 try await timeOffService.cancelTimeOffRequest(requestId: request.id)
-                await MainActor.run {
-                    alertMessage = "Request cancelled successfully"
-                    showingAlert = true
-                }
+                alertMessage = "Request cancelled successfully"
             } catch {
-                await MainActor.run {
-                    alertMessage = error.localizedDescription
-                    showingAlert = true
-                }
+                alertMessage = error.localizedDescription
             }
+            showingAlert = true
+            requestToCancel = nil
         }
-    }
-}
-
-// MARK: - Filter Button
-
-struct FilterButton: View {
-    let title: String
-    let isSelected: Bool
-    let count: Int
-    let color: Color
-    let action: () -> Void
-    
-    init(title: String, isSelected: Bool, count: Int, color: Color = .blue, action: @escaping () -> Void) {
-        self.title = title
-        self.isSelected = isSelected
-        self.count = count
-        self.color = color
-        self.action = action
-    }
-    
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundColor(isSelected ? color : .white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(isSelected ? .white : color)
-                        .clipShape(Capsule())
-                }
-            }
-            .foregroundColor(isSelected ? .white : color)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(isSelected ? color : Color.clear)
-            .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(color, lineWidth: 1)
-            )
-            .clipShape(Capsule())
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-}
-
-// MARK: - Time Off Request Card
-
-struct TimeOffRequestCard: View {
-    let request: TimeOffRequest
-    let showActions: Bool
-    let onEdit: (() -> Void)?
-    let onCancel: (() -> Void)?
-    let onApprove: (() -> Void)?
-    let onDeny: (() -> Void)?
-    let onReview: (() -> Void)?
-    
-    init(
-        request: TimeOffRequest,
-        showActions: Bool = false,
-        onEdit: (() -> Void)? = nil,
-        onCancel: (() -> Void)? = nil,
-        onApprove: (() -> Void)? = nil,
-        onDeny: (() -> Void)? = nil,
-        onReview: (() -> Void)? = nil
-    ) {
-        self.request = request
-        self.showActions = showActions
-        self.onEdit = onEdit
-        self.onCancel = onCancel
-        self.onApprove = onApprove
-        self.onDeny = onDeny
-        self.onReview = onReview
-    }
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            // Header with status
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(request.formattedDateRange)
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    Text(request.formattedDuration)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-
-                HStack(spacing: 6) {
-                    Image(systemName: request.statusEnum.systemImageName)
-                        .font(.caption)
-                    Text(request.statusEnum.displayName)
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color(request.statusEnum.colorName))
-                .clipShape(Capsule())
-            }
-            
-            // Reason and notes
-            HStack {
-                Image(systemName: request.reasonEnum.systemImageName)
-                    .foregroundColor(Color(request.reasonEnum.colorName))
-                Text(request.reasonEnum.displayName)
-                    .fontWeight(.medium)
-                Spacer()
-            }
-
-            if let notes = request.notes, !notes.isEmpty {
-                HStack {
-                    Text("Notes:")
-                        .fontWeight(.medium)
-                        .foregroundColor(.secondary)
-                    Text(notes)
-                        .foregroundColor(.primary)
-                    Spacer()
-                }
-                .font(.caption)
-            }
-            
-            // Approval/Denial details
-            if request.status == "approved", let approverName = request.approverName, let approvedAt = request.approvedAt {
-                HStack {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                    Text("Approved by \(approverName)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(formatDate(approvedAt))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            } else if request.status == "underReview", let reviewerName = request.reviewerName, let reviewedAt = request.reviewedAt {
-                HStack {
-                    Image(systemName: "magnifyingglass.circle.fill")
-                        .foregroundColor(.blue)
-                    Text("In review by \(reviewerName)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(formatDate(reviewedAt))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            } else if request.status == "denied", let denierName = request.denierName, let deniedAt = request.deniedAt {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.red)
-                        Text("Denied by \(denierName)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(formatDate(deniedAt))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    if let denialReason = request.denialReason {
-                        Text("Reason: \(denialReason)")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .padding(.leading, 20)
-                    }
-                }
-            }
-            
-            // Actions
-            if showActions && (request.canBeEdited || request.canBeCancelled) {
-                HStack(spacing: 12) {
-                    if request.canBeEdited, let onEdit = onEdit {
-                        Button("Edit") {
-                            onEdit()
-                        }
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.blue)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.blue.opacity(0.1))
-                        .clipShape(Capsule())
-                    }
-                    
-                    if request.canBeCancelled, let onCancel = onCancel {
-                        Button("Cancel") {
-                            onCancel()
-                        }
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.red.opacity(0.1))
-                        .clipShape(Capsule())
-                    }
-                    
-                    Spacer()
-                }
-            }
-            
-            // Manager actions
-            if let onApprove = onApprove, let onDeny = onDeny, (request.status == "pending" || request.status == "underReview") {
-                HStack(spacing: 12) {
-                    if request.status == "pending", let onReview = onReview {
-                        Button("Put in Review") {
-                            onReview()
-                        }
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.blue)
-                        .clipShape(Capsule())
-                    }
-                    
-                    Button("Approve") {
-                        onApprove()
-                    }
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.green)
-                    .clipShape(Capsule())
-                    
-                    Button("Deny") {
-                        onDeny()
-                    }
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.red)
-                    .clipShape(Capsule())
-                    
-                    Spacer()
-                }
-            }
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
-    }
-    
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
     }
 }

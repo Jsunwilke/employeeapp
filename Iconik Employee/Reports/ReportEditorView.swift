@@ -10,9 +10,9 @@
 //      is a hard gate on designing a surface the operator has not seen.
 //
 //      What it gets instead is the design the operator DID approve, applied to
-//      the same fields: the same `ReportSection` chrome, the same
+//      the same fields: the same `AmbientFormSection` chrome, the same
 //      `ReportMultiSelect` for the same 22 and 12 options, the same
-//      `ReportChoiceRow` for the same three scan questions, and the same
+//      `AmbientChoiceRow` for the same three scan questions, and the same
 //      `ReportVehiclePicker`. Nothing here is invented — the alternative was a
 //      raw `Form` of checkboxes sitting one push away from the converted create
 //      screen, which is the "widget and the screen it opens are two different
@@ -188,7 +188,7 @@ struct ReportEditorView: View {
             .map { ($0.key, Self.describe($0.value)) }
             .filter { !$0.1.isEmpty }
             .sorted { $0.0 < $1.0 }
-        return ReportSection(title: "Template answers",
+        return AmbientFormSection(title: "Template answers",
                              status: "\(entries.count)",
                              statusTint: entries.isEmpty ? nil : feature) {
             if entries.isEmpty {
@@ -227,7 +227,7 @@ struct ReportEditorView: View {
     // MARK: - Sections
 
     private var detailsSection: some View {
-        ReportSection(title: "Report details",
+        AmbientFormSection(title: "Report details",
                       status: vehicle.confirmed == nil
                         ? String(format: "%.1f mi", mileage.value)
                         : String(format: "%.1f mi · %@", mileage.value, vehicle.confirmed!.rawValue.capitalized),
@@ -286,7 +286,7 @@ struct ReportEditorView: View {
 
     private func listSection(title: String, groups: [(String, [String])],
                              selection: Binding<Set<String>>, tint: Color) -> some View {
-        ReportSection(title: title,
+        AmbientFormSection(title: title,
                       status: selection.wrappedValue.isEmpty
                         ? "select all that apply"
                         : "\(selection.wrappedValue.count) selected",
@@ -297,22 +297,22 @@ struct ReportEditorView: View {
 
     private var scanSection: some View {
         let answered = [cardsScanned, jobBox, sportsBackground].compactMap { $0 }.count
-        return ReportSection(title: "Cards and job box",
+        return AmbientFormSection(title: "Cards and job box",
                              status: "\(answered) of 3 answered",
                              statusTint: answered == 3 ? .teal : nil) {
             VStack(alignment: .leading, spacing: 14) {
-                ReportChoiceRow(title: "Cards scanned",
+                AmbientChoiceRow(title: "Cards scanned",
                                 options: ReportOptions.yesNo, selection: $cardsScanned)
-                ReportChoiceRow(title: "Job box and camera cards turned in",
+                AmbientChoiceRow(title: "Job box and camera cards turned in",
                                 options: ReportOptions.yesNoNA, selection: $jobBox)
-                ReportChoiceRow(title: "Sports background shot",
+                AmbientChoiceRow(title: "Sports background shot",
                                 options: ReportOptions.yesNoNA, selection: $sportsBackground)
             }
         }
     }
 
     private var jobNotesSection: some View {
-        ReportSection(title: "Job notes",
+        AmbientFormSection(title: "Job notes",
                       status: jobNotes.isEmpty ? "nothing written" : "\(jobNotes.count) characters",
                       statusTint: jobNotes.isEmpty ? nil : feature) {
             TextEditor(text: $jobNotes)
@@ -324,7 +324,7 @@ struct ReportEditorView: View {
     }
 
     private var photoshootNoteSection: some View {
-        ReportSection(title: "Photoshoot note info",
+        AmbientFormSection(title: "Photoshoot note info",
                       status: photoshootNoteText.isEmpty ? "nothing written" : "\(photoshootNoteText.count) characters",
                       statusTint: photoshootNoteText.isEmpty ? nil : feature) {
             TextEditor(text: $photoshootNoteText)
@@ -338,7 +338,7 @@ struct ReportEditorView: View {
     /// VIEW-ONLY, exactly as before — this screen can neither add, delete nor
     /// reorder a report's photos. Each opens a detail sheet.
     private var photosSection: some View {
-        ReportSection(title: "Attached photos",
+        AmbientFormSection(title: "Attached photos",
                       status: "\(photoURLs.count)",
                       statusTint: feature) {
             // The grid is built here rather than through `StoragePhotoGallery`,

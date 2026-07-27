@@ -1,0 +1,211 @@
+#!/bin/bash
+#
+# AMB.8 PARITY WALK — run against the NEW screens, not the old ones.
+#
+# Writing a parity inventory does not protect anything; only RUNNING it against
+# the redesign does. AMB.7 lost five capabilities inside its own redesigns and the
+# operator found four of them by asking "where is X?". The fifth was only found
+# because a check like this finally got run.
+#
+# Every line below is a capability from AMB_BATCH2_PARITY.md's Time Off inventory,
+# read from the ORIGINAL source before the redesign. A FAIL means the redesign
+# dropped something. Deliberate drops are listed at the bottom as EXPECTED-GONE,
+# each with the reason, and this script asserts they are gone rather than silently
+# not looking for them.
+#
+# Usage: scripts/parity_timeoff.sh
+cd "$(dirname "$0")/.."
+
+PASS=0
+FAIL=0
+LIST="Iconik Employee/TimeOff/Views/MyTimeOffRequestsView.swift"
+APPR="Iconik Employee/TimeOff/Views/TimeOffApprovalView.swift"
+FORM="Iconik Employee/TimeOff/Views/TimeOffRequestView.swift"
+DETAIL="Iconik Employee/TimeOff/Views/TimeOffDetailView.swift"
+PTO="Iconik Employee/Settings/PTOBalanceView.swift"
+KIT="Iconik Employee/TimeOff/TimeOffKit.swift"
+RULES="Iconik Employee/TimeOff/TimeOffRules.swift"
+PRES="Iconik Employee/TimeOff/TimeOffPresentation.swift"
+
+kept () { # $1 = capability, $2 = file, $3 = pattern
+  if grep -q "$3" "$2" 2>/dev/null; then
+    PASS=$((PASS+1)); printf '  ok    %s\n' "$1"
+  else
+    FAIL=$((FAIL+1)); printf '  LOST  %s   [%s ~ %s]\n' "$1" "$(basename "$2")" "$3"
+  fi
+}
+
+gone () { # $1 = capability, $2 = file, $3 = pattern that must NOT appear
+  # CODE ONLY — comment lines are stripped first. Every deliberate removal in this
+  # phase is explained in a comment that NAMES the thing removed, so a naive grep
+  # reports the explanation as the construct and the check fails on its own
+  # documentation. (The drift gate carries the mirror image of this trap: a long
+  # comment must not hide a construct from the rule.) Caught by running this.
+  if sed -e 's|//.*||' "$2" 2>/dev/null | grep -q "$3"; then
+    FAIL=$((FAIL+1)); printf '  STILL THERE  %s\n' "$1"
+  else
+    PASS=$((PASS+1)); printf '  ok    (deliberately gone) %s\n' "$1"
+  fi
+}
+
+echo "MyTimeOffRequestsView — the employee list"
+kept "New Time Off Request button, always present"   "$LIST" 'New Time Off Request'
+kept "All chip"                                       "$LIST" '"All"'
+kept "the five status chips come from filterOptions"  "$LIST" 'TimeOffStatus.filterOptions'
+kept "chips always rendered, only the badge is conditional" "$KIT" 'if count > 0'
+kept "chip row scrolls horizontally"                  "$LIST" 'ScrollView(.horizontal'
+kept "Create First Request"                           "$LIST" 'Create First Request'
+kept "…conditional on NO filter being active"         "$LIST" 'if let selectedStatus'
+kept "pull to refresh"                                "$LIST" 'refreshable'
+kept "Edit pill"                                      "$LIST" 'onEdit:'
+kept "Cancel pill"                                    "$LIST" 'onCancel:'
+kept "…with a confirmation alert"                     "$LIST" 'Are you sure you want to cancel'
+kept "Keep Request (the alert's cancel label)"         "$LIST" 'Keep Request'
+kept "unfiltered empty title"                         "$LIST" 'No Time Off Requests'
+kept "unfiltered empty message"                       "$LIST" "haven't submitted any time off requests yet"
+kept "filtered empty title"                           "$LIST" 'No \\(selectedStatus.displayName) Requests'
+kept "filtered empty message"                         "$LIST" "don't have any"
+kept "loading copy"                                   "$LIST" 'Loading your requests...'
+kept "newest-first order"                             "$LIST" 'TimeOffOrder.employeeList'
+kept "cancel success message"                         "$LIST" 'Request cancelled successfully'
+
+echo
+echo "The shared card (both lists draw it)"
+kept "reason icon carries its own colour"             "$KIT" 'model.reason.symbol'
+kept "date label"                                     "$KIT" 'model.dateLabel'
+kept "Partial badge"                                  "$KIT" '"Partial"'
+kept "time label"                                     "$KIT" 'model.timeLabel'
+kept "duration label"                                 "$KIT" 'model.durationLabel'
+kept "PTO hours on the card"                          "$KIT" 'PTO hours'
+kept "status badge"                                   "$KIT" 'model.status.label'
+kept "notes, max 2 lines"                             "$KIT" 'lineLimit(2)'
+kept "Approved by NAME"                               "$RULES" 'Approved by'
+kept "In review by NAME"                              "$RULES" 'In review by'
+kept "Denied by NAME"                                 "$RULES" 'Denied by'
+kept "attribution needs BOTH name and date"           "$RULES" 'guard let name, let date'
+kept "denial reason line"                             "$KIT" 'Reason: '
+kept "cancelled rows recede"                          "$KIT" 'receded'
+kept "manager Approve"                                "$KIT" '"Approve"'
+kept "manager Deny"                                   "$KIT" '"Deny"'
+kept "manager Put in Review"                          "$KIT" 'Put in Review'
+kept "photographer shown on the manager card only"    "$KIT" 'showsPhotographer'
+
+echo
+echo "TimeOffApprovalView — the manager queue"
+kept "three tabs"                                     "$APPR" 'case history'
+kept "red count badges"                               "$APPR" 'Color.red'
+kept "History deliberately carries no badge"          "$APPR" 'case .history: return 0'
+kept "pull to refresh"                                "$APPR" 'refreshable'
+kept "FIFO order for pending"                         "$APPR" 'TimeOffOrder.managerQueue'
+kept "history sorted by when it was actioned"         "$APPR" 'TimeOffOrder.history'
+kept "Put in Review wired only on the Pending tab"    "$APPR" 'tab == .pending ?'
+kept "denial reason REQUIRED"                         "$APPR" 'required'
+kept "empty: All Caught Up!"                          "$APPR" 'All Caught Up!'
+kept "empty: No Requests In Review"                   "$APPR" 'No Requests In Review'
+kept "empty: No History"                              "$APPR" 'No History'
+kept "loading copy"                                   "$APPR" 'Loading requests...'
+kept "approve success message"                        "$APPR" 'Request approved successfully'
+kept "deny success message"                           "$APPR" 'Request denied successfully'
+kept "review success message"                         "$APPR" 'Request placed in review'
+
+echo
+echo "TimeOffRequestView — create AND edit, one form"
+kept "Full Day / Partial Day picker"                  "$FORM" 'Full Day'
+kept "switching to partial forces end = start"        "$FORM" 'if partial { endDate = startDate }'
+kept "partial mode: one Date picker"                  "$FORM" '"Date"'
+kept "full mode: Start Date"                          "$FORM" 'Start Date'
+kept "full mode: End Date"                            "$FORM" 'End Date'
+kept "start bounded to today or later"                "$FORM" 'range: Date()...'
+kept "end bounded BY start"                           "$FORM" 'range: startDate...'
+kept "moving start past end drags end"                "$FORM" 'if newValue > endDate { endDate = newValue }'
+kept "Start Time"                                     "$FORM" 'Start Time'
+kept "End Time"                                       "$FORM" 'End Time'
+kept "end <= start auto-repairs to start + 1h"        "$RULES" 'end = start.adding(minutes: 60)'
+kept "read-only Duration row"                         "$FORM" '"Duration"'
+kept "duration inclusive of both endpoints"           "$RULES" 'return max(1, days + 1)'
+kept "six reasons, each with icon and colour"         "$FORM" 'TimeOffReason.allReasons'
+kept "Notes, optional, min height 80"                 "$FORM" 'minHeight: 80'
+kept "Use PTO Balance toggle"                         "$FORM" 'Use PTO Balance'
+kept "…defaulting to ON"                              "$FORM" 'isPaidTimeOff = true'
+kept "current balance row"                            "$FORM" 'Available now'
+kept "…omitted entirely when the balance is nil"      "$FORM" 'if let balance = currentPTOBalance'
+kept "PTO hours field"                                "$FORM" 'PTO Hours Requested'
+kept "…auto-filled but manual entry wins"             "$RULES" 'guard !isUserEdited else { return }'
+kept "insufficient-PTO message"                       "$FORM" 'not have sufficient PTO'
+kept "future-accrual message"                         "$FORM" "haven't accrued yet"
+kept "Summary: Type"                                  "$FORM" '"Type", value:'
+kept "Summary: Dates"                                 "$FORM" '"Dates"'
+kept "Summary: Duration"                              "$FORM" '"Duration"'
+kept "Summary: Reason"                                "$FORM" '"Reason"'
+kept "30-minute partial-day minimum gates Submit"     "$RULES" 'minimumMinutes = 30'
+kept "full-day requests are NEVER blocked"            "$RULES" 'guard span.isPartialDay else { return .allowed }'
+kept "edit mode title"                                "$FORM" 'Edit Request'
+kept "create success message"                         "$FORM" 'Time off request submitted successfully!'
+kept "update success message"                         "$FORM" 'Time off request updated successfully!'
+
+echo
+echo "TimeOffDetailView — reached from the Schedule"
+kept "date in full style"                             "$DETAIL" 'Formatters.longDate'
+kept "time range or Full Day"                         "$DETAIL" 'Full Day'
+kept "photographer row"                               "$DETAIL" 'Photographer'
+kept "reason shown"                                   "$DETAIL" 'reasonDisplay.label'
+kept "notes row omitted when empty"                   "$DETAIL" 'if !timeOffEntry.notes.isEmpty'
+kept "partial/full day request line"                  "$DETAIL" 'Partial Day Request'
+kept "status shown"                                   "$DETAIL" 'statusDisplay.label'
+kept "Cancel Request, conditional on pending"         "$DETAIL" 'timeOffEntry.status == .pending'
+kept "confirmation says it cannot be undone"          "$DETAIL" 'cannot be undone'
+kept "ownership check preserved verbatim (TOF.1)"     "$DETAIL" 'UserDefaults.standard.string(forKey: "userID")'
+
+echo
+echo "PTOBalanceView — in Settings, and now also from Time Off"
+kept "current balance hero"                           "$PTO" 'hours available'
+kept "Total Balance"                                  "$PTO" 'Total Balance'
+kept "Pending Requests, conditional on > 0"           "$PTO" 'balance.pendingBalance > 0'
+kept "Available to Use"                               "$PTO" 'Available to Use'
+kept "Banking Balance, conditional"                   "$PTO" 'balance.bankingBalance > 0'
+kept "Used this year"                                 "$PTO" 'Used this year'
+kept "Total accrued"                                  "$PTO" 'Total accrued'
+kept "accrual policy card, conditional on enabled"    "$PTO" 'settings.enabled'
+kept "accrual rate copy"                              "$PTO" 'formattedAccrualRate'
+kept "max accrual copy"                               "$PTO" 'formattedMaxAccrual'
+kept "rollover copy"                                  "$PTO" 'formattedRolloverPolicy'
+kept "date picker, 30 days out by default"            "$PTO" '30 \* 24 \* 60 \* 60'
+kept "balance projection"                             "$PTO" 'Projected balance'
+kept "you will accrue N more hours"                   "$PTO" 'You will accrue'
+kept "error state with Retry"                         "$PTO" 'Retry'
+kept "loading copy"                                   "$PTO" 'Loading PTO information...'
+
+echo
+echo "Domain logic carried forward deliberately"
+kept "a full day is 8 PTO hours"                      "$RULES" 'hoursPerFullDay: Double = 8'
+kept "the manager queue is FIFO"                      "$RULES" 'static func managerQueue'
+kept "the employee list is newest-first"              "$RULES" 'static func employeeList'
+kept "PTO defaults ON for a new request"              "$FORM" 'isPaidTimeOff = true'
+kept "denial requires a reason"                       "$APPR" 'guard !reason.isEmpty else { return }'
+
+echo
+echo "NEW — states that did not exist and should have"
+kept "the list shows a load FAILURE instead of an empty state" "$LIST" 'TimeOffFailureBanner'
+kept "the queue shows a load FAILURE too"             "$APPR" 'TimeOffFailureBanner'
+kept "a failed balance is not drawn as 0.0"           "$KIT" 'Balance unavailable'
+kept "the balance leads the surface"                  "$LIST" 'TimeOffBalanceLead'
+
+echo
+echo "NEW — cross-client repairs (the web app writes these)"
+kept "web reason vocabulary recognised"               "$RULES" 'case "sick", "sick leave"'
+kept "web denial stamps the APPROVAL columns"         "$PRES" 'approver_name, date: approved_at, status: .denied'
+kept "an unknown status is not shown as Pending"      "$KIT" 'case unrecognised'
+kept "empty-string photographer name handled"         "$PRES" 'name.isEmpty ? "Unknown"'
+
+echo
+echo "EXPECTED-GONE — dropped deliberately, each with a reason in the file"
+gone "Schedule Conflicts section (checkForConflicts always returns [])" "$FORM" 'Schedule Conflicts'
+gone "Delete Time Off (every press was a guaranteed 403)"               "$DETAIL" 'Delete Time Off'
+gone "the old hand-rolled card in the list file"                        "$LIST" 'struct TimeOffRequestCard'
+gone "Color(colorName) asset lookups that never resolved"               "$LIST" 'Color(request.statusEnum.colorName)'
+gone "rawValue.capitalized, which shipped as \"Underreview\""             "$DETAIL" 'rawValue.capitalized'
+
+echo
+echo "$PASS passed, $FAIL lost"
+if [ "$FAIL" -gt 0 ]; then echo "PARITY FAILED"; exit 1; fi
+echo "PARITY OK"

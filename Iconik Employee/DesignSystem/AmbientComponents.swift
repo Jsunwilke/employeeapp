@@ -273,3 +273,104 @@ struct AmbientEmptyState: View {
         .padding(.vertical, 44)
     }
 }
+
+// MARK: - Form section
+
+/// One part of a form: a heading, a short state summary on the right, and an
+/// OPAQUE panel holding the controls.
+///
+/// PROMOTED OUT OF `Reports/ReportFormKit.swift` IN AMB.8, where it was called
+/// `ReportSection`. It never knew anything about a report — it takes a title, a
+/// string and a view builder — and Time Off needed the same thing. The arc's
+/// rule when a second surface needs a primitive is to promote it rather than
+/// fork it (`AmbientCardFill.surface` and `AmbientEmptyState`'s action slot both
+/// arrived that way); a `TimeOffSection` that drew a heading two points
+/// differently is exactly the drift the design system exists to stop.
+///
+/// EVERY section goes through this, which is the point: the moment one gets its
+/// own heading treatment the layout starts ranking things again, and the
+/// operator's instruction for the report form was "nothing is secondary. it is
+/// all important."
+struct AmbientFormSection<Content: View>: View {
+    let title: String
+    /// The short state summary on the right of the heading — "3 selected",
+    /// "18.2 mi · Personal", "5 days · 40.0 PTO hours". Together these let the
+    /// state of a whole form be read in one scroll.
+    let status: String
+    /// Nil leaves the status tertiary, which is how "nothing here yet" reads.
+    var statusTint: Color?
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.headline)
+                Spacer(minLength: 8)
+                Text(status)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(statusTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.tertiary))
+                    .contentTransition(.numericText())
+                    .multilineTextAlignment(.trailing)
+            }
+            content()
+                // An OPAQUE panel plus a lit edge. A glass card over a tinted
+                // wash sits at nearly the same value as the page, and eight of
+                // them read as one mass — the operator's words were that they
+                // "practically blend in with the background". `.surface` was
+                // added to AmbientCard for this rather than hand-rolling a
+                // background or abusing `state: .highlighted` for a heavier
+                // material it does not mean.
+                .ambientCard(density: .compact,
+                             fill: .surface,
+                             border: .hairline(Color.primary.opacity(0.10)),
+                             fillWidth: true)
+        }
+    }
+}
+
+// MARK: - Single choice
+
+/// A capsule radio row — Yes / No / NA, Full Day / Partial Day, and friends.
+/// The app's segmented control: `Picker(.segmented)` cannot be tinted per option
+/// and reads as system chrome sitting on top of the wash rather than part of it.
+///
+/// PROMOTED OUT OF `Reports/ReportFormKit.swift` IN AMB.8, where it was called
+/// `ReportChoiceRow`. Same reasoning as `AmbientFormSection` above.
+///
+/// Nothing is pre-selected, and — per the live report form — an answer cannot be
+/// cleared once given. A caller that needs a clearable choice needs a different
+/// control, not a flag on this one.
+struct AmbientChoiceRow: View {
+    let title: String
+    let options: [String]
+    @Binding var selection: String?
+    var tint: Color = .teal
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                ForEach(options, id: \.self) { option in
+                    let on = selection == option
+                    Button {
+                        withAnimation(AmbientMotion.snappy) { selection = option }
+                        AmbientHaptics.selection()
+                    } label: {
+                        Text(option)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(on ? .white : .primary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 9)
+                            // ambient-allow: a radio control, not a container.
+                            .background(Capsule().fill(on
+                                                       ? AnyShapeStyle(tint)
+                                                       : AnyShapeStyle(.ultraThinMaterial)))
+                            .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.12)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}

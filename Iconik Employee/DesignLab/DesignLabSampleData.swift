@@ -476,88 +476,45 @@ extension DesignLabSampleData {
 /// ScheduleStyleKit makes approved ORANGE when partial and GREY when not.
 /// Batch-2 parity finding 6 says a redesign has to pick one knowingly. This is
 /// the pick — real colours, and a label a person would actually say.
-enum LabTimeOffStatus: String, CaseIterable {
-    case pending, underReview, approved, denied, cancelled
-
-    /// Never `rawValue.capitalized` — that is where "Underreview" came from.
-    var label: String {
-        switch self {
-        case .pending: return "Pending"
-        case .underReview: return "In Review"
-        case .approved: return "Approved"
-        case .denied: return "Denied"
-        case .cancelled: return "Cancelled"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .pending: return .orange
-        case .underReview: return .blue
-        case .approved: return .green
-        case .denied: return .red
-        case .cancelled: return .gray
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .pending: return "clock.fill"
-        case .underReview: return "magnifyingglass"
-        case .approved: return "checkmark.circle.fill"
-        case .denied: return "xmark.circle.fill"
-        case .cancelled: return "slash.circle.fill"
-        }
-    }
-
-    /// Drives the Edit and Cancel pills — the app's real condition.
-    var isEditable: Bool { self == .pending || self == .underReview }
-}
-
-enum LabTimeOffReason: String, CaseIterable {
-    case vacation = "Vacation"
-    case sick = "Sick"
-    case personal = "Personal"
-    case family = "Family"
-    case bereavement = "Bereavement"
-    case other = "Other"
-
-    var symbol: String {
-        switch self {
-        case .vacation: return "beach.umbrella.fill"
-        case .sick: return "cross.case.fill"
-        case .personal: return "person.fill"
-        case .family: return "figure.2.and.child.holdinghands"
-        case .bereavement: return "heart.fill"
-        case .other: return "ellipsis.circle.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .vacation: return .teal
-        case .sick: return .red
-        case .personal: return .indigo
-        case .family: return .purple
-        case .bereavement: return .brown
-        case .other: return .gray
-        }
-    }
-}
+// MARK: - Time Off (AMB.8)
+//
+// THE LAB NO LONGER OWNS A STATUS OR REASON VOCABULARY. `LabTimeOffStatus` and
+// `LabTimeOffReason` used to live here with their own labels, colours and icons,
+// carrying a comment promising they matched the app. They are DELETED: the
+// mockup now resolves both through `TimeOffStatusDisplay` / `TimeOffReasonDisplay`
+// in `TimeOff/TimeOffKit.swift`, which is the code the real screens draw with and
+// which `scripts/test_timeoff_rules.sh` runs.
+//
+// Same move AMB.7 made when `DesignLabSampleData` stopped keeping its own copy of
+// the 22 job descriptions: a private copy in the lab is a second source of truth,
+// and a second source of truth is drift waiting for a quiet week.
 
 /// One request. Fields taken from what the real card and detail actually render,
 /// including the three conditional attribution lines (approved by / in review by
 /// / denied by, with its own indented reason line).
+/// One sample request.
+///
+/// THE STATUS AND REASON ARE RAW STRINGS, exactly as the shared database stores
+/// them — and deliberately so. The lab feeds the same values a real row holds and
+/// lets the PRODUCTION resolvers render them, which means the mockup exercises the
+/// real cross-client parsing rather than a tidied-up copy of it. Two of the rows
+/// below carry the strings the WEB app writes, so the operator can see on a device
+/// that a web-created request no longer draws a grey ellipsis.
+///
+/// Every label, duration and date string comes from `TimeOffCardModel`, built the
+/// same way `TimeOffRequest.cardModel` builds it — no second implementation.
 struct LabTimeOffRequest: Identifiable {
     let id: String
     let photographer: String
-    let status: LabTimeOffStatus
-    let reason: LabTimeOffReason
+    /// The RAW stored value, e.g. "underReview" or the web app's "partially_approved".
+    let statusRaw: String
+    /// The RAW stored value, e.g. "vacation" (iOS) or "Sick Leave" (web).
+    let reasonRaw: String
     let startDate: Date
     let endDate: Date
     let isPartialDay: Bool
-    var startTime: Date?
-    var endTime: Date?
+    var startTime: TimeOfDay?
+    var endTime: TimeOfDay?
     var notes: String?
     var usesPTO: Bool = true
     var ptoHours: Double?
@@ -569,32 +526,56 @@ struct LabTimeOffRequest: Identifiable {
     /// Drives the employee list's newest-first sort and the manager History tab.
     let createdAt: Date
 
-    /// INCLUSIVE of both endpoints — days + 1. A domain rule, not a formatting
-    /// choice, so it lives on the model where a mockup cannot quietly drop it.
-    var dayCount: Int {
-        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: startDate),
-                                                   to: Calendar.current.startOfDay(for: endDate)).day ?? 0
-        return days + 1
+    /// Built through the SAME rule type the app uses, so the inclusive day count
+    /// cannot be one thing in the lab and another in production.
+    var span: TimeOffSpan {
+        TimeOffSpan(startDay: startDate, endDay: endDate,
+                    isPartialDay: isPartialDay, start: startTime, end: endTime)
+    }
+
+    /// What the shared card draws. Mirrors `TimeOffRequest.cardModel`.
+    var cardModel: TimeOffCardModel {
+        let status = TimeOffStatusDisplay.from(raw: statusRaw)
+        return TimeOffCardModel(
+            id: id,
+            photographer: photographer,
+            status: status,
+            reason: TimeOffReasonDisplay.from(raw: reasonRaw),
+            dateLabel: dateLabel,
+            timeLabel: timeLabel,
+            durationLabel: durationLabel,
+            isPartialDay: isPartialDay,
+            dayCount: span.dayCount,
+            notes: notes,
+            usesPTO: usesPTO,
+            ptoHours: ptoHours,
+            attribution: status.ruleStatus.flatMap {
+                TimeOffAttribution(name: actionedBy, date: actionedAt, status: $0)
+            },
+            denialReason: denialReason,
+            createdAt: createdAt)
     }
 
     var durationLabel: String {
-        if isPartialDay, let start = startTime, let end = endTime {
-            let hours = end.timeIntervalSince(start) / 3600
+        if isPartialDay {
+            guard let hours = span.partialHours else { return "Time not set" }
+            if hours == 1 { return "1 hour" }
+            if hours.truncatingRemainder(dividingBy: 1) == 0 { return "\(Int(hours)) hours" }
             return String(format: "%.1f hours", hours)
         }
-        return dayCount == 1 ? "1 day" : "\(dayCount) days"
+        return span.dayCount == 1 ? "1 day" : "\(span.dayCount) days"
     }
 
     var dateLabel: String {
-        if isPartialDay || dayCount == 1 {
+        if isPartialDay || span.dayCount == 1 {
             return Formatters.monthDay.string(from: startDate)
         }
         return "\(Formatters.monthDay.string(from: startDate)) – \(Formatters.monthDay.string(from: endDate))"
     }
 
     var timeLabel: String {
-        guard isPartialDay, let start = startTime, let end = endTime else { return "Full day" }
-        return "\(Formatters.shortTime.string(from: start)) – \(Formatters.shortTime.string(from: end))"
+        guard isPartialDay, let startTime, let endTime else { return "Full day" }
+        return "\(startTime.displayString) – \(endTime.displayString)"
     }
 }
 
@@ -633,66 +614,79 @@ extension DesignLabSampleData {
     /// approver name is missing (so the attribution line must NOT draw), and a
     /// PTO request that does not have the balance to cover it.
     static let myTimeOff: [LabTimeOffRequest] = [
-        .init(id: "t1", photographer: "You", status: .pending, reason: .vacation,
+        .init(id: "t1", photographer: "You", statusRaw: "pending", reasonRaw: "vacation",
               startDate: day(24), endDate: day(28), isPartialDay: false,
               notes: "Family trip — booked the flights already.",
               ptoHours: 40, createdAt: day(-1)),
         // Partial day, and the one that does NOT have the PTO to cover it.
-        .init(id: "t2", photographer: "You", status: .pending, reason: .personal,
+        .init(id: "t2", photographer: "You", statusRaw: "pending", reasonRaw: "personal",
               startDate: day(9), endDate: day(9), isPartialDay: true,
-              startTime: at(13, 0, dayOffset: 9), endTime: at(17, 0, dayOffset: 9),
+              startTime: TimeOfDay(hour: 13, minute: 0), endTime: TimeOfDay(hour: 17, minute: 0),
               notes: nil, ptoHours: 4, createdAt: day(-2)),
-        .init(id: "t3", photographer: "You", status: .underReview, reason: .family,
+        // WEB VOCABULARY. "Family Emergency" is what the web app writes; iOS
+        // writes "emergency". Before AMB.8 this row drew a grey ellipsis and read
+        // "Other". It must now show the emergency icon and label.
+        .init(id: "t3", photographer: "You", statusRaw: "underReview", reasonRaw: "Family Emergency",
               startDate: day(16), endDate: day(17), isPartialDay: false,
               notes: "Parent-teacher conferences both mornings.",
               ptoHours: 16, actionedBy: "Alex Fontaine", actionedAt: day(-3),
               createdAt: day(-5)),
-        .init(id: "t4", photographer: "You", status: .approved, reason: .sick,
+        .init(id: "t4", photographer: "You", statusRaw: "approved", reasonRaw: "sick",
               startDate: day(-8), endDate: day(-8), isPartialDay: false,
               notes: nil, ptoHours: 8,
               actionedBy: "Alex Fontaine", actionedAt: day(-9), createdAt: day(-10)),
-        // Approved but the approver name never came back — the attribution line
-        // is conditional on BOTH the name and the date, so this row must draw
-        // WITHOUT it rather than showing "Approved by".
-        .init(id: "t5", photographer: "You", status: .approved, reason: .vacation,
+        // Approved but the approver name never came back — the attribution line is
+        // conditional on BOTH the name and the date, so this row must draw WITHOUT
+        // it rather than showing a bare "Approved by".
+        .init(id: "t5", photographer: "You", statusRaw: "approved", reasonRaw: "vacation",
               startDate: day(-30), endDate: day(-26), isPartialDay: false,
               notes: "Spring break.", ptoHours: 40, createdAt: day(-45)),
-        .init(id: "t6", photographer: "You", status: .denied, reason: .personal,
+        // A WEB DENIAL: the web app stamps the APPROVAL columns and leaves the
+        // denial ones NULL, so there is a denial reason and NO denier. The reason
+        // must still draw — before AMB.8 it was nested inside the attribution
+        // block and vanished with it.
+        .init(id: "t6", photographer: "You", statusRaw: "denied", reasonRaw: "Personal Day",
               startDate: day(-14), endDate: day(-14), isPartialDay: false,
               notes: nil, usesPTO: false,
-              actionedBy: "Alex Fontaine", actionedAt: day(-16),
               denialReason: "Three photographers already off that day and it is a fall original day.",
               createdAt: day(-20)),
-        .init(id: "t7", photographer: "You", status: .cancelled, reason: .other,
+        .init(id: "t7", photographer: "You", statusRaw: "cancelled", reasonRaw: "other",
               startDate: day(-40), endDate: day(-39), isPartialDay: false,
               notes: "Changed my mind.", usesPTO: false, createdAt: day(-50)),
+        // A STATUS NEITHER CLIENT'S ENUM KNOWS. The web app really does write
+        // this. Before AMB.8 it rendered as an orange "Pending" badge with live
+        // Edit and Cancel buttons on a request somebody had already decided.
+        .init(id: "t8", photographer: "You", statusRaw: "partially_approved", reasonRaw: "Medical Appointment",
+              startDate: day(-3), endDate: day(-2), isPartialDay: false,
+              notes: "Follow-up appointment.", ptoHours: 16,
+              createdAt: day(-8)),
     ]
 
     /// The manager queue. THE ORDER IS THE POINT: pending and in-review sort
     /// OLDEST FIRST because a manager works a queue, which is the deliberate
     /// reverse of the employee list. History sorts by when it was ACTIONED.
     static let approvalQueue: [LabTimeOffRequest] = [
-        .init(id: "a1", photographer: "Sam Okafor", status: .pending, reason: .sick,
+        .init(id: "a1", photographer: "Sam Okafor", statusRaw: "pending", reasonRaw: "sick",
               startDate: day(1), endDate: day(1), isPartialDay: false,
               notes: "Woke up with it — sorry for the short notice.",
               ptoHours: 8, createdAt: day(-6)),
-        .init(id: "a2", photographer: "Priya Nair", status: .pending, reason: .vacation,
+        .init(id: "a2", photographer: "Priya Nair", statusRaw: "pending", reasonRaw: "Vacation",
               startDate: day(33), endDate: day(40), isPartialDay: false,
               notes: "Wedding, out of state. Booked a year ago.",
               ptoHours: 48, createdAt: day(-4)),
-        .init(id: "a3", photographer: "Devon Wright", status: .pending, reason: .personal,
+        .init(id: "a3", photographer: "Devon Wright", statusRaw: "pending", reasonRaw: "personal",
               startDate: day(5), endDate: day(5), isPartialDay: true,
-              startTime: at(8, 0, dayOffset: 5), endTime: at(10, 30, dayOffset: 5),
+              startTime: TimeOfDay(hour: 8, minute: 0), endTime: TimeOfDay(hour: 10, minute: 30),
               notes: nil, ptoHours: 2.5, createdAt: day(-1)),
-        .init(id: "a4", photographer: "Maria Alvarez", status: .underReview, reason: .family,
+        .init(id: "a4", photographer: "Maria Alvarez", statusRaw: "underReview", reasonRaw: "emergency",
               startDate: day(12), endDate: day(13), isPartialDay: false,
               notes: "Can move it if the Lincoln retakes land that week.",
               ptoHours: 16, actionedBy: "You", actionedAt: day(-2), createdAt: day(-7)),
-        .init(id: "a5", photographer: "June Castillo", status: .approved, reason: .vacation,
+        .init(id: "a5", photographer: "June Castillo", statusRaw: "approved", reasonRaw: "vacation",
               startDate: day(-3), endDate: day(-2), isPartialDay: false,
               notes: nil, ptoHours: 16,
               actionedBy: "You", actionedAt: day(-5), createdAt: day(-12)),
-        .init(id: "a6", photographer: "Alex Fontaine", status: .denied, reason: .other,
+        .init(id: "a6", photographer: "Alex Fontaine", statusRaw: "denied", reasonRaw: "other",
               startDate: day(-6), endDate: day(-6), isPartialDay: false,
               notes: nil, usesPTO: false,
               actionedBy: "You", actionedAt: day(-8),

@@ -27,48 +27,13 @@
 import SwiftUI
 
 // MARK: - Section
-
-/// One part of the report.
-///
-/// EVERY section goes through this, which is the point: the moment one gets its
-/// own heading treatment the layout starts ranking things again, and the
-/// operator's instruction was "nothing is secondary. it is all important."
-struct ReportSection<Content: View>: View {
-    let title: String
-    /// The short state summary on the right of the heading — "3 selected",
-    /// "18.2 mi · Personal", "2 of 3 answered". Together these let the state of
-    /// the whole report be read in one scroll.
-    let status: String
-    /// Nil leaves the status tertiary, which is how "nothing here yet" reads.
-    var statusTint: Color?
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.headline)
-                Spacer(minLength: 8)
-                Text(status)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(statusTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.tertiary))
-                    .contentTransition(.numericText())
-                    .multilineTextAlignment(.trailing)
-            }
-            content()
-                // An OPAQUE panel plus a lit edge. A glass card over a tinted
-                // wash sits at nearly the same value as the page, and eight of
-                // them read as one mass — the operator's words were that they
-                // "practically blend in with the background". `.surface` was
-                // added to AmbientCard for this rather than hand-rolling a
-                // background or abusing `state: .highlighted` for a heavier
-                // material it does not mean.
-                .ambientCard(density: .compact,
-                             fill: .surface,
-                             border: .hairline(Color.primary.opacity(0.10)),
-                             fillWidth: true)
-        }
-    }
-}
+//
+// `ReportSection` MOVED TO `DesignSystem/AmbientComponents.swift` IN AMB.8 and is
+// now `AmbientFormSection`. It never knew anything about a report, and Time Off
+// needed the same section heading, the same status summary and the same opaque
+// panel. The arc's rule when a second surface needs a primitive is to PROMOTE it,
+// not fork it — a `TimeOffSection` drawing its heading two points differently is
+// exactly the drift the design system exists to stop.
 
 // MARK: - Multi-select
 
@@ -171,43 +136,11 @@ struct ReportMultiSelect: View {
 }
 
 // MARK: - Single choice
-
-/// Yes / No / NA and friends. Nothing is pre-selected and, per the live form,
-/// an answer cannot be cleared once given.
-struct ReportChoiceRow: View {
-    let title: String
-    let options: [String]
-    @Binding var selection: String?
-    var tint: Color = .teal
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                ForEach(options, id: \.self) { option in
-                    let on = selection == option
-                    Button {
-                        withAnimation(AmbientMotion.snappy) { selection = option }
-                        AmbientHaptics.selection()
-                    } label: {
-                        Text(option)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(on ? .white : .primary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 9)
-                            // ambient-allow: a radio control, not a container.
-                            .background(Capsule().fill(on
-                                                       ? AnyShapeStyle(tint)
-                                                       : AnyShapeStyle(.ultraThinMaterial)))
-                            .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.12)))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-}
+//
+// `ReportChoiceRow` MOVED TO `DesignSystem/AmbientComponents.swift` IN AMB.8 and
+// is now `AmbientChoiceRow`, for the same reason as the section above: it is the
+// app's segmented control, and Time Off's Full Day / Partial Day picker is the
+// second caller. Promoted rather than copied.
 
 // MARK: - Vehicle
 

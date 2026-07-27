@@ -88,14 +88,21 @@ struct TimeOffMockup: View {
     /// reading as identical.
     static let featureTint = Color(hex: "#0D9B8A")
 
-    @State private var filter: LabTimeOffStatus?
+    @State private var filter: String?
     @State private var state: TimeOffListState = .populated
     @State private var destination: TimeOffDestination?
+
+    /// The selected filter's human label, resolved through the production
+    /// display type rather than a second table in the lab.
+    private var filterLabel: String {
+        guard let filter else { return "Matching" }
+        return TimeOffStatusDisplay.from(raw: filter).label
+    }
 
     private var requests: [LabTimeOffRequest] {
         let all = DesignLabSampleData.myTimeOff
         guard let filter else { return all }
-        return all.filter { $0.status == filter }
+        return all.filter { $0.statusRaw == filter }
     }
 
     var body: some View {
@@ -213,11 +220,12 @@ struct TimeOffMockup: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 chip(nil, label: "All", count: DesignLabSampleData.myTimeOff.count, tint: .secondary)
-                ForEach(LabTimeOffStatus.allCases, id: \.self) { status in
-                    chip(status,
-                         label: status.label,
-                         count: DesignLabSampleData.myTimeOff.filter { $0.status == status }.count,
-                         tint: status.color)
+                ForEach(TimeOffRuleStatus.allCases, id: \.self) { status in
+                    let display = TimeOffStatusDisplay.known(status)
+                    chip(status.rawValue,
+                         label: display.label,
+                         count: DesignLabSampleData.myTimeOff.filter { $0.statusRaw == status.rawValue }.count,
+                         tint: display.color)
                 }
             }
             .padding(.horizontal, 16)
@@ -225,7 +233,7 @@ struct TimeOffMockup: View {
         .padding(.horizontal, -16)
     }
 
-    private func chip(_ status: LabTimeOffStatus?, label: String, count: Int, tint: Color) -> some View {
+    private func chip(_ status: String?, label: String, count: Int, tint: Color) -> some View {
         let selected = filter == status
         return Button {
             withAnimation(AmbientMotion.snappy) { filter = status }
@@ -273,7 +281,8 @@ struct TimeOffMockup: View {
         LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
             ForEach(requests) { request in
                 Button { destination = .detail } label: {
-                    LabTimeOffRequestCard(request: request, showsActions: true)
+                    TimeOffRequestCard(model: request.cardModel, showsActions: true,
+                                       onEdit: {}, onCancel: {})
                 }
                 .buttonStyle(.plain)
                 .ambientScrollFade()
@@ -301,8 +310,8 @@ struct TimeOffMockup: View {
     /// have six of them and are looking at a filter.
     private var filteredEmptyState: some View {
         AmbientEmptyState(
-            title: "No \(filter?.label ?? "Matching") Requests",
-            message: "You don't have any \(filter?.label.lowercased() ?? "matching") requests.",
+            title: "No \(filterLabel) Requests",
+            message: "You don't have any \(filterLabel.lowercased()) requests.",
             systemImage: "line.3.horizontal.decrease.circle")
     }
 
@@ -352,7 +361,7 @@ struct TimeOffMockup: View {
 
             LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
                 ForEach(DesignLabSampleData.myTimeOff.prefix(3)) { request in
-                    LabTimeOffRequestCard(request: request, showsActions: false)
+                    TimeOffRequestCard(model: request.cardModel, showsActions: false)
                 }
             }
         }
@@ -393,152 +402,13 @@ struct TimeOffMockup: View {
 /// ONE card, used by the employee list AND the manager queue — which is what the
 /// app already does, and worth keeping: the thing a manager approves should look
 /// like the thing the employee submitted.
-private struct LabTimeOffRequestCard: View {
-    let request: LabTimeOffRequest
-    /// The employee list shows Edit and Cancel; the manager queue suppresses them
-    /// and shows its own actions instead.
-    var showsActions: Bool
-    var managerActions: Bool = false
-    var onApprove: (() -> Void)? = nil
-    var onDeny: (() -> Void)? = nil
-    var onReview: (() -> Void)? = nil
-    /// The manager queue shows WHOSE request it is; your own list does not.
-    var showsPhotographer: Bool = false
-
-    private var density: AmbientDensity { .compact }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header
-            if let notes = request.notes, !notes.isEmpty {
-                Text(notes)
-                    .font(density.subtitleFont)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            attribution
-            if showsActions { actions }
-        }
-        .ambientCard(density: density,
-                     state: request.status == .cancelled ? .receded : .normal,
-                     border: .hairline(request.status.color.opacity(0.28)),
-                     fillWidth: true)
-    }
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: 10) {
-            // The reason carries its own icon and colour — the app already does
-            // this and it is the fastest read on the card.
-            Image(systemName: request.reason.symbol)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(request.reason.color)
-                .frame(width: 22)
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(request.dateLabel).font(density.titleFont)
-                    if request.isPartialDay {
-                        AmbientBadge(text: "Partial", tint: .indigo)
-                    }
-                }
-                HStack(spacing: 6) {
-                    if showsPhotographer {
-                        Text(request.photographer).font(density.subtitleFont.weight(.semibold))
-                        Text("·").foregroundStyle(.tertiary)
-                    }
-                    Text(request.timeLabel).font(density.subtitleFont).foregroundStyle(.secondary)
-                    Text("·").foregroundStyle(.tertiary)
-                    Text(request.durationLabel).font(density.subtitleFont).foregroundStyle(.secondary)
-                }
-                // PTO is a payroll fact and belongs on the card, not buried in
-                // the detail — a manager approving 48 hours should see 48 hours.
-                if request.usesPTO, let hours = request.ptoHours {
-                    Text("\(hours, specifier: "%.1f") PTO hours")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            AmbientBadge(text: request.status.label,
-                         systemImage: request.status.symbol,
-                         tint: request.status.color)
-        }
-    }
-
-    /// Three conditional attribution lines. Each is conditional on BOTH the name
-    /// and the date existing — the app's real condition, which is why sample row
-    /// t5 is approved with no approver and must draw nothing here.
-    @ViewBuilder
-    private var attribution: some View {
-        if let name = request.actionedBy, let date = request.actionedAt {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Image(systemName: request.status.symbol)
-                        .font(.system(size: 10, weight: .bold))
-                    Text(verbLabel(name))
-                        .font(.caption)
-                    Text(Formatters.monthDay.string(from: date))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .foregroundStyle(request.status.color)
-
-                if let reason = request.denialReason {
-                    Text("Reason: \(reason)")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 15)
-                }
-            }
-        }
-    }
-
-    private func verbLabel(_ name: String) -> String {
-        switch request.status {
-        case .approved: return "Approved by \(name)"
-        case .denied: return "Denied by \(name)"
-        case .underReview: return "In review by \(name)"
-        default: return name
-        }
-    }
-
-    @ViewBuilder
-    private var actions: some View {
-        if managerActions {
-            HStack(spacing: 8) {
-                if request.status == .pending, let onReview {
-                    pill("Put in Review", "magnifyingglass", .blue, onReview)
-                }
-                if request.status.isEditable {
-                    if let onApprove { pill("Approve", "checkmark", .green, onApprove) }
-                    if let onDeny { pill("Deny", "xmark", .red, onDeny) }
-                }
-            }
-        } else if request.status.isEditable {
-            HStack(spacing: 8) {
-                pill("Edit", "pencil", .blue) {}
-                pill("Cancel", "xmark", .red) {}
-            }
-        }
-    }
-
-    private func pill(_ title: String, _ icon: String, _ tint: Color, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: icon)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(tint)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                // ambient-allow: an inline action pill is a control.
-                .background(Capsule().fill(tint.opacity(0.12)))
-        }
-        .buttonStyle(.plain)
-    }
-}
+// MARK: - The shared card — NOT DEFINED HERE ANY MORE
+//
+// `LabTimeOffRequestCard` was 145 lines of card that promised, in a comment, to
+// match the app's. It is DELETED. The mockup draws `TimeOffRequestCard` from
+// `TimeOff/TimeOffKit.swift` — the exact view the employee list and the manager
+// queue draw — so "does the mockup match the screen" is no longer a question
+// anyone can answer wrongly. That is the AMB.7 mechanism applied here.
 
 // MARK: - Request form
 
@@ -554,7 +424,7 @@ private struct TimeOffRequestMockup: View {
     }
 
     @State private var isPartialDay = false
-    @State private var reason: LabTimeOffReason = .vacation
+    @State private var reason: TimeOffReason = .vacation
     @State private var usePTO = true
     @State private var mode: Mode = .sufficient
     @State private var notes = ""
@@ -659,22 +529,23 @@ private struct TimeOffRequestMockup: View {
             // the card uses, so the choice you make here is the mark you see on
             // the list afterwards.
             AmbientFlowLayout(spacing: 8, lineSpacing: 8) {
-                ForEach(LabTimeOffReason.allCases, id: \.self) { option in
+                ForEach(TimeOffReason.allReasons, id: \.self) { option in
+                    let display = TimeOffReasonDisplay.from(raw: option.rawValue)
                     Button {
                         withAnimation(AmbientMotion.snappy) { reason = option }
                         AmbientHaptics.selection()
                     } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: option.symbol).font(.system(size: 11, weight: .semibold))
-                            Text(option.rawValue).font(.caption.weight(.semibold))
+                            Image(systemName: display.symbol).font(.system(size: 11, weight: .semibold))
+                            Text(option.displayName).font(.caption.weight(.semibold))
                         }
-                        .foregroundStyle(reason == option ? .white : option.color)
+                        .foregroundStyle(reason == option ? .white : display.color)
                         .padding(.horizontal, 11)
                         .padding(.vertical, 7)
                         // ambient-allow: a selection chip is a control.
                         .background(Capsule().fill(reason == option
-                                                   ? AnyShapeStyle(option.color)
-                                                   : AnyShapeStyle(option.color.opacity(0.13))))
+                                                   ? AnyShapeStyle(display.color)
+                                                   : AnyShapeStyle(display.color.opacity(0.13))))
                     }
                     .buttonStyle(.plain)
                 }
@@ -805,7 +676,7 @@ private struct TimeOffRequestMockup: View {
                 Divider()
                 formRow("Duration", isPartialDay ? "4.0 hours" : "5 days")
                 Divider()
-                formRow("Reason", reason.rawValue)
+                formRow("Reason", reason.displayName)
             }
             .ambientCard(density: .compact, fillWidth: true)
         }
@@ -876,20 +747,20 @@ private struct TimeOffApprovalMockup: View {
         switch tab {
         case .pending:
             // OLDEST FIRST. A manager works a queue.
-            return all.filter { $0.status == .pending }.sorted { $0.createdAt < $1.createdAt }
+            return all.filter { $0.statusRaw == "pending" }.sorted { $0.createdAt < $1.createdAt }
         case .inReview:
-            return all.filter { $0.status == .underReview }.sorted { $0.createdAt < $1.createdAt }
+            return all.filter { $0.statusRaw == "underReview" }.sorted { $0.createdAt < $1.createdAt }
         case .history:
             // History sorts by when it was ACTIONED, newest first.
-            return all.filter { $0.status == .approved || $0.status == .denied }
+            return all.filter { $0.statusRaw == "approved" || $0.statusRaw == "denied" }
                 .sorted { ($0.actionedAt ?? $0.createdAt) > ($1.actionedAt ?? $1.createdAt) }
         }
     }
 
     private func count(_ tab: Tab) -> Int {
         switch tab {
-        case .pending: return DesignLabSampleData.approvalQueue.filter { $0.status == .pending }.count
-        case .inReview: return DesignLabSampleData.approvalQueue.filter { $0.status == .underReview }.count
+        case .pending: return DesignLabSampleData.approvalQueue.filter { $0.statusRaw == "pending" }.count
+        case .inReview: return DesignLabSampleData.approvalQueue.filter { $0.statusRaw == "underReview" }.count
         // History DELIBERATELY carries no badge — the app passes none, and a
         // count on a history tab is a number nobody acts on.
         case .history: return 0
@@ -941,7 +812,7 @@ private struct TimeOffApprovalMockup: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Denying \(request.photographer)'s request")
                                 .font(.headline)
-                            Text("\(request.dateLabel) · \(request.durationLabel) · \(request.reason.rawValue)")
+                            Text("\(request.dateLabel) · \(request.durationLabel) · \(request.cardModel.reason.label)")
                                 .font(.subheadline).foregroundStyle(.secondary)
                         }
                         .ambientCard(density: .roomy, fillWidth: true)
@@ -1068,14 +939,14 @@ private struct TimeOffApprovalMockup: View {
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.tertiary)
                         }
-                        LabTimeOffRequestCard(
-                            request: request,
+                        TimeOffRequestCard(
+                            model: request.cardModel,
                             showsActions: tab != .history,
                             managerActions: true,
+                            showsPhotographer: true,
                             onApprove: {},
                             onDeny: { denying = request },
-                            onReview: {},
-                            showsPhotographer: true)
+                            onReview: tab == .pending ? {} : nil)
                     }
                     .ambientScrollFade()
                 }
@@ -1165,14 +1036,14 @@ private struct TimeOffDetailMockup: View {
     private var hero: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: request.reason.symbol)
+                Image(systemName: request.cardModel.reason.symbol)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(request.reason.color)
-                Text(request.reason.rawValue).font(.headline)
+                    .foregroundStyle(request.cardModel.reason.color)
+                Text(request.cardModel.reason.label).font(.headline)
                 Spacer(minLength: 0)
-                AmbientBadge(text: request.status.label,
-                             systemImage: request.status.symbol,
-                             tint: request.status.color)
+                AmbientBadge(text: request.cardModel.status.label,
+                             systemImage: request.cardModel.status.symbol,
+                             tint: request.cardModel.status.color)
             }
             Text(Formatters.longDate.string(from: request.startDate))
                 .font(.system(size: 22, weight: .bold))
@@ -1210,10 +1081,10 @@ private struct TimeOffDetailMockup: View {
     /// request, and cancelling cancels all of it.
     @ViewBuilder
     private var spanNote: some View {
-        if request.dayCount > 1 {
+        if request.span.dayCount > 1 {
             AmbientNoteCard(
                 title: "Part of a longer request",
-                text: "This is one day of a \(request.dayCount)-day request (\(request.dateLabel)). Cancelling here cancels all \(request.dayCount) days.",
+                text: "This is one day of a \(request.span.dayCount)-day request (\(request.dateLabel)). Cancelling here cancels all \(request.span.dayCount) days.",
                 accent: .orange,
                 density: .compact)
         }
@@ -1226,7 +1097,7 @@ private struct TimeOffDetailMockup: View {
     /// a feature to preserve.
     @ViewBuilder
     private var cancelButton: some View {
-        if request.status == .pending {
+        if request.statusRaw == TimeOffRuleStatus.pending.rawValue {
             Button {} label: {
                 Label("Cancel Request", systemImage: "xmark.circle.fill")
                     .font(.subheadline.weight(.semibold))

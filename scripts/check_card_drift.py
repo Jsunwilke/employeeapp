@@ -110,6 +110,15 @@ ALLOW_MARKER = re.compile(r"^\s*(?://|\*|/\*)\s*ambient-allow:\s*\S+")
 # AMB.9 so the row is not read as AMB.7 having failed; where the route planner
 # really lands is the operator's call.
 #
+# AMB.8 IS COMPLETE, 2026-07-27: BOTH of its rows are DELETED. MyTimeOffRequestsView
+# and TimeOffApprovalView both hand-rolled a card; both now draw
+# TimeOff/TimeOffKit.swift's shared TimeOffRequestCard through .ambientCard.
+# NOTE what the allowlist could NOT see, and it is the recurring lesson: PTOBalanceView
+# and TimeOffRequestView and TimeOffDetailView carried FOUR hand-rolled containers
+# between them and had NO rows here, because this gate matches a rounded FILL and
+# they used .background(Color…) + .cornerRadius(…). An empty allowlist row still
+# means nothing about whether a surface is converted.
+#
 # AMB.4 IS COMPLETE, 2026-07-26: both of its rows are DELETED. MainEmployeeView
 # went 2 -> 0 with the dashboard shell, and DashboardWidgets went 8 -> 3 -> 0 once
 # the operator approved the iPad dashboard and its three iPad-only widgets (Sports
@@ -136,8 +145,6 @@ Iconik Employee/Settings/EmployeeInfoView.swift|AMB.12|1
 Iconik Employee/Settings/SchoolDetailView.swift|AMB.12|3
 Iconik Employee/StatsView.swift|AMB.9|7
 Iconik Employee/TimeEntryListView.swift|AMB.12|2
-Iconik Employee/TimeOff/Views/MyTimeOffRequestsView.swift|AMB.8|1
-Iconik Employee/TimeOff/Views/TimeOffApprovalView.swift|AMB.8|1
 Iconik Employee/TimeTrackingButton.swift|AMB.12|2
 Iconik Employee/TimeTrackingMainView.swift|AMB.12|2
 Iconik Employee/Training/Components/CritiqueGridCard.swift|AMB.12|1

@@ -424,7 +424,7 @@ struct DailyReportView: View {
     private func section<Content: View>(_ title: String, status: String,
                                         statusTint: Color? = nil,
                                         @ViewBuilder content: @escaping () -> Content) -> some View {
-        ReportSection(title: title, status: status, statusTint: statusTint, content: content)
+        AmbientFormSection(title: title, status: status, statusTint: statusTint, content: content)
     }
 
     // MARK: - 1. Date and photographer
@@ -848,11 +848,11 @@ struct DailyReportView: View {
                        status: "\(answered) of 3 answered",
                        statusTint: answered == 3 ? .teal : nil) {
             VStack(alignment: .leading, spacing: 14) {
-                ReportChoiceRow(title: "Cards scanned",
+                AmbientChoiceRow(title: "Cards scanned",
                                 options: ReportOptions.yesNo, selection: $cardsScanned)
-                ReportChoiceRow(title: "Job box and camera cards turned in",
+                AmbientChoiceRow(title: "Job box and camera cards turned in",
                                 options: ReportOptions.yesNoNA, selection: $jobBox)
-                ReportChoiceRow(title: "Sports background shot",
+                AmbientChoiceRow(title: "Sports background shot",
                                 options: ReportOptions.yesNoNA, selection: $sportsBackground)
             }
         }

@@ -767,7 +767,7 @@ struct ReportSessionPicker: View {
         // Only when the photographer actually has sessions today, as before.
         Group {
             if !schedule.sessions.isEmpty {
-                ReportSection(title: "Session",
+                AmbientFormSection(title: "Session",
                               status: pick.selection == nil ? "off-schedule" : "linked",
                               statusTint: pick.selection == nil ? nil : tint) {
                     VStack(alignment: .leading, spacing: 2) {

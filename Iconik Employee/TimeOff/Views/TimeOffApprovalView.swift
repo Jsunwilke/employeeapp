@@ -1,325 +1,362 @@
+//  TimeOffApprovalView.swift
+//  Iconik Employee — the manager queue, converted to Ambient in AMB.8
+//
+//  THE DESIGN'S THIRD CLAIM: the queue says on screen that it is a queue.
+//  Pending and In Review sort OLDEST FIRST, deliberately reversing the employee
+//  list, because a manager works a queue from the top. That was real workflow
+//  knowledge buried in a bare `.sorted` call in a view body, where the next
+//  person to touch this screen would have "fixed" the inconsistency. It now runs
+//  through `TimeOffOrder`, which is compiled and tested, and the screen says it.
+//
+//  ⚠️ THIS SCREEN STILL HAS NO PERMISSION CHECK, AND THAT IS DELIBERATE HERE.
+//  `TimeOffService.canManageRequests()` exists, does the right check against
+//  `timeOffApprovals`, and has zero callers; the only gate today is the
+//  visibility of a row in AllFeaturesView, which is itself gated on a DIFFERENT
+//  area code (`users`). The lab mockup draws the locked-out state and marks it
+//  PROPOSED for exactly this reason. Wiring it is an AUTHORIZATION change on a
+//  payroll-adjacent surface and it belongs to TOF.1 — a style phase must not be
+//  the thing that quietly closes an authorization hole, and it must not be the
+//  thing that quietly widens one either. Tracked in AUDIT_ROADMAP.md, TOF.1.
+
 import SwiftUI
 
 struct TimeOffApprovalView: View {
     @StateObject private var timeOffService = TimeOffService.shared
-    @State private var selectedTab = 0
-    @State private var showingDenialDialog = false
-    @State private var requestToDeny: TimeOffRequest? = nil
+
+    @State private var tab: QueueTab = .pending
+    @State private var requestToDeny: TimeOffRequest?
     @State private var denialReason = ""
     @State private var showingAlert = false
     @State private var alertMessage = ""
-    
-    private var pendingRequests: [TimeOffRequest] {
-        return timeOffService.pendingRequests.sorted { $0.createdAt < $1.createdAt }
-    }
-    
-    private var inReviewRequests: [TimeOffRequest] {
-        return timeOffService.timeOffRequests
-            .filter { $0.status == "underReview" }
-            .sorted { $0.createdAt < $1.createdAt }
+
+    private enum QueueTab: String, CaseIterable, Identifiable {
+        case pending = "Pending"
+        case inReview = "In Review"
+        case history = "History"
+        var id: String { rawValue }
     }
 
-    private var historyRequests: [TimeOffRequest] {
-        return timeOffService.timeOffRequests
-            .filter { $0.status != "pending" && $0.status != "underReview" }
-            .sorted { $0.updatedAt > $1.updatedAt }
+    private var tint: Color { TimeOffStyle.approvals }
+
+    // MARK: - The three queues
+    //
+    // All three filter `timeOffRequests` directly rather than reading the
+    // service's pre-filtered `pendingRequests`. That array is rebuilt by
+    // `updateFilteredLists`, which returns early when the user id is nil — so it
+    // can hold the previous contents while `timeOffRequests` is fresh. Filtering
+    // the source array cannot go stale that way.
+
+    /// OLDEST FIRST. A manager works a queue.
+    private var pending: [TimeOffRequest] {
+        TimeOffOrder.managerQueue(
+            timeOffService.timeOffRequests.filter { $0.status == TimeOffStatus.pending.rawValue },
+            createdAt: { $0.createdAt })
     }
-    
+
+    private var inReview: [TimeOffRequest] {
+        TimeOffOrder.managerQueue(
+            timeOffService.timeOffRequests.filter { $0.status == TimeOffStatus.underReview.rawValue },
+            createdAt: { $0.createdAt })
+    }
+
+    /// History sorts by when it was ACTIONED, newest first — not by when it was
+    /// filed. The two orders are genuinely different and a test asserts it.
+    private var history: [TimeOffRequest] {
+        TimeOffOrder.history(
+            timeOffService.timeOffRequests.filter {
+                $0.status != TimeOffStatus.pending.rawValue
+                    && $0.status != TimeOffStatus.underReview.rawValue
+            },
+            actionedAt: { $0.updatedAt })
+    }
+
+    private var queue: [TimeOffRequest] {
+        switch tab {
+        case .pending: return pending
+        case .inReview: return inReview
+        case .history: return history
+        }
+    }
+
+    /// History DELIBERATELY carries no badge — the app passes none, and a count on
+    /// a history tab is a number nobody acts on.
+    private func badge(_ tab: QueueTab) -> Int {
+        switch tab {
+        case .pending: return pending.count
+        case .inReview: return inReview.count
+        case .history: return 0
+        }
+    }
+
+    private var hasFailed: Bool { !timeOffService.errorMessage.isEmpty }
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Tab selector
-            tabSelector
-            
-            // Content based on selected tab
-            TabView(selection: $selectedTab) {
-                // Pending requests tab
-                pendingRequestsView
-                    .tag(0)
-                
-                // In Review tab
-                inReviewRequestsView
-                    .tag(1)
-                
-                // History tab
-                historyRequestsView
-                    .tag(2)
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.75)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    tabBar
+                    queueOrderNote
+                    content
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
             }
-            .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+            .ambientNoBounceWhenShort()
+            .refreshable { await timeOffService.refreshRequests() }
         }
         .navigationTitle("Time Off Approvals")
         .navigationBarTitleDisplayMode(.large)
-        .task {
-            await timeOffService.startListeningToRequests()
-        }
-        .onDisappear {
-            Task {
-                await timeOffService.stopListening()
-            }
-        }
-        .alert("Deny Request", isPresented: $showingDenialDialog) {
-            TextField("Reason for denial", text: $denialReason)
-            Button("Deny Request", role: .destructive) {
-                if let request = requestToDeny {
-                    denyRequest(request)
-                }
-            }
-            Button("Cancel", role: .cancel) {
-                denialReason = ""
-                requestToDeny = nil
-            }
-        } message: {
-            Text("Please provide a reason for denying this time off request.")
+        .sheet(item: $requestToDeny) { request in
+            denialSheet(request)
         }
         .alert("Time Off Management", isPresented: $showingAlert) {
-            Button("OK") {}
+            Button("OK", role: .cancel) { }
         } message: {
             Text(alertMessage)
         }
-    }
-    
-    // MARK: - Tab Selector
-    
-    private var tabSelector: some View {
-        HStack(spacing: 0) {
-            TabButton(
-                title: "Pending",
-                badge: pendingRequests.count,
-                isSelected: selectedTab == 0
-            ) {
-                selectedTab = 0
-            }
-            
-            TabButton(
-                title: "In Review",
-                badge: inReviewRequests.count,
-                isSelected: selectedTab == 1
-            ) {
-                selectedTab = 1
-            }
-            
-            TabButton(
-                title: "History",
-                badge: nil,
-                isSelected: selectedTab == 2
-            ) {
-                selectedTab = 2
-            }
+        .task { await timeOffService.startListeningToRequests() }
+        .onDisappear {
+            Task { await timeOffService.stopListening() }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(Color(.systemGray6))
     }
-    
-    // MARK: - Pending Requests View
-    
-    private var pendingRequestsView: some View {
-        Group {
-            if timeOffService.isLoading {
-                loadingView
-            } else if pendingRequests.isEmpty {
-                emptyPendingView
-            } else {
-                List {
-                    ForEach(pendingRequests) { request in
-                        TimeOffRequestCard(
-                            request: request,
-                            showActions: false,
-                            onApprove: {
-                                approveRequest(request)
-                            },
-                            onDeny: {
-                                requestToDeny = request
-                                showingDenialDialog = true
-                            },
-                            onReview: {
-                                putRequestInReview(request)
-                            }
-                        )
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                        .listRowSeparator(.hidden)
+
+    // MARK: - Tabs
+
+    private var tabBar: some View {
+        HStack(spacing: 6) {
+            ForEach(QueueTab.allCases) { option in
+                Button {
+                    withAnimation(AmbientMotion.snappy) { tab = option }
+                    AmbientHaptics.selection()
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(option.rawValue).font(.caption.weight(.semibold))
+                        if badge(option) > 0 {
+                            Text("\(badge(option))")
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(Color.red))
+                        }
                     }
+                    .foregroundStyle(tab == option ? .white : .primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    // ambient-allow: a tab control, not a container.
+                    .background(Capsule().fill(tab == option
+                                               ? AnyShapeStyle(tint)
+                                               : AnyShapeStyle(.ultraThinMaterial)))
                 }
-                .listStyle(PlainListStyle())
-                .refreshable {
-                    await timeOffService.refreshRequests()
-                }
+                .buttonStyle(.plain)
             }
         }
     }
-    
-    // MARK: - In Review Requests View
-    
-    private var inReviewRequestsView: some View {
-        Group {
-            if timeOffService.isLoading {
-                loadingView
-            } else if inReviewRequests.isEmpty {
-                emptyInReviewView
+
+    /// If the design does not say the order out loud, the next person to touch
+    /// this screen will "fix" it to newest-first.
+    @ViewBuilder
+    private var queueOrderNote: some View {
+        if tab != .history {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down.to.line").font(.caption2.weight(.bold))
+                Text("Oldest first — work the queue from the top")
+                    .font(.caption2.weight(.semibold))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Content
+
+    @ViewBuilder
+    private var content: some View {
+        if hasFailed && timeOffService.timeOffRequests.isEmpty {
+            // "All Caught Up!" over a failed fetch is a lie a manager would act on.
+            failureBanner
+        } else {
+            if hasFailed { failureBanner }
+            if timeOffService.isLoading && timeOffService.timeOffRequests.isEmpty {
+                loadingState
+            } else if queue.isEmpty {
+                emptyState
             } else {
-                List {
-                    ForEach(inReviewRequests) { request in
-                        TimeOffRequestCard(
-                            request: request,
-                            showActions: false,
-                            onApprove: {
-                                approveRequest(request)
-                            },
-                            onDeny: {
-                                requestToDeny = request
-                                showingDenialDialog = true
-                            }
-                        )
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                        .listRowSeparator(.hidden)
-                    }
-                }
-                .listStyle(PlainListStyle())
-                .refreshable {
-                    await timeOffService.refreshRequests()
-                }
+                list
             }
         }
     }
-    
-    // MARK: - History View
-    
-    private var historyRequestsView: some View {
-        Group {
-            if timeOffService.isLoading {
-                loadingView
-            } else if historyRequests.isEmpty {
-                emptyHistoryView
-            } else {
-                List {
-                    ForEach(historyRequests) { request in
-                        TimeOffRequestCard(request: request, showActions: false)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                            .listRowSeparator(.hidden)
-                    }
-                }
-                .listStyle(PlainListStyle())
-                .refreshable {
-                    await timeOffService.refreshRequests()
-                }
-            }
+
+    private var failureBanner: some View {
+        TimeOffFailureBanner(message: timeOffService.errorMessage, tint: tint) {
+            Task { await timeOffService.refreshRequests() }
         }
     }
-    
-    // MARK: - Empty States
-    
-    private var loadingView: some View {
-        VStack(spacing: 16) {
+
+    private var loadingState: some View {
+        VStack(spacing: 8) {
             ProgressView()
-                .scaleEffect(1.2)
-            Text("Loading requests...")
-                .foregroundColor(.secondary)
+            Text("Loading requests...").font(.subheadline).foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 44)
     }
-    
-    private var emptyPendingView: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 60))
-                .foregroundColor(.green)
-            
-            VStack(spacing: 8) {
-                Text("All Caught Up!")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                
-                Text("There are no pending time off requests to review.")
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+
+    /// Three distinct empty states with their own icons, as today.
+    @ViewBuilder
+    private var emptyState: some View {
+        switch tab {
+        case .pending:
+            AmbientEmptyState(title: "All Caught Up!",
+                              message: "There are no pending time off requests to review.",
+                              systemImage: "checkmark.circle")
+        case .inReview:
+            AmbientEmptyState(title: "No Requests In Review",
+                              message: "There are no time off requests currently under review.",
+                              systemImage: "magnifyingglass")
+        case .history:
+            AmbientEmptyState(title: "No History",
+                              message: "No time off requests have been processed yet.",
+                              systemImage: "clock.arrow.circlepath")
+        }
+    }
+
+    private var list: some View {
+        LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
+            ForEach(Array(queue.enumerated()), id: \.element.id) { index, request in
+                VStack(alignment: .leading, spacing: 4) {
+                    // Position in the queue — the thing FIFO order exists to
+                    // communicate, and which nothing on this screen showed before.
+                    if tab != .history {
+                        Text("\(index + 1) of \(queue.count) · waiting \(TimeOffOrder.waitingDays(since: request.createdAt)) days")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    TimeOffRequestCard(
+                        model: request.cardModel,
+                        showsActions: tab != .history,
+                        managerActions: true,
+                        showsPhotographer: true,
+                        onApprove: { approveRequest(request) },
+                        onDeny: { requestToDeny = request },
+                        // "Put in Review" is wired ONLY on the Pending tab,
+                        // deliberately not on In Review — as today.
+                        onReview: tab == .pending ? { putRequestInReview(request) } : nil)
+                }
+                .ambientScrollFade()
             }
         }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    
-    private var emptyInReviewView: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "magnifyingglass.circle")
-                .font(.system(size: 60))
-                .foregroundColor(.blue)
-            
-            VStack(spacing: 8) {
-                Text("No Requests In Review")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                
-                Text("There are no time off requests currently under review.")
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+
+    // MARK: - Denial
+
+    /// THE LIVE APP COLLECTS THE REASON IN AN ALERT WITH AN INLINE FIELD. This is
+    /// a sheet instead, and that is a deliberate change with a reason: an alert
+    /// cannot show WHOSE request is being denied, cannot say the reason is
+    /// required until you have already failed, and cannot say the person will read
+    /// it. All three matter, because this text is the only thing the photographer
+    /// is ever told about why their time off was refused.
+    ///
+    /// It also closes a real defect in the alert version: `denyRequest` guarded an
+    /// empty reason and raised an error alert, but the guard ran AFTER the deny
+    /// alert had already dismissed — so the manager had to reopen it and retype.
+    /// Here Deny is simply disabled until there is a reason.
+    private func denialSheet(_ request: TimeOffRequest) -> some View {
+        let model = request.cardModel
+        let trimmed = denialReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        return NavigationView {
+            ZStack {
+                AmbientBackdrop(tint: .red, intensity: 0.5)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Denying \(model.photographer)'s request")
+                                .font(.headline)
+                            Text("\(model.dateLabel) · \(model.durationLabel) · \(model.reason.label)")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        .ambientCard(density: .roomy, fillWidth: true)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            AmbientSectionTitle("Reason", trailing: "required")
+                            TextEditor(text: $denialReason)
+                                .frame(minHeight: 110)
+                                .font(.subheadline)
+                                .scrollContentBackground(.hidden)
+                                .ambientCard(density: .compact, fillWidth: true)
+                            Text("\(model.photographer) will see this on their own list. Say enough that they can plan around it.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Button {
+                            denyRequest(request)
+                        } label: {
+                            Text("Deny Request")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity).padding(.vertical, 14)
+                                // ambient-allow: a control, not a card.
+                                .background(Capsule().fill(trimmed.isEmpty ? Color.gray : Color.red))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(trimmed.isEmpty)
+
+                        if trimmed.isEmpty {
+                            Text("A reason is required before this can be sent.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 16)
+                }
+            }
+            .navigationTitle("Deny")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        requestToDeny = nil
+                        denialReason = ""
+                    }
+                }
             }
         }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .presentationDetents([.medium, .large])
     }
-    
-    private var emptyHistoryView: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
-            
-            VStack(spacing: 8) {
-                Text("No History")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                
-                Text("No time off requests have been processed yet.")
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-    
-    // MARK: - Helper Methods
+
+    // MARK: - Actions
 
     private func approveRequest(_ request: TimeOffRequest) {
         Task {
             do {
                 try await timeOffService.approveTimeOffRequest(requestId: request.id)
-                await MainActor.run {
-                    alertMessage = "Request approved successfully"
-                    showingAlert = true
-                }
+                alertMessage = "Request approved successfully"
             } catch {
-                await MainActor.run {
-                    alertMessage = error.localizedDescription
-                    showingAlert = true
-                }
+                alertMessage = error.localizedDescription
             }
+            showingAlert = true
         }
     }
 
     private func denyRequest(_ request: TimeOffRequest) {
-        guard !denialReason.trimmingCharacters(in: .whitespaces).isEmpty else {
-            alertMessage = "Please provide a reason for denial"
-            showingAlert = true
-            return
-        }
-
+        let reason = denialReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reason.isEmpty else { return }
         Task {
             do {
-                try await timeOffService.denyTimeOffRequest(requestId: request.id, denialReason: denialReason)
-                await MainActor.run {
-                    alertMessage = "Request denied successfully"
-                    showingAlert = true
-
-                    // Reset dialog state
-                    denialReason = ""
-                    requestToDeny = nil
-                }
+                try await timeOffService.denyTimeOffRequest(requestId: request.id, denialReason: reason)
+                alertMessage = "Request denied successfully"
+                // Dismissed and cleared only on SUCCESS. A failed deny keeps the
+                // sheet and the typed reason, so the manager can retry instead of
+                // rewriting it — the alert version discarded both either way.
+                requestToDeny = nil
+                denialReason = ""
             } catch {
-                await MainActor.run {
-                    alertMessage = error.localizedDescription
-                    showingAlert = true
-                }
+                alertMessage = error.localizedDescription
             }
+            showingAlert = true
         }
     }
 
@@ -327,58 +364,11 @@ struct TimeOffApprovalView: View {
         Task {
             do {
                 try await timeOffService.putTimeOffRequestInReview(requestId: request.id)
-                await MainActor.run {
-                    alertMessage = "Request placed in review"
-                    showingAlert = true
-                }
+                alertMessage = "Request placed in review"
             } catch {
-                await MainActor.run {
-                    alertMessage = error.localizedDescription
-                    showingAlert = true
-                }
+                alertMessage = error.localizedDescription
             }
+            showingAlert = true
         }
-    }
-}
-
-// MARK: - Tab Button
-
-struct TabButton: View {
-    let title: String
-    let badge: Int?
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Text(title)
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                
-                if let badge = badge, badge > 0 {
-                    Text("\(badge)")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.red)
-                        .clipShape(Capsule())
-                }
-            }
-            .foregroundColor(isSelected ? .blue : .secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.blue.opacity(0.1) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
-            )
-        }
-        .buttonStyle(PlainButtonStyle())
     }
 }
