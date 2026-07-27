@@ -875,8 +875,8 @@ other rebases onto it.
 
 **Batch 2**
 
-- [x] **AMB.7 Reports family** — DONE 2026-07-27, NOT YET PUSHED (three commits,
-  b5679dc..fcac798). Seven screens converted, TEN files deleted in the same commit:
+- [x] **AMB.7 Reports family** — DONE 2026-07-27, NOT YET PUSHED (five commits,
+  b5679dc..2ac8927). Seven screens converted, TEN files deleted in the same commit:
   DailyJobReportView, MyJobReportsView, EditDailyJobReportView, CustomDailyReportsView,
   TemplateFormView, PhotoshootNotesView, LocationPhotoAttachmentView, the ORPHANED
   TemplateReportListView, plus UIComponents.swift and JobNotesView.swift, which the
@@ -901,14 +901,17 @@ other rebases onto it.
   **THE PARITY WALK RAN THREE TIMES**, 103 capability checks against the NEW screens,
   before showing the operator anything. That is the standing rule and it held.
 
-  **FOUR AUDITS. THE FIX-ROUND AUDIT FOUND THE PHASE'S WORST DEFECT — SIX PHASES
-  RUNNING.** Three adversarial passes (correctness/concurrency, data integrity, design
-  fidelity) found 40+ real findings; a fourth aimed at the FIX round found a CRITICAL one
-  the fix itself had introduced: the report's note-photo list was derived from the
-  thumbnails that had downloaded, so a failed download dropped a photo silently and
-  submitting before the downloads landed dropped all of them — and submit deletes the
-  note, so they had nowhere else to be. A fifth audit covered the second fix round.
-  **The pattern is now six for six and should be treated as a law, not a habit.**
+  **SIX AUDITS, THREE FIX ROUNDS, AND THE FIX-ROUND AUDIT FOUND THE PHASE'S WORST
+  DEFECT TWICE — SEVEN PHASES RUNNING.** Three adversarial passes (correctness/
+  concurrency, data integrity, design fidelity) found 40+ real findings. The audit of
+  the FIX round found a CRITICAL one the fix itself had introduced: the report's
+  note-photo list derived from the thumbnails that had downloaded, so a failed download
+  dropped a photo silently and submitting before they landed dropped all of them — and
+  submit deletes the note, so they had nowhere else to be. The audit of the SECOND fix
+  round found a DIFFERENT photo-loss path in the same code: the attached note can leave
+  the shared blob it was being resolved through (submitted or deleted on the notes
+  screen), and its photos went with it, unsaid. **Repeat the fix-round audit until it
+  comes back clean — that is now a law, not a habit.**
 
   **REGRESSIONS THE CONVERSION INTRODUCED AND FIXED:** a session resolved its school by
   NAME only (the deleted form preferred `school_id`, deliberately) so a renamed school
