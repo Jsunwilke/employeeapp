@@ -256,10 +256,11 @@ struct DailyReportView: View {
         guard !mileage.isOverridden, !isCalculatingMileage else { return .none }
         if storedUserHomeAddress.isEmpty { return .noHomeAddress }
         if unmeasuredLegs > 0 {
-            // A total failure ends in "type it yourself", which is what the
-            // stops message would also say, so it takes precedence alone. A
-            // PARTIAL failure ends in "check it", so it carries the excluded
-            // stops rather than hiding them — a stop with no location is
+            // A total failure and the stops message give the SAME instruction —
+            // type it in yourself — so showing both would say it twice, and the
+            // total failure takes precedence alone. A PARTIAL failure says
+            // "check it", a different instruction, so it carries the excluded
+            // stops rather than hiding them: a stop with no location is
             // permanently out of the figure and no retry will ever include it.
             guard unmeasuredLegs < lastRouteLegs else { return .routeFailed }
             return .routePartial(legs: unmeasuredLegs, excluded: unmeasurableStops.map(\.name))
@@ -782,12 +783,16 @@ struct DailyReportView: View {
                 if !excluded.isEmpty { stopsWithoutLocationLabel(excluded) }
             }
         case .stopsWithoutLocation(let names):
-            stopsWithoutLocationLabel(names)
+            // On its own this IS the whole problem, so it carries the
+            // instruction. Under a partial failure that line already says
+            // "check it", and this one only has to say a retry will not help.
+            stopsWithoutLocationLabel(names, instruction: "Type the mileage in yourself.")
         }
     }
 
-    private func stopsWithoutLocationLabel(_ names: [String]) -> some View {
-        Label("\(names.joined(separator: ", ")) \(names.count == 1 ? "has" : "have") no address or coordinates on file, so \(names.count == 1 ? "it is" : "they are") not in this figure — no retry will change that.",
+    private func stopsWithoutLocationLabel(_ names: [String],
+                                           instruction: String = "No retry will change that.") -> some View {
+        Label("\(names.joined(separator: ", ")) \(names.count == 1 ? "has" : "have") no address or coordinates on file, so \(names.count == 1 ? "it is" : "they are") not in this figure. \(instruction)",
               systemImage: "exclamationmark.triangle.fill")
             .font(.caption).foregroundStyle(.orange)
             .fixedSize(horizontal: false, vertical: true)
@@ -1145,14 +1150,22 @@ struct DailyReportView: View {
         mileageRun += 1
         let run = mileageRun
 
-        unmeasuredLegs = 0
-        lastRouteLegs = 0
-        measuredRoute = []
+        // NOTHING IS RESET HERE. Clearing `measuredRoute` on the way in made the
+        // "keep the figure" branch below UNREACHABLE — the comparison at the end
+        // could only ever see an empty array — so a failed re-check destroyed
+        // the measurement it was written to protect: background the app for a
+        // banner in a dead-signal area and an accurate 9.1 became 0.0, which
+        // submits. Clearing `unmeasuredLegs` here would be the same mistake one
+        // step further on: the kept figure's "this is short" warning would
+        // vanish with it. The state describes the FIGURE ON SCREEN, so only
+        // something that changes the figure may change it — and while a run is
+        // in flight `mileageNotice` is `.none` anyway.
         guard !storedUserHomeAddress.isEmpty else {
             // No home address means no route to measure. The live form CLEARED
             // the field here, wiping a typed value; ReportMileage leaves a typed
             // value alone and simply has nothing calculated to offer.
             mileage.recalculate(to: 0)
+            forgetMeasuredRoute()
             isCalculatingMileage = false
             return
         }
@@ -1165,7 +1178,10 @@ struct DailyReportView: View {
             + [storedUserHomeAddress]
 
         guard route.count > 2 else {
+            // Nothing measurable to route between. The figure is zero and no leg
+            // failed, so there is nothing outstanding to warn about or retry.
             mileage.recalculate(to: 0)
+            forgetMeasuredRoute()
             isCalculatingMileage = false
             return
         }
@@ -1211,6 +1227,13 @@ struct DailyReportView: View {
                 // failure, throwing away the accurate "this is short" warning.
             }
         }
+    }
+
+    /// There is no measured figure any more, so nothing is outstanding.
+    private func forgetMeasuredRoute() {
+        measuredRoute = []
+        unmeasuredLegs = 0
+        lastRouteLegs = 0
     }
 
     /// What this photographer usually claims at a single-stop school, so a
