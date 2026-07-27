@@ -202,7 +202,7 @@ struct ReportProposalMockup: View {
     private func section<Content: View>(_ title: String, status: String,
                                         statusTint: Color? = nil,
                                         @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title).font(.headline)
                 Spacer(minLength: 8)
@@ -220,7 +220,7 @@ struct ReportProposalMockup: View {
                 // AmbientCard for exactly this, rather than hand-rolling a
                 // background here or abusing `state: .highlighted` to reach a
                 // heavier material.
-                .ambientCard(density: .roomy,
+                .ambientCard(density: .compact,
                              fill: .surface,
                              border: .hairline(Color.primary.opacity(0.10)),
                              fillWidth: true)
@@ -266,7 +266,7 @@ struct ReportProposalMockup: View {
         section("Session",
                 status: session == nil ? "off-schedule" : "linked",
                 statusTint: session == nil ? nil : Self.featureTint) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(DesignLabSampleData.todaysSessions) { option in
                     sessionRow(option)
                 }
@@ -322,6 +322,7 @@ struct ReportProposalMockup: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
+            .padding(.vertical, 5)
         }
         .buttonStyle(.plain)
     }
@@ -500,7 +501,7 @@ struct ReportProposalMockup: View {
                     // spans the full width, so the grouping survives the split.
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10, alignment: .leading),
                                         GridItem(.flexible(), spacing: 10, alignment: .leading)],
-                              alignment: .leading, spacing: 2) {
+                              alignment: .leading, spacing: 0) {
                         ForEach(group.1, id: \.self) { option in
                             optionRow(option, selection: selection, tint: tint)
                         }
@@ -523,12 +524,12 @@ struct ReportProposalMockup: View {
     private func groupHeader(_ title: String, first: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if !first {
-                Divider().padding(.vertical, 10)
+                Divider().padding(.vertical, 7)
             }
             Text(title)
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(.secondary)
-                .padding(.bottom, 4)
+                .padding(.bottom, 2)
         }
     }
 
@@ -567,7 +568,10 @@ struct ReportProposalMockup: View {
             }
             // The WHOLE cell, per the guidance — not the 21pt box.
             .contentShape(Rectangle())
-            .padding(.vertical, 7)
+            // 4pt each side keeps the row a comfortable target (label + 21pt box
+            // is already ~29pt tall) while giving back 6pt on every one of the
+            // 19 rows.
+            .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
     }
@@ -632,10 +636,12 @@ struct ReportProposalMockup: View {
                     Text("No photoshoot notes available.")
                         .font(.subheadline).foregroundStyle(.tertiary)
                 } else {
-                    ForEach(available) { note in
-                        noteRow(note)
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(available) { note in
+                            noteRow(note)
+                        }
+                        noteRow(nil)
                     }
-                    noteRow(nil)
                 }
 
                 if let attachedNote {
@@ -699,6 +705,7 @@ struct ReportProposalMockup: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
+            .padding(.vertical, 5)
         }
         .buttonStyle(.plain)
     }
