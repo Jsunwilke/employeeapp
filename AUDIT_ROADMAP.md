@@ -875,8 +875,8 @@ other rebases onto it.
 
 **Batch 2**
 
-- [x] **AMB.7 Reports family** — DONE 2026-07-27, NOT YET PUSHED (sixteen commits,
-  b5679dc..30567ad). Seven screens converted, TEN files deleted in the same commit:
+- [x] **AMB.7 Reports family** — SHIPPED + PUSHED 2026-07-27. **OPERATOR SMOKE PASSED ON
+  iPHONE AND iPAD ("all works"), closing D7 and D10 for batch 2.** Seven screens converted, TEN files deleted in the same commit:
   DailyJobReportView, MyJobReportsView, EditDailyJobReportView, CustomDailyReportsView,
   TemplateFormView, PhotoshootNotesView, LocationPhotoAttachmentView, the ORPHANED
   TemplateReportListView, plus UIComponents.swift and JobNotesView.swift, which the
@@ -978,11 +978,19 @@ other rebases onto it.
   template the web app builds — a JavaScript/Swift truthiness mismatch found only by
   reading the OTHER repo. **The audits that found the most left this repo.**
 
-  ⚠️ **STILL OPEN AND ONLY THE OPERATOR CAN CLOSE THEM:** the iPhone and iPad smokes (D7). The batch-2 mockups are deliberately
-  NOT deleted until the smokes pass — a validation reference outlives the port it
-  validates. One question the phase did not need but the roadmap flagged: whether the
-  org's `session_types` match the 22 job descriptions. The approved v3 design prefills
-  nothing from them, so nothing depended on the answer.
+  **THE LAB SCAFFOLDING IS DELETED** now the smokes have passed — both Reports mockups,
+  286 lines of their sample data, and their registry entries. The TIMING is the rule: a
+  validation reference outlives the PORT it validates, not the phase that built it, so it
+  is kept while the port is still being checked and removed the moment it is not (GRP.6
+  deleted a lab while its port was still pending and had nothing left to diff against).
+  Nothing real went with it — the 22 job descriptions and 12 extra items live in
+  `Reports/ReportOptions.swift`, which the APP builds and the lab merely forwarded to.
+  The lab keeps AMB.2's specimen sheet and palette and AMB.8's Time Off set; the whole
+  harness goes at AMB.12.
+
+  One question the phase did not need but the roadmap flagged: whether the org's
+  `session_types` match the 22 job descriptions. The approved v3 design prefills nothing
+  from them, so nothing depended on the answer.
 
 - [ ] **AMB.8 Time off** (8 views, 3,763 lines) — closes batch 2 and mocks batch 3.
   **MOCKUP BUILT + APPROVED 2026-07-26** — five surfaces in the lab, approved with
