@@ -28,9 +28,15 @@ RULES="Iconik Employee/TimeOff/TimeOffRules.swift"
 PRES="Iconik Employee/TimeOff/TimeOffPresentation.swift"
 
 kept () { # $1 = capability, $2 = file, [-i] $3 = pattern
+  # CODE ONLY. `gone()` was taught to strip comments and this was not, so several
+  # checks passed on the PROSE THAT DESCRIBES THE FIX rather than the fix: the
+  # @MainActor check matched its own doc comment, and the realtime-clear check
+  # matched a comment containing the words it grepped for. An audit proved it by
+  # deleting the fixes and watching the checks still pass — which is the only way
+  # to know an assertion asserts anything.
   local flags=""
   if [ "$3" = "-i" ]; then flags="-i"; set -- "$1" "$2" "$4"; fi
-  if grep -q $flags "$3" "$2" 2>/dev/null; then
+  if sed -e 's|//.*||' -e 's|^[[:space:]]*#.*||' "$2" 2>/dev/null | grep -q $flags "$3"; then
     PASS=$((PASS+1)); printf '  ok    %s\n' "$1"
   else
     FAIL=$((FAIL+1)); printf '  LOST  %s   [%s ~ %s]\n' "$1" "$(basename "$2")" "$3"
@@ -182,7 +188,10 @@ kept "accrual rate copy"                              "$PTO" 'formattedAccrualRa
 kept "max accrual copy"                               "$PTO" 'formattedMaxAccrual'
 kept "rollover copy"                                  "$PTO" 'formattedRolloverPolicy'
 kept "date picker, 30 days out by default"            "$PTO" '30 \* 24 \* 60 \* 60'
-kept "balance projection"                             "$PTO" 'Projected balance'
+# Relabelled "Projected total balance": the figure projects `totalBalance` while
+# the hero shows `availableBalance`, and an unqualified label invited the reader to
+# compare two different quantities.
+kept "balance projection"                             "$PTO" 'Projected total balance'
 kept "you will accrue N more hours"                   "$PTO" 'You will accrue'
 kept "error state with Retry"                         "$PTO" 'Retry'
 kept "loading copy"                                   "$PTO" 'Loading PTO information...'
@@ -229,12 +238,18 @@ kept "attribution dates carry the year"               "$KIT" 'Formatters.mediumD
 # actually wanted is that the three action methods are main-actor isolated, so the
 # whole Task body (defer included) is on the main actor by construction.
 kept "approve/deny/review are @MainActor isolated"    "$APPR" '@MainActor'
-kept "…and the guard is released inside that isolation" "$APPR" 'defer { inFlight.remove'
-kept "the success alert fires after the sheet has gone" "$APPR" 'pendingSuccessMessage'
+kept "the guard is released on every exit"            "$APPR" 'defer { inFlight.remove'
+kept "the deny sheet cannot be dismissed mid-write"   "$APPR" 'interactiveDismissDisabled'
+kept "…nor cancelled mid-write"                       "$APPR" 'disabled(inFlight.contains(request.id))'
+kept "an alert is not raised while a sheet is up"     "$APPR" 'showingAlert = (requestToDeny == nil)'
 kept "the deny sheet shows its own busy state"        "$APPR" 'Denying…'
 kept "Retry forces a network fetch, not a cache hit"  "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'lastCacheUpdate = nil'
-kept "the realtime path clears the failure banner too" "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'THE FOURTH SUCCESS PATH'
-kept "dates carry a year outside the current one"     "$PRES" 'TimeOffDateLabel'
+kept "the realtime path clears the failure banner too" "Iconik Employee/TimeOff/Services/TimeOffService.swift" 'errorMessage = ""'
+kept "dates carry a year outside the current one"     "$PRES" 'Formatters.mediumDate.string'
+kept "…and a range is formatted as ONE unit"          "$PRES" 'rangeString'
+kept "the lab draws dates through the same formatter" "Iconik Employee/DesignLab/DesignLabSampleData.swift" 'TimeOffDateLabel.rangeString'
+kept "the shortfall is measured on the displayed base" "$FORM" 'projectedAvailable'
+kept "the accrual line is measured from its own base"  "$PTO" 'projectedBalance - balance.balance'
 kept "accrual footnote only for an accrual org"       "$PTO" 'settings.usesAccrualSystem'
 
 echo

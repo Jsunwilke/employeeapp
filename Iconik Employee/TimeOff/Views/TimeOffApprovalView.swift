@@ -28,8 +28,6 @@ struct TimeOffApprovalView: View {
     @State private var denialReason = ""
     /// Shown inside the denial sheet — see `denyRequest`.
     @State private var denialError = ""
-    /// Raised from `onDismiss`, after the sheet has actually gone — see `denyRequest`.
-    @State private var pendingSuccessMessage: String?
     @State private var showingAlert = false
     @State private var alertMessage = ""
     /// THE DOUBLE-SUBMIT GUARD. The OLD screen swapped the whole list for a
@@ -132,11 +130,6 @@ struct TimeOffApprovalView: View {
             // button pre-enabled — on the next one.
             denialReason = ""
             denialError = ""
-            if let message = pendingSuccessMessage {
-                pendingSuccessMessage = nil
-                alertMessage = message
-                showingAlert = true
-            }
         }) { request in
             denialSheet(request)
         }
@@ -316,6 +309,11 @@ struct TimeOffApprovalView: View {
 
                         VStack(alignment: .leading, spacing: 6) {
                             AmbientSectionTitle("Reason", trailing: "required")
+                                // Clear on APPEAR, not only on dismiss: a failure
+                                // that lands after the sheet closed would
+                                // otherwise greet the next photographer's deny
+                                // with the previous one's error.
+                                .onAppear { denialError = "" }
                             TextEditor(text: $denialReason)
                                 .frame(minHeight: 110)
                                 .font(.subheadline)
@@ -362,25 +360,38 @@ struct TimeOffApprovalView: View {
                         requestToDeny = nil
                         denialReason = ""
                     }
+                    // Dismissing mid-write is what stranded the confirmation.
+                    .disabled(inFlight.contains(request.id))
                 }
             }
         }
         .presentationDetents([.medium, .large])
+        // Same reason as the disabled Cancel: no swiping the sheet away while the
+        // deny is in flight.
+        .interactiveDismissDisabled(inFlight.contains(request.id))
     }
 
     // MARK: - Actions
 
-    /// @MainActor ON THE METHOD, not `MainActor.run` at each write.
+    /// REDUNDANT BUT EXPLICIT — and the comment that used to sit here was WRONG,
+    /// so the correction is kept rather than quietly deleted.
     ///
-    /// The fix round wrapped every post-`await` state write in `MainActor.run`
-    /// on the correct rationale that a `View` isolates `body`, not its methods —
-    /// and then released the in-flight guard in a `defer`, which runs in that same
-    /// nonisolated closure. So the ONE write that could drop the guard was the one
-    /// the fix did not protect, and `inFlight` is a `Set` that `body` reads
-    /// concurrently: a lost insert re-arms the double-tap this guard exists to
-    /// stop. Isolating the method makes the `Task` inherit MainActor, so every
-    /// write in it — including the `defer` — is on the main actor by construction
-    /// rather than by remembering.
+    /// A previous round asserted that "a `View` isolates `body`, not its methods",
+    /// wrapped every post-`await` write in `MainActor.run` on that basis, and then
+    /// filed a CRITICAL claiming the `defer` below was an unprotected write racing
+    /// `body`. THAT WAS FALSE. SwiftUI's `View` protocol is itself `@MainActor`, so
+    /// conformance isolates the WHOLE TYPE — every method and computed property,
+    /// not just `body`. Verified with a compiler probe rather than reasoned about:
+    /// an unannotated method on a `View` can call a `@MainActor` function, and the
+    /// identical method on a non-`View` struct fails with
+    /// "call to main actor-isolated global function in a synchronous nonisolated
+    /// context". These methods were already isolated in every earlier commit, the
+    /// `defer` was never unprotected, and the race described could not occur.
+    ///
+    /// The annotations are kept because stating the isolation is better than
+    /// relying on a protocol's inference two files away — but they FIX NOTHING,
+    /// and a comment claiming otherwise is the same defect as a commit message
+    /// describing a change that did not land.
     @MainActor
     private func approveRequest(_ request: TimeOffRequest) {
         guard !inFlight.contains(request.id) else { return }
@@ -393,7 +404,11 @@ struct TimeOffApprovalView: View {
             } catch {
                 alertMessage = error.localizedDescription
             }
-            showingAlert = true
+            // Not while a sheet is up: an alert raised on a view that is
+            // presenting one does not appear. Approve and Deny are reachable on
+            // different cards at the same time, so this is a real interleaving,
+            // not a theoretical one. The class, not the instance.
+            showingAlert = (requestToDeny == nil)
         }
     }
 
@@ -409,17 +424,25 @@ struct TimeOffApprovalView: View {
             defer { inFlight.remove(request.id) }
             do {
                 try await timeOffService.denyTimeOffRequest(requestId: request.id, denialReason: reason)
-                // MEDIUM 5 — the fix round moved the FAILURE out of the alert
-                // because an alert raised on a view that is presenting a sheet
-                // does not appear, and then left the SUCCESS alert doing exactly
-                // that in the same transaction as the dismissal. The reasoning was
-                // applied to one branch and not the other. The confirmation is
-                // handed to `onDismiss` instead, so it fires after the sheet has
-                // actually gone.
-                pendingSuccessMessage = "Request denied successfully"
+                // REVERTED to raising the alert directly. Routing the
+                // confirmation through `onDismiss` was worse, not better: the
+                // toolbar Cancel had no in-flight guard, so dismissing while the
+                // write was in flight consumed the (still empty) message, and the
+                // success branch then set `requestToDeny = nil` when it was
+                // ALREADY nil — no presentation change, no second `onDismiss`, no
+                // confirmation ever. Worse, the message stayed set and fired
+                // "Request denied successfully" the next time the manager backed
+                // out of an unrelated deny sheet.
+                //
+                // Here the sheet is dismissed in the same transaction and the
+                // alert is raised on a presenter that is no longer presenting.
+                // Cancel is now disabled while a write is in flight, so the
+                // dismiss-mid-write path that broke this cannot be entered.
                 requestToDeny = nil
                 denialReason = ""
                 denialError = ""
+                alertMessage = "Request denied successfully"
+                showingAlert = true
             } catch {
                 // NOT an alert. The sheet is still up, and an alert raised on the
                 // view that is presenting a sheet does not appear — so the old
@@ -442,7 +465,7 @@ struct TimeOffApprovalView: View {
             } catch {
                 alertMessage = error.localizedDescription
             }
-            showingAlert = true
+            showingAlert = (requestToDeny == nil)
         }
     }
 }

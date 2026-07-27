@@ -233,18 +233,33 @@ struct PTOBalanceView: View {
                 }
                 Divider()
                 HStack {
-                    Text("Projected balance").font(.subheadline)
+                    // LABELLED "total", because that is what it is.
+                    // `calculateProjectedBalance` projects `totalBalance` — the raw
+                    // column — while the hero above shows `availableBalance`
+                    // (`balance - pending_balance`). Showing an unqualified
+                    // "Projected balance" beneath an "available" hero invited the
+                    // reader to compare two different quantities.
+                    Text("Projected total balance").font(.subheadline)
                     Spacer(minLength: 8)
                     Text("\(projectedBalance, specifier: "%.1f") h")
                         .font(.system(size: 17, weight: .bold, design: .rounded))
                         .foregroundStyle(.green)
                         .contentTransition(.numericText())
                 }
-                // The old screen hid this whole readout behind `projectedBalance > 0`,
-                // so an employee with no balance saw a date picker with nothing
-                // under it and no explanation. A zero projection is an answer.
-                if projectedBalance > balance.availableBalance {
-                    Text("You will accrue \(projectedBalance - balance.availableBalance, specifier: "%.1f") more hours by this date.")
+                // MEASURED FROM THE SAME BASE IT IS PROJECTED FROM.
+                //
+                // This line used to read `projectedBalance - availableBalance`,
+                // subtracting an available-based figure from a total-based one to
+                // manufacture an accrual. With any pending hours and a
+                // non-accrual org the difference was exactly `pending_balance`, so
+                // the screen asserted "You will accrue 8.0 more hours by this
+                // date" for an organisation that has no accrual policy at all.
+                // `projectedBalance - balance.balance` is like-for-like and IS the
+                // accrual. The same mistake was removed from the request form one
+                // commit earlier and left here, in a file that commit edited —
+                // the instance, not the class.
+                if projectedBalance > balance.balance {
+                    Text("You will accrue \(projectedBalance - balance.balance, specifier: "%.1f") more hours by this date.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

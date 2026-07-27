@@ -567,10 +567,13 @@ struct LabTimeOffRequest: Identifiable {
     }
 
     var dateLabel: String {
-        if isPartialDay || span.dayCount == 1 {
-            return Formatters.monthDay.string(from: startDate)
-        }
-        return "\(Formatters.monthDay.string(from: startDate)) – \(Formatters.monthDay.string(from: endDate))"
+        // THROUGH THE PRODUCTION FORMATTER. This built its own `monthDay` string
+        // while production moved to `TimeOffDateLabel`, so the lab could no longer
+        // draw the out-of-year case that formatter exists for — the exact drift
+        // the "design lives in production code the lab imports" rule forbids.
+        TimeOffDateLabel.rangeString(from: startDate,
+                                     to: endDate,
+                                     collapsed: isPartialDay || span.dayCount == 1)
     }
 
     var timeLabel: String {

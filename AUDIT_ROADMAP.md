@@ -1169,6 +1169,17 @@ thing that quietly closes an authorization hole. Full file references in
 - [ ] **Sign-out leaves `TimeOffService.currentUserId` / `currentOrgId` set**, so a
   second sign-in in the same app run can fetch and subscribe for the PREVIOUS
   organization on a shared multi-tenant database.
+- [ ] **The PTO projection is computed on a different base from everything
+  displayed.** `PTOService.calculateProjectedBalance` projects `totalBalance` (the
+  raw column) while every screen shows `availableBalance`
+  (`balance - pending_balance`), and its `pendingRequests:` parameter defaults to
+  empty so nothing is subtracted. AMB.8 converted the projection to an
+  available-equivalent at the two display sites so the numbers beside each other
+  are measured the same way, and labelled the balance screen's figure "Projected
+  total balance". **The underlying inaccuracy is untouched and cannot be fixed
+  client-side:** `pending_balance` is itself unreliable, because a request iOS
+  reserved hours for and a manager approved ON THE WEB never releases the
+  reservation (see the item above). Any real fix is a cross-client one.
 - [ ] **`blocked_dates` is honoured by the web and ignored by iOS** — an employee
   can request time off on a blocked date from the phone. Same unbuilt idea as the
   dead "Schedule Conflicts" section AMB.8 removed.

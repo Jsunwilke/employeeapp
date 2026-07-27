@@ -143,9 +143,27 @@ struct TimeOffRequestView: View {
                           requested: ptoHours.value)
     }
 
+    /// BOTH FIGURES ON THE SAME BASE.
+    ///
+    /// `calculateProjectedBalance` projects `totalBalance` — the raw column —
+    /// while everything this form displays is `availableBalance`
+    /// (`balance - pending_balance`). Feeding the two straight into `evaluate`
+    /// compared quantities that are not comparable, and the "you are N hours
+    /// short" figure it produced was overstated by exactly the pending hours.
+    /// Subtracting the same reservation converts the projection to an
+    /// available-equivalent, which is the arithmetic `availableBalance` itself
+    /// performs. It is not a perfect number — this phase's research showed
+    /// `pending_balance` can be inflated, because a request approved on the WEB
+    /// never releases its reservation — but it is at least measured the same way
+    /// as the number beside it, and that defect is recorded under TOF.1.
+    private var projectedAvailable: Double {
+        guard let balance = currentPTOBalance else { return 0 }
+        return max(0, projectedPTOBalance - balance.pendingBalance)
+    }
+
     private var standing: PTOStanding {
         PTOStanding.evaluate(availableNow: currentPTOBalance?.availableBalance ?? 0,
-                             projectedByRequestDate: projectedPTOBalance,
+                             projectedByRequestDate: projectedAvailable,
                              requested: ptoHours.value)
     }
 
@@ -417,15 +435,11 @@ struct TimeOffRequestView: View {
                             // the previous screen calls "already requested and not
                             // yet decided".
                             //
-                            // Passing the pending requests would only make the two
-                            // bases comparable IF `pending_balance` equalled the sum
-                            // of pending request hours — and this phase's own
-                            // research established it does not, because a request
-                            // approved on the WEB never releases its reservation.
-                            // So the honest move on a payroll screen is to show one
-                            // number I can stand behind rather than two I cannot.
-                            // The base mismatch is pre-existing, affects the message
-                            // below, and is recorded under TOF.1.
+                            // The message below is now evaluated on the SAME base
+                            // as these rows — see `projectedAvailable` — so it can
+                            // no longer contradict them without a second figure to
+                            // explain it. The residual inaccuracy in
+                            // `pending_balance` itself is recorded under TOF.1.
                         }
                     }
                 }

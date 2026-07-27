@@ -61,11 +61,9 @@ extension TimeOffRequest {
     }
 
     private var presentedDateLabel: String {
-        let span = presentedSpan
-        if isPartialDay || span.dayCount == 1 {
-            return TimeOffDateLabel.string(from: start_date)
-        }
-        return "\(TimeOffDateLabel.string(from: start_date)) – \(TimeOffDateLabel.string(from: end_date))"
+        TimeOffDateLabel.rangeString(from: start_date,
+                                     to: end_date,
+                                     collapsed: isPartialDay || presentedSpan.dayCount == 1)
     }
 
     private var presentedTimeLabel: String {
@@ -132,11 +130,27 @@ extension TimeOffRequest {
 /// common case stays as short as the design drew it.
 enum TimeOffDateLabel {
     static func string(from date: Date) -> String {
+        isCurrentYear(date) ? Formatters.monthDay.string(from: date)
+                            : Formatters.mediumDate.string(from: date)
+    }
+
+    /// A RANGE IS FORMATTED AS ONE UNIT, not two independent dates.
+    ///
+    /// Testing each endpoint separately produced "Dec 28, 2025 – Jan 3" for a span
+    /// crossing New Year — a year on one side and not the other, which reads as a
+    /// mistake. If EITHER endpoint falls outside the current year, both carry it.
+    static func rangeString(from start: Date, to end: Date, collapsed: Bool) -> String {
+        let needsYear = !isCurrentYear(start) || !isCurrentYear(end)
+        let format: (Date) -> String = needsYear
+            ? { Formatters.mediumDate.string(from: $0) }
+            : { Formatters.monthDay.string(from: $0) }
+        if collapsed { return format(start) }
+        return "\(format(start)) – \(format(end))"
+    }
+
+    private static func isCurrentYear(_ date: Date) -> Bool {
         let calendar = Calendar.current
-        if calendar.component(.year, from: date) == calendar.component(.year, from: Date()) {
-            return Formatters.monthDay.string(from: date)
-        }
-        return Formatters.mediumDate.string(from: date)
+        return calendar.component(.year, from: date) == calendar.component(.year, from: Date())
     }
 }
 
