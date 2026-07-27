@@ -47,6 +47,24 @@ enum AmbientCardFill {
     case material
     /// A solid tint. Used by the chat bubble for the sender's own messages.
     case tint(Color)
+    /// An OPAQUE panel rather than glass.
+    ///
+    /// Added in AMB.7. The daily job report puts eight peer sections on one
+    /// screen, and at `.material` every one of them was ultraThinMaterial over a
+    /// tinted wash — a glass card over a tinted page sits at nearly the same
+    /// value as the page, so eight sections with nothing between them read as a
+    /// single mass. The operator's words were that the cards "practically blend
+    /// in with the background so everything just looks all clumped together".
+    ///
+    /// A lit edge alone was not enough, and the only heavier fill the primitive
+    /// had was `.regularMaterial` — reachable only through `state: .highlighted`,
+    /// which MEANS "the one thing on this screen that matters" and cannot
+    /// honestly be applied to all eight.
+    ///
+    /// So the weight gets its own axis instead of being smuggled through state.
+    /// Use this for a screen of many equal panels; keep `.material` for a card
+    /// floating over content, which is still the arc's default look.
+    case surface
 }
 
 /// The hairline around a card. Ambient cards are separated by a lit edge rather
@@ -97,6 +115,10 @@ struct AmbientCardModifier: ViewModifier {
         switch fill {
         case .tint(let color):
             return AnyShapeStyle(color)
+        case .surface:
+            // A real surface colour, not a material — it does not take its value
+            // from the wash behind it, which is the entire point.
+            return AnyShapeStyle(Color(.secondarySystemBackground))
         case .material:
             switch state {
             case .highlighted: return AnyShapeStyle(.regularMaterial)

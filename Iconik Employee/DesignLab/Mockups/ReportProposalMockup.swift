@@ -201,12 +201,16 @@ struct ReportProposalMockup: View {
                     .multilineTextAlignment(.trailing)
             }
             content()
-                // A hairline edge on EVERY section. Ambient separates cards with
-                // a lit edge rather than a drop shadow, and without it a glass
-                // card over a tinted wash is the same value as the page behind
-                // it — which is what made eight sections read as one clump.
+                // An OPAQUE panel, plus a lit edge. The edge alone was not
+                // enough: at .material every section was ultraThinMaterial over
+                // a tinted wash, which sits at nearly the same value as the page
+                // — eight of them read as one mass. `.surface` was added to
+                // AmbientCard for exactly this, rather than hand-rolling a
+                // background here or abusing `state: .highlighted` to reach a
+                // heavier material.
                 .ambientCard(density: .roomy,
-                             border: .hairline(Color.primary.opacity(0.14)),
+                             fill: .surface,
+                             border: .hairline(Color.primary.opacity(0.10)),
                              fillWidth: true)
         }
     }
