@@ -157,9 +157,22 @@ phase-naming registry as the rest of the family.
       DEC.1   Decompose the god files (DashboardWidgets; the Sports monoliths).
               NOTE: overlaps AMB.4 (home dashboard) on DashboardWidgets.swift — whichever
               runs first wins, the other rebases onto it.
-      DJR.1   Daily Job Report redesign (wizard, draft auto-save, offline outbox).
-              NOTE: overlaps AMB.7 (reports family) on the same screens — sequence
-              deliberately.
+      DJR.1   Daily Job Report — draft auto-save + offline outbox.
+              NO WIZARD. The original line here proposed one; it was written into this
+              list by a Claude session on 2026-07-13 with no research behind it, and
+              the operator rejected it on 2026-07-26. The evidence is against it for
+              this screen: NN/g says wizards "become annoying and overly controlling
+              if they have to be used over and over", and the Ministry of Justice
+              applied GOV.UK's one-thing-per-page to daily professional users and
+              reported it "slow and disorientating". A photographer files this ~200
+              times a year. AMB.7's approved design is ONE screen where nothing
+              collapses — see AMB_BATCH2_PARITY.md's behaviour contract.
+              WHAT REMAINS is the part AMB.7 deliberately did NOT specify because it
+              is a data-layer change: draft auto-save (the live form keeps every field
+              in view state, so leaving discards everything typed) and an offline
+              outbox (a submit with no signal currently just fails and loses the
+              report). The mockup draws a draft strip marked PROPOSED for exactly this.
+              NOTE: overlaps AMB.7 on the same screens — sequence deliberately.
       ONB.1   Invite-code onboarding + sign-in hardening.
       TST.1   Tests for the money paths (TimeEntryValidator, PayPeriodService).
       CHT.1   Chat data-layer rebuild — MULTIPLATFORM. Findings: CHAT_REBUILD_NOTES.md

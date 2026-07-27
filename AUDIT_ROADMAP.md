@@ -896,10 +896,10 @@ other rebases onto it.
   ⚠️ FIVE CAPABILITIES were lost inside these redesigns and restored — the denial
   reason, the report date, the photographer, the session link, the photoshoot note.
   The operator found four. Parity-walk the NEW screen every round, not just the old.
-  ⚠️ DJR.1 (not started) still proposes a WIZARD for this screen. The research says
-  do not: NN/g on repeat users, and the MoJ's report that one-thing-per-page was
-  "slow and disorientating" for daily professionals. DJR.1 and AMB.7 now contradict
-  each other and DJR.1 should be rewritten or dropped.
+  DJR.1's wizard is DROPPED (operator, 2026-07-26). It had been proposed by a Claude
+  session on 2026-07-13 with no research behind it and had never been questioned.
+  DJR.1 keeps draft auto-save and the offline outbox, which AMB.7 deliberately left
+  unspecified because both are data-layer work.
 - [ ] **AMB.8 Time off** (8 views, 3,763 lines) — closes batch 2 and mocks batch 3.
   **MOCKUP BUILT + APPROVED 2026-07-26** — five surfaces in the lab, approved with
   the Reports set. NOTE it was built BEFORE the feedback that reshaped Reports, so
