@@ -11,7 +11,24 @@ phase-naming registry as the rest of the family.
 
 # 🚀 START HERE  (you, the operator)
 
-      WHAT TO BUILD:  AMB.6
+      WHAT TO BUILD:  AMB.6's leftover — build the BATCH 2 MOCKUPS
+                      (Reports family + Time off) in the lab for approval
+
+  ⚠️ READ THIS BEFORE ANYTHING ELSE. These mockups belong to AMB.6 (D10) and AMB.6
+  did not build them — the phase went entirely into repairing Chat, which turned
+  out never to have worked. Do NOT convert a real Reports or Time Off screen: D10
+  is a hard gate and nothing has been approved.
+
+  START FROM AMB_BATCH2_PARITY.md, which already exists. Its Time Off half is
+  COMPLETE, read from source. Its Reports half is NOT — the file says so — and the
+  Reports capability detail must be re-derived from source before drawing.
+
+  AMB_BATCH2_PARITY.md also records ELEVEN non-style findings, and two of them are
+  payroll-adjacent and should be raised with the operator early rather than folded
+  silently into a design phase: TimeOffApprovalView has NO permission check at all
+  (and the row that reveals it checks the wrong permission area), and PTO shortfall
+  errors are swallowed so a request is created even when the balance is
+  insufficient.
 
   An arc id (e.g. NAV.1) or just describe the item in plain words. That is the only
   line you fill in — the agent works out the exact phase and scope.
