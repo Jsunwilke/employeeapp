@@ -757,6 +757,23 @@ struct LabReportTemplate: Identifiable {
     let version: Int
 }
 
+/// A scheduled session, as the report's session picker renders it.
+///
+/// The label matches `Session.reportDisplayLabel` in production — school, then
+/// time, then the session type in brackets — because that string is what gets
+/// stored on the report as `session_name`.
+struct LabSession: Identifiable {
+    let id: String
+    let school: String
+    let time: String
+    let type: String
+    /// Whether this photographer has already filed a report against it. Drives
+    /// auto-select, which picks the first session of the day NOT yet reported.
+    var alreadyReported: Bool = false
+
+    var label: String { "\(school) — \(time) (\(type))" }
+}
+
 /// A school you can pick on a report.
 ///
 /// Carries a distance from home so the mockup's mileage can actually RESPOND to
@@ -855,6 +872,16 @@ extension DesignLabSampleData {
             return counts.max { $0.value < $1.value }?.key ?? "personal"
         }
     }
+
+    /// Today's sessions for this photographer, EARLIEST FIRST — the order the
+    /// real picker uses, with undated sessions last. One is already reported, so
+    /// auto-select has something to skip past.
+    static let todaysSessions: [LabSession] = [
+        .init(id: "sess1", school: "Lincoln High School", time: "7:45 AM",
+              type: "Fall Original", alreadyReported: true),
+        .init(id: "sess2", school: "Riverside Middle School", time: "3:30 PM",
+              type: "Fall Sports"),
+    ]
 
     /// Filed reports, NEWEST FIRST — the real order of every list query.
     ///

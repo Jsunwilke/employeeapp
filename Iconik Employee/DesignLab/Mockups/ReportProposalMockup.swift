@@ -98,6 +98,10 @@ struct ReportProposalMockup: View {
     // What the app can prefill.
     @State private var reportDate = Date()
     @State private var photographer = "Maria Alvarez"
+    /// Auto-selected to the first session today NOT already reported — the live
+    /// app's rule, which runs once per date and is never undone by a refresh.
+    @State private var session: LabSession? = DesignLabSampleData.todaysSessions
+        .first { !$0.alreadyReported }
     @State private var stops: [LabSchool] = [DesignLabSampleData.schools[1]]
     @State private var mileage = ""
     @State private var mileageEdited = false
@@ -111,6 +115,12 @@ struct ReportProposalMockup: View {
     @State private var sportsBackground: String? = "NA"
     @State private var notes = ""
     @State private var photos: [Color] = []
+    /// The photoshoot note attached to this report. Auto-selected when there is
+    /// exactly one, which is what the live form does.
+    @State private var attachedNote: LabPhotoshootNote? = DesignLabSampleData
+        .photoshootNotes.first { !$0.submitted && !$0.school.isEmpty }
+    @State private var attachedNoteText = ""
+
 
     @State private var showVehicleConfirm = false
     @State private var showSchoolPicker = false
@@ -167,11 +177,13 @@ struct ReportProposalMockup: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 whenSection
+                sessionSection
                 schoolsSection
                 mileageSection
                 shotSection
                 extrasSection
                 scanSection
+                noteAttachmentSection
                 notesSection
                 photosSection
                 footer
@@ -242,6 +254,76 @@ struct ReportProposalMockup: View {
                 .padding(.vertical, 7)
             }
         }
+    }
+
+    /// THE SESSION LINK. Lost when this screen was rebuilt and restored here —
+    /// it is what ties a report to the schedule (`session_id` / `session_name`
+    /// on the row), and it is the thing that fills in the school.
+    ///
+    /// Off-schedule is a first-class choice, not a fallback: plenty of days have
+    /// no session, and the live app's first picker row says so explicitly.
+    private var sessionSection: some View {
+        section("Session",
+                status: session == nil ? "off-schedule" : "linked",
+                statusTint: session == nil ? nil : Self.featureTint) {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(DesignLabSampleData.todaysSessions) { option in
+                    sessionRow(option)
+                }
+                sessionRow(nil)
+
+                if let session {
+                    Divider()
+                    Label("Filled in \(session.school) below. Change anything it got wrong.",
+                          systemImage: "arrow.turn.down.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Divider()
+                    Text("Not linked to the schedule. The report still files normally.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// `nil` renders the off-schedule row.
+    private func sessionRow(_ option: LabSession?) -> some View {
+        let on = session?.id == option?.id
+        return Button {
+            withAnimation(AmbientMotion.snappy) {
+                session = option
+                // Picking a session fills the school in — the autofill that has
+                // to survive any redesign. It ADDS rather than replaces, because
+                // a multi-school day is normal.
+                if let option,
+                   let match = DesignLabSampleData.schools.first(where: { $0.name == option.school }),
+                   !stops.contains(where: { $0.id == match.id }) {
+                    stops.append(match)
+                }
+            }
+            AmbientHaptics.selection()
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: on ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(on ? Self.featureTint : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option?.label ?? "No scheduled session (off-schedule)")
+                        .font(.subheadline)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if option?.alreadyReported == true {
+                        Text("You already filed a report for this one")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var schoolsSection: some View {
@@ -532,6 +614,95 @@ struct ReportProposalMockup: View {
         }
     }
 
+    /// THE PHOTOSHOOT NOTE ATTACHMENT — missed entirely when this screen was
+    /// rebuilt, and found by checking v3 against the parity inventory rather
+    /// than by waiting to be asked a fifth time.
+    ///
+    /// It is not decoration: attaching a note fills the school in, COPIES the
+    /// note's photos onto the report, and its text is editable here and saved on
+    /// every keystroke. On submit the note is consumed. That is a real workflow
+    /// and the second half of this app's two-workflow split.
+    private var noteAttachmentSection: some View {
+        let available = DesignLabSampleData.photoshootNotes.filter { !$0.submitted }
+        return section("Photoshoot note",
+                       status: attachedNote == nil ? "none attached" : "attached",
+                       statusTint: attachedNote == nil ? nil : Self.featureTint) {
+            VStack(alignment: .leading, spacing: 10) {
+                if available.isEmpty {
+                    Text("No photoshoot notes available.")
+                        .font(.subheadline).foregroundStyle(.tertiary)
+                } else {
+                    ForEach(available) { note in
+                        noteRow(note)
+                    }
+                    noteRow(nil)
+                }
+
+                if let attachedNote {
+                    Divider()
+                    Text("Note for \(attachedNote.school)")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    TextEditor(text: $attachedNoteText)
+                        .frame(minHeight: 72)
+                        .font(.subheadline)
+                        .scrollContentBackground(.hidden)
+                        .overlay(alignment: .topLeading) {
+                            if attachedNoteText.isEmpty {
+                                Text(attachedNote.text)
+                                    .font(.subheadline).foregroundStyle(.tertiary)
+                                    .padding(.top, 8)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                    if attachedNote.photoCount > 0 {
+                        Label("\(attachedNote.photoCount) photo\(attachedNote.photoCount == 1 ? "" : "s") from this note will be copied onto the report.",
+                              systemImage: "photo.on.rectangle.angled")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    /// `nil` renders the "don't attach one" row.
+    private func noteRow(_ note: LabPhotoshootNote?) -> some View {
+        let on = attachedNote?.id == note?.id
+        return Button {
+            withAnimation(AmbientMotion.snappy) {
+                attachedNote = note
+                attachedNoteText = ""
+                // Attaching fills the school in — the same autofill the session
+                // does, and it ADDS rather than replaces.
+                if let note,
+                   let match = DesignLabSampleData.schools.first(where: { $0.name == note.school }),
+                   !stops.contains(where: { $0.id == match.id }) {
+                    stops.append(match)
+                }
+            }
+            AmbientHaptics.selection()
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: on ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(on ? Self.featureTint : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(note.map { "\(Formatters.shortTime.string(from: $0.timestamp)) — \($0.school)" }
+                         ?? "Don't attach a note")
+                        .font(.subheadline)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let note, !note.text.isEmpty {
+                        Text(note.text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var notesSection: some View {
         section("Notes",
                 status: notes.isEmpty ? "nothing written" : "\(notes.count) characters",
@@ -617,10 +788,12 @@ struct ReportProposalMockup: View {
                     .font(.subheadline).foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: 6) {
+                    line("Session", session?.label ?? "Off-schedule")
                     line("Schools", stops.isEmpty ? "None" : stops.map(\.name).joined(separator: ", "))
                     line("Mileage", String(format: "%.1f mi · %@", miles, vehicle.capitalized))
                     line("Shot", shot.isEmpty ? "Nothing selected" : shot.sorted().joined(separator: ", "))
                     if !extras.isEmpty { line("Extra", extras.sorted().joined(separator: ", ")) }
+                    line("Note", attachedNote.map { "Attached — \($0.school)" } ?? "None")
                     line("Cards", cardsScanned ?? "Not answered")
                     line("Photos", photos.isEmpty ? "None" : "\(photos.count)")
                 }
