@@ -450,10 +450,15 @@ class SupabaseChatService: SupabaseChatServiceProtocol {
 
     // MARK: - User Management
 
+    /// FLG.1: this was a bare .select() (SELECT *). ChatUser does not declare the flag fields
+    /// so they decoded away, but the RESPONSE BODY still carried every active coworker's
+    /// flag_note and flagged_by to every device, and this runs on chat init for everyone.
+    /// The same hazard was fixed in TeamService; an audit caught that it had been fixed at
+    /// one site and not the other.
     func getOrganizationUsers(organizationId: String) async throws -> [ChatUser] {
         let users: [ChatUser] = try await supabase
             .from("users")
-            .select()
+            .select("id, organization_id, first_name, last_name, email, display_name, photo_url, is_active")
             .eq("organization_id", value: organizationId)
             .eq("is_active", value: true)
             .execute()

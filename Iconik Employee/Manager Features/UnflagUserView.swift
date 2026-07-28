@@ -126,6 +126,13 @@ struct UnflagUserView: View {
             return
         }
 
+        // FLG.1: clear BOTH messages before starting. unflagUser now throws when the update
+        // matched no row, and without this a manager who unflags one person successfully and
+        // then fails on the next sees a green success and a red failure at the same time --
+        // which defeats the point of making the failure visible in the first place.
+        errorMessage = ""
+        successMessage = ""
+
         Task {
             do {
                 try await TeamService.shared.unflagUser(userId: user.id)
@@ -136,6 +143,7 @@ struct UnflagUserView: View {
                 }
             } catch {
                 await MainActor.run {
+                    successMessage = ""
                     errorMessage = error.localizedDescription
                 }
             }

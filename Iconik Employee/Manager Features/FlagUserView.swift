@@ -146,6 +146,14 @@ struct FlagUserView: View {
             errorMessage = "Please enter a flag note."
             return
         }
+        // currentUserID falls back to the literal string "unknown" when there is no session.
+        // That was inert while flagged_by did not exist; now it would persist "unknown" into
+        // the shared users table, where nothing can ever resolve it to a person.
+        let flagger = currentUserID
+        guard flagger != "unknown" else {
+            errorMessage = "You appear to be signed out. Sign in again before flagging."
+            return
+        }
         errorMessage = ""
         successMessage = ""
 
@@ -154,15 +162,25 @@ struct FlagUserView: View {
                 try await TeamService.shared.flagUser(
                     userId: target.id,
                     note: flagNote,
-                    flaggedBy: currentUserID
+                    flaggedBy: flagger
                 )
 
-                // The push is fired by the trg_user_flagged_notification database trigger
-                // on the is_flagged transition, not from here. PSH.1 moved it: sending
-                // required calling send-notification, and that function had to be locked to
-                // service-role callers once it was deployed, because it accepts an arbitrary
-                // recipient list and arbitrary text on a database shared with the web app
-                // and Captura.
+                // The push is fired by the trg_user_flagged_notification database trigger on
+                // the is_flagged transition, not from here -- sending from the app would mean
+                // calling send-notification, and that function is locked to service-role
+                // callers because it accepts an arbitrary recipient list and arbitrary text
+                // on a database shared with the web app and Captura.
+                //
+                // CORRECTION (FLG.1): the comment here previously said PSH.1 had done this.
+                // It had not. PSH.1 created that trigger against flag_note and flagged_by,
+                // which did not exist, then DROPPED it live when testing showed it would
+                // raise and roll back every is_flagged update on a shared table. The trigger
+                // is real as of FLG.1, which added the columns first:
+                // 20260727_flg1_user_flag_notification.sql. Its payload follows PSH.1's own,
+                // recovered from the sendFlagNotification function deleted from this file in
+                // d61d475 -- same title, type and data, and the same note as the body except
+                // that the trigger caps it at 300 characters so an over-long note cannot
+                // blow the 4KB APNs payload limit invisibly.
                 await MainActor.run {
                     successMessage = "\(target.name) flagged successfully."
                 }

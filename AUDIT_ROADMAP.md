@@ -1127,6 +1127,88 @@ other rebases onto it.
   tappable is a FEATURE (a detail screen, and write methods against the shared DB if
   editing is wanted) and belongs to its own phase, not to a restyle.
 
+### FLG.1 — FLAGGING A USER HAS NEVER WORKED (FIXED 2026-07-28, operator smoke pending)
+
+- [x] **The defect.** `TeamService.flagUser` wrote `is_flagged`, `flag_note` and `flagged_by`
+  to the SHARED `public.users` table. **Only `is_flagged` existed.** PostgREST rejects a
+  statement naming unknown columns, so the UPDATE failed *as a unit* — `is_flagged` was never
+  set either. No user has ever been flagged, on any build. The iOS app was fully built to
+  consume all three: `MainEmployeeView` selects them for the signed-in user and renders a red
+  wash plus a banner naming who flagged them, and both the banner and the inline card require
+  `flag_note` to be non-empty — so even a working `is_flagged` alone would have produced a red
+  screen with no explanation.
+
+- [x] **Scope note, from the operator mid-session.** This is NOT PSH.2. That heading is eight
+  unrelated items parked at the end of PSH.1 and is not a phase scope; it is left untouched
+  above and stays reserved for the notification-coverage work (six push types that still
+  cannot fire: chat, clock-in, clock-out, daily report, photo critique, job box).
+
+- [x] **Fixed:** `20260727_flg1_user_flag_columns.sql` (additive `flag_note` + `flagged_by`)
+  and `20260727_flg1_user_flag_notification.sql` (`trg_user_flagged_notification`). Both
+  APPLIED LIVE and read back. Blast radius checked rather than assumed: **the web app has no
+  user-flagging feature at all** — every `flag` in its `src` is an unrelated boolean — so the
+  columns are iOS-only and additive.
+
+- [x] **PSH.1's flag trigger could not be "recovered".** The operator asked for it to be
+  restored from `36fdf3f^` rather than rewritten. It is not there, at that path or any other:
+  `git log --all -S"trg_user_flagged_notification"` and `-S"notify_user_flagged"` return no
+  migration in either repo, and d61d475's own message says "The migration is deleted rather
+  than left to be applied by someone else." It was applied live and never committed. What WAS
+  recovered is the payload PSH.1 intended, from the `sendFlagNotification` function deleted
+  from `FlagUserView.swift` in that commit — same title, type and data, same note as the body.
+
+- [x] **The trigger was verified by FIRING it** — the lesson PSH.1 paid for, since plpgsql
+  does not validate field references until run time. In rolled-back transactions: ordinary
+  profile write queues **0** http requests, a genuine flag **1**, re-touching a flagged row
+  without changing the note still **1**, a re-flag with a new note **2**, a 5000-char note
+  capped to exactly **300**, title read back as `You've Been Flagged`, and a deliberately
+  raising trigger body left the flag write intact — proving the `EXCEPTION WHEN OTHERS`
+  handler. **That does NOT prove delivery**: the rollback discarded the queued requests, so
+  reaching a real device is the operator's smoke test.
+
+- [x] **Three adversarial audits. The fix-round audit again found the phase's worst defect —
+  eighth phase running.** Narrowing `SELECT *` on `users` (needed because the moment the
+  columns existed, every employee's flag note began shipping to every employee's device) had
+  been applied to `TeamService` and **not** to `SupabaseChatService.getOrganizationUsers`,
+  which runs on chat init for everyone. Fixed at both sites. The same audit caught a false
+  claim in my own comment — that the column list was the only control. **It is not a security
+  boundary**: any signed-in employee can still read `flag_note` straight from PostgREST. The
+  column list only stops the app routinely broadcasting it. Corrected in place.
+
+- [x] **A bug I nearly shipped applying this repo's own rule.** I added `.lowercased()` to the
+  flag write per the lowercase-UUID rule, then checked the live data: of 40 users, one is a
+  28-character mixed-case legacy Firebase uid — **an active admin**. Lowercasing would have
+  matched zero rows, and a PostgREST UPDATE matching zero rows *succeeds*. Reverted, with the
+  reason written into the code. The rule is about uuids; `users.id` is `text` and is not all
+  uuids.
+
+- [x] **`flagUser`/`unflagUser` now throw when no row was updated.** Before FLG.1 the missing
+  columns produced a 400 and a red error; making the columns exist would otherwise have
+  converted that loud failure into a green "flagged successfully" for every case that changes
+  nothing. This is not hypothetical — see the RLS finding below.
+
+**TWO THINGS FOUND THAT NEED AN OPERATOR DECISION — neither is caused by this fix:**
+
+- [ ] **CRITICAL, pre-existing: cross-tenant read of every `users` row.** The `audit_log_*`
+  partitions have RLS **off** while `authenticated` holds SELECT on them, and the phase-O
+  trigger writes `to_jsonb(NEW)` of every `users` change into them. Reading a partition
+  directly bypasses the parent's org policy — proven live: the parent returns 1 org, the
+  partition returns **3**. That exposes pay rates and APNs tokens across all three tenants
+  today, and flag notes from now on. Fix is `ENABLE ROW LEVEL SECURITY` per partition, or
+  revoking `authenticated` SELECT on them. Deliberately NOT done inside a flag fix: it is a
+  shared-DB security change with its own blast radius and deserves its own decision.
+- [ ] **Flagging works for org ADMINS only, not managers.** RLS `users_update_org` is
+  `(id = auth.uid()::text OR is_admin_of_org(organization_id))`, so a non-admin can only
+  update their own row — while the UI gates `FlagUserView` on `Permissions.has("users",
+  .edit)`, which managers also hold. A manager pressing Flag now gets a clear error instead of
+  a false success, but the mismatch itself is unresolved: either widen the policy or restrict
+  the UI. Operator's call.
+- [ ] **`FlaggedStatusView.swift` is dead code carrying the same defect this fix is named
+  after.** No mount point anywhere in the app, and its `requestUnflag()` writes
+  `unflag_request_note` and `is_unflag_requested` — **neither column exists** (verified live).
+  It is the flagged person's only route to respond to a flag. Either delete it or build it;
+  leaving a second copy of the bug is the worst of the three. Not decided unilaterally.
+
 ### PSH.1 — PUSH NOTIFICATIONS DO NOT WORK (RESEARCHED 2026-07-27, build gated)
 
 > ⚠️ **THE ORIGINAL ENTRY BELOW IS WRONG ON ITS DECISIVE POINT. Read
