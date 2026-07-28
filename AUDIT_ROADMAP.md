@@ -992,17 +992,18 @@ other rebases onto it.
   `session_types` match the 22 job descriptions. The approved v3 design prefills nothing
   from them, so nothing depended on the answer.
 
-- [ ] **AMB.8 Time off** (8 views, 3,763 lines) — CONVERTED 2026-07-27, EIGHT commits
-  88d01a1..ca28a85. **NOT PUSHED, AND NOT YET CLEARED FOR A SMOKE.** Mockup built +
-  approved on iPhone 2026-07-26.
+- [x] **AMB.8 Time off** (8 views, 3,763 lines) — SHIPPED 2026-07-27, fifteen commits
+  88d01a1..fb46e32. **OPERATOR SMOKE PASSED ON iPHONE AND iPAD**, closing D7. Mockup
+  built + approved on iPhone 2026-07-26; `/code-review` run TWICE by the operator.
 
-  **STATE, STATED PLAINLY: SIX FIX ROUNDS, SEVEN AUDITS, AND EVERY SINGLE AUDIT FOUND
-  A REAL DEFECT.** The round-5 audit's verdict was that the phase was NOT safe to hand
-  to the operator, because a smoke on a fast connection would not reproduce a
-  double-tap window and would convert "untested" into "smoke passed". Its two
-  CRITICALs are fixed in round 6 (ca28a85). **ROUND 6 IS ITSELF UNAUDITED.** On a
-  seven-for-seven record the honest expectation is that it is not clean either, so
-  THE NEXT SESSION STARTS BY AUDITING ca28a85, before any device smoke.
+  **NINE FIX ROUNDS, TWELVE AUDITS, AND EVERY SINGLE AUDIT FOUND A REAL DEFECT.** Four
+  of the worst were payroll bugs I introduced while converting: a deleted double-submit
+  guard (96 hours debited for a 48-hour request), a PTO field frozen at zero for every
+  web-created request (paid days off, nothing deducted), a deny confirmation lost and
+  then fired stale on an unrelated sheet, and a FAILED approval reporting "Request
+  approved successfully". The recurring shape was fixing the instance an audit named
+  rather than sweeping the class — three of four call sites, four of five presentation
+  surfaces — and each round the next audit found the one left behind.
 
   ⚠️ **BATCH-3 MOCKUPS NOT BUILT.** The source inventories for Mileage/Stats and
   Groups/Yearbook were gathered in this session but are not yet a repo document.
@@ -1125,6 +1126,55 @@ other rebases onto it.
   in the web app, so the list stops implying an action. Making kits genuinely
   tappable is a FEATURE (a detail screen, and write methods against the shared DB if
   editing is wanted) and belongs to its own phase, not to a restyle.
+
+### PSH.1 — PUSH NOTIFICATIONS DO NOT WORK (NOT STARTED, found 2026-07-27)
+
+Found while answering an operator question during AMB.8: "I denied it on the iPhone.
+I should always get a push notification for those." They were right to expect one, and
+right that it is broader than time off — **on the evidence in both repos, almost no push
+notification in this app can ever be delivered.** Both ends are built. The middle is not.
+
+**THE CHAIN, END TO END, with what is verified at each link:**
+
+- [ ] **Nothing fills the queue.** `send-notification` (the edge function that actually
+  sends) polls `notification_queue` for `status = 'pending'`. Across the whole backend
+  **exactly one thing writes to that table**: `daily-workflow-check`, with a single type,
+  `workflow_step_scheduled`. No migration creates a trigger on any table that queues a
+  notification. The iOS app never writes it. The web app never writes it.
+- [ ] **The web writes a DIFFERENT table.** `timeOffNotificationHelper.js` inserts into
+  `task_notifications` — which `send-notification` never reads and which **iOS never reads
+  either** (zero references in Swift). So a web denial creates a record nobody delivers.
+- [ ] **THE TOKEN COLUMNS DO NOT MATCH THE TRANSPORT.** `send-notification` reads
+  `users.fcm_token` and sends via FCM. `PushNotificationManager` writes **`apns_token`**.
+  The only writer of `fcm_token` anywhere in iOS is a stray call in
+  `Manager Features/JobBoxStatus.swift:189`, which stores a raw **APNs** device token under
+  the FCM column name. An APNs token is not an FCM token; FCM would reject it.
+- [ ] **Ten types are wired at both ends and none of them can fire.** The sender handles
+  `proofing_approval`, `chat_message`, `session_new`, `session_update`, `clock_reminder`,
+  `report_reminder`, `photo_critique`, `pto_processed`; `PushNotificationManager` handles
+  those plus `flag`, `jobbox`, `session_delete`. Somebody wired both ends and the middle
+  never landed.
+
+**THE ONE WAY THIS COULD BE WRONG, stated rather than glossed:** this is read from the two
+repos, not from the live database. A trigger created by hand in the Supabase console would
+not appear in `supabase/migrations/` and is invisible from here. The operator independently
+reports that session changes do not notify either, which is consistent with the reading but
+is not the same as a query. **CHECK THE LIVE DB FIRST** — `pg_trigger`, and whether
+`notification_queue` has ever held a row that was not `workflow_step_scheduled`.
+
+**SCOPE, and why it is its own arc rather than a line under TOF.1:** it is cross-client and
+server-side, it touches every feature that ever wanted to notify, and the first question is
+not "which types do we add" but "what was the intended trigger and was it ever built". The
+right shape is almost certainly a DATABASE TRIGGER on the source tables so that neither
+client can forget — the same reasoning CHT.1 reached about moving truth into the database.
+
+**A NOTE ON HOW THIS WAS NEARLY MIS-SCOPED.** Asked for a denial push, I first sized it as
+"a few hours: queue a row, add a case, add the iOS type." That would have added a ninth type
+to a queue nothing fills, verified the row appeared, and shipped something that still never
+reaches a phone. Fixing the instance without asking whether the mechanism works at all is
+the exact failure this arc has been punished for repeatedly.
+
+---
 
 ### TOF.1 — Time off authorization + PTO integrity (NOT STARTED, found 2026-07-26)
 
