@@ -80,22 +80,56 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         return false
     }
     
+    /// The most recent device token APNs handed us this launch.
+    ///
+    /// Registration happens in `didFinishLaunchingWithOptions`, which on a first-ever launch
+    /// runs BEFORE anybody has signed in — so the save below has no user to attach the token
+    /// to and does nothing. Holding the token here lets `flushPendingAPNsToken()` store it the
+    /// moment a session appears, instead of losing it until the user's next cold launch.
+    private var pendingDeviceToken: String?
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         // Convert device token to hex string for APNs
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
 
+        pendingDeviceToken = tokenString
+
         // Save APNs token to Supabase
         saveAPNsTokenToSupabase(token: tokenString)
-
-        // Also register with our JobBoxService
-        JobBoxService.shared.registerDeviceToken(deviceToken)
     }
 
-    /// Save APNs device token to Supabase users table
+    /// APNs refused to issue a device token.
+    ///
+    /// Without this, registration failure is completely silent — the app simply never has a
+    /// token and nothing anywhere says why. That invisibility is half of why PSH.1's bug
+    /// survived: every layer failed quietly.
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        print("‼️ [Push] APNs registration FAILED — this device will receive no notifications: \(error.localizedDescription)")
+    }
+
+    /// Store the token we already hold, now that a user has signed in.
+    ///
+    /// Called from `SupabaseAuthService` on the `signedIn` auth-state event.
+    func flushPendingAPNsToken() {
+        guard let token = pendingDeviceToken else { return }
+        saveAPNsTokenToSupabase(token: token)
+    }
+
+    /// Save APNs device token to Supabase users table, together with the Apple push
+    /// environment that minted it.
+    ///
+    /// The environment matters as much as the token: a sandbox token presented to Apple's
+    /// production service is rejected with `BadDeviceToken`, which is exactly what PSH.1
+    /// found happening to every push this app has ever sent. The sender reads this column to
+    /// choose the right endpoint per token, so a development install and a TestFlight install
+    /// can both work at once.
     private func saveAPNsTokenToSupabase(token: String) {
         guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
+            print("⚠️ [Push] APNs token received before sign-in; holding it until a session exists.")
             return
         }
+
+        let environment = APNsEnvironment.current
 
         Task {
             do {
@@ -105,12 +139,21 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                 try await supabase
                     .from("users")
                     .update([
-                        "apns_token": AnyJSON.string(token)
+                        "apns_token": AnyJSON.string(token),
+                        "apns_environment": AnyJSON.string(environment.rawValue)
                     ])
-                    .eq("id", value: userId)
+                    .eq("id", value: userId.lowercased())
                     .execute()
+
+                print("✅ [Push] APNs token stored (\(environment.rawValue)).")
+
+                // The token is safely stored; stop holding it for a post-sign-in retry.
+                await MainActor.run { self.pendingDeviceToken = nil }
             } catch {
-                print("Error updating APNs token: \(error.localizedDescription)")
+                // Deliberately loud. The previous version swallowed this into a bare print with
+                // no marker, so a token that never reached the database looked identical to one
+                // that did.
+                print("‼️ [Push] FAILED to store APNs token — this device will receive no notifications: \(error.localizedDescription)")
             }
         }
     }

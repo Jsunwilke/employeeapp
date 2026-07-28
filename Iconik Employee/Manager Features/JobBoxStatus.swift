@@ -172,29 +172,13 @@ class JobBoxService {
         return (status: status, scannedBy: scannedBy)
     }
     
-    // Register device token for push notifications
-    func registerDeviceToken(_ deviceToken: Data) {
-        guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
-            return
-        }
+    // NOTE (PSH.1, 2026-07-27): registerDeviceToken was deleted here. It wrote the raw APNs
+    // device token into a `users.fcm_token` column that DOES NOT EXIST on the live database
+    // (verified — only the orphaned `fcm_token_updated_at` remains), so it errored into a
+    // swallowed print on every single launch. It was also not job-box-specific in any way:
+    // it duplicated PushNotificationManager's own token write. Token storage now lives in
+    // exactly one place, PushNotificationManager.saveAPNsTokenToSupabase.
 
-        // Convert token to string format
-        let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-
-        // Store the token in Supabase
-        Task {
-            do {
-                try await supabase
-                    .from("users")
-                    .update(["fcm_token": tokenString])
-                    .eq("id", value: userId.lowercased())
-                    .execute()
-            } catch {
-                print("Error registering device token: \(error.localizedDescription)")
-            }
-        }
-    }
-    
     // Query all job boxes (for debugging purposes)
     func debugQueryAllJobBoxes(completion: @escaping ([JobBox]) -> Void) {
         Task {

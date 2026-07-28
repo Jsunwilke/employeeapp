@@ -86,6 +86,11 @@ class SupabaseAuthService: ObservableObject {
                         self.isAuthenticated = true
                         print("[SupabaseAuthService] User signed in: \(state.session?.user.id.uuidString ?? "unknown")")
 
+                        // APNs hands us the device token during launch, which on a first-ever
+                        // launch is before anyone has signed in — so it had nobody to attach to
+                        // and was lost until the next cold launch. Store it now.
+                        PushNotificationManager.shared.flushPendingAPNsToken()
+
                     case .signedOut:
                         self.currentUser = nil
                         self.isAuthenticated = false

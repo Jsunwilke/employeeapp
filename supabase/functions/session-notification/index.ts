@@ -17,7 +17,11 @@ interface APNsConfig {
   teamId: string;
   bundleId: string;
   privateKey: string;
-  production?: boolean;
+  // NOTE (PSH.1): there is deliberately no `production` field. The endpoint is chosen per
+  // TOKEN from users.apns_environment, not once for the whole project. A single global
+  // switch is what broke every push in this app: it said production while the app was
+  // signed for sandbox, and Apple answered 400 BadDeviceToken to all of them. Reinstating
+  // a config-wide flag would reintroduce exactly that failure.
 }
 
 interface APNsPayload {
@@ -61,11 +65,12 @@ async function generateAPNsToken(config: APNsConfig): Promise<string> {
 async function sendPushNotification(
   deviceToken: string,
   payload: APNsPayload,
-  config: APNsConfig
+  config: APNsConfig,
+  useProduction: boolean
 ): Promise<SendResult> {
   try {
     const token = await generateAPNsToken(config);
-    const baseUrl = config.production ? APNS_PRODUCTION : APNS_SANDBOX;
+    const baseUrl = useProduction ? APNS_PRODUCTION : APNS_SANDBOX;
     const url = `${baseUrl}/3/device/${deviceToken}`;
 
     const response = await fetch(url, {
@@ -103,13 +108,47 @@ async function sendPushNotification(
   }
 }
 
+/** A device token together with the Apple push service that minted it. */
+interface TokenTarget {
+  token: string;
+  /** 'sandbox' | 'production', or null for tokens stored before PSH.1. */
+  environment: string | null;
+}
+
+/**
+ * Send to each device on the endpoint that matches ITS OWN token.
+ *
+ * PSH.1: previously every token went to whichever endpoint the global APNS_PRODUCTION
+ * secret named, so a development install and a TestFlight install could not both work —
+ * and in practice neither did, because the flag said production while the app was signed
+ * for sandbox. Apple's reply to every push was 400 BadDeviceToken.
+ *
+ * A token whose environment is unknown (stored before PSH.1, so NULL in the database) is
+ * tried on production first and then on sandbox. That costs one wasted request for older
+ * development devices and nothing at all once the device's next launch records its real
+ * environment. Guessing a single endpoint for those would silently drop them exactly as
+ * before.
+ */
 async function sendPushNotificationBatch(
-  deviceTokens: string[],
+  targets: TokenTarget[],
   payload: APNsPayload,
   config: APNsConfig
 ): Promise<SendResult[]> {
   const results = await Promise.all(
-    deviceTokens.map((token) => sendPushNotification(token, payload, config))
+    targets.map(async ({ token, environment }) => {
+      if (environment === "production" || environment === "sandbox") {
+        return await sendPushNotification(
+          token, payload, config, environment === "production"
+        );
+      }
+
+      // Unknown environment: try production, fall back to sandbox.
+      const first = await sendPushNotification(token, payload, config, true);
+      if (first.success || first.error !== "BadDeviceToken") {
+        return first;
+      }
+      return await sendPushNotification(token, payload, config, false);
+    })
   );
   return results;
 }
@@ -133,7 +172,7 @@ function getAPNsConfigFromEnv(): APNsConfig {
   const teamId = Deno.env.get("APNS_TEAM_ID");
   const bundleId = Deno.env.get("APNS_BUNDLE_ID");
   const privateKey = Deno.env.get("APNS_PRIVATE_KEY");
-  const production = Deno.env.get("APNS_PRODUCTION") === "true";
+  // APNS_PRODUCTION is deliberately NOT read. See the note on APNsConfig.
 
   if (!keyId || !teamId || !bundleId || !privateKey) {
     throw new Error(
@@ -146,7 +185,6 @@ function getAPNsConfigFromEnv(): APNsConfig {
     teamId,
     bundleId,
     privateKey: privateKey.replace(/\\n/g, "\n"),
-    production,
   };
 }
 
@@ -250,7 +288,7 @@ serve(async (req) => {
     // Get APNs tokens for assigned employees
     const { data: users, error } = await supabase
       .from("users")
-      .select("id, apns_token, first_name")
+      .select("id, apns_token, apns_environment, first_name")
       .in("id", assignedEmployees.map((id) => id.toLowerCase()))
       .not("apns_token", "is", null);
 
@@ -261,7 +299,12 @@ serve(async (req) => {
 
     console.log(`Users with tokens found: ${users?.length || 0}`);
 
-    const deviceTokens = users?.map((u) => u.apns_token).filter(Boolean) || [];
+    const deviceTokens: TokenTarget[] = (users || [])
+      .filter((u) => Boolean(u.apns_token))
+      .map((u) => ({
+        token: u.apns_token as string,
+        environment: (u.apns_environment as string | null) ?? null,
+      }));
 
     if (deviceTokens.length === 0) {
       return new Response(
