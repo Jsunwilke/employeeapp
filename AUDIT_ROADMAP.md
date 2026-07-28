@@ -1127,7 +1127,43 @@ other rebases onto it.
   tappable is a FEATURE (a detail screen, and write methods against the shared DB if
   editing is wanted) and belongs to its own phase, not to a restyle.
 
-### PSH.1 — PUSH NOTIFICATIONS DO NOT WORK (NOT STARTED, found 2026-07-27)
+### PSH.1 — PUSH NOTIFICATIONS DO NOT WORK (RESEARCHED 2026-07-27, build gated)
+
+> ⚠️ **THE ORIGINAL ENTRY BELOW IS WRONG ON ITS DECISIVE POINT. Read
+> `PUSH_NOTIFICATIONS_PLAN.md` instead — it supersedes everything under this heading.**
+> It was written from the two repositories without checking what is DEPLOYED, and it
+> concluded "both ends are built, the middle is not." That is false for the one path
+> that matters. **The sessions path is complete and live:** `trg_session_notification`
+> on `public.sessions` (web repo `20260714_sec1_session_notification_vault.sql:66`)
+> POSTs to the `session-notification` edge function, which **IS deployed** (verified by
+> `supabase functions download` + byte-identical diff) and reads `users.apns_token` —
+> the exact column iOS writes. All five `APNS_*` secrets are set.
+>
+> **It delivers nothing because of an APNs ENVIRONMENT mismatch**, not a missing middle:
+> `APNS_PRODUCTION` is `true` so the sender targets Apple's production service, while
+> the app is signed `aps-environment = development` in BOTH Debug and Release
+> (`project.pbxproj:475`, `:522`). The operator installs from Xcode, so his device holds
+> a sandbox-only token that the production endpoint rejects as `BadDeviceToken` — and no
+> failure is recorded anywhere, because there is no
+> `didFailToRegisterForRemoteNotificationsWithError` handler and both token writes
+> swallow their errors with a `print`.
+>
+> **Do NOT "fix" this by flipping the flag.** One token column plus one global switch
+> cannot serve a dev build and a TestFlight build at once. The plan records the
+> environment per token instead.
+>
+> The findings below about undeployed functions, the dead queue, the `fcm_token` stray
+> write and the broken flag call all still hold and were re-verified. What changed is the
+> diagnosis and therefore the shape of the fix. Two further facts the original missed:
+> **`send-notification` is not deployed at all** (nor `chat-notification`, nor
+> `clock-reminder`), and **two different functions in two repos share that slug**, so the
+> canonical one must be chosen before anyone deploys.
+>
+> **Build is gated on a read-only live-DB probe** (`scripts/psh1_probe.sql`) that has not
+> yet run — if a session trigger already exists and PSH.1 adds another, every session
+> change fires twice on a table the web app shares.
+
+#### Original entry, 2026-07-27 (superseded — kept for the record)
 
 Found while answering an operator question during AMB.8: "I denied it on the iPhone.
 I should always get a push notification for those." They were right to expect one, and
