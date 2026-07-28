@@ -76,8 +76,12 @@ BEGIN
 
   -- No recipient, no request. users.id is a text column and is the key send-notification
   -- expects. It is NOT lowercased here: 39 of 40 rows are lowercase uuids but one is a
-  -- 28-character mixed-case legacy Firebase uid belonging to an active admin, and folding
-  -- case would address the notification to a user that does not exist.
+  -- 28-character mixed-case legacy Firebase uid, and folding case would address the
+  -- notification to a user that does not exist. (CORRECTED by the FLG.2 audit: that row
+  -- SAYS role=admin/is_active=true but has no auth.users row at all -- an orphan duplicate
+  -- that cannot sign in. It can only ever be a flag TARGET, never an actor, and a push to it
+  -- is a silent no-op since no device can hold its token. The do-not-lowercase rule stands,
+  -- for targets.)
   IF NEW.id IS NULL THEN
     RETURN NEW;
   END IF;

@@ -1177,39 +1177,70 @@ other rebases onto it.
 
 - [x] **A bug I nearly shipped applying this repo's own rule.** I added `.lowercased()` to the
   flag write per the lowercase-UUID rule, then checked the live data: of 40 users, one is a
-  28-character mixed-case legacy Firebase uid — **an active admin**. Lowercasing would have
-  matched zero rows, and a PostgREST UPDATE matching zero rows *succeeds*. Reverted, with the
-  reason written into the code. The rule is about uuids; `users.id` is `text` and is not all
-  uuids.
+  28-character mixed-case legacy Firebase uid. Lowercasing would have matched zero rows, and
+  a PostgREST UPDATE matching zero rows *succeeds*. Reverted, with the reason written into
+  the code. The rule is about uuids; `users.id` is `text` and is not all uuids.
+  (CORRECTED by the FLG.2 audit: I called that row "an active admin". Its stored values do
+  say role=admin/is_active=true, but it has **no auth.users row** — an orphan duplicate of
+  the accounting account that cannot sign in. It can be a flag *target*, never an actor. The
+  do-not-lowercase rule stands, and no regression either way, but the dramatic framing was
+  wrong.)
 
 - [x] **`flagUser`/`unflagUser` now throw when no row was updated.** Before FLG.1 the missing
   columns produced a 400 and a red error; making the columns exist would otherwise have
   converted that loud failure into a green "flagged successfully" for every case that changes
   nothing. This is not hypothetical — see the RLS finding below.
 
-**TWO THINGS FOUND THAT NEED AN OPERATOR DECISION — neither is caused by this fix:**
+**TWO THINGS FOUND THAT NEEDED AN OPERATOR DECISION — both decided and FIXED 2026-07-28
+(operator: "can you fix both of those? allow managers to flag people"):**
 
-- [ ] **CRITICAL, pre-existing: cross-tenant read of every `users` row.** The `audit_log_*`
-  partitions have RLS **off** while `authenticated` holds SELECT on them, and the phase-O
-  trigger writes `to_jsonb(NEW)` of every `users` change into them. Reading a partition
-  directly bypasses the parent's org policy — proven live: the parent returns 1 org, the
-  partition returns **3**. That exposes pay rates and APNs tokens across all three tenants
-  today, and flag notes from now on. Fix is `ENABLE ROW LEVEL SECURITY` per partition, or
-  revoking `authenticated` SELECT on them. Deliberately NOT done inside a flag fix: it is a
-  shared-DB security change with its own blast radius and deserves its own decision.
-  ⚠️ **Sharpened by the independent review, and the distinction matters:** the hole is not
-  FLG.1's, but **the PII now flowing into it is.** `phase_o_audit_users` writes `to_jsonb(NEW)`
-  — the whole row — on every `users` change, so from now on every flag note is copied into a
-  cross-tenant-readable table. This is the PUB.1 lesson recurring: a redaction is only as good
-  as the number of STORES it covers, not call sites. Narrowing the app's column lists does
-  nothing about this one. **Until the partitions are fixed, treat a flag note as readable by
-  any employee of any tenant.** That is the strongest argument for doing this next.
-- [ ] **Flagging works for org ADMINS only, not managers.** RLS `users_update_org` is
-  `(id = auth.uid()::text OR is_admin_of_org(organization_id))`, so a non-admin can only
-  update their own row — while the UI gates `FlagUserView` on `Permissions.has("users",
-  .edit)`, which managers also hold. A manager pressing Flag now gets a clear error instead of
-  a false success, but the mismatch itself is unresolved: either widen the policy or restrict
-  the UI. Operator's call.
+- [x] **AUD.2 — the cross-tenant `audit_log` read is CLOSED.** All ten partitions now have
+  RLS **enabled with no policy** (default deny on direct access); reads through the parent
+  keep using `audit_log_select` unchanged. Proven live as a real non-admin before applying,
+  in a rolled-back transaction: parent orgs 1→1 (legitimate access unchanged), direct
+  partition orgs 2→**0** (leak closed). The audit WRITE path was proven too — the trigger is
+  SECURITY DEFINER as `postgres`, which has `rolbypassrls`, and an authenticated write grew
+  `audit_log` by exactly one row with all partitions secured. **The part without which this
+  reopens monthly:** `ensure_audit_log_partition()` (the cron's partition creator) now
+  enables RLS on each partition it creates — Supabase default privileges grant
+  `authenticated` SELECT on new tables, which is how ten partitions came to be readable.
+  The fix-round audit added two corrections, both applied: the ALTER is guarded on
+  `relrowsecurity` + a 5s `lock_timeout`, because an unconditional ALTER takes an ACCESS
+  EXCLUSIVE lock on the CURRENT month's partition at every monthly run as `postgres` (no
+  timeout), behind which every audited write would queue; and the "catastrophic write
+  failure" framing was wrong — the audit trigger swallows insert errors at NOTICE, so the
+  real risk was silent audit loss, not write failure. Migration:
+  `20260728_aud2_audit_log_partition_rls.sql`, applied live.
+- [x] **FLG.2 — managers can flag.** NOT by widening `users_update_org` (rejected: that
+  policy governs the WHOLE row, so users-edit managers would also gain the ability to rewrite
+  any colleague's email, address and apns_token). Instead two SECURITY DEFINER RPCs,
+  `flag_user(p_user_id, p_note)` / `unflag_user(p_user_id)` — the same shape as the five chat
+  RPCs — checking permission (`is_user_admin() OR has_permission('users', 2)`), same-org,
+  self, non-empty note, and row count internally. `flagged_by` is now recorded from
+  `auth.uid()` server-side, unspoofable. The iOS direct-write path was DELETED in the same
+  change. Proven live: manager ALLOWED (row written, push queued), plain employee DENIED,
+  cross-org DENIED, self DENIED, empty note DENIED, ghost user DENIED, flag→unflag round trip
+  clean. **The fix-round audit found the round's worst defect — ninth phase running: the
+  permission guard failed OPEN on NULL.** `is_user_admin()` returns NULL (not false) for a
+  JWT with no `users` row, and inside RLS `USING` NULL denies while inside plpgsql
+  `IF NOT (...)` NULL skips the RAISE — the helper moved from a fail-closed context to a
+  fail-open one, masked only by the org check behind it. Fixed with `coalesce(..., false)`
+  and re-proven: a ghost JWT now hits the permission error itself. Migration:
+  `20260728_flg2_flag_user_rpc.sql`, applied live.
+
+**Recorded, not changed (pre-existing, each its own decision):**
+- [ ] The audit triggers (`phase_o_audit_log_trigger`, `record_audit_read_event`) swallow
+  failed inserts at `RAISE NOTICE`, which `log_min_messages` (warning) discards — a failing
+  audit write is invisible. Same NOTICE-vs-WARNING mistake FLG.1 fixed in
+  `notify_user_flagged`, but on a live shared audit trigger, so it is not a rider on AUD.2.
+- [ ] Four more RLS-off tables with `authenticated` SELECT and no policy
+  (`_recurring_tasks_backup_2026_05_28`, `access_code_pricing`, `_w12_repeats_backup_2026_05`,
+  `archive_step_legacy_fields`) — same shape as the partitions, all currently 0 rows or
+  non-PII, already named in `RLS_AUDIT.md` §181. The backup tables repopulate, so worth
+  closing.
+- [ ] Policy note from FLG.2, stated rather than assumed: a users-edit manager can now flag
+  an org ADMIN, and can clear a flag an admin set. That follows from "allow managers to
+  flag" but was never separately decided.
 - [ ] **`FlaggedStatusView.swift` is dead code carrying the same defect this fix is named
   after.** No mount point anywhere in the app, and its `requestUnflag()` writes
   `unflag_request_note` and `is_unflag_requested` — **neither column exists** (verified live).

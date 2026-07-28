@@ -146,11 +146,12 @@ struct FlagUserView: View {
             errorMessage = "Please enter a flag note."
             return
         }
-        // currentUserID falls back to the literal string "unknown" when there is no session.
-        // That was inert while flagged_by did not exist; now it would persist "unknown" into
-        // the shared users table, where nothing can ever resolve it to a person.
-        let flagger = currentUserID
-        guard flagger != "unknown" else {
+        // FLG.2: flagged_by is no longer sent from here -- the flag_user database function
+        // records auth.uid() itself, so the attribution cannot be spoofed and the old
+        // "unknown" fallback can no longer be persisted. This guard stays because the screen
+        // should still refuse to act when there is no session, rather than surfacing a
+        // permission error from the server.
+        guard currentUserID != "unknown" else {
             errorMessage = "You appear to be signed out. Sign in again before flagging."
             return
         }
@@ -161,8 +162,7 @@ struct FlagUserView: View {
             do {
                 try await TeamService.shared.flagUser(
                     userId: target.id,
-                    note: flagNote,
-                    flaggedBy: flagger
+                    note: flagNote
                 )
 
                 // The push is fired by the trg_user_flagged_notification database trigger on

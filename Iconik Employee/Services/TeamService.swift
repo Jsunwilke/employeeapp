@@ -1,23 +1,14 @@
 import Foundation
 import Supabase
 
-/// Minimal shape for reading back which rows an UPDATE actually touched, so a PostgREST
-/// update that matched nothing is distinguishable from one that worked. See flagUser.
-private struct FlagUpdateAck: Decodable {
-    let id: String
+/// Arguments for the flag_user / unflag_user database functions (FLG.2).
+private struct FlagUserArgs: Encodable {
+    let p_user_id: String
+    let p_note: String
 }
 
-enum TeamServiceError: LocalizedError {
-    /// The UPDATE succeeded at the HTTP level but changed no row -- almost always because
-    /// row-level security scoped it away, not because the id was wrong.
-    case noRowUpdated
-
-    var errorDescription: String? {
-        switch self {
-        case .noRowUpdated:
-            return "That change did not apply — you may not have permission to edit this user. Nothing was saved."
-        }
-    }
+private struct UnflagUserArgs: Encodable {
+    let p_user_id: String
 }
 
 @MainActor
@@ -173,57 +164,45 @@ class TeamService: ObservableObject {
     /// unrelated boolean), so there was no other vocabulary to match.
     /// See 20260727_flg1_user_flag_columns.sql.
     ///
-    /// DO NOT ADD .lowercased() TO userId. The project's lowercase-UUID rule exists because
-    /// Swift generates uppercase uuids and Supabase stores lowercase -- but public.users.id
-    /// is a TEXT column that is not all uuids. Checked live on 2026-07-27: of 40 rows, 39 are
-    /// lowercase uuids and one is a 28-character mixed-case legacy Firebase uid belonging to
-    /// an ACTIVE ADMIN. Lowercasing would make .eq match zero rows for that person. userId
-    /// comes from getTeamMembers, i.e. straight out of this column, so it already matches
-    /// exactly. (flaggedBy is different: getCurrentUserIDUnified returns the AUTH uuid, always
-    /// lowercase -- it is stored as-is because it is only ever resolved back through a
-    /// users.id lookup, which for that one legacy row will not resolve. That is a display
-    /// gap, not a write bug, and it is recorded in the FLG.1 closeout.)
+    /// FLG.2: goes through the flag_user database function, NOT a direct table write.
     ///
-    /// THROWS IF NO ROW WAS UPDATED. This is not defensive padding -- it is the whole
-    /// difference between this fix working and appearing to work. A PostgREST UPDATE that
-    /// matches zero rows returns 200 with an empty array, so without asking for the affected
-    /// rows back this function cannot tell "flagged" from "did nothing". Before FLG.1 the
-    /// missing columns produced a 400 and the manager saw a red error; making the columns
-    /// exist would otherwise have converted that loud failure into a green success message.
-    /// It matters concretely: RLS policy users_update_org only lets a NON-admin update their
-    /// OWN row, so a manager who has the in-app users-edit permission but is not an org admin
-    /// matches zero rows when flagging somebody else. That case must be visible.
-    func flagUser(userId: String, note: String, flaggedBy: String) async throws {
+    /// The direct .update() this replaces could only ever work for an org ADMIN. RLS policy
+    /// users_update_org is (id = auth.uid()::text OR is_admin_of_org(organization_id)), so a
+    /// manager -- who holds the in-app users-edit permission this screen gates on -- matched
+    /// zero rows, and a PostgREST UPDATE matching zero rows returns 200. The operator asked
+    /// for managers to be able to flag (2026-07-28).
+    ///
+    /// The alternative was widening users_update_org to include users-edit, which was
+    /// rejected: that policy governs the WHOLE ROW, so it would also have let every manager
+    /// rewrite any colleague's email, home address and apns_token. The function grants
+    /// exactly this one capability and checks permission, organization and self internally --
+    /// see 20260728_flg2_flag_user_rpc.sql.
+    ///
+    /// No zero-row check is needed here any more: the function raises on every failure
+    /// (including a row count other than 1), so anything short of success arrives as a thrown
+    /// error carrying a sentence the manager can read.
+    ///
+    /// `flaggedBy` is no longer passed -- the function records auth.uid() itself, which is the
+    /// only value that cannot be spoofed by the caller.
+    func flagUser(userId: String, note: String) async throws {
         isLoading = true
         errorMessage = nil
 
         defer { isLoading = false }
 
         do {
-            let updated: [FlagUpdateAck] = try await supabase
-                .from("users")
-                .update([
-                    "is_flagged": AnyJSON.bool(true),
-                    "flag_note": AnyJSON.string(note),
-                    "flagged_by": AnyJSON.string(flaggedBy)
-                ], returning: .representation)
-                .eq("id", value: userId)
-                .select("id")
+            try await supabase
+                .rpc("flag_user", params: FlagUserArgs(p_user_id: userId, p_note: note))
                 .execute()
-                .value
-
-            if updated.isEmpty {
-                throw TeamServiceError.noRowUpdated
-            }
         } catch {
             errorMessage = error.localizedDescription
             throw error
         }
     }
 
-    // MARK: - Unflag User (Admin Only)
-    /// Same zero-row reasoning as flagUser above: a silent no-op here would leave the person
-    /// flagged while telling the manager it was cleared.
+    // MARK: - Unflag User (admin or users-edit)
+    /// FLG.2: same reasoning as flagUser -- through the database function, which raises rather
+    /// than silently clearing nothing.
     func unflagUser(userId: String) async throws {
         isLoading = true
         errorMessage = nil
@@ -231,21 +210,9 @@ class TeamService: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let updated: [FlagUpdateAck] = try await supabase
-                .from("users")
-                .update([
-                    "is_flagged": AnyJSON.bool(false),
-                    "flag_note": AnyJSON.null,
-                    "flagged_by": AnyJSON.null
-                ], returning: .representation)
-                .eq("id", value: userId)
-                .select("id")
+            try await supabase
+                .rpc("unflag_user", params: UnflagUserArgs(p_user_id: userId))
                 .execute()
-                .value
-
-            if updated.isEmpty {
-                throw TeamServiceError.noRowUpdated
-            }
         } catch {
             errorMessage = error.localizedDescription
             throw error
