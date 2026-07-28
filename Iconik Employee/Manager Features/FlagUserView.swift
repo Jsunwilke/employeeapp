@@ -157,8 +157,15 @@ struct FlagUserView: View {
                     flaggedBy: currentUserID
                 )
 
-                // Send push notification via Supabase Edge Function
-                await sendFlagNotification(targetId: target.id, targetName: target.name, note: flagNote)
+                // The push is fired by the trg_user_flagged_notification database trigger
+                // on the is_flagged transition, not from here. PSH.1 moved it: sending
+                // required calling send-notification, and that function had to be locked to
+                // service-role callers once it was deployed, because it accepts an arbitrary
+                // recipient list and arbitrary text on a database shared with the web app
+                // and Captura.
+                await MainActor.run {
+                    successMessage = "\(target.name) flagged successfully."
+                }
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
@@ -166,81 +173,4 @@ struct FlagUserView: View {
             }
         }
     }
-
-    /// Send flag notification via Supabase Edge Function
-    ///
-    /// PSH.1 (2026-07-27) found this call broken three independent ways at once, each of
-    /// which alone was enough to guarantee no notification: the field was named `user_ids`
-    /// where the function reads `userIds`, so the recipient list was always empty; the type
-    /// was `flag_notification` where the app's own handler only knows `flag`, so even a
-    /// delivered payload routed to `.unknown`; and the function was not deployed at all.
-    /// The catch block then reported success regardless. The two contract bugs and the
-    /// false success are fixed in this file; the function was deployed separately on
-    /// 2026-07-27 and verified delivering to a real device.
-    private func sendFlagNotification(targetId: String, targetName: String, note: String) async {
-        struct NotificationRequest: Encodable {
-            let title: String
-            let body: String
-            let type: String
-            // Must match the edge function's field name exactly. It reads `userIds`;
-            // sending `user_ids` silently produced an empty recipient list and a
-            // "sent 0" that the caller reported as success.
-            let userIds: [String]
-            let data: [String: String]
-        }
-
-        // Must match PushNotificationManager.NotificationType.flag ("flag"), which is what
-        // routes the tap to the flag handler on the device.
-        let request = NotificationRequest(
-            title: "You've Been Flagged",
-            body: note,
-            type: "flag",
-            userIds: [targetId.lowercased()],
-            data: [
-                "flaggedBy": currentUserID,
-                "note": note
-            ]
-        )
-
-        // The function answers HTTP 200 with success:false when nobody could be reached —
-        // for instance when the flagged person has no device token stored. `invoke` only
-        // throws on a non-2xx status, so the body has to be read or that case would land in
-        // the success branch. This audit caught exactly that: the catch block below was
-        // unreachable for the most likely failure.
-        struct NotificationResponse: Decodable {
-            let success: Bool?
-            let reason: String?
-            let sent: Int?
-        }
-
-        do {
-            let supabase = SupabaseManager.shared.client
-
-            let response: NotificationResponse = try await supabase.functions.invoke(
-                "send-notification",
-                options: .init(body: request)
-            )
-
-            let delivered = (response.success ?? false) && (response.sent ?? 0) > 0
-
-            await MainActor.run {
-                successMessage = delivered
-                    ? "\(targetName) flagged successfully."
-                    : "\(targetName) was flagged, but could not be notified."
-            }
-            if !delivered {
-                print("⚠️ [Flag] flag saved, but nobody was notified: \(response.reason ?? "unknown")")
-            }
-        } catch {
-            print("‼️ [Flag] flag saved, but the notification FAILED: \(error.localizedDescription)")
-            // The flag itself DID save — that happens before this call and is what matters
-            // most. But do not claim the person was told, because they were not. Saying
-            // "flagged successfully" on a failed notify is the same class of lie that let
-            // this stay broken: every layer reported success while nothing was delivered.
-            await MainActor.run {
-                successMessage = "\(targetName) was flagged, but could not be notified."
-            }
-        }
-    }
 }
-

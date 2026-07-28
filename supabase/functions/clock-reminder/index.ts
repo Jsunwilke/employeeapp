@@ -69,6 +69,7 @@ serve(async (req) => {
 
       // For each upcoming day, notify assigned photographers who haven't clocked in
       let totalSent = 0;
+      let totalFailed = 0;
 
       for (const day of dayRows) {
         const session = (day as Record<string, unknown>).session as
@@ -135,11 +136,14 @@ serve(async (req) => {
         );
 
         totalSent += results.filter((r) => r.success).length;
+        totalFailed += results.filter((r) => !r.success).length;
       }
 
       return new Response(
         JSON.stringify({
-          success: true,
+          // Honest: true only if a device was actually reached. (PSH.1)
+          success: totalSent > 0,
+          failed: totalFailed,
           type: "clock_in",
           sent: totalSent,
           sessionsChecked: dayRows.length,
@@ -207,10 +211,13 @@ serve(async (req) => {
       );
 
       const successful = results.filter((r) => r.success).length;
+      const failedCount = results.filter((r) => !r.success).length;
 
       return new Response(
         JSON.stringify({
-          success: true,
+          // Honest: true only if a device was actually reached. (PSH.1)
+          success: successful > 0,
+          failed: failedCount,
           type: "clock_out",
           sent: successful,
           activeEntries: activeEntries.length,

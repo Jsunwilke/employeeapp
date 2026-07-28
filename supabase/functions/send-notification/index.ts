@@ -43,6 +43,45 @@ serve(async (req) => {
   }
 
   try {
+    // AUTHORIZATION. This function takes an arbitrary recipient list and arbitrary text and
+    // sends it with the service-role key. Without this gate any signed-in employee could
+    // push whatever they liked to ANY user id in a database shared with the web app and
+    // Captura — including other organizations — and spoof a convincing `type` such as
+    // "time_off_denied". It was theoretical while the function was undeployed; deploying it
+    // in PSH.1 made it live, and this closes it in the same phase rather than leaving it.
+    //
+    // Only server-side callers are legitimate: the database triggers, and the scheduled
+    // functions. All of them present the service-role key. A user JWT is refused.
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const bearer = authHeader.replace(/^Bearer\s+/i, "");
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+    let callerIsServiceRole = bearer.length > 0 && bearer === serviceRoleKey;
+
+    // The service-role key can also arrive as a signed JWT whose payload names the role,
+    // rather than as the literal key string. Accept that form too, without verifying the
+    // signature here — Supabase has already rejected an unsigned or invalid JWT before the
+    // request reaches this function (verify_jwt is on).
+    if (!callerIsServiceRole && bearer.split(".").length === 3) {
+      try {
+        const claims = JSON.parse(atob(bearer.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+        callerIsServiceRole = claims?.role === "service_role";
+      } catch {
+        callerIsServiceRole = false;
+      }
+    }
+
+    if (!callerIsServiceRole) {
+      console.warn("send-notification: refused a non-service-role caller.");
+      return new Response(
+        JSON.stringify({ error: "Forbidden" }),
+        {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
     const apnsConfig = getAPNsConfigFromEnv();
 
     const requestBody: NotificationRequest = await req.json();

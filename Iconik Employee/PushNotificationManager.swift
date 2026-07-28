@@ -5,11 +5,20 @@ import Supabase
 class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     
     // Define notification types
-    /// THIS ENUM IS THE AUTHORITY for what a delivered push can actually do on the device.
-    /// A type string the sender uses that is missing here still shows its banner, but the
-    /// tap routes to `.unknown` and nothing happens. Any new server-side notification type
+    /// THIS ENUM IS THE AUTHORITY for which delivered pushes this app recognises. A type
+    /// string the sender uses that is missing here still shows its banner, but falls to
+    /// `.unknown` and is not even logged as itself. Any new server-side notification type
     /// MUST be added here in the same change that starts sending it — PSH.1 shipped four
     /// time-off types without doing so and its own audit caught it.
+    ///
+    /// HONEST LIMIT, do not read more into the cases below than is there: recognising a
+    /// type means it is logged and re-posted on `NotificationCenter`. It does NOT mean
+    /// tapping the banner navigates anywhere. Of every push name this app posts, only
+    /// `didReceiveJobBoxNotification` currently has an observer (ShiftDetailView). The
+    /// notification itself is the deliverable — the person is told — and in-app deep
+    /// linking is a separate piece of work recorded as PSH.2. This pre-dates PSH.1 and
+    /// applies to chat and session pushes too; it is written down here rather than left
+    /// to be rediscovered.
     enum NotificationType: String {
         case flag = "flag"
         case jobBox = "jobbox"
@@ -30,9 +39,14 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case unknown = "unknown"
     }
     
-    // Singleton for easier access
-    static let shared = PushNotificationManager()
-    
+    // NOTE (PSH.1): the `shared` singleton was DELETED here. It was never the object the
+    // app actually ran — `@UIApplicationDelegateAdaptor(PushNotificationManager.self)` makes
+    // SwiftUI construct its own instance — and it had zero callers, so the one piece of code
+    // that did use it (this phase's own first attempt at the post-sign-in token retry) wrote
+    // to one object and read from another and could never have worked. Anything that must be
+    // reachable from outside the delegate is `static` instead, which both objects share.
+    // Do not reintroduce it.
+
     // Notification center for posting local notifications
     let notificationCenter = NotificationCenter.default
     
@@ -147,22 +161,55 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     /// the next occupant of the phone receives their notifications — denial reasons, chat
     /// previews, session changes. That was harmless only while nothing was ever delivered;
     /// PSH.1 is the change that makes it real.
-    static func clearAPNsTokenOnSignOut(userId: String) {
-        Task {
-            do {
-                try await SupabaseManager.shared.client
-                    .from("users")
-                    .update([
-                        "apns_token": AnyJSON.null,
-                        "apns_environment": AnyJSON.null
-                    ])
-                    .eq("id", value: userId.lowercased())
-                    .execute()
-                print("✅ [Push] Detached this device from the signed-out account.")
-            } catch {
-                print("‼️ [Push] FAILED to clear APNs token on sign-out — this device may still receive that account's notifications: \(error.localizedDescription)")
-            }
+    /// AWAITED on purpose, and called from `signOut()` while the session is still valid.
+    /// Fire-and-forget here would race the session teardown that follows it.
+    static func clearAPNsTokenOnSignOut(userId: String) async {
+        // Only clear the row if it is THIS handset's token sitting in it.
+        //
+        // There is one apns_token column per user, shared by all their devices, so an
+        // unconditional clear would be wrong for somebody signed in on both an iPhone and
+        // an iPad: signing out on the iPad would silence the iPhone. Matching on the token
+        // means we only detach the device actually being signed out of. (A single column
+        // still cannot serve two devices at once — the real fix is one row per device, and
+        // that is recorded as PSH.2, not faked here.)
+        guard let thisDeviceToken = pendingDeviceToken else {
+            print("⚠️ [Push] No device token held this launch; nothing to detach on sign-out.")
+            return
         }
+
+        do {
+            // `returning: .representation` so we can tell "cleared the row" from "matched no
+            // rows". An UPDATE that matches nothing is a 200 with an empty array, not an
+            // error — reporting that as success is how the first version of this fix managed
+            // to print a tick while changing nothing.
+            struct ClearedRow: Decodable { let id: String }
+
+            let cleared: [ClearedRow] = try await SupabaseManager.shared.client
+                .from("users")
+                .update([
+                    "apns_token": AnyJSON.null,
+                    "apns_environment": AnyJSON.null
+                ], returning: .representation)
+                .eq("id", value: userId.lowercased())
+                .eq("apns_token", value: thisDeviceToken)
+                .select("id")
+                .execute()
+                .value
+
+            if !cleared.isEmpty {
+                print("✅ [Push] Detached this device from the signed-out account.")
+            } else {
+                // Not necessarily a fault: the account's stored token may belong to the
+                // user's OTHER device, which we deliberately do not touch.
+                print("ℹ️ [Push] Sign-out token clear matched no row — the account's stored token is not this device's.")
+            }
+        } catch {
+            print("‼️ [Push] FAILED to clear APNs token on sign-out — this device may still receive that account's notifications: \(error.localizedDescription)")
+        }
+
+        // pendingDeviceToken is deliberately KEPT. It describes this handset, not the
+        // account that just left, and the next person to sign in during this same launch
+        // needs it — APNs only issues a token once per launch.
     }
 
     /// Save APNs device token to Supabase users table, together with the Apple push

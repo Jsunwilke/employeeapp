@@ -1176,6 +1176,37 @@ other rebases onto it.
 
 #### PSH.2 — carried out of PSH.1, NOT fixed (found 2026-07-27)
 
+- [ ] **FLAGGING A USER HAS NEVER WORKED, and it is not a push problem.**
+  `TeamService.flagUser` writes `is_flagged`, `flag_note` and `flagged_by`
+  (`Services/TeamService.swift:122-130`) — **only `is_flagged` exists on the live
+  `users` table.** Verified: `information_schema` returns `is_flagged` and nothing else
+  matching flag. The whole UPDATE therefore fails and every flag attempt has always
+  errored. Found while trying to test a flag notification, and it is why PSH.1 ships
+  **no** flag trigger: a notification for an action that cannot succeed is theatre.
+  ⚠️ PSH.1 briefly created `trg_user_flagged_notification` referencing those missing
+  columns, which would have made the trigger raise and ROLL BACK any `is_flagged`
+  update on a table shared with the web app. It was caught by testing, dropped live,
+  and verified gone; a plain `is_flagged` update was then proven unaffected. Whoever
+  fixes flagging should add the notification at the same time — the pattern is the
+  time-off trigger.
+- [ ] **One `apns_token` column cannot serve two devices.** A person signed in on an
+  iPhone and an iPad has one column between them, so only the most recently registered
+  device is reachable. PSH.1 narrowed the damage — sign-out only clears the row when the
+  stored token is *this* handset's, so signing out on the iPad no longer silences the
+  iPhone — but the real fix is one row per device (a `user_devices` table keyed by
+  token, carrying the environment), which every sender would then fan out over.
+- [ ] **A tapped push does not navigate anywhere.** Recognising a type means it is logged
+  and re-posted on `NotificationCenter`; of every push name the app posts, only
+  `didReceiveJobBoxNotification` has an observer (`ShiftDetailView`). This pre-dates
+  PSH.1 and applies to chat and session pushes too. The banner tells the person, which
+  is the deliverable; in-app deep linking is separate work.
+- [ ] **Time-off reasons now appear on the lock screen.** The submitted-request push
+  carries `reason` and the denial push carries `denial_reason`, which can be medical or
+  family detail. Deliberate — a notification with no substance is useless — but it
+  deserves a decision, and the lever is per-type notification preferences, which do not
+  exist (the `notification_preferences` and `email_notifications` columns are read by
+  nobody and there is no settings screen).
+
 - [ ] **Two web-app writers of `task_notifications` are broken against the live schema and
   have therefore never once succeeded.** `id` is `text NOT NULL` with NO default and the
   read flag is `is_read`, not `read` — both verified live.

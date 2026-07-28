@@ -142,12 +142,21 @@ serve(async (req) => {
     );
 
     const successful = results.filter((r) => r.success).length;
+    const failed = results.filter((r) => !r.success);
 
     console.log(`Chat notification: ${successful}/${deviceTokens.length} sent`);
+    if (failed.length > 0) {
+      // Reasons only — SendResult carries the device token, a per-device credential.
+      console.log(
+        "Failed notifications:",
+        failed.map((f) => ({ error: f.error, statusCode: f.statusCode }))
+      );
+    }
 
     return new Response(
       JSON.stringify({
-        success: true,
+        // Honest: true only if a device was actually reached. (PSH.1)
+        success: successful > 0,
         sent: successful,
         conversationId,
         messageId,

@@ -92,12 +92,10 @@ class SupabaseAuthService: ObservableObject {
                         PushNotificationManager.flushPendingAPNsToken()
 
                     case .signedOut:
-                        // Detach this handset from the account BEFORE we forget who it was,
-                        // or the next person to sign in on this phone receives their
-                        // notifications.
-                        if let previousUserId = self.currentUser?.id.uuidString {
-                            PushNotificationManager.clearAPNsTokenOnSignOut(userId: previousUserId)
-                        }
+                        // NOTE: the APNs token is detached in signOut() above, not here.
+                        // By the time this event fires the SDK has already removed the
+                        // session, so a database write from this point runs unauthenticated
+                        // and silently affects no rows.
                         self.currentUser = nil
                         self.isAuthenticated = false
                         print("[SupabaseAuthService] User signed out")
@@ -200,6 +198,20 @@ class SupabaseAuthService: ObservableObject {
 
         // 6. Cached role/permissions map
         PermissionsService.shared.clear()
+
+        // 6b. Detach this handset's push token from the account.
+        //     MUST happen here, before supabase.auth.signOut() below, for exactly the
+        //     reason this function's header comment gives: it is a database write and it
+        //     needs a valid auth context. Doing it from the .signedOut auth-state event
+        //     does not work — the SDK removes the session BEFORE emitting that event, so
+        //     the update goes out on the anon key, matches zero rows under RLS, and
+        //     returns 200 with an empty array, i.e. it silently does nothing while looking
+        //     like it worked. Without this the next person to sign in on a shared iPad
+        //     receives the previous user's notifications, including time-off denial
+        //     reasons and chat previews.
+        if let currentUserId = self.currentUser?.id.uuidString {
+            await PushNotificationManager.clearAPNsTokenOnSignOut(userId: currentUserId)
+        }
 
         // 7. PII + identity keys in UserDefaults (leave device prefs
         //    like appTheme alone — they are not account data)
