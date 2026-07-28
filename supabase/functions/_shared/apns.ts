@@ -7,12 +7,25 @@ import * as jose from "https://deno.land/x/jose@v4.14.4/index.ts";
 const APNS_PRODUCTION = "https://api.push.apple.com";
 const APNS_SANDBOX = "https://api.sandbox.push.apple.com";
 
-interface APNsConfig {
+export interface APNsConfig {
   keyId: string;
   teamId: string;
   bundleId: string;
   privateKey: string;
-  production?: boolean;
+  // NOTE (PSH.1, 2026-07-27): there is deliberately NO project-wide `production` flag.
+  // Apple runs two separate push services and a token minted by one is rejected by the
+  // other. A single global switch cannot serve a development install and a TestFlight
+  // install at the same time — and having one is what broke every push this app ever
+  // sent: it said production while the app was signed for sandbox, so Apple answered
+  // 400 BadDeviceToken to all of them. The endpoint is chosen per TOKEN, from
+  // users.apns_environment. Do not reintroduce a config-wide flag.
+}
+
+/** A device token together with the Apple push service that minted it. */
+export interface TokenTarget {
+  token: string;
+  /** 'sandbox' | 'production', or null for tokens stored before PSH.1. */
+  environment: string | null;
 }
 
 interface APNsPayload {
@@ -66,11 +79,12 @@ async function generateAPNsToken(config: APNsConfig): Promise<string> {
 export async function sendPushNotification(
   deviceToken: string,
   payload: APNsPayload,
-  config: APNsConfig
+  config: APNsConfig,
+  useProduction: boolean
 ): Promise<SendResult> {
   try {
     const token = await generateAPNsToken(config);
-    const baseUrl = config.production ? APNS_PRODUCTION : APNS_SANDBOX;
+    const baseUrl = useProduction ? APNS_PRODUCTION : APNS_SANDBOX;
     const url = `${baseUrl}/3/device/${deviceToken}`;
 
     const response = await fetch(url, {
@@ -113,15 +127,33 @@ export async function sendPushNotification(
 }
 
 /**
- * Send push notifications to multiple devices
+ * Send to each device on the endpoint that matches ITS OWN token.
+ *
+ * A token whose environment is unknown (stored before PSH.1, so NULL in the database) is
+ * tried on production first and retried on sandbox ONLY when Apple specifically says
+ * BadDeviceToken. That costs one wasted request for older development devices and nothing
+ * once the device's next launch records its real environment. Any other error is returned
+ * as-is rather than retried, so a genuine failure is not masked by a second attempt.
  */
 export async function sendPushNotificationBatch(
-  deviceTokens: string[],
+  targets: TokenTarget[],
   payload: APNsPayload,
   config: APNsConfig
 ): Promise<SendResult[]> {
   const results = await Promise.all(
-    deviceTokens.map((token) => sendPushNotification(token, payload, config))
+    targets.map(async ({ token, environment }) => {
+      if (environment === "production" || environment === "sandbox") {
+        return await sendPushNotification(
+          token, payload, config, environment === "production"
+        );
+      }
+
+      const first = await sendPushNotification(token, payload, config, true);
+      if (first.success || first.error !== "BadDeviceToken") {
+        return first;
+      }
+      return await sendPushNotification(token, payload, config, false);
+    })
   );
   return results;
 }
@@ -180,7 +212,7 @@ export function getAPNsConfigFromEnv(): APNsConfig {
   const teamId = Deno.env.get("APNS_TEAM_ID");
   const bundleId = Deno.env.get("APNS_BUNDLE_ID");
   const privateKey = Deno.env.get("APNS_PRIVATE_KEY");
-  const production = Deno.env.get("APNS_PRODUCTION") === "true";
+  // APNS_PRODUCTION is deliberately NOT read. See the note on APNsConfig.
 
   if (!keyId || !teamId || !bundleId || !privateKey) {
     throw new Error(
@@ -194,6 +226,5 @@ export function getAPNsConfigFromEnv(): APNsConfig {
     bundleId,
     // Replace escaped newlines with actual newlines
     privateKey: privateKey.replace(/\\n/g, "\n"),
-    production,
   };
 }

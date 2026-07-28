@@ -5,6 +5,11 @@ import Supabase
 class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     
     // Define notification types
+    /// THIS ENUM IS THE AUTHORITY for what a delivered push can actually do on the device.
+    /// A type string the sender uses that is missing here still shows its banner, but the
+    /// tap routes to `.unknown` and nothing happens. Any new server-side notification type
+    /// MUST be added here in the same change that starts sending it — PSH.1 shipped four
+    /// time-off types without doing so and its own audit caught it.
     enum NotificationType: String {
         case flag = "flag"
         case jobBox = "jobbox"
@@ -15,6 +20,13 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case clockReminder = "clock_reminder"
         case reportReminder = "report_reminder"
         case photoCritique = "photo_critique"
+        // Sent by the trg_time_off_notification database trigger (PSH.1).
+        case timeOffSubmitted = "time_off_submitted"
+        case timeOffApproved = "time_off_approved"
+        case timeOffDenied = "time_off_denied"
+        case timeOffPartiallyApproved = "time_off_partially_approved"
+        // Sent by the daily-workflow-check scheduled function.
+        case workflowStepScheduled = "workflow_step_scheduled"
         case unknown = "unknown"
     }
     
@@ -86,16 +98,22 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     /// runs BEFORE anybody has signed in — so the save below has no user to attach the token
     /// to and does nothing. Holding the token here lets `flushPendingAPNsToken()` store it the
     /// moment a session appears, instead of losing it until the user's next cold launch.
-    private var pendingDeviceToken: String?
+    ///
+    /// DELIBERATELY STATIC, and this is load-bearing. `@UIApplicationDelegateAdaptor` makes
+    /// SwiftUI construct its OWN instance of this class, which is NOT the `shared` singleton
+    /// above — `shared` in fact had zero callers before PSH.1. An instance property here
+    /// would be written by the adaptor's object and read by `shared`'s, so the flush would
+    /// find nil forever and quietly do nothing. Static storage is seen by both.
+    private static var pendingDeviceToken: String?
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         // Convert device token to hex string for APNs
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
 
-        pendingDeviceToken = tokenString
+        Self.pendingDeviceToken = tokenString
 
         // Save APNs token to Supabase
-        saveAPNsTokenToSupabase(token: tokenString)
+        Self.saveAPNsTokenToSupabase(token: tokenString)
     }
 
     /// APNs refused to issue a device token.
@@ -109,10 +127,42 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
 
     /// Store the token we already hold, now that a user has signed in.
     ///
-    /// Called from `SupabaseAuthService` on the `signedIn` auth-state event.
-    func flushPendingAPNsToken() {
+    /// Called from `SupabaseAuthService` on the `signedIn` auth-state event. STATIC on
+    /// purpose: see the note on `pendingDeviceToken`. An instance method here would be
+    /// called on the `shared` singleton while the token lives on SwiftUI's own delegate
+    /// instance, and would never find anything.
+    ///
+    /// This also covers the second-user case. APNs only hands out a token once per launch,
+    /// so if one person signs out and another signs in without relaunching, nothing would
+    /// otherwise write the new person's token. The token is kept for the whole launch and
+    /// re-saved against whoever signs in.
+    static func flushPendingAPNsToken() {
         guard let token = pendingDeviceToken else { return }
         saveAPNsTokenToSupabase(token: token)
+    }
+
+    /// Detach this device from the account that is signing out.
+    ///
+    /// Without this, the row keeps pointing at a handset the person no longer holds, and
+    /// the next occupant of the phone receives their notifications — denial reasons, chat
+    /// previews, session changes. That was harmless only while nothing was ever delivered;
+    /// PSH.1 is the change that makes it real.
+    static func clearAPNsTokenOnSignOut(userId: String) {
+        Task {
+            do {
+                try await SupabaseManager.shared.client
+                    .from("users")
+                    .update([
+                        "apns_token": AnyJSON.null,
+                        "apns_environment": AnyJSON.null
+                    ])
+                    .eq("id", value: userId.lowercased())
+                    .execute()
+                print("✅ [Push] Detached this device from the signed-out account.")
+            } catch {
+                print("‼️ [Push] FAILED to clear APNs token on sign-out — this device may still receive that account's notifications: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Save APNs device token to Supabase users table, together with the Apple push
@@ -123,7 +173,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     /// found happening to every push this app has ever sent. The sender reads this column to
     /// choose the right endpoint per token, so a development install and a TestFlight install
     /// can both work at once.
-    private func saveAPNsTokenToSupabase(token: String) {
+    private static func saveAPNsTokenToSupabase(token: String) {
         guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
             print("⚠️ [Push] APNs token received before sign-in; holding it until a session exists.")
             return
@@ -147,8 +197,11 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
 
                 print("✅ [Push] APNs token stored (\(environment.rawValue)).")
 
-                // The token is safely stored; stop holding it for a post-sign-in retry.
-                await MainActor.run { self.pendingDeviceToken = nil }
+                // NOTE: pendingDeviceToken is deliberately NOT cleared here. APNs issues a
+                // token once per launch, so if this person signs out and somebody else signs
+                // in on the same handset without relaunching, the token has to still be
+                // available to write against the new account. Holding it for the whole
+                // launch is what makes that work.
             } catch {
                 // Deliberately loud. The previous version swallowed this into a bare print with
                 // no marker, so a token that never reached the database looked identical to one
@@ -214,6 +267,12 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         case .photoCritique:
             // Process photo critique notification
             handlePhotoCritiqueNotification(userInfo: userInfo)
+        case .timeOffSubmitted, .timeOffApproved, .timeOffDenied, .timeOffPartiallyApproved:
+            handleTimeOffNotification(userInfo: userInfo, type: notificationType)
+        case .workflowStepScheduled:
+            notificationCenter.post(name: Notification.Name("didReceiveWorkflowStepNotification"),
+                                     object: nil,
+                                     userInfo: userInfo)
         case .unknown:
             print("Received unknown notification type: \(type)")
         }
@@ -330,6 +389,27 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                                  userInfo: userInfo)
     }
     
+    /// Handle time-off notifications (submitted, approved, denied, partially approved).
+    ///
+    /// Sent by the `trg_time_off_notification` trigger on `time_off_requests`, so it fires
+    /// whether the decision was made from this app or from the web app.
+    private func handleTimeOffNotification(userInfo: [AnyHashable: Any], type: NotificationType) {
+        let requestId = userInfo["requestId"] as? String
+        let status = userInfo["status"] as? String ?? "unknown"
+
+        print("Received time off notification: \(type.rawValue), request: \(requestId ?? "n/a"), status: \(status)")
+
+        // Distinguish "somebody needs you to decide" from "your request was decided", since
+        // the two land on different screens.
+        let name = type == .timeOffSubmitted
+            ? "didReceiveTimeOffRequestNotification"
+            : "didReceiveTimeOffDecisionNotification"
+
+        notificationCenter.post(name: Notification.Name(name),
+                                 object: nil,
+                                 userInfo: userInfo)
+    }
+
     /// Handle photo critique notifications
     private func handlePhotoCritiqueNotification(userInfo: [AnyHashable: Any]) {
         guard let critiqueId = userInfo["critiqueId"] as? String,

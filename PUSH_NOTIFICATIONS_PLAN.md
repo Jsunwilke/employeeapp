@@ -48,9 +48,13 @@ this plan does.
 
 Verified against the live list of deployed functions:
 
-- Three functions are not deployed at all: send-notification, chat-notification and
+- Three functions were not deployed at all: send-notification, chat-notification and
   clock-reminder. Chat pushes, clock reminders and daily report reminders therefore
-  cannot happen, regardless of anything else.
+  could not happen, regardless of anything else. RESOLVED IN PART on 2026-07-27:
+  send-notification is now deployed and verified delivering to a real device. The other
+  two had their code corrected but are deliberately left undeployed, because deploying
+  them would start firing chat pushes and clock reminders for everybody, which is a
+  behaviour decision rather than a bug fix.
 - Two completely different functions share the name send-notification, one in each
   repository. This repository's version sends directly to Apple and reads the Apple
   token column. The web repository's version drains a queue table and sends through

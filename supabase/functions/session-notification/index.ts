@@ -1,192 +1,19 @@
-// Session Notification Edge Function (Standalone - APNs code inlined)
-// Called by Supabase webhook when sessions are created/updated
+// Session Notification Edge Function
+// Fired by the trg_session_notification trigger on public.sessions (INSERT/UPDATE/DELETE).
+//
+// PSH.1 (2026-07-27): the APNs helper code that used to be inlined here has been removed in
+// favour of the shared module. The inlining was justified as being "for dashboard
+// deployment"; the CLI deploy bundles the import correctly, and keeping two copies of the
+// push plumbing is how one copy silently keeps a bug the other one fixed.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as jose from "https://deno.land/x/jose@v4.14.4/index.ts";
-
-// ============================================================================
-// APNs Helper Code (inlined from _shared/apns.ts for dashboard deployment)
-// ============================================================================
-
-const APNS_PRODUCTION = "https://api.push.apple.com";
-const APNS_SANDBOX = "https://api.sandbox.push.apple.com";
-
-interface APNsConfig {
-  keyId: string;
-  teamId: string;
-  bundleId: string;
-  privateKey: string;
-  // NOTE (PSH.1): there is deliberately no `production` field. The endpoint is chosen per
-  // TOKEN from users.apns_environment, not once for the whole project. A single global
-  // switch is what broke every push in this app: it said production while the app was
-  // signed for sandbox, and Apple answered 400 BadDeviceToken to all of them. Reinstating
-  // a config-wide flag would reintroduce exactly that failure.
-}
-
-interface APNsPayload {
-  aps: {
-    alert?: {
-      title?: string;
-      subtitle?: string;
-      body?: string;
-    } | string;
-    badge?: number;
-    sound?: string | { name: string; volume?: number };
-    "content-available"?: number;
-    "mutable-content"?: number;
-    category?: string;
-    "thread-id"?: string;
-  };
-  [key: string]: unknown;
-}
-
-interface SendResult {
-  success: boolean;
-  deviceToken: string;
-  apnsId?: string;
-  error?: string;
-  statusCode?: number;
-}
-
-async function generateAPNsToken(config: APNsConfig): Promise<string> {
-  const privateKey = await jose.importPKCS8(config.privateKey, "ES256");
-  const jwt = await new jose.SignJWT({})
-    .setProtectedHeader({
-      alg: "ES256",
-      kid: config.keyId,
-    })
-    .setIssuer(config.teamId)
-    .setIssuedAt()
-    .sign(privateKey);
-  return jwt;
-}
-
-async function sendPushNotification(
-  deviceToken: string,
-  payload: APNsPayload,
-  config: APNsConfig,
-  useProduction: boolean
-): Promise<SendResult> {
-  try {
-    const token = await generateAPNsToken(config);
-    const baseUrl = useProduction ? APNS_PRODUCTION : APNS_SANDBOX;
-    const url = `${baseUrl}/3/device/${deviceToken}`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "authorization": `bearer ${token}`,
-        "apns-topic": config.bundleId,
-        "apns-push-type": "alert",
-        "apns-priority": "10",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const apnsId = response.headers.get("apns-id");
-
-    if (response.ok) {
-      return { success: true, deviceToken, apnsId: apnsId || undefined };
-    } else {
-      const errorBody = await response.json().catch(() => ({}));
-      return {
-        success: false,
-        deviceToken,
-        apnsId: apnsId || undefined,
-        error: errorBody.reason || "Unknown error",
-        statusCode: response.status,
-      };
-    }
-  } catch (error) {
-    return {
-      success: false,
-      deviceToken,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
-}
-
-/** A device token together with the Apple push service that minted it. */
-interface TokenTarget {
-  token: string;
-  /** 'sandbox' | 'production', or null for tokens stored before PSH.1. */
-  environment: string | null;
-}
-
-/**
- * Send to each device on the endpoint that matches ITS OWN token.
- *
- * PSH.1: previously every token went to whichever endpoint the global APNS_PRODUCTION
- * secret named, so a development install and a TestFlight install could not both work —
- * and in practice neither did, because the flag said production while the app was signed
- * for sandbox. Apple's reply to every push was 400 BadDeviceToken.
- *
- * A token whose environment is unknown (stored before PSH.1, so NULL in the database) is
- * tried on production first and then on sandbox. That costs one wasted request for older
- * development devices and nothing at all once the device's next launch records its real
- * environment. Guessing a single endpoint for those would silently drop them exactly as
- * before.
- */
-async function sendPushNotificationBatch(
-  targets: TokenTarget[],
-  payload: APNsPayload,
-  config: APNsConfig
-): Promise<SendResult[]> {
-  const results = await Promise.all(
-    targets.map(async ({ token, environment }) => {
-      if (environment === "production" || environment === "sandbox") {
-        return await sendPushNotification(
-          token, payload, config, environment === "production"
-        );
-      }
-
-      // Unknown environment: try production, fall back to sandbox.
-      const first = await sendPushNotification(token, payload, config, true);
-      if (first.success || first.error !== "BadDeviceToken") {
-        return first;
-      }
-      return await sendPushNotification(token, payload, config, false);
-    })
-  );
-  return results;
-}
-
-function createAlertPayload(
-  title: string,
-  body: string,
-  data?: Record<string, unknown>
-): APNsPayload {
-  return {
-    aps: {
-      alert: { title, body },
-      sound: "default",
-    },
-    ...(data || {}),
-  };
-}
-
-function getAPNsConfigFromEnv(): APNsConfig {
-  const keyId = Deno.env.get("APNS_KEY_ID");
-  const teamId = Deno.env.get("APNS_TEAM_ID");
-  const bundleId = Deno.env.get("APNS_BUNDLE_ID");
-  const privateKey = Deno.env.get("APNS_PRIVATE_KEY");
-  // APNS_PRODUCTION is deliberately NOT read. See the note on APNsConfig.
-
-  if (!keyId || !teamId || !bundleId || !privateKey) {
-    throw new Error(
-      "Missing required APNs environment variables: APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID, APNS_PRIVATE_KEY"
-    );
-  }
-
-  return {
-    keyId,
-    teamId,
-    bundleId,
-    privateKey: privateKey.replace(/\\n/g, "\n"),
-  };
-}
+import {
+  sendPushNotificationBatch,
+  createAlertPayload,
+  getAPNsConfigFromEnv,
+  type TokenTarget,
+} from "../_shared/apns.ts";
 
 // ============================================================================
 // Main Edge Function
@@ -373,12 +200,19 @@ serve(async (req) => {
 
     console.log(`Session notification: ${successful}/${deviceTokens.length} sent`);
     if (failed.length > 0) {
-      console.log(`Failed notifications:`, failed);
+      // Reasons only. SendResult carries the device token, which is a per-device
+      // credential and must not be written to a log the whole team can read.
+      console.log(
+        `Failed notifications:`,
+        failed.map((f) => ({ error: f.error, statusCode: f.statusCode }))
+      );
     }
 
     return new Response(
       JSON.stringify({
-        success: true,
+        // True only if at least one device was actually reached. Hardcoding true here is
+        // what let "Apple rejected every token" read as a success to the trigger.
+        success: successful > 0,
         sent: successful,
         failed: failed.length,
         sessionId,

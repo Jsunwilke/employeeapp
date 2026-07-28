@@ -4,10 +4,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  sendPushNotification,
   sendPushNotificationBatch,
   createAlertPayload,
   getAPNsConfigFromEnv,
+  type TokenTarget,
 } from "../_shared/apns.ts";
 
 const corsHeaders = {
@@ -70,7 +70,12 @@ serve(async (req) => {
       );
     }
 
-    let deviceTokens: string[] = directTokens || [];
+    // Tokens passed in directly carry no recorded environment, so they are resolved the
+    // same way a pre-PSH.1 stored token is: production first, sandbox on BadDeviceToken.
+    let deviceTokens: TokenTarget[] = (directTokens || []).map((token) => ({
+      token,
+      environment: null,
+    }));
 
     // If userIds provided, look up their device tokens
     if (userIds && userIds.length > 0) {
@@ -80,7 +85,7 @@ serve(async (req) => {
 
       const { data: users, error } = await supabase
         .from("users")
-        .select("id, apns_token")
+        .select("id, apns_token, apns_environment")
         .in("id", userIds.map((id) => id.toLowerCase()))
         .not("apns_token", "is", null);
 
@@ -97,16 +102,30 @@ serve(async (req) => {
 
       deviceTokens = [
         ...deviceTokens,
-        ...(users?.map((u) => u.apns_token).filter(Boolean) || []),
+        ...(users || [])
+          .filter((u) => Boolean(u.apns_token))
+          .map((u) => ({
+            token: u.apns_token as string,
+            environment: (u.apns_environment as string | null) ?? null,
+          })),
       ];
     }
 
     if (deviceTokens.length === 0) {
+      // Reported as success:false deliberately. Nobody was reached, and PSH.1 exists
+      // because this system reported success at every layer while delivering nothing.
+      // "Asked to notify somebody who has no device" is a real, actionable outcome —
+      // it is how you discover a user whose token never got stored.
+      console.warn(
+        `No device tokens found for ${userIds?.length ?? 0} requested user(s) — nobody was notified.`
+      );
       return new Response(
         JSON.stringify({
-          success: true,
-          message: "No device tokens found",
+          success: false,
+          reason: "no_device_tokens",
+          message: "No device tokens found for the requested recipients",
           sent: 0,
+          failed: 0,
         }),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -141,15 +160,25 @@ serve(async (req) => {
     );
 
     if (failed.length > 0) {
-      console.log("Failed notifications:", JSON.stringify(failed, null, 2));
+      // Reasons only — SendResult carries the device token, a per-device credential.
+      console.log(
+        "Failed notifications:",
+        JSON.stringify(failed.map((f) => ({ error: f.error, statusCode: f.statusCode })), null, 2)
+      );
     }
 
     return new Response(
       JSON.stringify({
-        success: true,
+        // True only if at least one device was actually reached. Previously this was
+        // hardcoded true, so a send in which Apple rejected every single token — which
+        // is what happened to every push this app sent before PSH.1 — was reported as
+        // a success to the caller.
+        success: successful > 0,
         sent: successful,
         failed: failed.length,
-        results,
+        // Device tokens are deliberately omitted. The caller does not need them and
+        // they are per-device credentials; only the failure reasons are returned.
+        failures: failed.map((f) => ({ error: f.error, statusCode: f.statusCode })),
       }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

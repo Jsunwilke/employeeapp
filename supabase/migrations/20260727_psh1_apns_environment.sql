@@ -22,6 +22,25 @@
 --   * Captura does not read a push token.
 -- Reversible with: ALTER TABLE public.users DROP COLUMN apns_environment;
 
+-- Also carried forward from the deleted migration: the extensions. pg_net in particular is
+-- a hard dependency of the notification triggers (net.http_post). Both are already present
+-- on this database via the web repo's cron migrations, so these are no-ops in practice —
+-- restated so the migration history does not depend on that coincidence.
+CREATE EXTENSION IF NOT EXISTS pg_net;
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+-- Carried forward from 20241228_apns_and_notifications.sql, which is DELETED in this same
+-- commit. That file's three cron.schedule calls all still contained the literal placeholder
+-- YOUR_PROJECT_REF and were verified never to have been registered (cron.job holds none of
+-- clock-in-reminder, clock-out-reminder or daily-report-reminder), so the file could never
+-- have run as written. Its one real, applied statement was this column, which does exist in
+-- production — so it is restated here rather than lost from the migration history.
+ALTER TABLE public.users
+  ADD COLUMN IF NOT EXISTS apns_token TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_users_apns_token
+  ON public.users(apns_token) WHERE apns_token IS NOT NULL;
+
 ALTER TABLE public.users
   ADD COLUMN IF NOT EXISTS apns_environment TEXT;
 

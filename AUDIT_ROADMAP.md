@@ -1159,9 +1159,44 @@ other rebases onto it.
 > `clock-reminder`), and **two different functions in two repos share that slug**, so the
 > canonical one must be chosen before anyone deploys.
 >
-> **Build is gated on a read-only live-DB probe** (`scripts/psh1_probe.sql`) that has not
-> yet run — if a session trigger already exists and PSH.1 adds another, every session
-> change fires twice on a table the web app shares.
+> **UPDATE 2026-07-27, after the live-DB read ran and the fix shipped.** The probe
+> (`scripts/psh1_probe.sql`) confirmed every link healthy: `trg_session_notification`
+> present and ENABLED, the vault secret `service_role_key` present, 22 users holding valid
+> 64-char tokens. Apple then confirmed the diagnosis directly — sending to a real token
+> returned `error: "BadDeviceToken", statusCode: 400`. **Fixed and verified end to end:**
+> `sent: 1, failed: 0`, operator confirmed the notification arrived on the device.
+> Steps 1–4 of `PUSH_NOTIFICATIONS_PLAN.md` are done, including a `time_off_requests`
+> trigger that pushes to approvers on submit and to the requester on a decision.
+>
+> **Two more roadmap claims were wrong, both corrected by the live read:**
+> `public.notification_queue` DOES NOT EXIST, so `daily-workflow-check` had been FAILING
+> its hourly insert rather than filling a queue nobody drained; and `users.fcm_token` does
+> not exist either (only an orphaned `fcm_token_updated_at`), so the stray iOS writer had
+> been erroring on every launch. `DATABASE_SCHEMA.md` still lists `fcm_token` and is stale.
+
+#### PSH.2 — carried out of PSH.1, NOT fixed (found 2026-07-27)
+
+- [ ] **Two web-app writers of `task_notifications` are broken against the live schema and
+  have therefore never once succeeded.** `id` is `text NOT NULL` with NO default and the
+  read flag is `is_read`, not `read` — both verified live.
+  `src/services/equipmentNotifications.js:26-37` omits `id` AND writes non-existent
+  `reference_id` / `reference_type` columns; `src/services/workflowNotificationService.js:91-101`
+  omits `id` and writes `read:`. (The third instance, in `daily-workflow-check`, WAS fixed
+  in PSH.1 because that function was already being edited.) These are in-app bell rows in
+  the web app, a different feature from push, which is why they were recorded rather than
+  swept into a push fix.
+- [ ] **The orphaned `users.fcm_token_updated_at` column** should be dropped. Deliberately
+  not done in PSH.1: it is destructive on a table shared with the web app and Captura, and
+  `UserProfileService`'s full-row update encodes that field, so it needs its own impact
+  trace and sign-off.
+- [ ] **`chat-notification` and `clock-reminder` are still not deployed.** Their code was
+  corrected in PSH.1 (they were passing the old token shape into the changed shared
+  signature) but deploying them is a behaviour change — chat pushes and clock reminders
+  would start firing for everyone — so it is a deliberate decision, not a leftover.
+- [ ] **The stale credentials in `~/Desktop/Focal-Point-Supabase/.env.local`**: both
+  `SUPABASE_DB_PASSWORD` and the password embedded in `SUPABASE_DB_URL` fail
+  authentication, and `SUPABASE_DB_HOST` points at `db.<ref>.supabase.co`, which no longer
+  resolves. Live SQL now has to go through the Management API.
 
 #### Original entry, 2026-07-27 (superseded — kept for the record)
 

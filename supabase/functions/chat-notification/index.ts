@@ -5,6 +5,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   sendPushNotificationBatch,
+  type TokenTarget,
   createAlertPayload,
   getAPNsConfigFromEnv,
 } from "../_shared/apns.ts";
@@ -89,7 +90,7 @@ serve(async (req) => {
     // Get APNs tokens for recipients
     const { data: users, error } = await supabase
       .from("users")
-      .select("id, apns_token")
+      .select("id, apns_token, apns_environment")
       .in("id", recipientIds.map((id) => id.toLowerCase()))
       .not("apns_token", "is", null);
 
@@ -98,7 +99,12 @@ serve(async (req) => {
       throw error;
     }
 
-    const deviceTokens = users?.map((u) => u.apns_token).filter(Boolean) || [];
+    const deviceTokens: TokenTarget[] = (users || [])
+      .filter((u) => Boolean(u.apns_token))
+      .map((u) => ({
+        token: u.apns_token as string,
+        environment: (u.apns_environment as string | null) ?? null,
+      }));
 
     if (deviceTokens.length === 0) {
       return new Response(

@@ -89,9 +89,15 @@ class SupabaseAuthService: ObservableObject {
                         // APNs hands us the device token during launch, which on a first-ever
                         // launch is before anyone has signed in — so it had nobody to attach to
                         // and was lost until the next cold launch. Store it now.
-                        PushNotificationManager.shared.flushPendingAPNsToken()
+                        PushNotificationManager.flushPendingAPNsToken()
 
                     case .signedOut:
+                        // Detach this handset from the account BEFORE we forget who it was,
+                        // or the next person to sign in on this phone receives their
+                        // notifications.
+                        if let previousUserId = self.currentUser?.id.uuidString {
+                            PushNotificationManager.clearAPNsTokenOnSignOut(userId: previousUserId)
+                        }
                         self.currentUser = nil
                         self.isAuthenticated = false
                         print("[SupabaseAuthService] User signed out")
