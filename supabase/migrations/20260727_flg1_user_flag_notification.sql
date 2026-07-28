@@ -141,6 +141,13 @@ EXCEPTION
   -- table shared with the web app and Captura. That is precisely the failure mode PSH.1 had
   -- to drop this trigger for, arriving by a different route. A notification is never worth
   -- losing the write it describes.
+  --
+  -- HONEST LIMIT, do not read "never" too literally: plpgsql's OTHERS matches every error
+  -- class EXCEPT query_canceled and assert_failure. The `authenticated` role carries an 8s
+  -- statement_timeout, so a timeout landing while control is inside this trigger still
+  -- propagates and still rolls the UPDATE back. That window is small -- net.http_post only
+  -- enqueues a row, it does not wait on the network -- but it is not zero, and claiming
+  -- otherwise would be the same kind of overstatement this file already had to correct.
   WHEN OTHERS THEN
     RAISE WARNING 'notify_user_flagged: push failed for user % (%): %', NEW.id, SQLSTATE, SQLERRM;
     RETURN NEW;

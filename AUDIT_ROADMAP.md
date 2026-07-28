@@ -1197,6 +1197,13 @@ other rebases onto it.
   today, and flag notes from now on. Fix is `ENABLE ROW LEVEL SECURITY` per partition, or
   revoking `authenticated` SELECT on them. Deliberately NOT done inside a flag fix: it is a
   shared-DB security change with its own blast radius and deserves its own decision.
+  ⚠️ **Sharpened by the independent review, and the distinction matters:** the hole is not
+  FLG.1's, but **the PII now flowing into it is.** `phase_o_audit_users` writes `to_jsonb(NEW)`
+  — the whole row — on every `users` change, so from now on every flag note is copied into a
+  cross-tenant-readable table. This is the PUB.1 lesson recurring: a redaction is only as good
+  as the number of STORES it covers, not call sites. Narrowing the app's column lists does
+  nothing about this one. **Until the partitions are fixed, treat a flag note as readable by
+  any employee of any tenant.** That is the strongest argument for doing this next.
 - [ ] **Flagging works for org ADMINS only, not managers.** RLS `users_update_org` is
   `(id = auth.uid()::text OR is_admin_of_org(organization_id))`, so a non-admin can only
   update their own row — while the UI gates `FlagUserView` on `Permissions.has("users",

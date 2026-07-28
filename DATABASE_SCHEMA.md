@@ -971,19 +971,20 @@ This is a Foreign Key to `organizations.id`.<fk table='organizations' column='id
 | overtime_threshold | integer (integer) | YES | - |
 | phone | string (text) | YES | - |
 | salary_amount | number (double precision) | YES | - |
-<!-- USERS TABLE CORRECTIONS, verified against the LIVE database 2026-07-27/28 (FLG.1).
-     THIS FILE HAS BEEN WRONG ABOUT THIS TABLE AND THAT IS EXPENSIVE. `fcm_token` is listed
-     here but DOES NOT EXIST on the live table; code written against this document therefore
-     failed silently for months (PSH.1 found four such mechanisms). Only `fcm_token_updated_at`
-     survives, orphaned, and dropping it is still open.
-     `apns_token`/`apns_environment` were added by PSH.1 and were missing from this file.
-     `flag_note`/`flagged_by` were added by FLG.1 — before that, flagging a user could never
-     work, because TeamService wrote all three flag columns and only `is_flagged` existed.
-     THE LIVE DATABASE IS THE AUTHORITY, NOT THIS FILE. Query it before trusting a row here;
-     the recipe is in the psh-push-notifications memory (psql does NOT work on this project). -->
-
 | state | string (text) | YES | - |
 | zip_code | string (text) | YES | - |
+
+> **USERS TABLE CORRECTIONS — verified against the LIVE database 2026-07-27/28 (PSH.1, FLG.1).**
+> This file has been wrong about this table, and it was expensive. `fcm_token` was listed here
+> and **does not exist**, so code written against this document failed silently for months —
+> PSH.1 found four separate mechanisms in that state, every one invisible from the repo because
+> the code looked correct while targeting a column that is not there. Only the orphaned
+> `fcm_token_updated_at` survives; dropping it is still open.
+> `apns_token` / `apns_environment` were added by PSH.1 and were missing here.
+> `flag_note` / `flagged_by` were added by FLG.1 — before that, flagging a user could never
+> work, because `TeamService` wrote all three flag columns and only `is_flagged` existed.
+> **The live database is the authority, not this file.** Query it before trusting a row above;
+> the recipe is in the `psh-push-notifications` memory (`psql` does NOT work on this project).
 | preferences | unknown (jsonb) | YES | - |
 | email_notifications | unknown (jsonb) | YES | - |
 | notification_preferences | unknown (jsonb) | YES | - |

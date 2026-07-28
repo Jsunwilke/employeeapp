@@ -91,6 +91,12 @@ struct UnflagUserView: View {
             // feature (AMB.4).
             .tabBarClearance()
             .onAppear {
+                // FLG.1: gated on the permission, not just the rendered branch. This is the
+                // ONE query that deliberately returns flag_note and flagged_by, and it was
+                // firing even for someone shown "Access Denied" -- so the note reached a
+                // device that was being told it had no access. The view's own guard is not a
+                // fetch guard.
+                guard hasPermission else { return }
                 loadFlaggedUsers()
             }
         }
