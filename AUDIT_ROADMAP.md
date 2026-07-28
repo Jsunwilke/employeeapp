@@ -1127,7 +1127,8 @@ other rebases onto it.
   tappable is a FEATURE (a detail screen, and write methods against the shared DB if
   editing is wanted) and belongs to its own phase, not to a restyle.
 
-### FLG.1 — FLAGGING A USER HAS NEVER WORKED (FIXED 2026-07-28, operator smoke pending)
+### FLG.1 — FLAGGING A USER HAS NEVER WORKED (FIXED 2026-07-28 — OPERATOR SMOKE PASSED
+2026-07-28, "it all worked": manager flag delivered end to end on device)
 
 - [x] **The defect.** `TeamService.flagUser` wrote `is_flagged`, `flag_note` and `flagged_by`
   to the SHARED `public.users` table. **Only `is_flagged` existed.** PostgREST rejects a
@@ -1238,9 +1239,10 @@ other rebases onto it.
   `archive_step_legacy_fields`) — same shape as the partitions, all currently 0 rows or
   non-PII, already named in `RLS_AUDIT.md` §181. The backup tables repopulate, so worth
   closing.
-- [ ] Policy note from FLG.2, stated rather than assumed: a users-edit manager can now flag
-  an org ADMIN, and can clear a flag an admin set. That follows from "allow managers to
-  flag" but was never separately decided.
+- [x] Policy note from FLG.2 — **DECIDED by the operator 2026-07-28: "anyone should be
+  flaggable."** A users-edit manager can flag an org admin and clear a flag an admin set;
+  that is intended behaviour, not an oversight. No code change; recorded so nobody
+  "fixes" it later.
 - [ ] **`FlaggedStatusView.swift` is dead code carrying the same defect this fix is named
   after.** No mount point anywhere in the app, and its `requestUnflag()` writes
   `unflag_request_note` and `is_unflag_requested` — **neither column exists** (verified live).
