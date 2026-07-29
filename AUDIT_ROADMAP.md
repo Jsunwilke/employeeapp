@@ -1338,7 +1338,12 @@ exception handler was sabotage-tested (a raising transport did not roll back the
   (both clients insert the sessions row BEFORE the day rows, so an INSERT trigger on
   `sessions` can never see the crew — that path never once had a recipient and was
   removed rather than kept looking wired).
-- [ ] **Clock-in / clock-out / daily-report reminders — BUILT, NOT YET LIVE.** The old
+- [x] **Clock-in / clock-out / daily-report reminders — LIVE (applied 2026-07-29 on the
+  operator's direct instruction, clearing the earlier classifier block).** Three cron
+  jobs verified in cron.job (psh2-clock-in-reminders */30, psh2-clock-out-reminders and
+  psh2-report-reminders hourly); all three dispatchers fired once in a rolled-back
+  transaction with zero errors, and the hour-gated branch queries proven standalone
+  against the live schema. The old
   `clock-reminder` edge function was unbuildable-on (four defects: `clock_in_time` /
   `clock_out_time` columns that do not exist, the removed `sessions.photographers`,
   UTC-vs-local wall-clock comparison, no auth gate) and was DELETED, repo and remote.
