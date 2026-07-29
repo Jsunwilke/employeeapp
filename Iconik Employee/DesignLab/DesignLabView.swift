@@ -42,9 +42,12 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     /// operator confirmed both device smokes on the converted screens — a
     /// validation reference outlives the port it validates, not the phase.
     case timeOff
-    /// AMB.11's, mocked early: the operator flagged the shift detail's job box
-    /// bar, and inventorying the live table turned a geometry fix into a design
-    /// question. Four options against the real distribution of box states.
+    /// AMB.11's. Started as four options against the real distribution of box
+    /// states; the operator chose the scrubber 2026-07-29 and it SHIPPED to both
+    /// the shift detail and the manager tracker. What remains here is a
+    /// validation reference — the production types over sample data the real
+    /// screens cannot conjure, plus a reproduction of the bar it replaced. It is
+    /// deleted once the device smoke is confirmed.
     case jobBoxTrack
 
     var id: String { rawValue }
@@ -78,7 +81,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff:
             return "Five surfaces. The balance moves out of Settings to the top of the screen it is about, status gets ONE rendering instead of three, and the manager queue admits it is a queue."
         case .jobBoxTrack:
-            return "Four ways to draw a box's progression, against the real distribution of box states. Only 10% of boxes walk all four stages — today's bar ticks the ones that were skipped."
+            return "The shipped scrubber, drawn by the production types the real screens use. Five real box states behind a picker, with the bar it replaced underneath for comparison."
         }
     }
 
