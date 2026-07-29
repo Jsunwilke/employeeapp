@@ -42,6 +42,10 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     /// operator confirmed both device smokes on the converted screens — a
     /// validation reference outlives the port it validates, not the phase.
     case timeOff
+    /// AMB.11's, mocked early: the operator flagged the shift detail's job box
+    /// bar, and inventorying the live table turned a geometry fix into a design
+    /// question. Four options against the real distribution of box states.
+    case jobBoxTrack
 
     var id: String { rawValue }
 
@@ -50,6 +54,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
         case .timeOff: return "Time Off"
+        case .jobBoxTrack: return "Job Box Progress"
         }
     }
 
@@ -60,6 +65,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
         case .timeOff: return "AMB.8"
+        case .jobBoxTrack: return "AMB.11"
         }
     }
 
@@ -71,6 +77,8 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
         case .timeOff:
             return "Five surfaces. The balance moves out of Settings to the top of the screen it is about, status gets ONE rendering instead of three, and the manager queue admits it is a queue."
+        case .jobBoxTrack:
+            return "Four ways to draw a box's progression, against the real distribution of box states. Only 10% of boxes walk all four stages — today's bar ticks the ones that were skipped."
         }
     }
 
@@ -79,6 +87,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
         case .timeOff: return "calendar.badge.clock"
+        case .jobBoxTrack: return "shippingbox.fill"
         }
     }
 
@@ -91,6 +100,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return .purple
         case .palette: return .pink
         case .timeOff: return TimeOffMockup.featureTint
+        case .jobBoxTrack: return JobBoxTrackMockup.featureTint
         }
     }
 
@@ -100,6 +110,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
         case .timeOff: TimeOffMockup()
+        case .jobBoxTrack: JobBoxTrackMockup()
         }
     }
 }
