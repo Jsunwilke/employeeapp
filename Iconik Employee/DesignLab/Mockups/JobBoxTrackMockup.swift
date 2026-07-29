@@ -75,18 +75,10 @@ enum LabBoxStage: Int, CaseIterable, Identifiable {
 
     var id: Int { rawValue }
 
-    /// What the database actually stores, so the mockup is matching real values
-    /// rather than a paraphrase of them.
-    var stored: String {
-        switch self {
-        case .packed: return "Packed"
-        case .pickedUp: return "Picked Up"
-        case .leftJob: return "Left Job"
-        case .turnedIn: return "Turned In"
-        }
-    }
-
-    /// What a person says out loud.
+    /// What a person says out loud. The DATABASE stores "Packed" / "Picked Up" /
+    /// "Left Job" / "Turned In" (JobBoxStatus's raw values) — the difference is
+    /// only capitalisation, so the conversion can map on rawValue and does not
+    /// need a translation table.
     var label: String {
         switch self {
         case .packed: return "Packed"
