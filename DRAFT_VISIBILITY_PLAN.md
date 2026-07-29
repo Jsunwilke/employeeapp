@@ -1,7 +1,7 @@
 # PUB — draft visibility on the iOS schedule
 
 Plan doc for the PUB arc. Registered in the family registry,
-FocalPointProduction/docs/PHASES.md. One phase.
+~/Brain/projects/registry.md (formerly FocalPointProduction/docs/PHASES.md). One phase.
 
 Written 2026-07-25 from an operator decision. Not part of the AMB arc: AMB is a
 restyle and its D2 forbids behaviour changes inside a phase. This changes what a

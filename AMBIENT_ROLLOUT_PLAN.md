@@ -1,7 +1,7 @@
 # AMB — Ambient design language rollout (iOS employee app)
 
 Plan doc for the AMB arc. Registered in the family registry,
-FocalPointProduction/docs/PHASES.md. One phase per session.
+~/Brain/projects/registry.md (formerly FocalPointProduction/docs/PHASES.md). One phase per session.
 
 Written 2026-07-24, after AMB.1 (the schedule) shipped and passed operator
 smoke on device.

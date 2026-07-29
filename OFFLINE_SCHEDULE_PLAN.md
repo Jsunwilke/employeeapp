@@ -1,7 +1,7 @@
 # OFF — the offline schedule
 
 Plan doc for the OFF arc. Registered in the family registry,
-FocalPointProduction/docs/PHASES.md. Two phases.
+~/Brain/projects/registry.md (formerly FocalPointProduction/docs/PHASES.md). Two phases.
 
 Written 2026-07-25, from a defect found during PUB.1's audit and an operator
 question: photographers should be able to see their schedule with no signal.

@@ -1,7 +1,7 @@
 # CRS.1 — Captura Roster Save Hardening (plan)
 
 Proposed arc code CRS.1 (Captura Roster Save); register in
-FocalPointProduction/docs/PHASES.md at kickoff per the family naming rule.
+~/Brain/projects/registry.md (formerly FocalPointProduction/docs/PHASES.md) at kickoff per the family naming rule.
 Written 2026-07-23. Source: the four pre-existing weaknesses documented in the
 post-ship adversarial review of commit 6bf00ba — see CAPTURA_ROSTER_SAVE_ANALYSIS.md
 (Post-ship adversarial review section). None are regressions; all predate the

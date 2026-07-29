@@ -1,6 +1,6 @@
 # PSH.1 — Push notifications that actually reach a phone
 
-Arc PSH, registered in FocalPointProduction/docs/PHASES.md on 2026-07-27.
+Arc PSH, registered in ~/Brain/projects/registry.md (formerly FocalPointProduction/docs/PHASES.md) on 2026-07-27.
 Status: research complete, build gated on one live-database read.
 
 This plan is written for a non-engineer to read. No backticks anywhere, per the

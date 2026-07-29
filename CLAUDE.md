@@ -47,8 +47,7 @@ These are loaded into context every session because they're rules Jason's agents
 ## Key Reference Documents
 
 - **`AUDIT_ROADMAP.md`** — The per-item scope, plan links, and dated closeouts for the audit/fix program. Read it when the operator says "start phase N" or mentions the audit.
-- **`kickoffs/START_A_PHASE.md`** — Paste into a fresh session and name a phase to start work; it routes to the roster, loads the rules, and runs research → build → audit → verify → close out. One phase per session.
-- **`~/Desktop/FocalPointProduction/docs/PHASES.md`** — The Focal Point family arc registry. This app is the iOS app of the family: phases use family arc codes ARC.N registered THERE (naming rule; forward-only — shipped work isn't renamed).
+- **`~/Brain/projects/registry.md`** — The arc registry for all projects (moved from FocalPointProduction/docs/PHASES.md in BRAIN.3, 2026-07-29). Phases use arc codes ARC.N registered there (forward-only — shipped work isn't renamed). This repo's card: `~/Brain/projects/focal-point-ios.md`. To start a phase, say "Do ARC.N" — the start-phase skill replaces the retired kickoffs/START_A_PHASE.md (now in kickoffs/archive/). One phase per session.
 - **`DATABASE_SCHEMA.md`** — The shared Supabase schema reference.
 - **`.claude/MIGRATION_LESSONS.md`** — Firebase→Supabase migration lessons.
 

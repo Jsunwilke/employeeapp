@@ -192,7 +192,7 @@ Status: **Phase 1 in progress (2026-07-12).** Code done + committed. Claude prox
 
 Per-phase scope and closeouts for the AMB arc. Full plan, decisions D1–D9 and the
 lessons carried forward: `AMBIENT_ROLLOUT_PLAN.md`. Status board: the Phase menu in
-`kickoffs/START_A_PHASE.md`. Family registry row: `FocalPointProduction/docs/PHASES.md`.
+the start-phase skill (formerly `kickoffs/START_A_PHASE.md`). Family registry row: `~/Brain/projects/registry.md (formerly FocalPointProduction/docs/PHASES.md)`.
 
 This arc is a RESTYLE, not a rewrite — data layers, services, navigation shape and
 business rules are out of scope inside a phase (D2). It does not overlap Phase 4's
@@ -1671,7 +1671,7 @@ progress.
 ## PUB — draft visibility on the iOS schedule (arc, registered 2026-07-25)
 
 Plan and the six decisions P1–P6: `DRAFT_VISIBILITY_PLAN.md`. Family registry row:
-`FocalPointProduction/docs/PHASES.md`. One phase.
+`~/Brain/projects/registry.md (formerly FocalPointProduction/docs/PHASES.md)`. One phase.
 
 Deliberately NOT part of the AMB arc, whose D2 forbids behaviour changes inside a
 phase. Sequenced against AMB.3 because both touch `ScheduleView`'s per-day index.
