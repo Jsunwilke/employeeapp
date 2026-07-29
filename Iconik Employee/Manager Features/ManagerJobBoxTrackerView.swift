@@ -67,24 +67,12 @@ enum JobBoxStatusFilter: String, CaseIterable {
 }
 
 class ManagerJobBoxViewModel: ObservableObject {
-    // Supabase model for job boxes (must be at class scope)
-    struct SupabaseJobBox: Decodable {
-        let id: String
-        let shift_uid: String?
-        let status: String?
-        let photographer: String?
-        let updated_at: Date?
-        let box_number: String?
-        let organization_id: String?
-        let school: String?
-        let school_id: String?
-        let user_id: String?
-        let jobbox_number: String?
-        let card_number: String?
-        let card_id: String?
-        let event_date: Date?
-        let scanned_by: String?
-    }
+    // NOTE (2026-07-29): the intermediate SupabaseJobBox struct was deleted here. It
+    // duplicated JobBox and carried FIVE Firebase-era ghost fields (jobbox_number,
+    // card_number, card_id, event_date, scanned_by) plus updated_at — none of which
+    // exist on the live job_boxes table, so every one decoded nil on every row and the
+    // fallback chains reading them were dead. Fetches decode [JobBox] directly; the scan
+    // time is the `timestamp` column (see the note on JobBox.timestamp).
 
     @Published var allJobBoxes: [JobBoxWithEvent] = []
     @Published var selectedFilter: JobBoxFilter = .active
@@ -138,9 +126,12 @@ class ManagerJobBoxViewModel: ObservableObject {
 
         Task {
             do {
-                var jobBoxes: [SupabaseJobBox]
+                var jobBoxes: [JobBox]
 
-                // Build query based on filters
+                // Build query based on filters. The time filters run on `timestamp` —
+                // the column that exists and that every scan writes. They used to run on
+                // updated_at, which does not exist on job_boxes, so PostgREST rejected
+                // the whole query and this screen errored on EVERY load (2026-07-29).
                 if selectedFilter == .today && !isSearchingByCardNumber {
                     let startOfDay = calendar.startOfDay(for: Date())
                     let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
@@ -149,8 +140,8 @@ class ManagerJobBoxViewModel: ObservableObject {
                         .from("job_boxes")
                         .select()
                         .eq("organization_id", value: organizationID)
-                        .gte("updated_at", value: startOfDay.ISO8601Format())
-                        .lt("updated_at", value: endOfDay.ISO8601Format())
+                        .gte("timestamp", value: startOfDay.ISO8601Format())
+                        .lt("timestamp", value: endOfDay.ISO8601Format())
                         .execute()
                         .value
                 } else {
@@ -158,7 +149,7 @@ class ManagerJobBoxViewModel: ObservableObject {
                         .from("job_boxes")
                         .select()
                         .eq("organization_id", value: organizationID)
-                        .gte("updated_at", value: thirtyDaysAgo.ISO8601Format())
+                        .gte("timestamp", value: thirtyDaysAgo.ISO8601Format())
                         .execute()
                         .value
                 }
@@ -173,31 +164,19 @@ class ManagerJobBoxViewModel: ObservableObject {
         }
     }
 
-    private func processJobBoxRecords(_ records: [SupabaseJobBox]) async {
+    private func processJobBoxRecords(_ records: [JobBox]) async {
         // This will hold all job boxes
         var allBoxes: [JobBoxWithEvent] = []
 
         // Process each record
-        for record in records {
-            // Create JobBox from Supabase record
-            let jobBox = JobBox(
-                id: record.id,
-                shift_uid: record.shift_uid ?? "",
-                status: record.status ?? "Unknown",
-                photographer: record.photographer ?? record.scanned_by ?? "Unknown",
-                updated_at: record.updated_at,
-                box_number: record.box_number ?? record.jobbox_number,
-                organization_id: record.organization_id ?? "",
-                school: record.school,
-                school_id: record.school_id,
-                user_id: record.user_id
-            )
-
-            let schoolName = record.school ?? "Unknown School"
-            let jobboxNumber = record.jobbox_number ?? record.box_number ?? ""
-            let cardNumber = record.card_number ?? record.card_id ?? ""
-            let date = record.event_date ?? jobBox.updated_at ?? Date()
-            let photographerName = record.scanned_by ?? record.photographer ?? "Unknown"
+        for jobBox in records {
+            let schoolName = jobBox.school ?? "Unknown School"
+            let jobboxNumber = jobBox.boxNumber
+            // Card numbers belong to the SD-card feature; job_boxes rows never carried
+            // one (the old card_number/card_id reads were Firebase-era ghost columns).
+            let cardNumber = ""
+            let date = jobBox.timestamp ?? Date()
+            let photographerName = jobBox.photographer.isEmpty ? "Unknown" : jobBox.photographer
 
             // Create JobBoxWithEvent object
             let jobBoxWithEvent = JobBoxWithEvent(
@@ -332,9 +311,14 @@ class ManagerJobBoxViewModel: ObservableObject {
     func updateJobBoxStatus(jobBox: JobBoxWithEvent, newStatus: JobBoxStatus) {
         Task {
             do {
+                // `timestamp` is the scan-moment column that actually exists; writing
+                // updated_at (which does not) made PostgREST reject the whole UPDATE, so
+                // a manager's manual status correction had never once worked. Stamping
+                // now also makes the correction the shift's latest state, which is what
+                // the progression bar should show.
                 let updateData: [String: AnyJSON] = [
                     "status": .string(newStatus.rawValue),
-                    "updated_at": .string(Date().ISO8601Format())
+                    "timestamp": .string(Date().ISO8601Format())
                 ]
 
                 try await supabase

@@ -370,7 +370,7 @@ class DatabaseManager: ObservableObject {
                             shift_uid: dto.shift_uid ?? "",
                             status: dto.status ?? "",
                             photographer: dto.photographer ?? "",
-                            updated_at: dto.timestamp,
+                            timestamp: dto.timestamp,
                             box_number: dto.box_number,
                             organization_id: dto.organization_id ?? "",
                             school: dto.school,

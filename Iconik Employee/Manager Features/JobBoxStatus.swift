@@ -24,7 +24,16 @@ struct JobBox: Identifiable, Codable {
     let shift_uid: String
     let status: String
     let photographer: String
-    let updated_at: Date?
+    /// The scan moment, from the live table's `timestamp` column.
+    ///
+    /// This used to be `updated_at` — a column that DOES NOT EXIST on job_boxes. Because
+    /// it decoded as an optional it never errored; it was just nil on every row, and
+    /// `timestampDate` substituted "now" for every scan — so sorting for "the latest
+    /// scan" compared rows whose keys were all the moment of comparison, and the shift
+    /// detail's progression bar showed an effectively RANDOM one of the shift's scans.
+    /// The PSH.1 defect class (code that looks right reading a column that isn't there),
+    /// found live 2026-07-29 after the operator reported the progression not moving.
+    let timestamp: Date?
 
     // New fields from updated schema
     let box_number: String?
@@ -45,8 +54,10 @@ struct JobBox: Identifiable, Codable {
         JobBoxStatus(rawValue: status) ?? .unknown
     }
 
+    /// distantPast, not Date(): an undated row must LOSE to every dated row when picking
+    /// the latest scan — substituting "now" is what made the winner random.
     var timestampDate: Date {
-        updated_at ?? Date()
+        timestamp ?? .distantPast
     }
 
     enum CodingKeys: String, CodingKey {
@@ -54,12 +65,52 @@ struct JobBox: Identifiable, Codable {
         case shift_uid
         case status
         case photographer
-        case updated_at
+        case timestamp
         case box_number
         case organization_id
         case school
         case school_id
         case user_id
+    }
+}
+
+// Decodable lives in an extension so the memberwise initializer survives (the manager
+// tracker constructs JobBox by hand).
+extension JobBox {
+    /// The `timestamp` column is timestamptz and arrives as an ISO8601 string that may
+    /// or may not carry fractional seconds (both exist live). A decode that only handles
+    /// one form throws, and a thrown decode empties the WHOLE fetch — the failure would
+    /// present as "no job boxes", the empty-state class this project keeps paying for.
+    /// Same tolerant pattern as Session.created_at.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        // Tolerant of NULLs by necessity, not style: live 2026-07-29, 316 of 1055 rows
+        // have NULL shift_uid and 334 NULL photographer. One strict field would throw on
+        // the first such row and empty the manager tracker's org-wide fetch.
+        shift_uid = try c.decodeIfPresent(String.self, forKey: .shift_uid) ?? ""
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "Unknown"
+        photographer = try c.decodeIfPresent(String.self, forKey: .photographer) ?? ""
+        box_number = try c.decodeIfPresent(String.self, forKey: .box_number)
+        organization_id = try c.decodeIfPresent(String.self, forKey: .organization_id) ?? ""
+        school = try c.decodeIfPresent(String.self, forKey: .school)
+        school_id = try c.decodeIfPresent(String.self, forKey: .school_id)
+        user_id = try c.decodeIfPresent(String.self, forKey: .user_id)
+
+        if let date = try? c.decode(Date.self, forKey: .timestamp) {
+            timestamp = date
+        } else if let string = try? c.decode(String.self, forKey: .timestamp) {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let parsed = iso.date(from: string) {
+                timestamp = parsed
+            } else {
+                iso.formatOptions = [.withInternetDateTime]
+                timestamp = iso.date(from: string)
+            }
+        } else {
+            timestamp = nil
+        }
     }
 }
 
