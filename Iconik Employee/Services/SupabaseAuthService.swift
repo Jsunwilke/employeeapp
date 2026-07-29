@@ -98,11 +98,31 @@ class SupabaseAuthService: ObservableObject {
                         // and silently affects no rows.
                         self.currentUser = nil
                         self.isAuthenticated = false
+                        // Pending push deep links are pure in-memory state, so THIS clear
+                        // is safe here — and it must live here as well as in signOut(),
+                        // because an SDK-driven sign-out (revoked session, refresh
+                        // failure) never runs signOut() and would otherwise carry user
+                        // A's pending navigation into user B's session on a shared
+                        // device. (Fourth-round audit, F2.)
+                        TabBarManager.shared.clearPendingPushDestinations()
                         print("[SupabaseAuthService] User signed out")
 
                     case .tokenRefreshed:
                         self.currentUser = state.session?.user
                         print("[SupabaseAuthService] Token refreshed")
+
+                    case .initialSession:
+                        // A WARM launch restores the session from the keychain and never
+                        // emits .signedIn — which is why, before PSH.2, no device had
+                        // successfully written its push environment since PSH.1 shipped:
+                        // the only flush hook was .signedIn, and the APNs token usually
+                        // arrives after this event on a normal launch too. Flushing here
+                        // covers the restored-session path; the registration callback
+                        // itself covers the token-arrives-later ordering. (Session state
+                        // is owned by checkSession(); only the token flush lives here.)
+                        if state.session != nil {
+                            PushNotificationManager.flushPendingAPNsToken()
+                        }
 
                     case .userUpdated:
                         self.currentUser = state.session?.user
@@ -212,6 +232,11 @@ class SupabaseAuthService: ObservableObject {
         if let currentUserId = self.currentUser?.id.uuidString {
             await PushNotificationManager.clearAPNsTokenOnSignOut(userId: currentUserId)
         }
+
+        // 6c. Drop any push deep link that never resolved. On a shared device a pending
+        //     id surviving sign-out would navigate the NEXT user into the previous
+        //     user's destination on their first visit to that tab.
+        await MainActor.run { TabBarManager.shared.clearPendingPushDestinations() }
 
         // 7. PII + identity keys in UserDefaults (leave device prefs
         //    like appTheme alone — they are not account data)

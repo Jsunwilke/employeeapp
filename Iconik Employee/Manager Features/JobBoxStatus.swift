@@ -173,11 +173,12 @@ class JobBoxService {
     }
     
     // NOTE (PSH.1, 2026-07-27): registerDeviceToken was deleted here. It wrote the raw APNs
-    // device token into a `users.fcm_token` column that DOES NOT EXIST on the live database
-    // (verified — only the orphaned `fcm_token_updated_at` remains), so it errored into a
-    // swallowed print on every single launch. It was also not job-box-specific in any way:
-    // it duplicated PushNotificationManager's own token write. Token storage now lives in
-    // exactly one place, PushNotificationManager.saveAPNsTokenToSupabase.
+    // device token into a `users.fcm_token` column that DOES NOT EXIST on the live database,
+    // so it errored into a swallowed print on every single launch. It was also not
+    // job-box-specific in any way: it duplicated PushNotificationManager's own token write.
+    // (PSH.2, 2026-07-29: the orphaned fcm_token_updated_at companion column was dropped
+    // too.) Token storage now lives in exactly one place —
+    // PushNotificationManager.saveAPNsTokenToSupabase, writing user_devices.
 
     // Query all job boxes (for debugging purposes)
     func debugQueryAllJobBoxes(completion: @escaping ([JobBox]) -> Void) {

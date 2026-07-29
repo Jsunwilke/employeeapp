@@ -21,10 +21,12 @@ export interface APNsConfig {
   // users.apns_environment. Do not reintroduce a config-wide flag.
 }
 
-/** A device token together with the Apple push service that minted it. */
+/** A device token together with the Apple push service that minted it.
+ * PSH.2: rows come from public.user_devices (one per device) via _shared/tokens.ts,
+ * not from the dropped users.apns_token/apns_environment columns. */
 export interface TokenTarget {
   token: string;
-  /** 'sandbox' | 'production', or null for tokens stored before PSH.1. */
+  /** 'sandbox' | 'production', or null for tokens stored before the environment was recorded. */
   environment: string | null;
 }
 
@@ -45,7 +47,7 @@ interface APNsPayload {
   [key: string]: unknown;
 }
 
-interface SendResult {
+export interface SendResult {
   success: boolean;
   deviceToken: string;
   apnsId?: string;
@@ -54,13 +56,29 @@ interface SendResult {
 }
 
 /**
- * Generate a JWT token for APNs authentication
+ * Generate (or reuse) a JWT token for APNs authentication.
+ *
+ * CACHED (PSH.2 fix round, F6): Apple accepts a provider token for up to an hour and
+ * actively throttles token churn (TooManyProviderTokenUpdates). The original code minted
+ * a fresh ES256 JWT per device per send — harmless at one push a day, a real throttle
+ * risk once the chat trigger fans one message out to a conversation's every device.
+ * Module scope survives across requests for the lifetime of the function isolate; a cold
+ * isolate simply mints anew.
  */
-async function generateAPNsToken(config: APNsConfig): Promise<string> {
-  // Parse the private key
-  const privateKey = await jose.importPKCS8(config.privateKey, "ES256");
+let cachedToken: { jwt: string; mintedAt: number; keyId: string } | null = null;
+const TOKEN_TTL_MS = 45 * 60 * 1000; // refresh well inside Apple's 60-minute window
 
-  // Create JWT
+async function generateAPNsToken(config: APNsConfig): Promise<string> {
+  const now = Date.now();
+  if (
+    cachedToken &&
+    cachedToken.keyId === config.keyId &&
+    now - cachedToken.mintedAt < TOKEN_TTL_MS
+  ) {
+    return cachedToken.jwt;
+  }
+
+  const privateKey = await jose.importPKCS8(config.privateKey, "ES256");
   const jwt = await new jose.SignJWT({})
     .setProtectedHeader({
       alg: "ES256",
@@ -70,6 +88,7 @@ async function generateAPNsToken(config: APNsConfig): Promise<string> {
     .setIssuedAt()
     .sign(privateKey);
 
+  cachedToken = { jwt, mintedAt: now, keyId: config.keyId };
   return jwt;
 }
 

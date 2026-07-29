@@ -1296,60 +1296,140 @@ other rebases onto it.
 > not exist either (only an orphaned `fcm_token_updated_at`), so the stray iOS writer had
 > been erroring on every launch. `DATABASE_SCHEMA.md` still lists `fcm_token` and is stale.
 
-#### PSH.2 — carried out of PSH.1, NOT fixed (found 2026-07-27)
+#### PSH.2 — NOTIFICATION COVERAGE — SHIPPED 2026-07-29 (crons pending one unblock)
 
-- [ ] **FLAGGING A USER HAS NEVER WORKED, and it is not a push problem.**
-  `TeamService.flagUser` writes `is_flagged`, `flag_note` and `flagged_by`
-  (`Services/TeamService.swift:122-130`) — **only `is_flagged` exists on the live
-  `users` table.** Verified: `information_schema` returns `is_flagged` and nothing else
-  matching flag. The whole UPDATE therefore fails and every flag attempt has always
-  errored. Found while trying to test a flag notification, and it is why PSH.1 ships
-  **no** flag trigger: a notification for an action that cannot succeed is theatre.
-  ⚠️ PSH.1 briefly created `trg_user_flagged_notification` referencing those missing
-  columns, which would have made the trigger raise and ROLL BACK any `is_flagged`
-  update on a table shared with the web app. It was caught by testing, dropped live,
-  and verified gone; a plain `is_flagged` update was then proven unaffected. Whoever
-  fixes flagging should add the notification at the same time — the pattern is the
-  time-off trigger.
-- [ ] **One `apns_token` column cannot serve two devices.** A person signed in on an
-  iPhone and an iPad has one column between them, so only the most recently registered
-  device is reachable. PSH.1 narrowed the damage — sign-out only clears the row when the
-  stored token is *this* handset's, so signing out on the iPad no longer silences the
-  iPhone — but the real fix is one row per device (a `user_devices` table keyed by
-  token, carrying the environment), which every sender would then fan out over.
-- [ ] **A tapped push does not navigate anywhere.** Recognising a type means it is logged
-  and re-posted on `NotificationCenter`; of every push name the app posts, only
-  `didReceiveJobBoxNotification` has an observer (`ShiftDetailView`). This pre-dates
-  PSH.1 and applies to chat and session pushes too. The banner tells the person, which
-  is the deliverable; in-app deep linking is separate work.
-- [ ] **Time-off reasons now appear on the lock screen.** The submitted-request push
-  carries `reason` and the denial push carries `denial_reason`, which can be medical or
-  family detail. Deliberate — a notification with no substance is useless — but it
-  deserves a decision, and the lever is per-type notification preferences, which do not
-  exist (the `notification_preferences` and `email_notifications` columns are read by
-  nobody and there is no settings screen).
+Scope confirmed by the operator 2026-07-28. Everything below is applied to the LIVE
+database and deployed unless marked open. Each trigger was FIRED against a real row in a
+rolled-back transaction (counting `net.http_request_queue`), and the transport's
+exception handler was sabotage-tested (a raising transport did not roll back the write).
 
-- [ ] **Two web-app writers of `task_notifications` are broken against the live schema and
-  have therefore never once succeeded.** `id` is `text NOT NULL` with NO default and the
-  read flag is `is_read`, not `read` — both verified live.
-  `src/services/equipmentNotifications.js:26-37` omits `id` AND writes non-existent
-  `reference_id` / `reference_type` columns; `src/services/workflowNotificationService.js:91-101`
-  omits `id` and writes `read:`. (The third instance, in `daily-workflow-check`, WAS fixed
-  in PSH.1 because that function was already being edited.) These are in-app bell rows in
-  the web app, a different feature from push, which is why they were recorded rather than
-  swept into a push fix.
-- [ ] **The orphaned `users.fcm_token_updated_at` column** should be dropped. Deliberately
-  not done in PSH.1: it is destructive on a table shared with the web app and Captura, and
-  `UserProfileService`'s full-row update encodes that field, so it needs its own impact
-  trace and sign-off.
-- [ ] **`chat-notification` and `clock-reminder` are still not deployed.** Their code was
-  corrected in PSH.1 (they were passing the old token shape into the changed shared
-  signature) but deploying them is a behaviour change — chat pushes and clock reminders
-  would start firing for everyone — so it is a deliberate decision, not a leftover.
-- [ ] **The stale credentials in `~/Desktop/Focal-Point-Supabase/.env.local`**: both
-  `SUPABASE_DB_PASSWORD` and the password embedded in `SUPABASE_DB_URL` fail
-  authentication, and `SUPABASE_DB_HOST` points at `db.<ref>.supabase.co`, which no longer
-  resolves. Live SQL now has to go through the Management API.
+- [x] **One row per DEVICE: `public.user_devices`** (token PK, user_id FK, environment).
+  Replaces `users.apns_token`/`apns_environment` — an iPhone+iPad user is now reachable
+  on both devices; every sender fans out over the table and REAPS rows Apple pronounces
+  dead (410 Unregistered / BadDeviceToken). 22 tokens backfilled, then the old columns
+  (and the orphaned `fcm_token_updated_at`, operator sign-off 2026-07-28) were DROPPED.
+  Registration goes through the `register_push_device` SECURITY DEFINER RPC ("push" in
+  the name because `public.register_device` already belongs to the hardware registry —
+  found live at apply time) so a handset changing users can evict the stale owner's row;
+  RLS: own-row SELECT/DELETE only, anon revoked at creation (the AUD.2 lesson).
+  Also fixed: the environment write had NEVER succeeded (all 40 rows NULL) because the
+  only flush hook was the `.signedIn` event, which a warm launch never emits — the app
+  now also flushes on `.initialSession`.
+- [x] **Chat pushes wired**: `trg_chat_message_notification` AFTER INSERT ON `messages`
+  (system rows excluded) → `chat-notification`, which got THREE fixes before wiring:
+  it read `record.message_text` (the column is `text` — every body would have been
+  empty), it had NO caller-auth gate (now service-role only, like `send-notification`),
+  and it read the dropped users columns. One trigger covers both clients — web and iOS
+  insert into the same table.
+- [x] **Photo critique pushes wired**: insert-published + draft→publish transition
+  triggers on `photo_critiques` → target photographer; self-critiques stay silent.
+- [x] **Job box pushes wired**: `trg_job_box_notification` AFTER INSERT ON `job_boxes` →
+  the shift's crew minus the scanner; payload carries BOTH `scannedBy` (the handler's
+  required key) and `photographer` (the key JobBoxService actually reads).
+- [x] **Session pushes were DEAD AGAIN and are repaired.** The MD7 arc moved crew off
+  `sessions` onto `session_days`; `session-notification` still read
+  `record.photographers`, so every fire since the move exited "No assigned employees".
+  Now: crew resolves from `session_days` (or `crew_ids` captured by a new BEFORE DELETE
+  trigger — an AFTER trigger finds the day rows already cascade-deleted); UPDATE fires
+  only on is_published/school_name transitions (the old any-write trigger would have
+  spammed "Session Updated" on every job-box scan once recipients resolved again);
+  publish-transition renders as "New Session Assigned"; and a statement-level
+  `session_days` INSERT trigger sends the assignment push when the crew actually lands
+  (both clients insert the sessions row BEFORE the day rows, so an INSERT trigger on
+  `sessions` can never see the crew — that path never once had a recipient and was
+  removed rather than kept looking wired).
+- [ ] **Clock-in / clock-out / daily-report reminders — BUILT, NOT YET LIVE.** The old
+  `clock-reminder` edge function was unbuildable-on (four defects: `clock_in_time` /
+  `clock_out_time` columns that do not exist, the removed `sessions.photographers`,
+  UTC-vs-local wall-clock comparison, no auth gate) and was DELETED, repo and remote.
+  Its replacement is three SQL dispatchers + `cron.schedule` in
+  `supabase/migrations/20260729_psh2_reminder_crons.sql` (org-local timezones via
+  `organizations.preferences->>'timezone'`, the daily-workflow-check convention;
+  half-hour-grid windows so a late cron can neither skip nor double-remind). The
+  auto-mode classifier BLOCKED applying it live (reported in-session 2026-07-29);
+  apply the file as-is once unblocked, then verify `SELECT * FROM cron.job WHERE
+  jobname LIKE 'psh2-%'` shows three jobs.
+- [x] **A tapped push now navigates.** `PushNotificationManager` routes through
+  `TabBarManager` pending ids (the `selectedClassGroupJobId` consume-and-clear shape):
+  chat → the conversation, session/job box → the shift, critique → the critique sheet,
+  clock reminder → time tracking, report reminder → daily report, time-off submitted →
+  approvals, time-off decided → your requests, workflow step → tasks. The zero-observer
+  `NotificationCenter` posts were deleted; the one real observer
+  (`didReceiveJobBoxNotification`, ShiftDetailView live-refresh) is kept.
+- [x] **Time-off reasons are OFF the lock screen** (privacy decision, decided
+  deliberately per the flag-trigger precedent): bodies now carry the decision and dates
+  only; the reason lives in the app behind the tap. Verified by firing a denial with a
+  sentinel reason and reading the queued payload — not present.
+- [x] **The two web-app `task_notifications` writers** (equipmentNotifications.js,
+  workflowNotificationService.js) were ALREADY FIXED in the web repo (in-file comments
+  credit PSH.2 2026-07-27); this checkbox was stale.
+- [x] **`~/Desktop/Focal-Point-Supabase/.env.local`**: the three dead direct-DB
+  credential keys removed (host unresolvable, both passwords failed, zero readers —
+  grepped); a comment points at the Management API recipe.
+- [ ] Still not built, recorded not claimed: per-type notification preferences (no
+  settings surface exists; PSH.1's scope note stands); pushes for day DATE MOVES and
+  for crew REMOVAL ("your session moved" / "you're off this session" notify nobody).
+  Crew ADDITION is covered from both directions — the day-INSERT statement trigger and
+  the fix round's crew-added UPDATE trigger (the dominant assignment path in both
+  clients); notifying on removal/moves is the remaining gap.
+
+**Security fix round (2026-07-29) — an adversarial audit that left the repo found and
+PSH.2 closed, live-verified:** `session-notification` had NO caller gate (proven live:
+a forged webhook signed with the public anon key returned 200 and would push arbitrary
+"session cancelled" text to arbitrary crew_ids — now 403, same service-role gate as its
+siblings). The gate itself now lives in ONE shared module (functions/_shared/gate.ts)
+after a lesson the fix round paid for in full: the audit flagged the unverified
+decoded-claims branch, the fix removed it leaving a literal-only comparison, and a live
+end-to-end probe then showed the VAULT SERVICE KEY ITSELF getting 403 — this project
+carries both key families, the runtime env holds the new-format sb_secret key while
+verify_jwt forces callers to present the legacy JWT, so a literal-only gate is
+unsatisfiable and would have silently killed every trigger push at once. Final gate:
+literal match OR claims role=service_role on a bearer the platform has already
+signature-verified; ⚠️ NEVER deploy these three functions with --no-verify-jwt — the
+claims branch is sound only while verify_jwt stays on. Verified both ways live: vault
+key via pg_net → 200, anon-key forgery → 403 on all three.
+Also: `notify_photo_critique` required no actor at all on a table whose RLS
+is `WITH CHECK (true)` for anon (now: no authenticated actor → no push; actor and
+target must both belong to the row's org); `notify_job_box` resolved crew for ANY
+`shift_uid` as SECURITY DEFINER (now: the shift must belong to the row's org);
+`user_devices` lost its inert authenticated INSERT/UPDATE/TRUNCATE grants. Each guard
+fired both ways in rolled-back transactions (attack path 0 requests, legit path 1).
+
+**Recorded, deliberately not changed in PSH.2:**
+- `photo_critiques` RLS is `WITH CHECK (true)` / `USING (true)` for anon AND
+  authenticated — a pre-existing hole, now on the SEC.* candidate list (the trigger
+  refuses to amplify it, but the table itself is world-writable with the anon key).
+- Bulk publish (`publishMultipleSessions`, web Schedule.js) legitimately sends one push
+  per session per crew member — publishing a large backlog is a push burst by design;
+  revisit only if the operator reports it as noise.
+- `scripts/firebase-sync-app` (archived web-repo Electron tool) upserts historical
+  `messages`/`job_boxes` rows; RE-RUNNING IT NOW WOULD REPLAY HISTORY AS LIVE PUSHES.
+  Do not run it without dropping the PSH.2 triggers first.
+- `register_push_device` evicts a stale owner silently (possession-of-token design is
+  sound; an audit_log write on the eviction branch is a recorded low-priority
+  improvement).
+- A tapped deep link whose target has not loaded yet stays pending until it resolves —
+  so if the person meanwhile opens something else IN THAT TAB, the requested navigation
+  can arrive late and swap what they are looking at. Deliberate trade (fourth-round
+  audit): the alternative — dropping the id on a no-match list — dead-ended the
+  canonical new-conversation push against cache-first list emissions. The navigation
+  that fires is always exactly the one the person tapped, bounded by app-process
+  lifetime, and sign-out (both the explicit and the SDK-event path) clears it.
+- Web `syncSessionDays` was fixed in the web repo (one INSERT statement for new days,
+  so adding N days to a published session sends one push, not N).
+- `notify_photo_critique`'s actor guard requires auth.uid() to match an in-org users.id
+  — it FAILS CLOSED (drops the push, never over-sends) for the 9 legacy rows whose
+  users.id is not their auth uid. Checked live: zero existing critiques were authored
+  by such a row, and the one active mismatched admin resolves through a duplicate
+  in-org row; recorded because it is the id-equality fragility the FLG lesson names.
+- `daily-workflow-check` → send-notification (workflow_step_scheduled pushes): the gate
+  passes its bearer via the literal branch only if the runtime env key equals what
+  functions.invoke sends — expected true (same injected env), but not provable from
+  this machine. VERIFY on the next hourly run, and verify the POSITIVE signal only:
+  send-notification 200s in the function logs. Absence of "refused a non-service-role
+  caller" warnings is NOT a pass — if the env key is the non-JWT sb_secret form, the
+  invoke dies at the platform's verify_jwt (401) BEFORE the function runs and no gate
+  log line ever appears; a gateway 401 or silence is the other failure mode.
 
 #### Original entry, 2026-07-27 (superseded — kept for the record)
 

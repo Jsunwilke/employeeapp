@@ -11,14 +11,13 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     /// MUST be added here in the same change that starts sending it — PSH.1 shipped four
     /// time-off types without doing so and its own audit caught it.
     ///
-    /// HONEST LIMIT, do not read more into the cases below than is there: recognising a
-    /// type means it is logged and re-posted on `NotificationCenter`. It does NOT mean
-    /// tapping the banner navigates anywhere. Of every push name this app posts, only
-    /// `didReceiveJobBoxNotification` currently has an observer (ShiftDetailView). The
-    /// notification itself is the deliverable — the person is told — and in-app deep
-    /// linking is a separate piece of work recorded as PSH.2. This pre-dates PSH.1 and
-    /// applies to chat and session pushes too; it is written down here rather than left
-    /// to be rediscovered.
+    /// PSH.2: a tapped banner now NAVIGATES. `handleNotification` runs only from the tap
+    /// callback (`didReceive`), sets the destination's pending id on
+    /// `TabBarManager.shared` and then switches the tab; the target view consumes and
+    /// clears the id. The one `NotificationCenter` post that had a real observer —
+    /// `didReceiveJobBoxNotification`, which ShiftDetailView uses to live-refresh an open
+    /// shift — is kept; the other per-type posts had ZERO observers anywhere in the app
+    /// and were deleted with the routing that replaced them.
     enum NotificationType: String {
         case flag = "flag"
         case jobBox = "jobbox"
@@ -164,47 +163,41 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     /// AWAITED on purpose, and called from `signOut()` while the session is still valid.
     /// Fire-and-forget here would race the session teardown that follows it.
     static func clearAPNsTokenOnSignOut(userId: String) async {
-        // Only clear the row if it is THIS handset's token sitting in it.
-        //
-        // There is one apns_token column per user, shared by all their devices, so an
-        // unconditional clear would be wrong for somebody signed in on both an iPhone and
-        // an iPad: signing out on the iPad would silence the iPhone. Matching on the token
-        // means we only detach the device actually being signed out of. (A single column
-        // still cannot serve two devices at once — the real fix is one row per device, and
-        // that is recorded as PSH.2, not faked here.)
+        // PSH.2: tokens live in user_devices, one row per device, so the sign-out delete
+        // is exact — this handset's row goes, the person's OTHER devices keep theirs.
+        // (Under the old single-column model this needed a token-match guard so an iPad
+        // sign-out would not silence the iPhone; a per-device row makes that shape
+        // structural instead of defensive.)
         guard let thisDeviceToken = pendingDeviceToken else {
             print("⚠️ [Push] No device token held this launch; nothing to detach on sign-out.")
             return
         }
 
         do {
-            // `returning: .representation` so we can tell "cleared the row" from "matched no
-            // rows". An UPDATE that matches nothing is a 200 with an empty array, not an
-            // error — reporting that as success is how the first version of this fix managed
-            // to print a tick while changing nothing.
-            struct ClearedRow: Decodable { let id: String }
+            // `returning: .representation` so we can tell "deleted the row" from "matched
+            // no rows". A DELETE that matches nothing is a 200 with an empty array, not an
+            // error — reporting that as success is how the first version of the old clear
+            // managed to print a tick while changing nothing. RLS scopes the delete to the
+            // signing-out user's own rows, which is why this runs BEFORE auth.signOut().
+            struct DeletedRow: Decodable { let token: String }
 
-            let cleared: [ClearedRow] = try await SupabaseManager.shared.client
-                .from("users")
-                .update([
-                    "apns_token": AnyJSON.null,
-                    "apns_environment": AnyJSON.null
-                ], returning: .representation)
-                .eq("id", value: userId.lowercased())
-                .eq("apns_token", value: thisDeviceToken)
-                .select("id")
+            let deleted: [DeletedRow] = try await SupabaseManager.shared.client
+                .from("user_devices")
+                .delete(returning: .representation)
+                .eq("token", value: thisDeviceToken)
+                .select("token")
                 .execute()
                 .value
 
-            if !cleared.isEmpty {
-                print("✅ [Push] Detached this device from the signed-out account.")
+            if !deleted.isEmpty {
+                print("✅ [Push] Detached this device from the signed-out account (user \(userId)).")
             } else {
-                // Not necessarily a fault: the account's stored token may belong to the
-                // user's OTHER device, which we deliberately do not touch.
-                print("ℹ️ [Push] Sign-out token clear matched no row — the account's stored token is not this device's.")
+                // Not necessarily a fault: the token may never have been registered for
+                // this account (e.g. notifications denied before any save succeeded).
+                print("ℹ️ [Push] Sign-out device delete matched no row — this device was not registered to the account.")
             }
         } catch {
-            print("‼️ [Push] FAILED to clear APNs token on sign-out — this device may still receive that account's notifications: \(error.localizedDescription)")
+            print("‼️ [Push] FAILED to detach this device on sign-out — it may still receive that account's notifications: \(error.localizedDescription)")
         }
 
         // pendingDeviceToken is deliberately KEPT. It describes this handset, not the
@@ -212,16 +205,24 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         // needs it — APNs only issues a token once per launch.
     }
 
-    /// Save APNs device token to Supabase users table, together with the Apple push
-    /// environment that minted it.
+    /// Register this device in user_devices (PSH.2: one row per device), together with the
+    /// Apple push environment that minted its token.
     ///
     /// The environment matters as much as the token: a sandbox token presented to Apple's
     /// production service is rejected with `BadDeviceToken`, which is exactly what PSH.1
-    /// found happening to every push this app has ever sent. The sender reads this column to
-    /// choose the right endpoint per token, so a development install and a TestFlight install
-    /// can both work at once.
+    /// found happening to every push this app has ever sent. The senders read it per row to
+    /// choose the right endpoint per device, so a development install and a TestFlight
+    /// install can both work at once.
+    ///
+    /// Goes through the register_push_device SECURITY DEFINER RPC rather than a direct
+    /// insert ("push" in the name because public.register_device already belongs to the
+    /// hardware/station registry),
+    /// because registration must be able to EVICT a stale row: if the previous user of this
+    /// handset signed out uncleanly (crash, reinstall), their row still points at this
+    /// token, own-row RLS makes it untouchable from this account, and until it is evicted
+    /// the previous user's notifications land on a device they no longer hold.
     private static func saveAPNsTokenToSupabase(token: String) {
-        guard let userId = UserManager.shared.getCurrentUserIDUnified() else {
+        guard UserManager.shared.getCurrentUserIDUnified() != nil else {
             print("⚠️ [Push] APNs token received before sign-in; holding it until a session exists.")
             return
         }
@@ -232,17 +233,14 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
             do {
                 let supabase = SupabaseManager.shared.client
 
-                // Update apns_token in users table
                 try await supabase
-                    .from("users")
-                    .update([
-                        "apns_token": AnyJSON.string(token),
-                        "apns_environment": AnyJSON.string(environment.rawValue)
+                    .rpc("register_push_device", params: [
+                        "p_token": AnyJSON.string(token),
+                        "p_environment": AnyJSON.string(environment.rawValue)
                     ])
-                    .eq("id", value: userId.lowercased())
                     .execute()
 
-                print("✅ [Push] APNs token stored (\(environment.rawValue)).")
+                print("✅ [Push] Device registered (\(environment.rawValue)).")
 
                 // NOTE: pendingDeviceToken is deliberately NOT cleared here. APNs issues a
                 // token once per launch, so if this person signs out and somebody else signs
@@ -253,7 +251,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                 // Deliberately loud. The previous version swallowed this into a bare print with
                 // no marker, so a token that never reached the database looked identical to one
                 // that did.
-                print("‼️ [Push] FAILED to store APNs token — this device will receive no notifications: \(error.localizedDescription)")
+                print("‼️ [Push] FAILED to register this device — it will receive no notifications: \(error.localizedDescription)")
             }
         }
     }
@@ -276,202 +274,90 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
         completionHandler()
     }
     
-    // MARK: - Custom Notification Handling
-    
-    /// Handle incoming notifications
+    // MARK: - Tap Routing (PSH.2)
+
+    /// Route a TAPPED notification to its screen.
+    ///
+    /// Called only from `userNotificationCenter(_:didReceive:)` — the person pressed the
+    /// banner, so switching tabs is what they asked for. The pending id is set BEFORE
+    /// `selectedTab` on purpose: MainEmployeeView reacts to tab changes (it clears Home's
+    /// push state on leave), and the consuming view may read the id the moment its tab
+    /// appears. Everything runs on the main queue — UNUserNotificationCenter promises the
+    /// delegate callback there, but `TabBarManager` is UI state and the hop is cheap
+    /// insurance against a future caller.
     func handleNotification(userInfo: [AnyHashable: Any]) {
-        // Determine the notification type
         let type = userInfo["type"] as? String ?? ""
         let notificationType = NotificationType(rawValue: type) ?? .unknown
-        
-        switch notificationType {
-        case .flag:
-            // Post notification for flag event
-            notificationCenter.post(name: Notification.Name("didReceiveFlagNotification"),
-                                     object: nil,
-                                     userInfo: userInfo)
-        case .jobBox:
-            // Process job box notification
-            handleJobBoxNotification(userInfo: userInfo)
-        case .chatMessage:
-            // Process chat notification
-            handleChatNotification(userInfo: userInfo)
-        case .sessionNew:
-            // Process new session notification
-            handleSessionNotification(userInfo: userInfo, isNew: true)
-        case .sessionUpdate:
-            // Process session update notification
-            handleSessionNotification(userInfo: userInfo, isNew: false)
-        case .sessionDelete:
-            // Process session deletion notification
-            handleSessionDeleteNotification(userInfo: userInfo)
-        case .clockReminder:
-            // Process clock reminder notification
-            handleClockReminderNotification(userInfo: userInfo)
-        case .reportReminder:
-            // Process report reminder notification
-            handleReportReminderNotification(userInfo: userInfo)
-        case .photoCritique:
-            // Process photo critique notification
-            handlePhotoCritiqueNotification(userInfo: userInfo)
-        case .timeOffSubmitted, .timeOffApproved, .timeOffDenied, .timeOffPartiallyApproved:
-            handleTimeOffNotification(userInfo: userInfo, type: notificationType)
-        case .workflowStepScheduled:
-            notificationCenter.post(name: Notification.Name("didReceiveWorkflowStepNotification"),
-                                     object: nil,
-                                     userInfo: userInfo)
-        case .unknown:
-            print("Received unknown notification type: \(type)")
+
+        DispatchQueue.main.async {
+            let tabs = TabBarManager.shared
+
+            switch notificationType {
+            case .flag:
+                // Nowhere to land: the flagged-status surface is unmounted dead code (a
+                // recorded SEC.* decision — build it or delete it). Opening the app is the
+                // whole interaction; the note itself shows on the person's next load.
+                print("Flag notification tapped — no in-app destination exists yet (SEC.*)")
+
+            case .jobBox:
+                // Live-refresh observer first (ShiftDetailView listens while a shift is
+                // open), then navigate to the shift the box belongs to.
+                self.notificationCenter.post(name: Notification.Name("didReceiveJobBoxNotification"),
+                                             object: nil,
+                                             userInfo: userInfo)
+                if let shiftUid = userInfo["shiftUid"] as? String, !shiftUid.isEmpty {
+                    tabs.pendingSessionId = shiftUid
+                }
+                tabs.selectedTab = "schedule"
+
+            case .chatMessage:
+                if let conversationId = userInfo["conversationId"] as? String {
+                    tabs.pendingConversationId = conversationId
+                }
+                tabs.selectedTab = "chat"
+
+            case .sessionNew, .sessionUpdate:
+                if let sessionId = userInfo["sessionId"] as? String {
+                    tabs.pendingSessionId = sessionId
+                }
+                tabs.selectedTab = "schedule"
+
+            case .sessionDelete:
+                // The session is gone; there is no detail to open. The schedule itself is
+                // the answer to "so what does my week look like now?".
+                tabs.selectedTab = "schedule"
+
+            case .clockReminder:
+                tabs.selectedTab = "timeTracking"
+
+            case .reportReminder:
+                // If the org runs photoshoot-notes-only, this feature id is unavailable
+                // and MainEmployeeView's guard redirects to Home — acceptable, and the
+                // dispatcher only targets crews with sessions, so the mismatch is rare.
+                tabs.selectedTab = "dailyJobReport"
+
+            case .photoCritique:
+                if let critiqueId = userInfo["critiqueId"] as? String {
+                    tabs.pendingCritiqueId = critiqueId
+                }
+                tabs.selectedTab = "training"
+
+            case .timeOffSubmitted:
+                // "Somebody needs you to decide" lands on the approvals queue…
+                tabs.selectedTab = "timeOffApprovals"
+
+            case .timeOffApproved, .timeOffDenied, .timeOffPartiallyApproved:
+                // …and "your request was decided" lands on your own requests, where the
+                // full decision (including any reason, kept off the lock screen by the
+                // PSH.2 privacy change) is shown.
+                tabs.selectedTab = "timeOffRequests"
+
+            case .workflowStepScheduled:
+                tabs.selectedTab = "tasks"
+
+            case .unknown:
+                print("Received unknown notification type: \(type)")
+            }
         }
-    }
-    
-    /// Handle job box specific notifications
-    private func handleJobBoxNotification(userInfo: [AnyHashable: Any]) {
-        guard let status = userInfo["status"] as? String,
-              let schoolName = userInfo["schoolName"] as? String,
-              let scannedBy = userInfo["scannedBy"] as? String else {
-            print("Missing required job box notification data")
-            return
-        }
-        
-        print("Received job box notification: Status: \(status), School: \(schoolName), Scanned by: \(scannedBy)")
-        
-        // Post a notification that Views can listen for
-        notificationCenter.post(name: Notification.Name("didReceiveJobBoxNotification"),
-                                 object: nil,
-                                 userInfo: userInfo)
-    }
-    
-    /// Handle chat message notifications
-    private func handleChatNotification(userInfo: [AnyHashable: Any]) {
-        // Check if this is a chat notification
-        if let conversationId = userInfo["conversationId"] as? String {
-            // Handle chat notification
-            print("Received chat notification")
-            
-            let senderId = userInfo["senderId"] as? String
-            let senderName = userInfo["senderName"] as? String ?? "Someone"
-            let messageText = userInfo["messageText"] as? String ?? "New message"
-            
-            print("From: \(senderName), ConversationId: \(conversationId)")
-            
-            // Post notification for chat
-            notificationCenter.post(name: Notification.Name("didReceiveChatNotification"),
-                                     object: nil,
-                                     userInfo: userInfo)
-        } else {
-            print("Unknown chat notification format")
-        }
-    }
-    
-    /// Handle session notifications (new or updated)
-    private func handleSessionNotification(userInfo: [AnyHashable: Any], isNew: Bool) {
-        guard let sessionId = userInfo["sessionId"] as? String,
-              let schoolName = userInfo["schoolName"] as? String else {
-            print("Missing required session notification data")
-            return
-        }
-        
-        let changeType = userInfo["changeType"] as? String
-        
-        print("Received session \(isNew ? "new" : "update") notification: Session: \(sessionId), School: \(schoolName), Changes: \(changeType ?? "N/A")")
-        
-        // Post a notification that Views can listen for
-        notificationCenter.post(name: Notification.Name(isNew ? "didReceiveNewSessionNotification" : "didReceiveSessionUpdateNotification"),
-                                 object: nil,
-                                 userInfo: userInfo)
-    }
-
-    /// Handle session deletion notifications
-    private func handleSessionDeleteNotification(userInfo: [AnyHashable: Any]) {
-        guard let sessionId = userInfo["sessionId"] as? String,
-              let schoolName = userInfo["schoolName"] as? String else {
-            print("Missing required session delete notification data")
-            return
-        }
-
-        let sessionDate = userInfo["sessionDate"] as? String ?? "Unknown date"
-
-        print("Received session delete notification: Session: \(sessionId), School: \(schoolName), Date: \(sessionDate)")
-
-        // Post a notification that Views can listen for
-        notificationCenter.post(name: Notification.Name("didReceiveSessionDeleteNotification"),
-                                 object: nil,
-                                 userInfo: userInfo)
-    }
-
-    /// Handle clock reminder notifications
-    private func handleClockReminderNotification(userInfo: [AnyHashable: Any]) {
-        guard let reminderType = userInfo["reminderType"] as? String else {
-            print("Missing reminder type in clock notification")
-            return
-        }
-        
-        print("Received clock reminder notification: Type: \(reminderType)")
-        
-        if reminderType == "clock_in" {
-            let sessionId = userInfo["sessionId"] as? String
-            let schoolName = userInfo["schoolName"] as? String ?? "your session"
-            print("Clock-in reminder for session at \(schoolName)")
-        } else if reminderType == "clock_out" {
-            print("Clock-out reminder received")
-        }
-        
-        // Post a notification that Views can listen for
-        notificationCenter.post(name: Notification.Name("didReceiveClockReminderNotification"),
-                                 object: nil,
-                                 userInfo: userInfo)
-    }
-    
-    /// Handle daily report reminder notifications
-    private func handleReportReminderNotification(userInfo: [AnyHashable: Any]) {
-        let date = userInfo["date"] as? String ?? "today"
-        let sessionsCount = userInfo["sessionsCount"] as? Int ?? 0
-        
-        print("Received report reminder notification: Date: \(date), Sessions: \(sessionsCount)")
-        
-        // Post a notification that Views can listen for
-        notificationCenter.post(name: Notification.Name("didReceiveReportReminderNotification"),
-                                 object: nil,
-                                 userInfo: userInfo)
-    }
-    
-    /// Handle time-off notifications (submitted, approved, denied, partially approved).
-    ///
-    /// Sent by the `trg_time_off_notification` trigger on `time_off_requests`, so it fires
-    /// whether the decision was made from this app or from the web app.
-    private func handleTimeOffNotification(userInfo: [AnyHashable: Any], type: NotificationType) {
-        let requestId = userInfo["requestId"] as? String
-        let status = userInfo["status"] as? String ?? "unknown"
-
-        print("Received time off notification: \(type.rawValue), request: \(requestId ?? "n/a"), status: \(status)")
-
-        // Distinguish "somebody needs you to decide" from "your request was decided", since
-        // the two land on different screens.
-        let name = type == .timeOffSubmitted
-            ? "didReceiveTimeOffRequestNotification"
-            : "didReceiveTimeOffDecisionNotification"
-
-        notificationCenter.post(name: Notification.Name(name),
-                                 object: nil,
-                                 userInfo: userInfo)
-    }
-
-    /// Handle photo critique notifications
-    private func handlePhotoCritiqueNotification(userInfo: [AnyHashable: Any]) {
-        guard let critiqueId = userInfo["critiqueId"] as? String,
-              let submitterName = userInfo["submitterName"] as? String else {
-            print("Missing required photo critique notification data")
-            return
-        }
-        
-        let exampleType = userInfo["exampleType"] as? String ?? "unknown"
-        
-        print("Received photo critique notification: From: \(submitterName), Type: \(exampleType), ID: \(critiqueId)")
-        
-        // Post a notification that Views can listen for
-        notificationCenter.post(name: Notification.Name("didReceivePhotoCritiqueNotification"),
-                                 object: nil,
-                                 userInfo: userInfo)
     }
 }

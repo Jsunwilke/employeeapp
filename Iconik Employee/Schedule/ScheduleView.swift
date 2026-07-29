@@ -48,6 +48,9 @@ struct ScheduleView: View {
     // and a redacted session must never reach the editor, which seeds its crew
     // picker from exactly that array.
     @ObservedObject private var permissionsService = PermissionsService.shared
+    // PSH.2: a tapped session/job-box push parks the session id here; this screen
+    // consumes it once the session list can answer for it.
+    @ObservedObject private var tabBarManager = TabBarManager.shared
 
     // MARK: Data
 
@@ -145,6 +148,17 @@ struct ScheduleView: View {
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             isListening = false
             loadSessions()
+        }
+        // PSH.2 deep link: consume when the id lands, and again when sessions arrive —
+        // the push tap usually beats the load. The EMITTED value is passed in: @Published
+        // emits during willSet, so re-reading pendingSessionId inside its own emission
+        // returns the pre-assignment nil (fix-round audit, H2). onChange fires after
+        // didSet, so reading the pending id there is safe.
+        .onReceive(tabBarManager.$pendingSessionId) { id in
+            consumePendingSession(id: id, in: sessions)
+        }
+        .onChange(of: sessions) { newSessions in
+            consumePendingSession(id: tabBarManager.pendingSessionId, in: newSessions)
         }
         .onChange(of: weekOffset) { _ in loadTimeOff() }
         .onChange(of: modeRaw) { _ in rebuildIndex() }
@@ -631,6 +645,28 @@ struct ScheduleView: View {
     }
 
     // MARK: - Data
+
+    /// Consume-and-clear a push deep link (the selectedClassGroupJobId pattern). Matching
+    /// on the RAW feed and redacting at the push boundary mirrors what a manual tap does.
+    /// Both inputs arrive as parameters so a caller inside a @Published emission hands us
+    /// the post-assignment value; the mutations hop off the current emission because a
+    /// same-property assignment inside its own willSet emission is DISCARDED
+    /// (probe-verified by the fix-round audit).
+    ///
+    /// Deliberately NO drop-on-no-match branch: a list emission is not proof the session
+    /// is gone (a cache-first emission would not contain a just-created session — the
+    /// exact hazard the third-round audit traced in chat, latent here for when OFF.1
+    /// makes the schedule cache real). An unmatched id navigates nowhere and sign-out
+    /// clears it.
+    private func consumePendingSession(id: String?, in currentSessions: [Session]) {
+        guard let id else { return }
+        guard let match = currentSessions.first(where: { $0.id.lowercased() == id.lowercased() }) else { return }
+        let redacted = DraftCrew.redacted([match], hidingDraftCrew: hideDraftCrew).first ?? match
+        DispatchQueue.main.async {
+            tabBarManager.pendingSessionId = nil
+            pushedSession = redacted
+        }
+    }
 
     private func start() {
         // onDisappear always stops the org listener, so it has to be restarted on

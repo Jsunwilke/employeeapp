@@ -141,6 +141,24 @@ class TabBarManager: ObservableObject {
     @Published var selectedSportsShoot: SportsShoot? = nil
     @Published var selectedClassGroupJobId: String? = nil
     @Published var selectedClassGroupJobType: String? = nil
+
+    // PSH.2 — a tapped push navigates. PushNotificationManager sets the pending id FIRST
+    // and selectedTab second; the target view consumes-and-clears its id in onAppear /
+    // onChange, exactly the selectedClassGroupJobId shape above. These are ids, not
+    // models, because a push payload carries ids — each consumer resolves its own model
+    // (and quietly stays put if the id no longer resolves, e.g. a deleted conversation).
+    @Published var pendingConversationId: String? = nil
+    @Published var pendingSessionId: String? = nil
+    @Published var pendingCritiqueId: String? = nil
+
+    /// Called from sign-out. A pending id that never resolved (its target list stayed
+    /// empty) would otherwise survive into the NEXT sign-in on a shared device and
+    /// navigate the new user into the previous user's destination. (Fix-round audit, M4.)
+    func clearPendingPushDestinations() {
+        pendingConversationId = nil
+        pendingSessionId = nil
+        pendingCritiqueId = nil
+    }
     
     private let configurationKey = "TabBarConfiguration"
     

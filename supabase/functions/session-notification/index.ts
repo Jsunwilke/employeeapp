@@ -14,6 +14,8 @@ import {
   getAPNsConfigFromEnv,
   type TokenTarget,
 } from "../_shared/apns.ts";
+import { lookupTokenTargets, reapDeadTokens } from "../_shared/tokens.ts";
+import { callerIsServiceRole, forbiddenResponse } from "../_shared/gate.ts";
 
 // ============================================================================
 // Main Edge Function
@@ -46,6 +48,19 @@ serve(async (req) => {
   }
 
   try {
+    // AUTHORIZATION (PSH.2 fix round). This function takes crew_ids verbatim and pushes
+    // attacker-controllable text ("Your session at <school_name> has been cancelled") to
+    // them with the service role. The PSH.2 security audit PROVED the hole live: a forged
+    // webhook signed with nothing but the public anon key returned 200 here while the two
+    // gated siblings returned 403 — verify_jwt accepts ANY project-signed JWT, and the
+    // anon key ships in every client binary. Only the database trigger is a legitimate
+    // caller, and it presents the service-role key from the vault. The gate lives in
+    // _shared/gate.ts — one copy for all three push functions.
+    if (!callerIsServiceRole(req)) {
+      console.warn("session-notification: refused a non-service-role caller.");
+      return forbiddenResponse(corsHeaders);
+    }
+
     const apnsConfig = getAPNsConfigFromEnv();
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -76,7 +91,6 @@ serve(async (req) => {
 
     const sessionId = sessionData.id as string;
     const schoolName = sessionData.school_name as string || "Unknown School";
-    const organizationId = sessionData.organization_id as string;
 
     // A session's date lives in the `session_days` child table now. Prefer the
     // legacy sessions.date column while it still exists (transition); once it's
@@ -99,11 +113,44 @@ serve(async (req) => {
       }
     }
 
-    // Get assigned employee IDs from photographers array
-    const photographers = sessionData.photographers as Photographer[] || [];
-    const assignedEmployees = photographers.map(p => p.id);
+    // Resolve the assigned crew. The MD7 arc moved crew off the sessions row and onto
+    // the session_days child rows (sessions has NO photographers column on the live
+    // schema — verified, and it is why this function delivered nothing between the crew
+    // move and PSH.2: record.photographers was always missing and every fire exited
+    // "No assigned employees"). Resolution order:
+    //   1. crew_ids injected by the BEFORE DELETE trigger, which runs while the day rows
+    //      still exist (an AFTER trigger would find them cascade-deleted).
+    //   2. The union of session_days.photographers for this session.
+    //   3. record.photographers, kept only for a replayed pre-MD7 payload.
+    let assignedEmployees: string[] = [];
 
-    console.log(`Photographers found: ${photographers.length}`, assignedEmployees);
+    const crewIds = sessionData.crew_ids as string[] | undefined;
+    if (crewIds && crewIds.length > 0) {
+      assignedEmployees = crewIds;
+    } else if (type !== "DELETE") {
+      const { data: dayCrew, error: dayCrewError } = await supabase
+        .from("session_days")
+        .select("photographers")
+        .eq("session_id", sessionId);
+      if (dayCrewError) {
+        console.error("Error fetching session_days crew:", dayCrewError);
+        throw dayCrewError;
+      }
+      const ids = new Set<string>();
+      for (const day of dayCrew || []) {
+        for (const p of (day.photographers as Photographer[] | null) || []) {
+          if (p?.id) ids.add(p.id);
+        }
+      }
+      assignedEmployees = [...ids];
+    }
+
+    if (assignedEmployees.length === 0) {
+      const legacyPhotographers = sessionData.photographers as Photographer[] || [];
+      assignedEmployees = legacyPhotographers.map((p) => p.id).filter(Boolean);
+    }
+
+    console.log(`Crew resolved: ${assignedEmployees.length} assignee(s)`);
 
     if (assignedEmployees.length === 0) {
       return new Response(
@@ -112,26 +159,8 @@ serve(async (req) => {
       );
     }
 
-    // Get APNs tokens for assigned employees
-    const { data: users, error } = await supabase
-      .from("users")
-      .select("id, apns_token, apns_environment, first_name")
-      .in("id", assignedEmployees.map((id) => id.toLowerCase()))
-      .not("apns_token", "is", null);
-
-    if (error) {
-      console.error("Error fetching user tokens:", error);
-      throw error;
-    }
-
-    console.log(`Users with tokens found: ${users?.length || 0}`);
-
-    const deviceTokens: TokenTarget[] = (users || [])
-      .filter((u) => Boolean(u.apns_token))
-      .map((u) => ({
-        token: u.apns_token as string,
-        environment: (u.apns_environment as string | null) ?? null,
-      }));
+    // Fan out over every registered device of every assignee (PSH.2: user_devices).
+    const deviceTokens: TokenTarget[] = await lookupTokenTargets(supabase, assignedEmployees);
 
     if (deviceTokens.length === 0) {
       return new Response(
@@ -147,7 +176,18 @@ serve(async (req) => {
 
     const onDate = sessionDate ? ` on ${sessionDate}` : "";
 
-    if (type === "INSERT") {
+    // A publish is a debut, not an edit: the crew has never seen the session, so
+    // "Session Updated" would be nonsense. The trigger now fires UPDATE only for
+    // is_published/school_name transitions (PSH.2), and the unpublished->published one
+    // lands here. (A plain INSERT never reaches this function any more — both clients
+    // insert the sessions row before the day rows carrying the crew, so the old INSERT
+    // fire never had a recipient; the "new session" push for direct-published sessions
+    // comes from the session_days trigger instead.)
+    const wasPublished = Boolean(old_record?.is_published);
+    const isPublishTransition =
+      type === "UPDATE" && !wasPublished && Boolean(record.is_published);
+
+    if (type === "INSERT" || isPublishTransition) {
       title = "New Session Assigned";
       body = `You've been assigned to ${schoolName}${onDate}`;
       notificationType = "session_new";
@@ -194,6 +234,8 @@ serve(async (req) => {
       notificationPayload,
       apnsConfig
     );
+
+    await reapDeadTokens(supabase, results);
 
     const successful = results.filter((r) => r.success).length;
     const failed = results.filter((r) => !r.success);

@@ -9,6 +9,8 @@ import {
   createAlertPayload,
   getAPNsConfigFromEnv,
 } from "../_shared/apns.ts";
+import { lookupTokenTargets, reapDeadTokens } from "../_shared/tokens.ts";
+import { callerIsServiceRole, forbiddenResponse } from "../_shared/gate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -30,6 +32,17 @@ serve(async (req) => {
   }
 
   try {
+    // AUTHORIZATION (PSH.2). This function resolves a conversation's participants and
+    // pushes a message excerpt to every one of them, on a multi-tenant database. Without
+    // this gate any signed-in employee could POST a forged webhook body and push
+    // arbitrary text to the members of ANY conversation id. Only the database trigger is
+    // a legitimate caller, and it presents the service-role key from the vault. The gate
+    // lives in _shared/gate.ts — one copy for all three push functions.
+    if (!callerIsServiceRole(req)) {
+      console.warn("chat-notification: refused a non-service-role caller.");
+      return forbiddenResponse(corsHeaders);
+    }
+
     const apnsConfig = getAPNsConfigFromEnv();
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -49,7 +62,10 @@ serve(async (req) => {
     const messageId = record.id as string;
     const conversationId = record.conversation_id as string;
     const senderId = record.sender_id as string;
-    const messageText = record.message_text as string || "";
+    // The column is `text` — both clients write messages.text (verified live; there has
+    // never been a message_text column). The old read of record.message_text meant every
+    // chat push body would have been empty.
+    const messageText = record.text as string || "";
 
     // Get the conversation to find participants
     const { data: conversation, error: convError } = await supabase
@@ -87,24 +103,8 @@ serve(async (req) => {
       );
     }
 
-    // Get APNs tokens for recipients
-    const { data: users, error } = await supabase
-      .from("users")
-      .select("id, apns_token, apns_environment")
-      .in("id", recipientIds.map((id) => id.toLowerCase()))
-      .not("apns_token", "is", null);
-
-    if (error) {
-      console.error("Error fetching user tokens:", error);
-      throw error;
-    }
-
-    const deviceTokens: TokenTarget[] = (users || [])
-      .filter((u) => Boolean(u.apns_token))
-      .map((u) => ({
-        token: u.apns_token as string,
-        environment: (u.apns_environment as string | null) ?? null,
-      }));
+    // Fan out over every registered device of every recipient (PSH.2: user_devices).
+    const deviceTokens: TokenTarget[] = await lookupTokenTargets(supabase, recipientIds);
 
     if (deviceTokens.length === 0) {
       return new Response(
@@ -113,11 +113,18 @@ serve(async (req) => {
       );
     }
 
+    // The iOS GIF send path stores the raw Giphy URL as the message `text`, which is
+    // noise on a lock screen. A body that is nothing but a URL gets a label instead;
+    // real attachment texts ("📷 Photo", a filename) pass through untouched.
+    // (PSH.2 fix round, F7.)
+    const isBareUrl = /^https?:\/\/\S+$/.test(messageText.trim());
+    const displayText = isBareUrl ? "Sent an attachment" : messageText;
+
     // Truncate message for notification
     const truncatedMessage =
-      messageText.length > 100
-        ? messageText.substring(0, 100) + "..."
-        : messageText;
+      displayText.length > 100
+        ? displayText.substring(0, 100) + "..."
+        : displayText;
 
     const title = conversation.name || senderName;
     const body = conversation.name
@@ -140,6 +147,8 @@ serve(async (req) => {
       notificationPayload,
       apnsConfig
     );
+
+    await reapDeadTokens(supabase, results);
 
     const successful = results.filter((r) => r.success).length;
     const failed = results.filter((r) => !r.success);

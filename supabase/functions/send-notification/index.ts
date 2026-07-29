@@ -9,6 +9,8 @@ import {
   getAPNsConfigFromEnv,
   type TokenTarget,
 } from "../_shared/apns.ts";
+import { lookupTokenTargets, reapDeadTokens } from "../_shared/tokens.ts";
+import { callerIsServiceRole, forbiddenResponse } from "../_shared/gate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -47,39 +49,12 @@ serve(async (req) => {
     // sends it with the service-role key. Without this gate any signed-in employee could
     // push whatever they liked to ANY user id in a database shared with the web app and
     // Captura — including other organizations — and spoof a convincing `type` such as
-    // "time_off_denied". It was theoretical while the function was undeployed; deploying it
-    // in PSH.1 made it live, and this closes it in the same phase rather than leaving it.
-    //
-    // Only server-side callers are legitimate: the database triggers, and the scheduled
-    // functions. All of them present the service-role key. A user JWT is refused.
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const bearer = authHeader.replace(/^Bearer\s+/i, "");
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-
-    let callerIsServiceRole = bearer.length > 0 && bearer === serviceRoleKey;
-
-    // The service-role key can also arrive as a signed JWT whose payload names the role,
-    // rather than as the literal key string. Accept that form too, without verifying the
-    // signature here — Supabase has already rejected an unsigned or invalid JWT before the
-    // request reaches this function (verify_jwt is on).
-    if (!callerIsServiceRole && bearer.split(".").length === 3) {
-      try {
-        const claims = JSON.parse(atob(bearer.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-        callerIsServiceRole = claims?.role === "service_role";
-      } catch {
-        callerIsServiceRole = false;
-      }
-    }
-
-    if (!callerIsServiceRole) {
+    // "time_off_denied". Only server-side callers are legitimate, and they present the
+    // service-role key. The gate itself lives in _shared/gate.ts — ONE copy for all three
+    // push functions, with the full history of why it has the shape it has.
+    if (!callerIsServiceRole(req)) {
       console.warn("send-notification: refused a non-service-role caller.");
-      return new Response(
-        JSON.stringify({ error: "Forbidden" }),
-        {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
+      return forbiddenResponse(corsHeaders);
     }
 
     const apnsConfig = getAPNsConfigFromEnv();
@@ -116,38 +91,28 @@ serve(async (req) => {
       environment: null,
     }));
 
-    // If userIds provided, look up their device tokens
+    // If userIds provided, fan out over their registered devices (PSH.2: one row per
+    // device in user_devices, so an iPhone+iPad user is reached on both).
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
     if (userIds && userIds.length > 0) {
-      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-      const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-      const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-      const { data: users, error } = await supabase
-        .from("users")
-        .select("id, apns_token, apns_environment")
-        .in("id", userIds.map((id) => id.toLowerCase()))
-        .not("apns_token", "is", null);
-
-      if (error) {
-        console.error("Error fetching user tokens:", error);
+      try {
+        deviceTokens = [
+          ...deviceTokens,
+          ...(await lookupTokenTargets(supabase, userIds)),
+        ];
+      } catch (lookupError) {
+        console.error("Error fetching device tokens:", lookupError);
         return new Response(
-          JSON.stringify({ error: "Failed to fetch user tokens" }),
+          JSON.stringify({ error: "Failed to fetch device tokens" }),
           {
             status: 500,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           }
         );
       }
-
-      deviceTokens = [
-        ...deviceTokens,
-        ...(users || [])
-          .filter((u) => Boolean(u.apns_token))
-          .map((u) => ({
-            token: u.apns_token as string,
-            environment: (u.apns_environment as string | null) ?? null,
-          })),
-      ];
     }
 
     if (deviceTokens.length === 0) {
@@ -190,6 +155,11 @@ serve(async (req) => {
       payload,
       apnsConfig
     );
+
+    // Rows Apple pronounced dead (410 Unregistered / BadDeviceToken) are deleted so
+    // user_devices self-cleans. Directly-passed deviceTokens have no row; the delete
+    // simply matches nothing for them.
+    await reapDeadTokens(supabase, results);
 
     const successful = results.filter((r) => r.success).length;
     const failed = results.filter((r) => !r.success);

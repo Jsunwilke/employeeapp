@@ -46,9 +46,11 @@ struct UserProfile: Codable {
     var original_photo_url: String?
     var photo_crop_settings: AnyJSON?  // JSONB - native object from Supabase
 
-    // Push notifications
-    var fcm_token: String?
-    var fcm_token_updated_at: Date?
+    // NOTE (PSH.2, 2026-07-29): the Firebase-era fcm_token / fcm_token_updated_at fields
+    // were deleted here. fcm_token never existed on the live users table, and the
+    // orphaned fcm_token_updated_at column was dropped with operator sign-off in
+    // 20260729_psh2_user_devices.sql. Push tokens live in user_devices now, written only
+    // by PushNotificationManager.
 
     // Invitation fields
     var is_temporary_invite: Bool?
@@ -99,8 +101,6 @@ struct UserProfile: Codable {
         }
         return nil
     }
-    var fcmToken: String? { fcm_token }
-    var fcmTokenUpdatedAt: Date? { fcm_token_updated_at }
     var isTemporaryInvite: Bool { is_temporary_invite ?? false }
     var invitedAt: Date? { invited_at }
     var notifyOnProofingApproval: Bool { notify_on_proofing_approval ?? false }
@@ -124,7 +124,6 @@ struct UserProfile: Codable {
          compensation_type: String? = nil, hourly_rate: Double? = nil,
          salary_amount: Double? = nil, overtime_threshold: Int? = nil,
          original_photo_url: String? = nil, photo_crop_settings: AnyJSON? = nil,
-         fcm_token: String? = nil, fcm_token_updated_at: Date? = nil,
          is_temporary_invite: Bool? = nil, invited_at: Date? = nil,
          preferences: AnyJSON? = nil, email_notifications: AnyJSON? = nil,
          notify_on_proofing_approval: Bool? = nil) {
@@ -159,8 +158,6 @@ struct UserProfile: Codable {
         self.overtime_threshold = overtime_threshold
         self.original_photo_url = original_photo_url
         self.photo_crop_settings = photo_crop_settings
-        self.fcm_token = fcm_token
-        self.fcm_token_updated_at = fcm_token_updated_at
         self.is_temporary_invite = is_temporary_invite
         self.invited_at = invited_at
         self.preferences = preferences
@@ -263,47 +260,12 @@ class UserProfileService: ObservableObject {
         }
     }
 
-    // Update user profile in Supabase
-    func updateUserProfile(_ profile: UserProfile) async throws {
-        guard profile.uid == supabase.auth.currentUser?.id.uuidString.lowercased() else {
-            throw NSError(domain: "UserProfileService", code: -1,
-                         userInfo: [NSLocalizedDescriptionKey: "Can only update own profile"])
-        }
-
-        isLoading = true
-        errorMessage = nil
-
-        defer { isLoading = false }
-
-        do {
-            // Update profile using Codable directly (Supabase SDK 2.x)
-            try await supabase
-                .from("users")
-                .update(profile)
-                .eq("id", value: profile.id)
-                .execute()
-
-            // Update local state
-            self.currentUserProfile = profile
-            updateAppStorage(with: profile)
-
-        } catch {
-            errorMessage = error.localizedDescription
-            throw error
-        }
-    }
-
-    // Legacy completion-based update for backward compatibility
-    func updateUserProfile(_ profile: UserProfile, completion: @escaping (Result<Void, Error>) -> Void) {
-        Task {
-            do {
-                try await updateUserProfile(profile)
-                completion(.success(()))
-            } catch {
-                completion(.failure(error))
-            }
-        }
-    }
+    // NOTE (PSH.2, 2026-07-29): updateUserProfile(_:) — the whole-row Codable update —
+    // was deleted here, along with its completion-handler overload. It had ZERO callers
+    // (every real caller uses the field-scoped updateUserFields below), and a full-row
+    // encode is a standing hazard on a shared table: it silently rewrites every column
+    // the struct knows, and it breaks the moment a column the struct still carries is
+    // dropped — which is exactly what this phase did to the Firebase-era token columns.
 
     // Update specific fields only (using snake_case field names)
     func updateUserFields(_ fields: [String: AnyJSON]) async throws {
