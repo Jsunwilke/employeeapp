@@ -10,7 +10,26 @@ struct JobBoxWithEvent: Identifiable {
     let position: String
     let jobboxNumber: String
     let cardNumber: String
-    
+
+    /// EVERY row this view fetched for this box, not just the latest one.
+    ///
+    /// The rows were always here — `processJobBoxRecords` groups them by box
+    /// number and then throws the siblings away, keeping one summary row. That is
+    /// why the old progress pills had to infer history from a single status and
+    /// drew stages that were never scanned. Carrying the group costs nothing (no
+    /// extra query) and lets the meter read what actually happened.
+    var log: [JobBox] = []
+
+    /// The progress reading for this box's CURRENT trip.
+    ///
+    /// The trip matters because this screen groups by box number across ALL TIME —
+    /// correctly, since it answers "where is box 3028 now" and a box is a reused
+    /// physical object. Without cutting at the last Packed scan, June's trip and
+    /// October's would merge and report stages complete that belong to another job.
+    var reading: JobBoxProgressReading {
+        JobBoxProgressReading(rows: log.isEmpty ? [jobBox] : log)
+    }
+
     // Computed property to determine if the job box is stalled
     var isStalled: Bool {
         let threshold = JobBoxSettingsManager.shared.getStalledThreshold(for: jobBox.jobBoxStatus)
@@ -194,6 +213,19 @@ class ManagerJobBoxViewModel: ObservableObject {
             allBoxes.append(jobBoxWithEvent)
         }
 
+        // A box's HISTORY is built from the unfiltered set, deliberately.
+        //
+        // The search filter runs over school / photographer / box number, and a
+        // Packed row usually has NO photographer (NULL on 199 live rows, rendered
+        // "Unknown"). Searching a photographer's name therefore drops that box's
+        // Packed scan — and a meter fed the filtered rows would draw Packed as
+        // "never scanned" purely because of what was typed in the search field.
+        // The search decides which boxes are LISTED; it must not decide what
+        // happened to them.
+        let fullLogByKey = Dictionary(grouping: allBoxes) { box -> String in
+            !box.cardNumber.isEmpty ? box.cardNumber : box.jobboxNumber
+        }.mapValues { $0.map(\.jobBox) }
+
         await MainActor.run {
             // First apply search filter to all boxes
             let filteredBoxes = self.filterJobBoxesBySearch(allBoxes)
@@ -215,9 +247,14 @@ class ManagerJobBoxViewModel: ObservableObject {
             var latestStatusBoxes: [JobBoxWithEvent] = []
 
             for (_, boxes) in groupedBoxes {
-                // Sort by timestamp (newest first) and take only the first one
+                // Sort by timestamp (newest first) and take only the first one —
+                // but CARRY THE GROUP on it, so the row can draw the box's real
+                // progress instead of inferring it from this one status.
                 if let latestBox = boxes.sorted(by: { $0.jobBox.timestampDate > $1.jobBox.timestampDate }).first {
-                    latestStatusBoxes.append(latestBox)
+                    var withLog = latestBox
+                    let key = !latestBox.cardNumber.isEmpty ? latestBox.cardNumber : latestBox.jobboxNumber
+                    withLog.log = fullLogByKey[key] ?? boxes.map(\.jobBox)
+                    latestStatusBoxes.append(withLog)
                 }
             }
 
@@ -753,7 +790,7 @@ struct ManagerJobBoxTrackerView: View {
             
             // Bottom row with status
             HStack(spacing: 8) {
-                statusPillsView(for: jobBox.jobBox.jobBoxStatus)
+                statusMeterView(for: jobBox)
                 
                 Spacer()
                 
@@ -785,22 +822,28 @@ struct ManagerJobBoxTrackerView: View {
         return Color.green.opacity(0.05) // Must be .turnedIn
     }
     
-    // Status pills visualization
-    private func statusPillsView(for status: JobBoxStatus) -> some View {
-        let stepsCompleted = statusToStep(status)
-        
-        return HStack(spacing: 4) {
-            ForEach(1...4, id: \.self) { step in
-                Capsule()
-                    .fill(getStepColor(isActive: stepsCompleted >= step, isCompleted: stepsCompleted > step))
-                    .frame(width: step == stepsCompleted ? 24 : 16, height: 8)
-            }
-            
-            Text(status.rawValue)
+    /// The SAME meter the shift detail and the design lab draw, in its compact
+    /// form. This screen used to hand-roll its own four pills with its own colour
+    /// rules — green/blue/grey against the shift detail's blue/orange/green — so
+    /// two screens showing one box disagreed about it. One meter, one vocabulary.
+    private func statusMeterView(for jobBox: JobBoxWithEvent) -> some View {
+        let reading = jobBox.reading
+        return HStack(spacing: 8) {
+            JobBoxProgressMeter(reading: reading, compact: true)
+                .frame(maxWidth: 116)
+
+            Text(reading.headline)
                 .font(.caption)
                 .fontWeight(.medium)
-                .foregroundColor(getStatusColor(status))
-                .padding(.leading, 4)
+                .foregroundColor(reading.meterTint)
+
+            if !reading.skipped.isEmpty {
+                // The manager is the person who needs to know a box arrived
+                // without being scanned on the way.
+                Text("\(reading.scannedCount)/4")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
     
@@ -898,34 +941,12 @@ struct ManagerJobBoxTrackerView: View {
         }
     }
     
-    // Helper functions
-    
-    // Convert JobBoxStatus to step number (1-4) (optimized version)
-    private func statusToStep(_ status: JobBoxStatus) -> Int {
-        if status == .packed { return 1 }
-        if status == .pickedUp { return 2 }
-        if status == .leftJob { return 3 }
-        return 4 // Must be .turnedIn
-    }
-    
-    // Get the color for a step based on its state
-    private func getStepColor(isActive: Bool, isCompleted: Bool) -> Color {
-        if isCompleted {
-            return .green
-        } else if isActive {
-            return .blue
-        } else {
-            return Color(.systemGray4)
-        }
-    }
-    
-    // Get color for status text (optimized version)
-    private func getStatusColor(_ status: JobBoxStatus) -> Color {
-        if status == .packed { return .blue }
-        if status == .pickedUp { return .purple }
-        if status == .leftJob { return .orange }
-        return .green // Must be .turnedIn
-    }
+    // statusToStep / getStepColor / getStatusColor were DELETED here when this
+    // screen adopted JobBoxProgressMeter. They were this file's private copy of
+    // the shift detail's stepper logic, with a different colour map, and they were
+    // the reason two screens described the same box differently. The stage
+    // vocabulary and its colours now live in one place:
+    // JobBox/JobBoxProgressRules.swift and JobBox/JobBoxProgressMeter.swift.
 }
 
 // Helper extension to make JobBoxStatus conform to CaseIterable

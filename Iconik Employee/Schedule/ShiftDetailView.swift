@@ -129,9 +129,11 @@ struct ShiftDetailView: View {
     // Job box state
     @State private var jobBoxes: [JobBox] = []
     @State private var jobBoxListener: ListenerRegistrationWrapper?
-    @State private var latestJobBoxStatus: JobBoxStatus = .unknown
-    @State private var latestJobBoxScannedBy: String = ""
-    @State private var latestJobBoxTimestamp: Date?
+    // `jobBoxes` is the ONLY job box state. There used to be three more —
+    // latestJobBoxStatus / ScannedBy / Timestamp — each written in two places
+    // (the realtime listener and the push-notification observer) and read as if
+    // they agreed with the rows. Everything the card needs is now DERIVED from
+    // the rows by JobBoxProgressRules, so there is nothing left to disagree.
 
     // State for photo detail management
     @State private var selectedPhoto: LocationPhoto? = nil
@@ -589,15 +591,19 @@ struct ShiftDetailView: View {
                         name: person.name,
                         imageURL: photoURL(for: person),
                         size: 40,
-                        ringColor: isMatchingUser(profileName: person.name, scannedByName: latestJobBoxScannedBy)
-                            ? jobBoxHighlightColor : nil
+                        // `holder`, not "whoever scanned last": after a box is
+                        // turned in nobody has it, and the old code went on
+                        // telling you the person who RETURNED it still had it.
+                        // holder is nil for packed and for turned-in boxes.
+                        ringColor: isMatchingUser(profileName: person.name, scannedByName: jobBoxHolder)
+                            ? jobBoxReading.meterTint : nil
                     )
                     VStack(alignment: .leading, spacing: 2) {
                         Text(person.name).font(.subheadline.weight(.semibold))
                         if let notes = person.notes, !notes.isEmpty {
                             Text(notes).font(.caption).foregroundStyle(.secondary)
-                        } else if isMatchingUser(profileName: person.name, scannedByName: latestJobBoxScannedBy) {
-                            Text("Has the job box").font(.caption).foregroundStyle(jobBoxHighlightColor)
+                        } else if isMatchingUser(profileName: person.name, scannedByName: jobBoxHolder) {
+                            Text("Has the job box").font(.caption).foregroundStyle(jobBoxReading.meterTint)
                         }
                     }
                     Spacer()
@@ -629,96 +635,51 @@ struct ShiftDetailView: View {
 
     // MARK: - Job box
 
+    /// The rows for the box this card is about.
+    ///
+    /// A job can carry more than one box — rare (2 of 349 live shifts) but real,
+    /// and the old card silently showed one and hid the other, because it took the
+    /// latest ROW for the status and the latest row WITH A NUMBER for the number,
+    /// which are not necessarily the same box. This groups properly and shows the
+    /// box with the most recent scan, then says how many others there were.
+    private var jobBoxGroups: [(number: String, rows: [JobBox])] {
+        Dictionary(grouping: jobBoxes) { $0.boxNumber }
+            .map { (number: $0.key, rows: $0.value) }
+            .sorted { lhs, rhs in
+                let l = lhs.rows.map(\.timestampDate).max() ?? .distantPast
+                let r = rhs.rows.map(\.timestampDate).max() ?? .distantPast
+                return l > r
+            }
+    }
+
+    /// The progress reading for the displayed box, redaction applied.
+    ///
+    /// PUB.1: the job box is tracked by SESSION id, not by crew, so a scanner's
+    /// name is the one place a person reaches an unannounced draft without going
+    /// anywhere near `photographers`. Stripping the names HERE rather than hiding
+    /// a line means every consumer of the reading — the headline, the crew ring,
+    /// the "Has the job box" label — is redacted by construction instead of each
+    /// having to remember. The box's progress itself is about equipment and stays.
+    private var jobBoxReading: JobBoxProgressReading {
+        let rows = jobBoxGroups.first?.rows ?? []
+        guard isRedactedDraft else { return JobBoxProgressReading(rows: rows) }
+        return JobBoxProgressReading(log: JobBoxProgressReading(rows: rows).scans.map {
+            JobBoxScanPoint(stage: $0.stage, who: nil, at: $0.at)
+        })
+    }
+
+    /// Whoever currently has the box, or "" when it is in the warehouse.
+    private var jobBoxHolder: String { jobBoxReading.holder ?? "" }
+
     @ViewBuilder
     private var jobBoxCard: some View {
-        if latestJobBoxStatus != .unknown {
-            let step = statusToStep(latestJobBoxStatus)
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    AmbientSectionTitle("Job box")
-                    if let box = jobBoxes.sorted(by: { $0.timestampDate > $1.timestampDate }).first,
-                       !box.boxNumber.isEmpty {
-                        Text("#\(box.boxNumber)")
-                            .font(.footnote.weight(.bold))
-                            .foregroundStyle(jobBoxHighlightColor)
-                    }
-                }
-
-                // Four states, drawn as a track that fills — you read progress
-                // from the shape before you read any label.
-                HStack(spacing: 0) {
-                    ForEach(Array(jobBoxSteps.enumerated()), id: \.offset) { index, title in
-                        let number = index + 1
-                        let done = step >= number
-                        VStack(spacing: 6) {
-                            ZStack {
-                                Circle()
-                                    .fill(done ? jobBoxHighlightColor : Color(.tertiarySystemFill))
-                                    .frame(width: 28, height: 28)
-                                if done {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 12, weight: .bold))
-                                        .foregroundStyle(.white)
-                                } else {
-                                    Text("\(number)")
-                                        .font(.system(size: 12, weight: .bold))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            Text(title)
-                                .font(.system(size: 10, weight: done ? .semibold : .regular))
-                                .foregroundStyle(done ? .primary : .secondary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .overlay(alignment: .top) {
-                            if index < jobBoxSteps.count - 1 {
-                                Rectangle()
-                                    .fill(step > number ? jobBoxHighlightColor : Color(.tertiarySystemFill))
-                                    .frame(height: 2)
-                                    .padding(.leading, 20)
-                                    .offset(x: 24, y: 13)
-                            }
-                        }
-                    }
-                }
-
-                // The job box is tracked by SESSION id, not by crew, so this line
-                // is the one place a person's name reaches a draft without going
-                // anywhere near `photographers` — and the whole point of the
-                // redaction is that no name is attached to unannounced work. The
-                // box's progress itself is about equipment and stays.
-                if !latestJobBoxScannedBy.isEmpty && !isRedactedDraft {
-                    HStack(spacing: 4) {
-                        Text("Last scanned by")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text(latestJobBoxScannedBy)
-                            .font(.caption.weight(.semibold))
-                        if let timestamp = latestJobBoxTimestamp {
-                            Text("· \(jobBoxTimestampFormatter.string(from: timestamp))")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-            .ambientCard(density: .roomy, fillWidth: true)
+        if !jobBoxReading.isEmpty {
+            JobBoxProgressCard(
+                reading: jobBoxReading,
+                boxNumber: jobBoxGroups.first?.number ?? "",
+                otherBoxCount: max(0, jobBoxGroups.count - 1)
+            )
         }
-    }
-
-    private var jobBoxSteps: [String] { ["Packed", "Picked up", "Left job", "Turned in"] }
-
-    private var jobBoxHighlightColor: Color {
-        switch latestJobBoxStatus {
-        case .pickedUp: return .blue
-        case .leftJob: return .orange
-        case .turnedIn: return .green
-        default: return .gray
-        }
-    }
-
-    private var jobBoxTimestampFormatter: DateFormatter {
-        let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"; return f
     }
 
     // MARK: - Weather
@@ -1007,18 +968,6 @@ struct ShiftDetailView: View {
         .navigationViewStyle(StackNavigationViewStyle())
     }
 
-    // MARK: - Job box step mapping
-
-    private func statusToStep(_ status: JobBoxStatus) -> Int {
-        switch status {
-        case .packed: return 1
-        case .pickedUp: return 2
-        case .leftJob: return 3
-        case .turnedIn: return 4
-        case .unknown: return 0
-        }
-    }
-    
     // MARK: - Job Box Methods
     
     // Start listening for job box updates
@@ -1039,14 +988,8 @@ struct ShiftDetailView: View {
 
         // Start a new listener
         jobBoxListener = JobBoxService.shared.listenForJobBoxes(forShift: compatibilityEvent, organizationID: session.organizationID) { jobBoxes in
+            // The rows ARE the state; nothing is summarised out of them here.
             self.jobBoxes = jobBoxes
-
-            // Find the latest job box record based on timestamp
-            if let latestBox = jobBoxes.sorted(by: { $0.timestampDate > $1.timestampDate }).first {
-                self.latestJobBoxStatus = latestBox.jobBoxStatus
-                self.latestJobBoxScannedBy = latestBox.scannedBy
-                self.latestJobBoxTimestamp = latestBox.timestampDate
-            }
         }
     }
     
@@ -1066,14 +1009,35 @@ struct ShiftDetailView: View {
             let currentShiftUid = self.session.id
             
             if shiftUid == currentShiftUid {
-                // Process the notification to update UI
+                // A push arrives before the realtime re-fetch lands, and the card
+                // should move immediately. Since the ROWS are now the only state,
+                // the update is an appended row rather than three summary fields —
+                // which also means the appended scan goes through exactly the same
+                // rules as a fetched one, instead of bypassing them.
+                //
+                // The realtime listener re-fetches the whole set on any change and
+                // REPLACES this array, so the optimistic row cannot linger or
+                // double up once the real row arrives.
                 if let notificationInfo = JobBoxService.shared.processJobBoxNotification(userInfo: userInfo) {
-                    self.latestJobBoxStatus = notificationInfo.status
-                    self.latestJobBoxScannedBy = notificationInfo.scannedBy
-                    
-                    // Use the current time for the timestamp if not provided in the notification
-                    // In a production app, we would ideally get this from the notification
-                    self.latestJobBoxTimestamp = Date()
+                    // The box number comes from the rows we already have, NOT from
+                    // the payload: `notify_job_box` sends only status, photographer
+                    // and shiftUid — it used to send boxNumber and that was removed
+                    // deliberately because no client read it. Reading a key that is
+                    // not there is the PSH.1 defect class this project keeps paying
+                    // for, so the number is taken from the group this scan joins.
+                    let boxNumber = self.jobBoxGroups.first?.number ?? ""
+                    self.jobBoxes.append(JobBox(
+                        id: UUID().uuidString.lowercased(),
+                        shift_uid: currentShiftUid,
+                        status: notificationInfo.status.rawValue,
+                        photographer: notificationInfo.scannedBy,
+                        timestamp: Date(),
+                        box_number: boxNumber,
+                        organization_id: self.session.organizationID,
+                        school: nil,
+                        school_id: nil,
+                        user_id: nil
+                    ))
                 }
             }
         }
