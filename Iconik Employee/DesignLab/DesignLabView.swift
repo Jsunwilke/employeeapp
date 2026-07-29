@@ -42,13 +42,12 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     /// operator confirmed both device smokes on the converted screens — a
     /// validation reference outlives the port it validates, not the phase.
     case timeOff
-    /// AMB.11's. Started as four options against the real distribution of box
-    /// states; the operator chose the scrubber 2026-07-29 and it SHIPPED to both
-    /// the shift detail and the manager tracker. What remains here is a
-    /// validation reference — the production types over sample data the real
-    /// screens cannot conjure, plus a reproduction of the bar it replaced. It is
-    /// deleted once the device smoke is confirmed.
-    case jobBoxTrack
+    /// AMB.11's job box meter mockup was DELETED at its close (2026-07-29), the
+    /// same rule AMB.7's two Reports mockups went by: the operator confirmed the
+    /// converted screens on a device, so the validation reference had outlived the
+    /// port it validated. Its awkward states — Packed-then-Turned-In, a box on its
+    /// second trip — are covered executably by
+    /// `scripts/test_jobbox_progress_rules.sh` instead of by a screen.
 
     var id: String { rawValue }
 
@@ -57,7 +56,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
         case .timeOff: return "Time Off"
-        case .jobBoxTrack: return "Job Box Progress"
         }
     }
 
@@ -68,7 +66,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
         case .timeOff: return "AMB.8"
-        case .jobBoxTrack: return "AMB.11"
         }
     }
 
@@ -80,8 +77,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
         case .timeOff:
             return "Five surfaces. The balance moves out of Settings to the top of the screen it is about, status gets ONE rendering instead of three, and the manager queue admits it is a queue."
-        case .jobBoxTrack:
-            return "The shipped scrubber, drawn by the production types the real screens use. Five real box states behind a picker, with the bar it replaced underneath for comparison."
         }
     }
 
@@ -90,7 +85,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
         case .timeOff: return "calendar.badge.clock"
-        case .jobBoxTrack: return "shippingbox.fill"
         }
     }
 
@@ -103,7 +97,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return .purple
         case .palette: return .pink
         case .timeOff: return TimeOffMockup.featureTint
-        case .jobBoxTrack: return JobBoxTrackMockup.featureTint
         }
     }
 
@@ -113,7 +106,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
         case .timeOff: TimeOffMockup()
-        case .jobBoxTrack: JobBoxTrackMockup()
         }
     }
 }

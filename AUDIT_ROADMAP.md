@@ -1097,7 +1097,67 @@ other rebases onto it.
 
 **Batch 4**
 
-- [ ] **AMB.11 Job box / NFC** (18 views, 5,198 lines)
+- [ ] **AMB.11 Job box / NFC** (18 views, 5,198 lines) — **PARTIAL: the progress meter
+  slice is DONE, SHIPPED and PUSHED 2026-07-29.** The rest of the surface is untouched, so
+  the phase stays open.
+
+  Closed out of order because the operator looked at the shift detail and said the job box
+  bar read "funky". It did — the connector was positioned with constants
+  (`.padding(.leading, 20).offset(x: 24)`) inside columns that flex to fill the width, so on
+  a 402pt iPhone the line started at the dot's CENTRE and ended 6pt short of the next, and on
+  an iPad it detached from the dots entirely (both measured, the iPad one on device).
+
+  **But the cosmetic bug was not the real one.** `job_boxes` is an APPEND-ONLY SCAN LOG —
+  every scan INSERTs a row, there is no update-status path in either client — so the rows for
+  a box ARE its history. Both screens ignored that: each took ONE row, turned its status into
+  a number, and ticked every stage below it. Live counts over the 351 boxes carrying a shift:
+  199 Packed-only, 47 Packed+PickedUp, **35 walking all four**, 31 going Packed straight to
+  Turned In, 22 skipping one, 11 more across six shapes including four never packed at all.
+  **Ten per cent walk all four stages**, so a box scanned twice was drawn with four ticks —
+  the screen asserting two scans that do not exist.
+
+  Shipped: `JobBox/JobBoxProgressRules.swift` (SwiftUI-free, 60 checks via
+  `scripts/test_jobbox_progress_rules.sh`, six rules each proved to fail without their fix)
+  and `JobBox/JobBoxProgressMeter.swift` (the scrubber). **Two old bars deleted in the same
+  commit** — the shift detail's stepper plus four helpers and three `@State` fields, and the
+  manager tracker's private copy with a DIFFERENT colour map, which is why two screens
+  described one box differently. Old-path grep clean.
+
+  Two rules make a meter honest and both are tested: **position is not completeness** (fill
+  shows where the box IS; each stage's notch shows whether a scan exists), and **a box is a
+  reused object so progress means the CURRENT TRIP** (cut the log at the last Packed, because
+  the manager tracker groups by box number across all time and June's trip would otherwise
+  merge with October's).
+
+  Also fixed: the crew card credited "Has the job box" to whoever scanned LAST, so it kept
+  crediting the person who had RETURNED it (now `holder`, nil for packed and turned-in); a
+  second box on one job is no longer silently hidden; PUB.1 redaction moved to reading-BUILD
+  time so every consumer is redacted by construction.
+
+  **THE PROCESS LESSON, and it cost three rounds: a rejection tells you the DIRECTION, not
+  the DISTANCE.** Round 1 offered four variations on the existing stepper and led with one
+  captioned "smallest change from today" — rejected as "almost identical to what i have that
+  looks wonky", which is D12 for the third time in this arc and the same failure the bottom
+  tab bar had in AMB.4. I over-corrected in round 2 and deleted the meter entirely — "not
+  really liking any of those. I do want some sort of progress meter though." Round 3's four
+  real meters (ring / block bar / filling crate / scrubber) landed; the operator chose the
+  scrubber. **Never lead a set of options with the status quo** — AMB.2 already recorded that
+  trap and I walked into it anyway.
+
+  Fix-round audit of my own diff caught two before commit: the notification handler read
+  `userInfo["boxNumber"]`, which `notify_job_box` deliberately stopped sending (the PSH.1
+  defect class, verified against the live trigger source); and the manager tracker built each
+  box's HISTORY from the search-FILTERED rows, so searching a photographer's name dropped the
+  photographer-less Packed row and drew Packed as "never scanned" because of what was typed
+  in a search field.
+
+  Operator smoke PASSED 2026-07-29 ("works perfect"); iPhone and iPad both driven in the
+  simulator against live data first. The lab mockup and its gallery entry were DELETED at
+  this close. **Left unverified and recorded rather than claimed:** the push-notification TAP
+  handler's optimistic append — push DELIVERY was verified, but the tap gesture could not be
+  driven reliably from the simulator tooling. The primary live-update path is Supabase
+  realtime and is unchanged. `/code-review` was NOT run; the operator chose to close without
+  it, and this work touches no schema, RLS, auth, PowerSync or Captura path.
 - [ ] **AMB.12 Settings, Manager, Training** (~6,600 lines) — the tail, converted per D9.
   Closes the arc and deletes the lab harness + its menu entry.
 
