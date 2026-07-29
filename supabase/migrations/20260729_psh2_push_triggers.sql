@@ -544,7 +544,10 @@ BEGIN
    WHERE coalesce(n.id, '') <> ''
      AND NOT EXISTS (
            SELECT 1 FROM jsonb_array_elements(coalesce(OLD.photographers, '[]'::jsonb)) o
-            WHERE o->>'id' = n.id
+            -- lower() both sides (fix-round F5), matching every other fold in this
+            -- file: a case-flip rewrite of the same person must not read as
+            -- remove-plus-add and fire a spurious assignment push.
+            WHERE lower(o->>'id') = lower(n.id)
          );
 
   IF v_added IS NULL THEN
@@ -769,10 +772,19 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Cap BEFORE building the payload (fix-round F2): psh2_send_push caps only its body
+  -- parameter, and the first rewrite passed the UNCAPPED note into data.note — which is
+  -- spread into the same 4KB APNs payload, so a pasted multi-KB note would have made
+  -- Apple reject the whole push invisibly. Capping here covers both uses, exactly as
+  -- the FLG.1 original did.
+  IF length(v_body) > 300 THEN
+    v_body := left(v_body, 297) || '...';
+  END IF;
+
   PERFORM public.psh2_send_push(
     ARRAY[NEW.id],
     'You''ve Been Flagged',
-    v_body,                      -- psh2_send_push caps at 300 chars (4KB APNs limit)
+    v_body,
     'flag',                      -- must match PushNotificationManager.NotificationType
     jsonb_build_object('flaggedBy', NEW.flagged_by, 'note', v_body)
   );

@@ -200,14 +200,25 @@ class TabBarManager: ObservableObject {
     ) {
         guard let pending else { return }
         if pending.isExpired {
-            DispatchQueue.main.async { [weak self] in self?[keyPath: keyPath] = nil }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self[keyPath: keyPath] == pending else { return }
+                self[keyPath: keyPath] = nil
+            }
             return
         }
         guard let match = items.first(where: { idOf($0).lowercased() == pending.id.lowercased() }) else {
             return
         }
         DispatchQueue.main.async { [weak self] in
-            self?[keyPath: keyPath] = nil
+            guard let self else { return }
+            // Compare-and-clear (fix-round F6): the clear runs a runloop turn after the
+            // match, and a SECOND push tap can land in that gap — an unconditional nil
+            // would discard the newer link and dead-end its tap. Only the link this
+            // block consumed is cleared; a newer one survives for its own consume.
+            // (This is what PendingDeepLink's Equatable is for.)
+            if self[keyPath: keyPath] == pending {
+                self[keyPath: keyPath] = nil
+            }
             onMatch(match)
         }
     }

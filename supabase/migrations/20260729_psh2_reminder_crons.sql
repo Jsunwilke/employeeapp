@@ -22,12 +22,14 @@
 -- ============================================================================
 -- Clock-in: "your session starts within 30 minutes and you haven't clocked in"
 -- ============================================================================
--- Runs every 30 minutes. The window is FLOORED to the half-hour grid — [10:30, 11:00)
--- regardless of whether cron fired at 10:30:00 or 10:31:40 — so a late run can neither
--- skip a session nor overlap the next run's window and double-remind. (The 00:00 run
--- floors to the NEW day's 00:00 and covers [00:00, 00:30) correctly — an earlier draft
--- of this comment claimed that window was unreachable, which the fix-round audit
--- disproved by reading the arithmetic.)
+-- Runs every 30 minutes. The window is FLOORED to the half-hour grid and half-open on
+-- the LEFT — (10:30, 11:00] — regardless of whether cron fired at 10:30:00 or 10:31:40,
+-- so a late run can neither skip a session nor overlap the next run's window, and an
+-- on-grid start (the dominant real case) is reminded by the PRECEDING run with ~30
+-- minutes' notice. Known limit, checked against live data rather than glossed: a
+-- start_time of exactly '00:00' would belong to no window (the previous day's 23:30 run
+-- filters on yesterday's date) — zero such rows exist, and a session genuinely starting
+-- at midnight would be the anomaly worth hearing about.
 
 CREATE OR REPLACE FUNCTION public.dispatch_clock_in_reminders()
 RETURNS void
