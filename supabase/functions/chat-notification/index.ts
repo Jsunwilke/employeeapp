@@ -67,24 +67,29 @@ serve(async (req) => {
     // chat push body would have been empty.
     const messageText = record.text as string || "";
 
-    // Get the conversation to find participants
-    const { data: conversation, error: convError } = await supabase
-      .from("conversations")
-      .select("participants, name")
-      .eq("id", conversationId)
-      .single();
+    // Conversation and sender-name lookups run in PARALLEL (review round): both depend
+    // only on the webhook record, and this is the per-message hot path — serializing
+    // them added a full DB round trip of latency to every chat push.
+    const [convResult, senderResult] = await Promise.all([
+      supabase
+        .from("conversations")
+        .select("participants, name")
+        .eq("id", conversationId)
+        .single(),
+      supabase
+        .from("users")
+        .select("first_name, last_name")
+        .eq("id", senderId.toLowerCase())
+        .single(),
+    ]);
 
+    const { data: conversation, error: convError } = convResult;
     if (convError || !conversation) {
       console.error("Error fetching conversation:", convError);
       throw new Error("Conversation not found");
     }
 
-    // Get sender name
-    const { data: sender, error: senderError } = await supabase
-      .from("users")
-      .select("first_name, last_name")
-      .eq("id", senderId.toLowerCase())
-      .single();
+    const { data: sender } = senderResult;
 
     const senderName = sender
       ? `${sender.first_name || ""} ${sender.last_name || ""}`.trim()
@@ -113,12 +118,15 @@ serve(async (req) => {
       );
     }
 
-    // The iOS GIF send path stores the raw Giphy URL as the message `text`, which is
-    // noise on a lock screen. A body that is nothing but a URL gets a label instead;
-    // real attachment texts ("📷 Photo", a filename) pass through untouched.
-    // (PSH.2 fix round, F7.)
+    // The iOS GIF send path stores the raw Giphy URL as a FILE-type message's `text`,
+    // which is noise on a lock screen. The label applies only when the message type is
+    // 'file' AND the text is a bare URL (review round narrowed this): a plain TEXT
+    // message that is just a pasted link — "https://forms.school.edu/retake-signup" —
+    // is the message's whole content and must pass through verbatim, and real
+    // attachment texts ("📷 Photo", a filename) are untouched either way.
     const isBareUrl = /^https?:\/\/\S+$/.test(messageText.trim());
-    const displayText = isBareUrl ? "Sent an attachment" : messageText;
+    const displayText =
+      (record.type as string) === "file" && isBareUrl ? "Sent an attachment" : messageText;
 
     // Truncate message for notification
     const truncatedMessage =

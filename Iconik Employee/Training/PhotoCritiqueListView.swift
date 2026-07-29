@@ -2,9 +2,10 @@ import SwiftUI
 
 struct PhotoCritiqueListView: View {
     @StateObject private var critiqueService = PhotoCritiqueService.shared
-    // PSH.2: a tapped critique push parks the critique id here; consumed below once the
-    // service's listener has the critique.
-    @ObservedObject private var tabBarManager = TabBarManager.shared
+    // PSH.2: a tapped critique push parks a PendingDeepLink here; consumed below once
+    // the service's listener has the critique. Plain let, NOT @ObservedObject (review
+    // round): this view needs exactly one of the manager's publishers.
+    private let tabBarManager = TabBarManager.shared
     @State private var isGridView = true
     @State private var selectedCritique: Critique?
     @State private var isRefreshing = false
@@ -56,21 +57,19 @@ struct PhotoCritiqueListView: View {
             .tabBarClearance()
             .onAppear {
                 critiqueService.startListening()
-                consumePendingCritique(id: tabBarManager.pendingCritiqueId,
-                                       in: critiqueService.critiques)
+                consumePending(tabBarManager.pendingCritique, in: critiqueService.critiques)
             }
             .onDisappear {
                 critiqueService.stopListening()
             }
             // PSH.2 deep link: the push tap usually beats the listener's first load, so
-            // re-check whenever either side changes. The EMITTED value is passed in —
-            // @Published emits during willSet, so re-reading the property inside its own
-            // emission returns the pre-assignment value (fix-round audit, H2).
-            .onReceive(tabBarManager.$pendingCritiqueId) { id in
-                consumePendingCritique(id: id, in: critiqueService.critiques)
+            // re-check whenever either side changes. The consume rules (emitted value,
+            // async mutation hop, expiry) live in TabBarManager.consumePendingDeepLink.
+            .onReceive(tabBarManager.$pendingCritique) { pending in
+                consumePending(pending, in: critiqueService.critiques)
             }
             .onReceive(critiqueService.$critiques) { list in
-                consumePendingCritique(id: tabBarManager.pendingCritiqueId, in: list)
+                consumePending(tabBarManager.pendingCritique, in: list)
             }
             .sheet(item: $selectedCritique) { critique in
                 PhotoCritiqueDetailView(critique: critique)
@@ -81,21 +80,9 @@ struct PhotoCritiqueListView: View {
         }
     }
     
-    /// Consume-and-clear a push deep link (the selectedClassGroupJobId pattern). Both
-    /// inputs arrive as parameters so a caller inside a @Published emission hands us the
-    /// post-assignment value; the mutations hop off the current emission because a
-    /// same-property assignment inside its own willSet emission is DISCARDED
-    /// (probe-verified by the fix-round audit).
-    ///
-    /// Deliberately NO drop-on-no-match branch: the singleton service retains the
-    /// PREVIOUS visit's list across mounts, so a warm-app tap on a freshly published
-    /// critique would consume against stale data and dead-end (third-round audit, F2).
-    /// An unmatched id opens nothing and sign-out clears it.
-    private func consumePendingCritique(id: String?, in critiques: [Critique]) {
-        guard let id else { return }
-        guard let match = critiques.first(where: { $0.id.lowercased() == id.lowercased() }) else { return }
-        DispatchQueue.main.async {
-            tabBarManager.pendingCritiqueId = nil
+    private func consumePending(_ pending: PendingDeepLink?, in critiques: [Critique]) {
+        tabBarManager.consumePendingDeepLink(\.pendingCritique, emitted: pending,
+                                             in: critiques, id: { $0.id }) { match in
             selectedCritique = match
         }
     }

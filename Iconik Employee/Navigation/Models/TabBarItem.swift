@@ -114,6 +114,23 @@ struct TabBarConfiguration: Codable {
     )
 }
 
+// MARK: - Push Deep Links
+
+/// A push deep link waiting for its destination screen to load. Carries the tap moment
+/// so a link that cannot resolve promptly EXPIRES — the navigation a person asked for
+/// two minutes ago is no longer the navigation they want.
+struct PendingDeepLink: Equatable {
+    let id: String
+    let tappedAt: Date
+
+    init(id: String) {
+        self.id = id
+        self.tappedAt = Date()
+    }
+
+    var isExpired: Bool { Date().timeIntervalSince(tappedAt) > 120 }
+}
+
 // MARK: - Tab Bar Manager
 class TabBarManager: ObservableObject {
     static let shared = TabBarManager()
@@ -142,22 +159,57 @@ class TabBarManager: ObservableObject {
     @Published var selectedClassGroupJobId: String? = nil
     @Published var selectedClassGroupJobType: String? = nil
 
-    // PSH.2 — a tapped push navigates. PushNotificationManager sets the pending id FIRST
-    // and selectedTab second; the target view consumes-and-clears its id in onAppear /
-    // onChange, exactly the selectedClassGroupJobId shape above. These are ids, not
-    // models, because a push payload carries ids — each consumer resolves its own model
-    // (and quietly stays put if the id no longer resolves, e.g. a deleted conversation).
-    @Published var pendingConversationId: String? = nil
-    @Published var pendingSessionId: String? = nil
-    @Published var pendingCritiqueId: String? = nil
+    // PSH.2 — a tapped push navigates. PushNotificationManager sets the pending link
+    // FIRST and selectedTab second; the target view consumes-and-clears it through
+    // consumePendingDeepLink below, exactly the selectedClassGroupJobId shape above.
+    // These carry ids, not models, because a push payload carries ids — each consumer
+    // resolves its own model.
+    @Published var pendingConversation: PendingDeepLink? = nil
+    @Published var pendingSession: PendingDeepLink? = nil
+    @Published var pendingCritique: PendingDeepLink? = nil
 
-    /// Called from sign-out. A pending id that never resolved (its target list stayed
-    /// empty) would otherwise survive into the NEXT sign-in on a shared device and
-    /// navigate the new user into the previous user's destination. (Fix-round audit, M4.)
+    /// Called from BOTH sign-out paths (explicit signOut() and the SDK .signedOut
+    /// event). A pending link that never resolved would otherwise survive into the NEXT
+    /// sign-in on a shared device and navigate the new user into the previous user's
+    /// destination. (Fix-round audit, M4/F2.)
     func clearPendingPushDestinations() {
-        pendingConversationId = nil
-        pendingSessionId = nil
-        pendingCritiqueId = nil
+        pendingConversation = nil
+        pendingSession = nil
+        pendingCritique = nil
+    }
+
+    /// THE deep-link consumer — one copy of rules that three views used to hand-carry
+    /// and that two audit rounds each caught a copy violating:
+    ///   1. The caller passes the EMITTED value. @Published emits during willSet, so
+    ///      re-reading the property inside its own emission returns the pre-assignment
+    ///      value (probe-verified) — the original per-view copies missed taps that way.
+    ///   2. All mutations hop off the emission via DispatchQueue.main.async — a
+    ///      same-property assignment inside its own willSet emission is DISCARDED
+    ///      (also probe-verified), which left ids armed to re-fire.
+    ///   3. A stale tap EXPIRES rather than firing late: there is deliberately no
+    ///      drop-on-no-match (cache-first list emissions are not authoritative — a
+    ///      brand-new conversation's push id is exactly what the cached list lacks),
+    ///      but a link that has not resolved within the window is discarded instead of
+    ///      yanking the user out of whatever they moved on to minutes later.
+    func consumePendingDeepLink<T>(
+        _ keyPath: ReferenceWritableKeyPath<TabBarManager, PendingDeepLink?>,
+        emitted pending: PendingDeepLink?,
+        in items: [T],
+        id idOf: (T) -> String,
+        onMatch: @escaping (T) -> Void
+    ) {
+        guard let pending else { return }
+        if pending.isExpired {
+            DispatchQueue.main.async { [weak self] in self?[keyPath: keyPath] = nil }
+            return
+        }
+        guard let match = items.first(where: { idOf($0).lowercased() == pending.id.lowercased() }) else {
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?[keyPath: keyPath] = nil
+            onMatch(match)
+        }
     }
     
     private let configurationKey = "TabBarConfiguration"

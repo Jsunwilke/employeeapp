@@ -307,24 +307,49 @@ class ManagerJobBoxViewModel: ObservableObject {
         loadJobBoxes()
     }
     
-    // Manually update a job box status
+    // Manually correct a job box status
     func updateJobBoxStatus(jobBox: JobBoxWithEvent, newStatus: JobBoxStatus) {
         Task {
             do {
-                // `timestamp` is the scan-moment column that actually exists; writing
-                // updated_at (which does not) made PostgREST reject the whole UPDATE, so
-                // a manager's manual status correction had never once worked. Stamping
-                // now also makes the correction the shift's latest state, which is what
-                // the progression bar should show.
-                let updateData: [String: AnyJSON] = [
+                // A correction is a new scan EVENT, not an edit (review round). Every
+                // other writer on this shared table — the iOS NFC scan path and the web
+                // app — INSERTs one row per status change and reads latest-by-timestamp,
+                // and the crew push trigger fires on INSERT. The previous version
+                // UPDATEd the latest row in place, which (a) falsified the original
+                // scan's recorded moment and (b) made a manager's correction the one
+                // status change the crew was never told about. (Before that it wrote
+                // the nonexistent updated_at column and never worked at all.) Inserting
+                // makes the correction the latest state everywhere — progression bar,
+                // web modal, crew pushes — while the history stays true.
+                let correctedBy = UserDefaults.standard.string(forKey: "userFirstName") ?? "Manager"
+                let userId = UserManager.shared.getCurrentUserIDUnified()?.lowercased() ?? ""
+
+                var insertData: [String: AnyJSON] = [
+                    "id": .string(UUID().uuidString.lowercased()),
                     "status": .string(newStatus.rawValue),
-                    "timestamp": .string(Date().ISO8601Format())
+                    "photographer": .string(correctedBy),
+                    "timestamp": .string(Date().ISO8601Format()),
+                    "organization_id": .string(jobBox.jobBox.organizationID)
                 ]
+                if !jobBox.jobBox.boxNumber.isEmpty {
+                    insertData["box_number"] = .string(jobBox.jobBox.boxNumber)
+                }
+                if !jobBox.jobBox.shiftUid.isEmpty {
+                    insertData["shift_uid"] = .string(jobBox.jobBox.shiftUid)
+                }
+                if let school = jobBox.jobBox.school, !school.isEmpty {
+                    insertData["school"] = .string(school)
+                }
+                if !jobBox.jobBox.schoolId.isEmpty {
+                    insertData["school_id"] = .string(jobBox.jobBox.schoolId)
+                }
+                if !userId.isEmpty {
+                    insertData["user_id"] = .string(userId)
+                }
 
                 try await supabase
                     .from("job_boxes")
-                    .update(updateData)
-                    .eq("id", value: jobBox.id)
+                    .insert(insertData)
                     .execute()
 
                 await MainActor.run {

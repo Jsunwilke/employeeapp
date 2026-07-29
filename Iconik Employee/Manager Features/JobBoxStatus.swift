@@ -77,6 +77,20 @@ struct JobBox: Identifiable, Codable {
 // Decodable lives in an extension so the memberwise initializer survives (the manager
 // tracker constructs JobBox by hand).
 extension JobBox {
+    // Shared, not per-row (review round): ISO8601DateFormatter is documented-expensive
+    // to create, and the manager tracker decodes 1000+ rows per load — the string-parse
+    // fallback was constructing one (sometimes two) formatters per row.
+    private static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoPlain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     /// The `timestamp` column is timestamptz and arrives as an ISO8601 string that may
     /// or may not carry fractional seconds (both exist live). A decode that only handles
     /// one form throws, and a thrown decode empties the WHOLE fetch — the failure would
@@ -100,14 +114,7 @@ extension JobBox {
         if let date = try? c.decode(Date.self, forKey: .timestamp) {
             timestamp = date
         } else if let string = try? c.decode(String.self, forKey: .timestamp) {
-            let iso = ISO8601DateFormatter()
-            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let parsed = iso.date(from: string) {
-                timestamp = parsed
-            } else {
-                iso.formatOptions = [.withInternetDateTime]
-                timestamp = iso.date(from: string)
-            }
+            timestamp = Self.isoFractional.date(from: string) ?? Self.isoPlain.date(from: string)
         } else {
             timestamp = nil
         }

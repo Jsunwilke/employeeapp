@@ -98,12 +98,13 @@ class SupabaseAuthService: ObservableObject {
                         // and silently affects no rows.
                         self.currentUser = nil
                         self.isAuthenticated = false
-                        // Pending push deep links are pure in-memory state, so THIS clear
-                        // is safe here — and it must live here as well as in signOut(),
-                        // because an SDK-driven sign-out (revoked session, refresh
-                        // failure) never runs signOut() and would otherwise carry user
-                        // A's pending navigation into user B's session on a shared
-                        // device. (Fourth-round audit, F2.)
+                        // Pending push deep links are pure in-memory state, so this
+                        // event handler is the ONE place they clear (the review round
+                        // removed a duplicate call from signOut(), which this event
+                        // also covers): explicit sign-outs and SDK-driven ones
+                        // (revoked session, refresh failure) both land here, and
+                        // without the clear a shared device would carry user A's
+                        // pending navigation into user B's session.
                         TabBarManager.shared.clearPendingPushDestinations()
                         print("[SupabaseAuthService] User signed out")
 
@@ -233,10 +234,9 @@ class SupabaseAuthService: ObservableObject {
             await PushNotificationManager.clearAPNsTokenOnSignOut(userId: currentUserId)
         }
 
-        // 6c. Drop any push deep link that never resolved. On a shared device a pending
-        //     id surviving sign-out would navigate the NEXT user into the previous
-        //     user's destination on their first visit to that tab.
-        await MainActor.run { TabBarManager.shared.clearPendingPushDestinations() }
+        // (Pending push deep links are cleared in the .signedOut auth-event handler,
+        // which fires for THIS path and for SDK-driven sign-outs alike — one clear,
+        // one place. Unlike the token detach above, it needs no auth context.)
 
         // 7. PII + identity keys in UserDefaults (leave device prefs
         //    like appTheme alone — they are not account data)

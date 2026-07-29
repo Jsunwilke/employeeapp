@@ -145,10 +145,13 @@ serve(async (req) => {
       assignedEmployees = [...ids];
     }
 
-    if (assignedEmployees.length === 0) {
-      const legacyPhotographers = sessionData.photographers as Photographer[] || [];
-      assignedEmployees = legacyPhotographers.map((p) => p.id).filter(Boolean);
-    }
+    // NOTE (review round): an earlier version fell back to record.photographers — the
+    // pre-MD7 embedded crew array — "for replayed old payloads". That was a parallel
+    // implementation of the path this phase replaced (delete-first violation), and its
+    // one activation route was exactly the hazard the roadmap warns about: a replayed
+    // historical webhook resolving a years-stale crew list and pushing session changes
+    // to people long off the session. Deleted; session_days and crew_ids are the only
+    // crew sources.
 
     console.log(`Crew resolved: ${assignedEmployees.length} assignee(s)`);
 
@@ -183,14 +186,27 @@ serve(async (req) => {
     // insert the sessions row before the day rows carrying the crew, so the old INSERT
     // fire never had a recipient; the "new session" push for direct-published sessions
     // comes from the session_days trigger instead.)
+    //
+    // The REVERSE transition is a retraction, not an edit (review round): pulling a
+    // published session back to draft removes it from the crew's schedule (PUB.1 draft
+    // redaction), so "Session Updated" was misleading and its tap dead-ended — and a
+    // subsequent draft delete is deliberately silent, so without this the crew were
+    // never told at all and could still show up. An unpublish reads as a cancellation;
+    // if the session is later re-published, the publish transition announces it anew.
     const wasPublished = Boolean(old_record?.is_published);
     const isPublishTransition =
       type === "UPDATE" && !wasPublished && Boolean(record.is_published);
+    const isUnpublishTransition =
+      type === "UPDATE" && wasPublished && !record.is_published;
 
     if (type === "INSERT" || isPublishTransition) {
       title = "New Session Assigned";
       body = `You've been assigned to ${schoolName}${onDate}`;
       notificationType = "session_new";
+    } else if (isUnpublishTransition) {
+      title = "Session Cancelled";
+      body = `Your session at ${schoolName}${onDate} has been cancelled`;
+      notificationType = "session_delete";
     } else if (type === "DELETE") {
       title = "Session Cancelled";
       body = `Your session at ${schoolName}${onDate} has been cancelled`;

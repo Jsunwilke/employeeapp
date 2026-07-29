@@ -1296,7 +1296,7 @@ other rebases onto it.
 > not exist either (only an orphaned `fcm_token_updated_at`), so the stray iOS writer had
 > been erroring on every launch. `DATABASE_SCHEMA.md` still lists `fcm_token` and is stale.
 
-#### PSH.2 — NOTIFICATION COVERAGE — SHIPPED 2026-07-29 (crons pending one unblock)
+#### PSH.2 — NOTIFICATION COVERAGE — SHIPPED 2026-07-29, everything live
 
 Scope confirmed by the operator 2026-07-28. Everything below is applied to the LIVE
 database and deployed unless marked open. Each trigger was FIRED against a real row in a
@@ -1351,9 +1351,10 @@ exception handler was sabotage-tested (a raising transport did not roll back the
   `supabase/migrations/20260729_psh2_reminder_crons.sql` (org-local timezones via
   `organizations.preferences->>'timezone'`, the daily-workflow-check convention;
   half-hour-grid windows so a late cron can neither skip nor double-remind). The
-  auto-mode classifier BLOCKED applying it live (reported in-session 2026-07-29);
-  apply the file as-is once unblocked, then verify `SELECT * FROM cron.job WHERE
-  jobname LIKE 'psh2-%'` shows three jobs.
+  auto-mode classifier initially blocked the live apply (reported in-session); the
+  operator directed it through on 2026-07-29 and the earlier text claiming it was
+  still pending was itself a review finding — this bullet is now the single truth:
+  the three jobs are LIVE and verified in cron.job.
 - [x] **A tapped push now navigates.** `PushNotificationManager` routes through
   `TabBarManager` pending ids (the `selectedClassGroupJobId` consume-and-clear shape):
   chat → the conversation, session/job box → the shift, critique → the critique sheet,
@@ -1399,6 +1400,47 @@ target must both belong to the row's org); `notify_job_box` resolved crew for AN
 `shift_uid` as SECURITY DEFINER (now: the shift must belong to the row's org);
 `user_devices` lost its inert authenticated INSERT/UPDATE/TRUNCATE grants. Each guard
 fired both ways in rolled-back transactions (attack path 0 requests, legit path 1).
+
+**Operator-run /code-review round (2026-07-29) — 8 finder angles, 21 verified findings,
+all fixed same session except the declined list below.** Fixed and live-verified:
+case-folded id comparisons in every SQL recipient/suppression filter (341 report rows +
+6 time-entry users verifiably carry uppercase ids); the sessions UPDATE trigger gained
+its missing draft/time-off gate (a draft rename pushed to crew PUB.1 redacts drafts
+from); unpublishing a published session now reads as a CANCELLATION (it was "Session
+Updated" with a dead-end tap, and an unpublish-then-delete told the crew nothing);
+clock-in windows flipped to (start, end] so an on-grid 09:00 session is reminded at
+08:30, not 09:00; the reap loop closed (every BadDeviceToken now earns one try on the
+other Apple endpoint, so a mis-recorded environment self-heals instead of permanently
+silencing the device); the notes-only org excluded from report reminders; time-off push
+dates render in org-local time (evening submissions said the wrong day); the manager's
+job-box correction INSERTs a new scan event (it mutated history in place and was the
+one status change that never pushed); the legacy record.photographers fallback deleted
+(delete-first; a replayed pre-MD7 payload would have pushed a years-stale crew); chat
+banners suppressed over the thread being read; notify_user_flagged migrated onto the
+shared transport; the three deep-link consumers consolidated into ONE
+TabBarManager.consumePendingDeepLink with a 120-second tap expiry; plus perf fixes
+(@ObservedObject over-subscription, guard ordering, parallel lookups, shared
+formatters) and both false doc claims corrected (this file's crons bullet; the
+job_boxes realtime migration's "no web subscription" — SessionDetailsModal.js:255 had
+a dormant one this change deliberately activates).
+
+**Review findings DECLINED, with reasons (evaluated, not ignored):**
+- The photographers-jsonb crew extraction appears in ~7 SQL bodies; a shared helper was
+  declined this round — all seven copies are live-verified working and rewriting seven
+  SECURITY DEFINER functions at phase close risks more than it saves. Candidate for the
+  next phase that touches crew shape.
+- The tolerant ISO8601 decode exists in Session.swift and JobBox; a shared Swift helper
+  was declined for the same reason (Session's copy has shipped for weeks).
+- Set-based dispatcher rewrites (vs per-org loops): declined — the loop's per-org
+  exception isolation is deliberate and org count is small.
+- The tracker's card-number search operates on a permanently empty field (Firebase-era
+  ghost) — dead feature, recorded for a cleanup phase rather than surgically removed at
+  1am.
+- The gate's in-function JWT signature verification (vs the verify_jwt dependency):
+  already on the SEC.* list.
+- The user_devices backfill's arbitrary owner pick on duplicate tokens: unfixable
+  retroactively (source columns dropped) and self-healing on next launch via
+  register_push_device.
 
 **Recorded, deliberately not changed in PSH.2:**
 - `photo_critiques` RLS is `WITH CHECK (true)` / `USING (true)` for anon AND

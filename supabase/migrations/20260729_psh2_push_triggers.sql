@@ -197,11 +197,10 @@ BEGIN
     END,
     'photo_critique',
     jsonb_build_object(
-      -- Keys consumed by PushNotificationManager's tap routing (critiqueId feeds
-      -- TabBarManager.pendingCritiqueId; the PhotoCritiqueListView consumer resolves it).
-      'critiqueId',    NEW.id,
-      'submitterName', v_submitter,
-      'exampleType',   coalesce(NEW.example_type, '')
+      -- critiqueId is the one consumed key (tap routing → TabBarManager.pendingCritiqueId
+      -- → the PhotoCritiqueListView consumer). submitterName/exampleType were dropped in
+      -- the review round: no client reads them, and the submitter is already in the body.
+      'critiqueId', NEW.id
     )
   );
   RETURN NEW;
@@ -249,6 +248,14 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- STALENESS GUARD FIRST (review round: it depends only on NEW, and it exists for the
+  -- offline-outbox replay case — a burst of N stale scans must cost N timestamp
+  -- comparisons, not N runs of the org probe and crew aggregation below).
+  IF NEW.timestamp IS NOT NULL AND NEW.timestamp < now() - interval '2 hours' THEN
+    RAISE WARNING 'notify_job_box: box % scan is a stale replay (%); recorded, not pushed', NEW.id, NEW.timestamp;
+    RETURN NEW;
+  END IF;
+
   -- GUARD (PSH.2 fix round, F3): shift_uid is unconstrained text on a client-writable
   -- row, and this function reads session_days as SECURITY DEFINER — without the org
   -- check, a row naming ANOTHER tenant's session id would push that tenant's crew.
@@ -271,18 +278,13 @@ BEGIN
     ) p
    WHERE sd.session_id = NEW.shift_uid
      AND coalesce(p.id, '') <> ''
-     AND p.id IS DISTINCT FROM NEW.user_id;   -- the scanner knows; they did it
+     -- lower() on BOTH sides (review round): 6 users' time_entries and 341 report rows
+     -- verifiably carry uppercase ids, so a case-sensitive exclusion would push the
+     -- scanner their own scan. This is a comparison between two id VALUES, not a lookup
+     -- of users.id — the FLG mixed-case exception governs lookups, not equality folds.
+     AND lower(p.id) IS DISTINCT FROM lower(NEW.user_id);   -- the scanner knows; they did it
 
   IF v_crew IS NULL THEN
-    RETURN NEW;
-  END IF;
-
-  -- STALENESS GUARD (fix-round, F5): the iOS offline outbox replays scans as real
-  -- INSERTs when connectivity returns, carrying the ORIGINAL scan timestamp — hours or
-  -- days later, possibly after a newer scan already told the crew something different.
-  -- A stale replay is recorded but not announced.
-  IF NEW.timestamp IS NOT NULL AND NEW.timestamp < now() - interval '2 hours' THEN
-    RAISE WARNING 'notify_job_box: box % scan is a stale replay (%); recorded, not pushed', NEW.id, NEW.timestamp;
     RETURN NEW;
   END IF;
 
@@ -295,16 +297,14 @@ BEGIN
     v_scanner || ' marked the ' || v_school || ' job box: ' || coalesce(NEW.status, 'updated'),
     'jobbox',
     jsonb_build_object(
-      -- JobBoxService.processJobBoxNotification reads `photographer` and `status`;
-      -- scannedBy is kept as the human-readable duplicate. shiftUid is what
-      -- ShiftDetailView's observer matches on to live-refresh the open shift, and what
-      -- the tap routing feeds TabBarManager.pendingSessionId.
+      -- Exactly the consumed keys, nothing speculative (review round): the ShiftDetailView
+      -- observer requires shiftUid; JobBoxService.processJobBoxNotification reads status
+      -- and photographer; the tap routing feeds shiftUid to TabBarManager.pendingSessionId.
+      -- An earlier version also sent scannedBy/schoolName/boxNumber, which no client
+      -- reads — unconsumed contract keys are the name-drift class this phase exists to kill.
       'status',       coalesce(NEW.status, ''),
-      'schoolName',   coalesce(NEW.school, ''),
-      'scannedBy',    v_scanner,
       'photographer', v_scanner,
-      'shiftUid',     NEW.shift_uid,
-      'boxNumber',    coalesce(NEW.box_number, '')
+      'shiftUid',     NEW.shift_uid
     )
   );
   RETURN NEW;
@@ -398,12 +398,23 @@ END;
 $function$;
 
 DROP TRIGGER IF EXISTS trg_session_notification ON public.sessions;
+-- Review-round gate: the DELETE twin below always had the published/not-time-off guard;
+-- this UPDATE trigger did not, so renaming a DRAFT (or a time-off block) pushed "Session
+-- Updated" to crew PUB.1 deliberately redacts drafts from. Fires only when the session
+-- is or was visible to crew (published on at least one side) and is not time off; a
+-- draft-to-draft rename now stays silent while publish and unpublish transitions still
+-- fire (the edge function renders unpublish as a cancellation — see its comment).
 CREATE TRIGGER trg_session_notification
   AFTER UPDATE OF is_published, school_name ON public.sessions
   FOR EACH ROW
   WHEN (
-    OLD.is_published IS DISTINCT FROM NEW.is_published
-    OR OLD.school_name IS DISTINCT FROM NEW.school_name
+    (OLD.is_published IS TRUE OR NEW.is_published IS TRUE)
+    AND OLD.is_time_off IS NOT TRUE
+    AND NEW.is_time_off IS NOT TRUE
+    AND (
+      OLD.is_published IS DISTINCT FROM NEW.is_published
+      OR OLD.school_name IS DISTINCT FROM NEW.school_name
+    )
   )
   EXECUTE FUNCTION public.notify_session_change();
 
@@ -609,18 +620,29 @@ DECLARE
   v_dates         text;
   v_old_status    text;
   v_new_status    text;
+  v_tz            text;
 BEGIN
   v_old_status := replace(replace(lower(btrim(coalesce(OLD.status, ''))), '_', ''), ' ', '');
   v_new_status := replace(replace(lower(btrim(coalesce(NEW.status, ''))), '_', ''), ' ', '');
+
+  -- Dates render in the ORG'S clock, not the server's (review round): an evening
+  -- Central-time submission stores start_date past UTC midnight, and to_char in the
+  -- session timezone told the requester their Jul 30 time off was "for Jul 31" — a
+  -- wrong day on a payroll-adjacent message. Same timezone convention as the reminder
+  -- dispatchers (organizations.preferences, America/Chicago fallback).
+  SELECT coalesce(o.preferences->>'timezone', 'America/Chicago') INTO v_tz
+    FROM public.organizations o WHERE o.id = NEW.organization_id;
+  v_tz := coalesce(v_tz, 'America/Chicago');
 
   v_dates := CASE
     WHEN NEW.start_date IS NULL AND NEW.end_date IS NULL
       THEN 'your requested dates'
     WHEN NEW.start_date IS NULL OR NEW.end_date IS NULL
-      THEN to_char(coalesce(NEW.start_date, NEW.end_date), 'Mon FMDD')
-    WHEN NEW.start_date::date = NEW.end_date::date
-      THEN to_char(NEW.start_date, 'Mon FMDD')
-    ELSE to_char(NEW.start_date, 'Mon FMDD') || ' to ' || to_char(NEW.end_date, 'Mon FMDD')
+      THEN to_char(coalesce(NEW.start_date, NEW.end_date) AT TIME ZONE v_tz, 'Mon FMDD')
+    WHEN (NEW.start_date AT TIME ZONE v_tz)::date = (NEW.end_date AT TIME ZONE v_tz)::date
+      THEN to_char(NEW.start_date AT TIME ZONE v_tz, 'Mon FMDD')
+    ELSE to_char(NEW.start_date AT TIME ZONE v_tz, 'Mon FMDD') || ' to '
+         || to_char(NEW.end_date AT TIME ZONE v_tz, 'Mon FMDD')
   END;
 
   IF TG_OP = 'INSERT' THEN
@@ -631,7 +653,11 @@ BEGIN
     SELECT array_agg(u.id) INTO v_recipients
       FROM public.users u
      WHERE u.organization_id = NEW.organization_id
-       AND u.id IS DISTINCT FROM NEW.photographer_id
+       -- lower() both sides (review round): iOS's TimeOffService verifiably inserts
+       -- UPPERCASE uuids (recorded under TOF.1), so a case-sensitive exclusion would
+       -- notify a requesting manager of their own submission. Comparison fold only —
+       -- the recipient values themselves stay as stored.
+       AND lower(u.id) IS DISTINCT FROM lower(NEW.photographer_id)
        AND (
              u.role = 'admin'
              OR EXISTS (
@@ -662,7 +688,8 @@ BEGIN
                  ELSE NEW.approved_by
                END;
 
-    IF NEW.photographer_id IS NULL OR NEW.photographer_id IS NOT DISTINCT FROM v_actor THEN
+    IF NEW.photographer_id IS NULL
+       OR lower(NEW.photographer_id) IS NOT DISTINCT FROM lower(v_actor) THEN
       RETURN NEW;
     END IF;
 
@@ -704,6 +731,58 @@ $function$;
 
 -- The trigger itself (trg_time_off_notification, AFTER INSERT OR UPDATE) is unchanged;
 -- CREATE OR REPLACE swaps the body under it in place.
+
+-- ============================================================================
+-- 7. Flag trigger joins the shared transport (review round)
+-- ============================================================================
+-- notify_user_flagged (20260727_flg1_user_flag_notification.sql) was the last hand copy
+-- of the vault-fetch/cap/post skeleton psh2_send_push centralizes — and one copy left
+-- behind is exactly how "a fix applied to one copy while the second keeps the bug"
+-- happens: a secret rename or sender-contract change would fix six consumers and
+-- silently kill flag pushes. Behavior is unchanged (same guards, same payload, same
+-- 300-char cap — now applied by the helper); the trigger and its WHEN clause are
+-- untouched. Supersedes the FLG.1 file's function body.
+
+CREATE OR REPLACE FUNCTION public.notify_user_flagged()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_body text;
+BEGIN
+  -- No recipient, no push. users.id is NOT lowercased here (the FLG.1 rule: one
+  -- mixed-case legacy Firebase uid exists; folding a LOOKUP value misses it).
+  IF NEW.id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- Whoever pressed the button does not need to be told they pressed it.
+  IF lower(NEW.flagged_by) IS NOT DISTINCT FROM lower(NEW.id) THEN
+    RETURN NEW;
+  END IF;
+
+  v_body := nullif(btrim(coalesce(NEW.flag_note, '')), '');
+  IF v_body IS NULL THEN
+    RAISE WARNING 'notify_user_flagged: user % flagged with an empty note; no push sent', NEW.id;
+    RETURN NEW;
+  END IF;
+
+  PERFORM public.psh2_send_push(
+    ARRAY[NEW.id],
+    'You''ve Been Flagged',
+    v_body,                      -- psh2_send_push caps at 300 chars (4KB APNs limit)
+    'flag',                      -- must match PushNotificationManager.NotificationType
+    jsonb_build_object('flaggedBy', NEW.flagged_by, 'note', v_body)
+  );
+  RETURN NEW;
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE WARNING 'notify_user_flagged: push failed for user % (%): %', NEW.id, SQLSTATE, SQLERRM;
+    RETURN NEW;
+END;
+$function$;
 
 COMMENT ON FUNCTION public.notify_chat_message() IS
   'PSH.2: posts new chat messages to the chat-notification edge function. Covers both the '

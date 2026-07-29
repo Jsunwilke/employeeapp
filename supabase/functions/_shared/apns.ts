@@ -148,11 +148,16 @@ export async function sendPushNotification(
 /**
  * Send to each device on the endpoint that matches ITS OWN token.
  *
- * A token whose environment is unknown (stored before PSH.1, so NULL in the database) is
- * tried on production first and retried on sandbox ONLY when Apple specifically says
- * BadDeviceToken. That costs one wasted request for older development devices and nothing
- * once the device's next launch records its real environment. Any other error is returned
- * as-is rather than retried, so a genuine failure is not masked by a second attempt.
+ * EVERY BadDeviceToken gets one retry on the other endpoint — including tokens with a
+ * RECORDED environment (review round). The recorded value comes from the on-device
+ * provisioning-profile heuristic, the exact detection PSH.1's original bug lived in; if
+ * it ever misclassifies a build, a single-endpoint send would fail forever and — worse —
+ * the reaper would delete the row on every send while the device faithfully re-registers
+ * the same wrong pair: a permanent, invisible register/reap loop. With the cross-endpoint
+ * retry, a mis-recorded device still RECEIVES its pushes (self-healing in effect), and a
+ * final BadDeviceToken now genuinely means BOTH Apple services rejected the token, which
+ * is what makes reaping on it sound. Any other error is returned as-is rather than
+ * retried, so a genuine failure is not masked by a second attempt.
  */
 export async function sendPushNotificationBatch(
   targets: TokenTarget[],
@@ -161,17 +166,14 @@ export async function sendPushNotificationBatch(
 ): Promise<SendResult[]> {
   const results = await Promise.all(
     targets.map(async ({ token, environment }) => {
-      if (environment === "production" || environment === "sandbox") {
-        return await sendPushNotification(
-          token, payload, config, environment === "production"
-        );
-      }
-
-      const first = await sendPushNotification(token, payload, config, true);
+      // Recorded environment (or the NULL-legacy default of production) picks the
+      // first endpoint; BadDeviceToken earns exactly one try on the other.
+      const tryProductionFirst = environment !== "sandbox";
+      const first = await sendPushNotification(token, payload, config, tryProductionFirst);
       if (first.success || first.error !== "BadDeviceToken") {
         return first;
       }
-      return await sendPushNotification(token, payload, config, false);
+      return await sendPushNotification(token, payload, config, !tryProductionFirst);
     })
   );
   return results;

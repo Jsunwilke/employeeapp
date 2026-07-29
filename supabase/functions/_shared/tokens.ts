@@ -8,10 +8,11 @@
 // siblings got fixed.
 //
 // REAPING. The token is the primary key and Apple is the authority on its validity.
-// A 410 Unregistered means the app was removed from that device; a BadDeviceToken on the
-// token's own recorded environment means it can never deliver (for a NULL-environment
-// legacy token, BadDeviceToken here means BOTH endpoints rejected it — the batch sender
-// already retried sandbox before reporting). Dead rows are deleted so the table is
+// A 410 Unregistered means the app was removed from that device; and since the batch
+// sender retries EVERY BadDeviceToken on the other Apple endpoint before reporting it
+// (see sendPushNotificationBatch — the review round extended the retry to
+// recorded-environment tokens precisely so reaping stays sound), a final BadDeviceToken
+// means BOTH services rejected the token. Dead rows are deleted so the table is
 // self-cleaning and a rotated token cannot deliver another person's pushes forever.
 
 import type { SendResult, TokenTarget } from "./apns.ts";

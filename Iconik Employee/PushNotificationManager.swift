@@ -259,8 +259,25 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        // Show banner, list, and play sound even when app is in foreground.
-        completionHandler([.banner, .list, .sound])
+        let userInfo = notification.request.content.userInfo
+        let type = userInfo["type"] as? String
+        let conversationId = userInfo["conversationId"] as? String
+
+        // A chat push for the thread ALREADY ON SCREEN is suppressed (review round):
+        // with the chat trigger wired, two people talking in-app would otherwise get a
+        // banner and sound over every message of the conversation they are reading —
+        // the realtime stream renders the message in place, so the banner adds nothing.
+        // Every other type (and chat for a different thread) still presents.
+        Task { @MainActor in
+            if type == NotificationType.chatMessage.rawValue,
+               let cid = conversationId,
+               let visible = ChatManager.shared.visibleConversationId,
+               visible.lowercased() == cid.lowercased() {
+                completionHandler([])
+                return
+            }
+            completionHandler([.banner, .list, .sound])
+        }
     }
     
     func userNotificationCenter(_ center: UNUserNotificationCenter,
@@ -306,19 +323,19 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
                                              object: nil,
                                              userInfo: userInfo)
                 if let shiftUid = userInfo["shiftUid"] as? String, !shiftUid.isEmpty {
-                    tabs.pendingSessionId = shiftUid
+                    tabs.pendingSession = PendingDeepLink(id: shiftUid)
                 }
                 tabs.selectedTab = "schedule"
 
             case .chatMessage:
                 if let conversationId = userInfo["conversationId"] as? String {
-                    tabs.pendingConversationId = conversationId
+                    tabs.pendingConversation = PendingDeepLink(id: conversationId)
                 }
                 tabs.selectedTab = "chat"
 
             case .sessionNew, .sessionUpdate:
                 if let sessionId = userInfo["sessionId"] as? String {
-                    tabs.pendingSessionId = sessionId
+                    tabs.pendingSession = PendingDeepLink(id: sessionId)
                 }
                 tabs.selectedTab = "schedule"
 
@@ -338,7 +355,7 @@ class PushNotificationManager: NSObject, UIApplicationDelegate, UNUserNotificati
 
             case .photoCritique:
                 if let critiqueId = userInfo["critiqueId"] as? String {
-                    tabs.pendingCritiqueId = critiqueId
+                    tabs.pendingCritique = PendingDeepLink(id: critiqueId)
                 }
                 tabs.selectedTab = "training"
 

@@ -18,7 +18,10 @@ import SwiftUI
 
 struct ConversationListView: View {
     @StateObject private var chatManager = ChatManager.shared
-    @ObservedObject private var tabBarManager = TabBarManager.shared
+    // Plain let, NOT @ObservedObject (review round): this view consumes exactly one of
+    // the manager's publishers via onReceive; observing the whole object re-evaluated
+    // this body on every keyboard show/hide, tab switch, and overlay toggle.
+    private let tabBarManager = TabBarManager.shared
     @State private var showNewConversation = false
     @State private var showGroupNaming = false
     @State private var selectedUsersForGroup: [ChatUser] = []
@@ -58,20 +61,17 @@ struct ConversationListView: View {
         .refreshable { await chatManager.loadConversations() }
         .onAppear {
             Task { await chatManager.initialize() }
-            consumePendingConversation(id: tabBarManager.pendingConversationId,
-                                       in: chatManager.conversations)
+            consumePending(tabBarManager.pendingConversation, in: chatManager.conversations)
         }
-        // PSH.2: a tapped chat push sets pendingConversationId and lands here; the list
-        // may still be loading at that moment, so re-check whenever either side changes.
-        // THE EMITTED VALUE IS PASSED IN — @Published emits during willSet, so re-reading
-        // the property inside its own emission returns the PRE-assignment value; the
-        // original version did exactly that and missed the tap in the two primary flows
-        // (caught by the fix-round audit with a runnable probe).
-        .onReceive(tabBarManager.$pendingConversationId) { id in
-            consumePendingConversation(id: id, in: chatManager.conversations)
+        // PSH.2: a tapped chat push parks a PendingDeepLink and lands here; the list may
+        // still be loading at that moment, so re-check whenever either side changes. The
+        // consume rules (emitted value, async mutation hop, expiry) live in ONE place —
+        // TabBarManager.consumePendingDeepLink.
+        .onReceive(tabBarManager.$pendingConversation) { pending in
+            consumePending(pending, in: chatManager.conversations)
         }
         .onReceive(chatManager.$conversations) { list in
-            consumePendingConversation(id: tabBarManager.pendingConversationId, in: list)
+            consumePending(tabBarManager.pendingConversation, in: list)
         }
         .sheet(isPresented: $showNewConversation) {
             EmployeeSelectorView { selectedUsers in
@@ -97,23 +97,9 @@ struct ConversationListView: View {
         }
     }
 
-    /// Consume-and-clear a push deep link (the selectedClassGroupJobId pattern).
-    /// Both inputs arrive as parameters so a caller inside a @Published emission hands us
-    /// the POST-assignment value; the MUTATIONS hop off the current emission because a
-    /// same-property assignment inside its own willSet emission is DISCARDED
-    /// (probe-verified by the fix-round audit).
-    ///
-    /// There is deliberately NO "drop the id on a loaded-but-no-match list" branch. Chat
-    /// emits a CACHED list before the fresh one, and the canonical chat-push scenario —
-    /// somebody starts a NEW conversation with you — is precisely an id the cached list
-    /// does not contain; a drop branch dead-ends that tap (third-round audit, F1). An
-    /// unmatched id is inert: it navigates nowhere unless its conversation appears, and
-    /// sign-out clears it.
-    private func consumePendingConversation(id: String?, in conversations: [Conversation]) {
-        guard let id else { return }
-        guard let match = conversations.first(where: { $0.id.lowercased() == id.lowercased() }) else { return }
-        DispatchQueue.main.async {
-            tabBarManager.pendingConversationId = nil
+    private func consumePending(_ pending: PendingDeepLink?, in conversations: [Conversation]) {
+        tabBarManager.consumePendingDeepLink(\.pendingConversation, emitted: pending,
+                                             in: conversations, id: { $0.id }) { match in
             pushedConversation = match
         }
     }

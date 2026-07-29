@@ -73,8 +73,14 @@ BEGIN
            AND s.is_time_off IS NOT TRUE
            AND sd.date = v_today
            AND sd.start_time IS NOT NULL
-           AND sd.start_time >= v_win_start
-           AND sd.start_time <  v_win_end
+           -- Half-open on the LEFT (review round): (start, end] rather than [start, end).
+           -- Sessions overwhelmingly start on the half-hour grid, and with [start, end)
+           -- a 09:00 session missed the 08:30 run ('09:00' < '09:00' is false) and was
+           -- caught by the 09:00 run — a "don't forget to clock in" delivered as the
+           -- shift began. With (start, end], the 08:30 run owns 09:00 and every start
+           -- gets up to ~30 minutes' notice; windows still cannot overlap.
+           AND sd.start_time >  v_win_start
+           AND sd.start_time <= v_win_end
       LOOP
         -- Suppress the reminder for anyone who (a) has a time entry for THIS session
         -- TODAY — day-scoped, so day 1's entry cannot silence day 2 of a multi-day
@@ -86,11 +92,14 @@ BEGIN
         -- future clock-in reminder forever (second fix-round audit) — a stale open
         -- entry is the 09:00 clock-OUT dispatcher's job to nag about, not a licence to
         -- skip clock-in reminders.
+        -- lower() on both id sides (review round): 6 users' time_entries verifiably
+        -- carry uppercase user_id, and a case-sensitive match silently fails the
+        -- suppression — nagging someone already on the clock every 30 minutes.
         SELECT array_agg(x) INTO v_crew
           FROM unnest(coalesce(v_day.crew, ARRAY[]::text[])) x
          WHERE NOT EXISTS (
                  SELECT 1 FROM public.time_entries te
-                  WHERE te.user_id = x
+                  WHERE lower(te.user_id) = lower(x)
                     AND (
                           (te.session_id = v_day.sid AND te.date = v_today)
                           OR (te.status = 'clocked-in' AND te.end_time IS NULL
@@ -222,6 +231,11 @@ BEGIN
     SELECT id, coalesce(preferences->>'timezone', 'America/Chicago') AS tz
       FROM public.organizations
      WHERE is_active IS NOT FALSE
+       -- Review round: one live org runs photoshoot-notes-only — its report feature is
+       -- client-blocked (the tap would bounce to Home) and daily_job_reports never gets
+       -- a row to silence the nag, so without this filter its whole crew would be told
+       -- to file a report after every working day, forever.
+       AND coalesce(use_photoshoot_notes_only, false) IS NOT TRUE
   LOOP
     BEGIN
       v_local := now() AT TIME ZONE v_org.tz;
@@ -242,7 +256,9 @@ BEGIN
          AND coalesce(crew.id, '') <> ''
          AND NOT EXISTS (
                SELECT 1 FROM public.daily_job_reports djr
-                WHERE djr.user_id = crew.id
+                -- lower() both sides (review round): 341 live report rows carry
+                -- uppercase user_id; case-sensitive matching wrongly re-nags filers.
+                WHERE lower(djr.user_id) = lower(crew.id)
                   AND (djr.created_at AT TIME ZONE v_org.tz)::date = v_local::date
              );
 

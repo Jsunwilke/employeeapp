@@ -52,6 +52,12 @@ class ChatManager: ObservableObject {
     /// Set and cleared by MessageThreadView's appear/disappear.
     private var viewingConversationId: String?
 
+    /// Read-only view of the on-screen thread for PushNotificationManager.willPresent
+    /// (PSH.2 review round): a chat push for the conversation the person is READING must
+    /// not banner-and-buzz over it — the realtime stream already renders the message in
+    /// place. Same signal, same lifecycle, as the mark-read logic above.
+    var visibleConversationId: String? { viewingConversationId }
+
     // Debouncing
     private var messageUpdateDebouncer = Debouncer(delay: 0.1)
 

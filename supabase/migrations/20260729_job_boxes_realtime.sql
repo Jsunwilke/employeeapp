@@ -11,8 +11,15 @@
 --
 -- Safety: realtime enforces RLS on postgres_changes, and job_boxes_org_access scopes
 -- rows to the subscriber's own organization — adding the table broadcasts nothing
--- cross-tenant. The web app has no job_boxes subscription (grepped); PowerSync uses its
--- own publication and is untouched.
+-- cross-tenant. PowerSync uses its own publication and is untouched.
+--
+-- CORRECTION (review round): this header originally claimed "the web app has no
+-- job_boxes subscription (grepped)". FALSE — SessionDetailsModal.js:255 subscribes to
+-- postgres_changes on job_boxes filtered by shift_uid, and had been dead since creation
+-- for exactly the reason this migration fixes. Publishing the table ACTIVATES that
+-- dormant web listener: the web session-details modal now re-fetches its job box when a
+-- matching scan lands, which is the behavior its author intended. Recorded here rather
+-- than silently corrected, because the original claim shipped as impact analysis.
 
 DO $do$
 BEGIN
