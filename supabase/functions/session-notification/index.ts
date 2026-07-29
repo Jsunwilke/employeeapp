@@ -81,8 +81,15 @@ serve(async (req) => {
       );
     }
 
-    // Only notify for published sessions (skip check for DELETE - always notify)
-    if (type !== "DELETE" && !sessionData.is_published) {
+    // Only notify for sessions the crew can see — published now, OR published a moment
+    // ago (a retraction). The second clause is load-bearing (fix-round self-catch): the
+    // unpublish transition arrives with record.is_published=false, and without it this
+    // gate returned "skipping" BEFORE the cancellation branch below could run — the
+    // isUnpublishTransition rendering was unreachable dead code, verified by reading the
+    // control flow, not the intent. Never-published records (draft edits) still skip;
+    // the trigger's own WHEN gate also refuses to fire for those.
+    const wasPublishedBeforeChange = Boolean(old_record?.is_published);
+    if (type !== "DELETE" && !sessionData.is_published && !wasPublishedBeforeChange) {
       return new Response(
         JSON.stringify({ message: "Session not published, skipping" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -193,11 +200,10 @@ serve(async (req) => {
     // subsequent draft delete is deliberately silent, so without this the crew were
     // never told at all and could still show up. An unpublish reads as a cancellation;
     // if the session is later re-published, the publish transition announces it anew.
-    const wasPublished = Boolean(old_record?.is_published);
     const isPublishTransition =
-      type === "UPDATE" && !wasPublished && Boolean(record.is_published);
+      type === "UPDATE" && !wasPublishedBeforeChange && Boolean(record.is_published);
     const isUnpublishTransition =
-      type === "UPDATE" && wasPublished && !record.is_published;
+      type === "UPDATE" && wasPublishedBeforeChange && !record.is_published;
 
     if (type === "INSERT" || isPublishTransition) {
       title = "New Session Assigned";
