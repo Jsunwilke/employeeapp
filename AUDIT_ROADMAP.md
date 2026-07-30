@@ -1233,6 +1233,31 @@ other rebases onto it.
   (create→delete→card gone at the confirm). NOT simulatable, left for the
   operator's device smoke: the Airplane-Mode failure states, haptics/feel, and
   the batch-4 design review sitting.
+  **2026-07-30 — OPERATOR /code-review ROUND (d3f4b76): 8 finder angles, 13
+  deduped candidates, 1-vote verification — 8 CONFIRMED findings, ALL FIXED.**
+  The worst was this session's own smoke fix (fix-round law, again): rebuilding
+  the org subscription on delete success re-joined the SAME channel object while
+  its leave-ack was in flight, which supabase-swift resolves by de-registering
+  the instance — org realtime permanently deaf until screen re-entry (verified
+  against the vendored SDK source). Deletes now remove the row from the
+  service's published array; no channel is touched. Also fixed: the group row's
+  missing .contentShape (the yearbook row's own on-device fix, unapplied to its
+  sibling); zero-row write guards + a throwing miss on the three class-group
+  row writers (AMB.9's sweep provably SKIPPED this service — not among
+  f9200cc's five files, not a recorded exception); the failure-banner +
+  empty-state double render; job cards restored to real Buttons (VoiceOver /
+  Switch Control could not open a job at all); the yearbook root's double
+  full-org fetch per appearance (now first-appearance-only); reloadJob now
+  fetches ONE row by id (new fetchClassGroupJob(byId:)) and surfaces
+  job-not-found; Cancel stays live during saves in both sheets. REFUTED by
+  verification, for the record: the "checklist torn down mid-edit by a failed
+  refetch" claim (the realtime catch publishes nothing). Deferred to AMB.12
+  with the existing consolidation list: the chip / failure-card / loading /
+  search-field / primary-button duplications the review's reuse angle
+  enumerated across the six converted kits, and a shared prove-can-fail
+  harness for the six rules scripts. Verified after the fix round: build
+  green, 66+93 rule checks, sweep clean, create→delete round trip re-run live
+  on the signed-in simulator, zero test rows left in the shared DB.
 
 **Batch 4**
 
