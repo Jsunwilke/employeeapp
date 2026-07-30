@@ -56,7 +56,16 @@ struct MileageDetailView: View {
 
     // Local copies of the record data for editing.
     @State private var schoolName: String
-    @State private var vehicleChoice: String?
+    /// THE VEHICLE IS HELD AS THE TYPE, not as its label.
+    ///
+    /// It used to be a `String?` carrying "Personal"/"Company" and the save path
+    /// mapped it back with `MileageVehicle.from(choiceLabel:) ?? .personal` — so a
+    /// label the form no longer offers (a rename, a localisation, a typo) resolved
+    /// silently to PERSONAL and wrote a company trip at the personal rate. That is a
+    /// payroll figure changed by a string comparison. The label is now derived FROM
+    /// the type for the choice row and parsed back only inside that row's binding,
+    /// where an unrecognised label changes nothing at all.
+    @State private var vehicle: MileageVehicle
     @State private var milesText: String
 
     @State private var isEditing = false
@@ -79,14 +88,24 @@ struct MileageDetailView: View {
         self.personalRate = personalRate
         self.companyRate = companyRate
         _schoolName = State(initialValue: record.schoolName)
-        _vehicleChoice = State(initialValue: MileageVehicle.from(storage: record.vehicleType).choiceLabel)
+        _vehicle = State(initialValue: MileageVehicle.from(storage: record.vehicleType))
         _milesText = State(initialValue: MileageFigures.oneDecimal(record.totalMileage))
     }
 
     // MARK: - Derived
 
-    private var vehicle: MileageVehicle {
-        MileageVehicle.from(choiceLabel: vehicleChoice ?? "") ?? .personal
+    /// The choice row takes plain strings — the kit does not know this enum exists —
+    /// so the labels are generated from the cases and parsed back through
+    /// `MileageVehicle.from(choiceLabel:)`, which returns nil for anything the form
+    /// does not offer. A nil is IGNORED rather than defaulted: the selection simply
+    /// does not move, and nothing on the save path ever maps a label to a vehicle.
+    /// One direction of mapping, and the labels are defined once, in MileageRules.
+    private var vehicleChoice: Binding<String?> {
+        Binding(get: { vehicle.choiceLabel },
+                set: { newValue in
+                    guard let newValue, let picked = MileageVehicle.from(choiceLabel: newValue) else { return }
+                    vehicle = picked
+                })
     }
 
     private var rate: Double {
@@ -116,7 +135,7 @@ struct MileageDetailView: View {
 
                     if isEditing {
                         MileageEditForm(schoolName: $schoolName,
-                                        vehicleChoice: $vehicleChoice,
+                                        vehicleChoice: vehicleChoice,
                                         milesText: $milesText,
                                         schools: schoolOptions,
                                         schoolsState: schoolsState,
@@ -179,7 +198,7 @@ struct MileageDetailView: View {
 
     private func cancelEditing() {
         schoolName = record.schoolName
-        vehicleChoice = MileageVehicle.from(storage: record.vehicleType).choiceLabel
+        vehicle = MileageVehicle.from(storage: record.vehicleType)
         milesText = MileageFigures.oneDecimal(record.totalMileage)
         // Cleared on Cancel: a message about an edit that no longer exists is noise.
         noticeMessage = nil

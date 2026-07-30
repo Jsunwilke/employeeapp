@@ -54,6 +54,15 @@ struct StatsDay: Comparable, Hashable {
     let month: Int
     let day: Int
 
+    /// THE ONE RESIDUAL, NAMED RATHER THAN FIXED HERE: 177 of the live rows were
+    /// written by the WEB app and carry a real evening instant rather than a bare day
+    /// (verified 2026-07-29). Under this convention — the day is the UTC prefix — such
+    /// a row buckets a day LATE, because 8pm local on the 15th is the 16th in UTC.
+    /// Re-interpreting the instant locally instead would be worse: it would move all
+    /// ~2,300 iOS-written rows (which are correct as stored) to fix 177. The fix is on
+    /// the WRITE side — the web app should store the bare local day the way iOS does —
+    /// which is another repo and another phase (AMB_BATCH3_PARITY.md §6).
+    ///
     /// Parses the leading "yyyy-MM-dd" of ANY of the three forms the column has
     /// been observed to produce: a bare day, a whole-second timestamp, and a
     /// fractional-second timestamp. A decoder that handles one form and throws on
@@ -389,11 +398,53 @@ struct StatsAggregate: Equatable {
     /// Count descending.
     let jobTypes: [StatsJobType]
 
-    var totalMiles: Double { photographers.reduce(0) { $0 + $1.miles } }
-    var totalTrips: Int { photographers.reduce(0) { $0 + $1.trips } }
+    // THE FIVE DERIVED FIGURES ARE COMPUTED ONCE, IN THE INITIALISER, and stored.
+    //
+    // They were computed properties, and each one is a reduce or a sort over the whole
+    // period: `totalMiles` is read by an overview tile AND by the Mileage section's
+    // title, `photographersByTrips` sorts the roster inside a `ForEach`, and SwiftUI
+    // re-evaluates all of it on every body pass. Deriving them here keeps the property
+    // this aggregate exists to hold — a total is the sum of the section under it,
+    // never a second accumulation — while paying for it once per load.
+    let totalMiles: Double
+    let totalTrips: Int
+    let totalReimbursement: Double
+    /// Trips descending — the Photographers section's order, named rather than left
+    /// as a `.sorted` in a view body.
+    let photographersByTrips: [StatsPhotographer]
+    let topDestinations: [StatsDestination]
+
     var photographerCount: Int { photographers.count }
     var schoolsVisited: Int { destinations.count }
-    var totalReimbursement: Double { photographers.reduce(0) { $0 + $1.reimbursement } }
+
+    /// DERIVED, NOT PASSED IN. A memberwise initialiser taking the five totals would
+    /// let a caller hand in figures that disagree with the sections — the exact defect
+    /// this type was built to make impossible (the live screen's totals were 2× the
+    /// sections because they were accumulated separately). Both call sites — the
+    /// aggregator and the lab's sample builder — supply only the parts.
+    init(period: StatsPeriod,
+         periodLabel: String,
+         spanLabel: String,
+         months: [StatsMonthBucket],
+         photographers: [StatsPhotographer],
+         destinations: [StatsDestination],
+         jobTypes: [StatsJobType]) {
+        self.period = period
+        self.periodLabel = periodLabel
+        self.spanLabel = spanLabel
+        self.months = months
+        self.photographers = photographers
+        self.destinations = destinations
+        self.jobTypes = jobTypes
+
+        self.totalMiles = photographers.reduce(0) { $0 + $1.miles }
+        self.totalTrips = photographers.reduce(0) { $0 + $1.trips }
+        self.totalReimbursement = photographers.reduce(0) { $0 + $1.reimbursement }
+        self.photographersByTrips = photographers.sorted {
+            $0.trips != $1.trips ? $0.trips > $1.trips : $0.name.lowercased() < $1.name.lowercased()
+        }
+        self.topDestinations = Array(destinations.prefix(5))
+    }
 
     /// The bars inside the period, summed. Equal to `totalMiles` by construction
     /// — asserted by the test suite, because "the chart and the tile disagree" is
@@ -401,16 +452,6 @@ struct StatsAggregate: Equatable {
     var inPeriodBarMiles: Double {
         months.filter { !$0.isComparison }.reduce(0) { $0 + $1.miles }
     }
-
-    /// Trips descending — the Photographers section's order, named rather than
-    /// left as a `.sorted` in a view body.
-    var photographersByTrips: [StatsPhotographer] {
-        photographers.sorted {
-            $0.trips != $1.trips ? $0.trips > $1.trips : $0.name.lowercased() < $1.name.lowercased()
-        }
-    }
-
-    var topDestinations: [StatsDestination] { Array(destinations.prefix(5)) }
 
     /// No reports filed in the period. NOT an error — the old screen raised it
     /// through the error path and replaced the whole screen with "No data

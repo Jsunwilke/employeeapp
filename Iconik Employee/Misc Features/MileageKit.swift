@@ -163,8 +163,13 @@ struct MileagePeriodChip: View {
 struct MileageFigureTile: View {
     let title: String
     let caption: String
-    let miles: Double
-    let reimbursement: Double
+    /// ONE SOURCE FOR BOTH NUMBERS. The tile used to take `miles` and
+    /// `reimbursement` as separate parameters, and each of its two call sites
+    /// wired them from two different places — the miles off a stored mirror and
+    /// the money off a live split — which is a tile that can state miles from one
+    /// bucket and dollars from another. `MileageFigures` is the accumulator's own
+    /// output, so they cannot disagree.
+    let figures: MileageFigures
     let systemImage: String
     var tint: Color = MileageStyle.tint
     /// False when the figure behind this tile has NEVER BEEN FETCHED — the year query
@@ -189,10 +194,10 @@ struct MileageFigureTile: View {
                 Spacer(minLength: 0)
             }
             if isLoaded {
-                Text(MileageFigures.oneDecimal(miles))
+                Text(MileageFigures.oneDecimal(figures.miles))
                     .font(.system(size: 24, weight: .bold, design: .rounded))
                     .contentTransition(.numericText())
-                Text("miles · \(Formatters.currency(reimbursement))")
+                Text("miles · \(Formatters.currency(figures.reimbursement))")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 Text("—")
@@ -233,11 +238,16 @@ struct MileageTripRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            // THE STORED DAY, READ IN UTC. `daily_job_reports.date` is a bare day
+            // carried as midnight UTC, so a device-zone formatter drew a trip filed
+            // on the 1st as "Fri 31" — and the month tile above it, which now
+            // buckets on the same convention, would have counted it in August while
+            // this block said July.
             VStack(spacing: 0) {
-                Text(Formatters.weekdayShort.string(from: date).uppercased())
+                Text(Formatters.storedDayWeekdayShort.string(from: date).uppercased())
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(.secondary)
-                Text(Formatters.dayNumber.string(from: date))
+                Text(Formatters.storedDayNumber.string(from: date))
                     .font(.system(size: 18, weight: .bold, design: .rounded))
             }
             .frame(width: 34)
@@ -415,7 +425,10 @@ struct MileageDetailHero: View {
                              systemImage: vehicle == .company ? "car.2.fill" : "car.fill",
                              tint: vehicle == .company ? tint : .secondary)
             }
-            Text(Formatters.longDate.string(from: date))
+            // UTC-pinned for the same reason the trip row is: this is the day the
+            // report is FOR, and the row the reader tapped must not name a different
+            // day than the screen they came from.
+            Text(Formatters.storedDayLong.string(from: date))
                 .font(.subheadline).foregroundStyle(.secondary)
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -503,13 +516,15 @@ struct MileageEditForm: View {
     var retrySchools: (() -> Void)?
     var tint: Color = MileageStyle.tint
 
-    private var vehicle: MileageVehicle {
-        MileageVehicle.from(choiceLabel: vehicleChoice ?? "") ?? .personal
-    }
-
+    /// THE LABEL THE ROW IS SHOWING, echoed. It used to be mapped back through
+    /// `MileageVehicle.from(choiceLabel:) ?? .personal`, which meant a label this form
+    /// does not recognise was silently reported as "Personal" in the status line while
+    /// the row above it read something else. The owner of the selection is the caller;
+    /// this section describes it rather than re-deciding it.
     private var statusLine: String {
         let miles = Double(milesText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        return "\(MileageFigures.oneDecimal(miles)) mi · \(vehicle.choiceLabel)"
+        let vehicleLabel = vehicleChoice ?? MileageVehicle.personal.choiceLabel
+        return "\(MileageFigures.oneDecimal(miles)) mi · \(vehicleLabel)"
     }
 
     var body: some View {

@@ -175,10 +175,26 @@ class DailyJobReportService: ObservableObject {
 
     // MARK: - Get Reports by User ID and Date Range
 
-    /// Get reports for a specific user within a date range
+    /// Get reports for a specific user within a date range.
+    ///
+    /// THE BOUNDS ARE THE PERIOD'S **LOCAL** DAY LABELS, and the time zone pin is the
+    /// whole reason this formatter is not the default one. `ISO8601DateFormatter`
+    /// defaults to GMT, and every caller of this method passes bounds minted from
+    /// `Calendar.current` — a pay period's last day at 23:59:59 local, or Dec 31
+    /// 23:59:59. Formatted in GMT that end bound becomes the NEXT DAY's label in any
+    /// western zone, so `.lte` swept in the first stored day of the following period:
+    /// one trip counted under two chips, and next January's reports pulled into "This
+    /// year". Pinned to `TimeZone.current` the bounds read "2026-07-20" … "2026-08-02"
+    /// — the days the user's own carousel says.
+    ///
+    /// `daily_job_reports.date` is a bare day written by iOS as midnight UTC, and the
+    /// filter compares it as a day string, which is the app's one convention (the same
+    /// one `StatsWindow` sends). Only the Mileage view model's four fetch sites and
+    /// `getTotalMileage(userId:…)` reach this method.
     func getReports(userId: String, startDate: Date, endDate: Date) async throws -> [DailyJobReport] {
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withFullDate]
+        dateFormatter.timeZone = TimeZone.current
 
         let startDateString = dateFormatter.string(from: startDate)
         let endDateString = dateFormatter.string(from: endDate)

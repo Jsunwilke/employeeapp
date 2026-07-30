@@ -764,8 +764,8 @@ struct MileageWidget: View {
                         // Dynamic Type, but the currency beside it does — without
                         // these the money wrapped or crushed the miles at
                         // accessibility sizes.
-                        Text(currency(reimbursement(mileageViewModel.currentPeriodSplit,
-                                                    cachedMiles: currentPeriodMileage)))
+                        Text(Formatters.currency(reimbursement(mileageViewModel.currentPeriodSplit,
+                                                               cachedMiles: currentPeriodMileage)))
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.green)
                             .monospacedDigit()
@@ -825,17 +825,20 @@ struct MileageWidget: View {
             Text("\(Int(miles)) mi")
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-            Text(currency(pay))
+            // `Formatters.currency`, not the `String(format: "$%.2f")` this widget
+            // used to spell it with: that one has no thousands separator, so a
+            // four-figure year total read "$1234.50". Deleting the private helper is
+            // the point — `Formatters.currency`'s own doc names this exact call site
+            // as the one it replaced (AMB.9), and a second spelling left beside it is
+            // how there came to be four.
+            Text(Formatters.currency(pay))
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(.green)
                 .monospacedDigit()
         }
     }
 
-    private func currency(_ value: Double) -> String {
-        String(format: "$%.2f", value)
-    }
-    
+
     private func loadMileageData() {
         // Only show loading if we have no cached data
         if currentPeriodMileage == 0 && monthMileage == 0 && yearMileage == 0 {

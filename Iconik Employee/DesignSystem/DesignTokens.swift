@@ -154,6 +154,30 @@ enum Formatters {
         let f = DateFormatter(); f.dateStyle = .full; f.timeStyle = .none; return f
     }()
 
+    // MARK: the stored day (UTC-PINNED — read this before using one)
+
+    /// These three are the display formatters ABOVE, pinned to UTC, and the pin is
+    /// load-bearing rather than incidental.
+    ///
+    /// A "stored day" column holds the day something is ABOUT, not an instant:
+    /// `daily_job_reports.date` is written by iOS as a bare day, which the column
+    /// carries as midnight UTC and PostgREST returns as "2026-08-01T00:00:00+00:00".
+    /// Formatted with the device zone in any western time zone that instant renders
+    /// as the PREVIOUS day — so a trip filed on the 1st read "Fri 31". The
+    /// arithmetic side of the same convention is `MileageMath.storedDayCalendar`
+    /// (AMB.9), and Statistics reads the day straight off the string (`StatsDay`).
+    ///
+    /// USE THESE ONLY FOR A DATE DECODED FROM A BARE-DAY COLUMN. For a real instant
+    /// — a session start, a message timestamp — the device-zone formatters above are
+    /// the correct ones, and these would be an hours-long lie.
+    static let storedDayWeekdayShort: DateFormatter = utcPinned(display("EEE"))
+    /// "1"
+    static let storedDayNumber: DateFormatter = utcPinned(display("d"))
+    /// "Saturday, August 1, 2026"
+    static let storedDayLong: DateFormatter = utcPinned({
+        let f = DateFormatter(); f.dateStyle = .full; f.timeStyle = .none; return f
+    }())
+
     /// "$1,234.50" — grouped, ALWAYS two decimals.
     ///
     /// Added in AMB.9, which needed one currency string for a screen whose whole
@@ -225,6 +249,12 @@ enum Formatters {
         let f = DateFormatter()
         f.dateFormat = format
         return f
+    }
+
+    /// Pins an already-configured formatter to UTC. See the stored-day block above.
+    private static func utcPinned(_ formatter: DateFormatter) -> DateFormatter {
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
     }
 }
 

@@ -90,10 +90,27 @@ final class StatsViewModel: ObservableObject {
         loadTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let reports = try await self.fetchReports(organizationID: organizationID, window: window)
-                let people = try await self.fetchPeople(organizationID: organizationID)
-                let companyCarRate = try await self.fetchCompanyCarRate(organizationID: organizationID)
+                // THREE INDEPENDENT READS, RUN TOGETHER. None of them takes an input
+                // from another — the window is computed before the task starts and the
+                // org id is the same for all three — so awaiting them in sequence made
+                // the screen wait three round trips to draw one answer. One do/catch
+                // still covers all three: every figure on this screen needs all three
+                // reads, so a partial answer is not a state worth having.
+                async let reportsFetch = self.fetchReports(organizationID: organizationID, window: window)
+                async let peopleFetch = self.fetchPeople(organizationID: organizationID)
+                async let rateFetch = self.fetchCompanyCarRate(organizationID: organizationID)
+                let (reports, people, companyCarRate) = try await (reportsFetch, peopleFetch, rateFetch)
                 if Task.isCancelled { return }
+
+                // TRUNCATION IS A WRONG NUMBER, NOT A SMALLER ONE. The read carries an
+                // explicit `.limit`; hitting it exactly means PostgREST returned a
+                // page, not the period, and every total below would be quietly short.
+                // The old screen carried no limit at all and let the server's default
+                // cap do this silently.
+                guard reports.count < Self.reportRowLimit else {
+                    self.state = .failed("Too many reports to total accurately — this period holds \(Self.reportRowLimit) or more reports, which is more than this screen can add up. Pick a shorter period.")
+                    return
+                }
                 let aggregate = StatsAggregator.aggregate(reports: reports,
                                                           people: people,
                                                           companyCarRate: companyCarRate,

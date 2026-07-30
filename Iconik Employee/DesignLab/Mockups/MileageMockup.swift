@@ -212,15 +212,13 @@ struct MileageMockup: View {
         HStack(spacing: 10) {
             MileageFigureTile(title: "This month",
                               caption: MileageSample.monthName,
-                              miles: MileageSample.monthMiles,
-                              reimbursement: MileageSample.monthMiles * MileageSample.personalRate,
+                              figures: MileageSample.monthFigures,
                               systemImage: "calendar",
                               tint: Self.featureTint,
                               isLoaded: state != .loading)
             MileageFigureTile(title: "This year",
                               caption: MileageSample.yearName,
-                              miles: MileageSample.yearMiles,
-                              reimbursement: MileageSample.yearMiles * MileageSample.personalRate,
+                              figures: MileageSample.yearFigures,
                               systemImage: "calendar.badge.clock",
                               tint: Self.featureTint,
                               isLoaded: state != .loading)
@@ -263,13 +261,22 @@ private struct MileageDetailMockup: View {
     @State private var editing = false
     @State private var saving = false
     @State private var school: String = MileageSample.detailTrip.school
-    @State private var vehicle: String? = MileageVehicle
-        .from(storage: MileageSample.detailTrip.isCompanyVehicle ? "company" : "personal").choiceLabel
+    /// HELD AS THE TYPE, exactly as the real screen holds it (`MileageDetailView`):
+    /// a label mapped back with `?? .personal` turns a renamed option into a company
+    /// trip saved as personal, and the lab must not demonstrate the shape production
+    /// no longer has.
+    @State private var resolvedVehicle: MileageVehicle = MileageVehicle
+        .from(storage: MileageSample.detailTrip.isCompanyVehicle ? "company" : "personal")
     @State private var milesText: String = MileageFigures.oneDecimal(MileageSample.detailTrip.miles)
     @State private var validation: String?
 
-    private var resolvedVehicle: MileageVehicle {
-        MileageVehicle.from(choiceLabel: vehicle ?? "") ?? .personal
+    /// The kit's choice row takes plain strings; an unrecognised one moves nothing.
+    private var vehicleChoice: Binding<String?> {
+        Binding(get: { resolvedVehicle.choiceLabel },
+                set: { newValue in
+                    guard let newValue, let picked = MileageVehicle.from(choiceLabel: newValue) else { return }
+                    resolvedVehicle = picked
+                })
     }
     private var rate: Double {
         resolvedVehicle == .company ? MileageSample.companyRate : MileageSample.personalRate
@@ -290,7 +297,7 @@ private struct MileageDetailMockup: View {
                                       tint: MileageMockup.featureTint)
                     if editing {
                         MileageEditForm(schoolName: $school,
-                                        vehicleChoice: $vehicle,
+                                        vehicleChoice: vehicleChoice,
                                         milesText: $milesText,
                                         schools: MileageSample.schoolItems,
                                         schoolsState: .ready,
@@ -318,8 +325,8 @@ private struct MileageDetailMockup: View {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("Cancel") {
                     school = trip.school
-                    vehicle = MileageVehicle
-                        .from(storage: trip.isCompanyVehicle ? "company" : "personal").choiceLabel
+                    resolvedVehicle = MileageVehicle
+                        .from(storage: trip.isCompanyVehicle ? "company" : "personal")
                     milesText = MileageFigures.oneDecimal(trip.miles)
                     validation = nil
                     withAnimation(AmbientMotion.snappy) { editing = false }
@@ -397,8 +404,21 @@ private enum MileageSample {
         Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 20))
         ?? Date(timeIntervalSince1970: 1_784_505_600)
 
+    /// A TRIP'S DATE AS THE DATABASE CARRIES ONE: `daily_job_reports.date` is a bare
+    /// day, stored as midnight UTC. The trip row and the detail hero read it back in
+    /// UTC (`Formatters.storedDay*`), so sample dates minted at LOCAL midnight would
+    /// draw a day early in every zone east of UTC and the lab would be arguing with
+    /// production about which day a row is. The chip anchor stays local — a pay-period
+    /// boundary is a local wall-clock date, which is what `PayPeriodService` mints.
     static func day(_ offset: Int) -> Date {
-        Calendar.current.date(byAdding: .day, value: offset, to: anchor) ?? anchor
+        let calendar = MileageMath.storedDayCalendar
+        let label = Calendar.current.dateComponents([.year, .month, .day], from: anchor)
+        guard let storedAnchor = calendar.date(from: DateComponents(year: label.year,
+                                                                   month: label.month,
+                                                                   day: label.day)),
+              let shifted = calendar.date(byAdding: .day, value: offset, to: storedAnchor)
+        else { return anchor }
+        return shifted
     }
 
     /// A bi-weekly cycle anchored on `anchor`, in the shape `PayPeriodService`
@@ -422,6 +442,18 @@ private enum MileageSample {
     static let yearName = "2026"
     static let monthMiles: Double = 262.6
     static let yearMiles: Double = 1574.2
+
+    /// The two tiles take a `MileageFigures` so their miles and their money come from
+    /// ONE source, which is what production does — through the real accumulator here
+    /// as well, rather than a `miles × rate` multiplication beside it.
+    static let monthFigures = MileageFigures(split: MileageMath.split(personalMiles: monthMiles,
+                                                                     companyMiles: 0,
+                                                                     personalRate: personalRate,
+                                                                     companyCarRate: companyRate))
+    static let yearFigures = MileageFigures(split: MileageMath.split(personalMiles: yearMiles,
+                                                                    companyMiles: 0,
+                                                                    personalRate: personalRate,
+                                                                    companyCarRate: companyRate))
 
     static let schools = [
         "Cedar Valley Day School",

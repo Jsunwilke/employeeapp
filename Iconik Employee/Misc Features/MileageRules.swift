@@ -281,15 +281,51 @@ enum MileageMath {
                                   companyCarRate: companyCarRate)
     }
 
+    /// THE CALENDAR THE STORED DAY IS READ IN, and the single convention for every
+    /// date on these screens.
+    ///
+    /// `daily_job_reports.date` is "the day the report is about". iOS writes it as a
+    /// bare day, which the column carries as midnight UTC and PostgREST returns as
+    /// "2026-08-01T00:00:00+00:00" — so the day a report is FOR is the UTC component
+    /// of the decoded instant, never the local one. Reading it with
+    /// `Calendar.current` in any western zone shifts every report back a day: a trip
+    /// filed on the 1st of August rendered "Fri 31", fell out of August's tile and
+    /// out of the year total at the January boundary, and Mileage disagreed with
+    /// Statistics about the same row — Stats already parses the stored day off the
+    /// string (`StatsDay`, StatsRules.swift) and got it right.
+    ///
+    /// It is a fixed-offset UTC calendar rather than the device's, and gregorian
+    /// rather than the device's calendar identifier, because the stored value is not
+    /// a local wall clock and not a locale question.
+    static let storedDayCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        return calendar
+    }()
+
     /// The month tile counts the CALENDAR month of `reference`, both month and year
     /// — a month test without a year folds last July into this one.
-    static func isInSameMonth(_ date: Date, as reference: Date, calendar: Calendar = .current) -> Bool {
-        calendar.component(.month, from: date) == calendar.component(.month, from: reference)
-            && calendar.component(.year, from: date) == calendar.component(.year, from: reference)
+    ///
+    /// TWO CALENDARS, DELIBERATELY, and this is the same pairing Stats ships
+    /// (`StatsWindow` is built from `StatsDay(date: reference, calendar: .current)`
+    /// while the reports it buckets carry days parsed out of the stored string).
+    /// The report's day is a STORED day, so it is read in UTC; "this month" is a
+    /// question about the reader's own calendar, so the reference is read locally.
+    /// Reading both in one calendar is wrong whichever one is picked — locally the
+    /// stored day shifts, in UTC the reader's "this month" flips over an evening.
+    static func isInSameMonth(_ date: Date,
+                              as reference: Date,
+                              referenceCalendar: Calendar = .current) -> Bool {
+        let stored = storedDayCalendar.dateComponents([.year, .month], from: date)
+        let now = referenceCalendar.dateComponents([.year, .month], from: reference)
+        return stored.month == now.month && stored.year == now.year
     }
 
-    static func isInSameYear(_ date: Date, as reference: Date, calendar: Calendar = .current) -> Bool {
-        calendar.component(.year, from: date) == calendar.component(.year, from: reference)
+    static func isInSameYear(_ date: Date,
+                             as reference: Date,
+                             referenceCalendar: Calendar = .current) -> Bool {
+        storedDayCalendar.component(.year, from: date)
+            == referenceCalendar.component(.year, from: reference)
     }
 }
 

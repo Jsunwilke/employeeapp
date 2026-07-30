@@ -327,19 +327,102 @@ check("miles line", mixed.milesLine, "150.0 miles")
 // this file gets to assert either way.
 check("one decimal", MileageFigures.oneDecimal(24.66), "24.7")
 
-// The month tile counts a CALENDAR month, year included. A month test without a
-// year folds last July's miles into this July's.
+// ── The month and year buckets, ON THE STORED-DAY CONVENTION.
+//
+// `daily_job_reports.date` is "the day the report is about": iOS writes a bare day,
+// the column carries it as MIDNIGHT UTC, and the app's one convention is that the
+// day is the UTC prefix of that instant (which is how Stats has always read it —
+// `StatsDay`). So the REPORT dates below are minted in UTC, the way the decoder
+// produces them, and the REFERENCE ("this month") is minted locally, because "this
+// month" is a question about the reader's calendar.
+//
+// These checks used to mint both sides with `Calendar.current` and pass the local
+// calendar in, which is precisely the bug they failed to catch: a report stored
+// 2026-08-01T00:00:00Z read locally in any western zone is July 31, so every
+// 1st-of-month trip fell out of the month tile and the Mileage screen disagreed with
+// Statistics about the same row.
 print("the month and year buckets")
+
+// A stored day, exactly as the decoder hands it over: midnight UTC. MINTED BY THE
+// HARNESS'S OWN UTC CALENDAR, not by `MileageMath.storedDayCalendar` — using the
+// production one on both sides of the comparison would make these checks pass even
+// with the pin reverted, which is fake evidence (see --prove-can-fail).
+let utcCalendar: Calendar = {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(secondsFromGMT: 0)!
+    return c
+}()
+func storedDay(_ year: Int, _ month: Int, _ day: Int) -> Date {
+    utcCalendar.date(from: DateComponents(year: year, month: month, day: day))!
+}
+
+// A calendar fixed at a given offset from UTC, standing in for a device zone.
+func zone(_ offsetHours: Int) -> Calendar {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(secondsFromGMT: offsetHours * 3600)!
+    return c
+}
+
 check("same month same year",
-      MileageMath.isInSameMonth(date(2026, 7, 3), as: date(2026, 7, 28), calendar: calendar), true)
+      MileageMath.isInSameMonth(storedDay(2026, 7, 3), as: date(2026, 7, 28), referenceCalendar: calendar), true)
 check("same month other year",
-      MileageMath.isInSameMonth(date(2025, 7, 3), as: date(2026, 7, 28), calendar: calendar), false)
+      MileageMath.isInSameMonth(storedDay(2025, 7, 3), as: date(2026, 7, 28), referenceCalendar: calendar), false)
 check("other month",
-      MileageMath.isInSameMonth(date(2026, 6, 30), as: date(2026, 7, 1), calendar: calendar), false)
+      MileageMath.isInSameMonth(storedDay(2026, 6, 30), as: date(2026, 7, 1), referenceCalendar: calendar), false)
 check("same year",
-      MileageMath.isInSameYear(date(2026, 1, 1), as: date(2026, 12, 31), calendar: calendar), true)
+      MileageMath.isInSameYear(storedDay(2026, 1, 1), as: date(2026, 12, 31), referenceCalendar: calendar), true)
 check("other year",
-      MileageMath.isInSameYear(date(2025, 12, 31), as: date(2026, 1, 1), calendar: calendar), false)
+      MileageMath.isInSameYear(storedDay(2025, 12, 31), as: date(2026, 1, 1), referenceCalendar: calendar), false)
+
+// THE 1st-OF-MONTH CASE, in a zone where it used to fail. A trip stored
+// 2026-08-01T00:00:00Z is an August trip and a 2026 trip in EVERY device zone —
+// including one seven hours behind UTC, where reading the instant locally makes it
+// July 31, and one two hours ahead, where the old code happened to be right.
+let firstOfAugust = storedDay(2026, 8, 1)
+let firstOfJanuary = storedDay(2026, 1, 1)
+for offsetHours in [-11, -7, 0, 2, 14] {
+    let zoned = zone(offsetHours)
+    // "Today" in that zone, mid-August and mid-January — a reference far from any
+    // boundary, so only the STORED side can be misread.
+    let augustReference = zoned.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 12))!
+    let januaryReference = zoned.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 12))!
+    check("the 1st of August is in August (UTC\(offsetHours))",
+          MileageMath.isInSameMonth(firstOfAugust, as: augustReference, referenceCalendar: zoned), true)
+    check("the 1st of August is not in July (UTC\(offsetHours))",
+          MileageMath.isInSameMonth(firstOfAugust,
+                                    as: zoned.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 12))!,
+                                    referenceCalendar: zoned), false)
+    check("the 1st of January is in this year (UTC\(offsetHours))",
+          MileageMath.isInSameYear(firstOfJanuary, as: januaryReference, referenceCalendar: zoned), true)
+    check("the 1st of January is not in the year before (UTC\(offsetHours))",
+          MileageMath.isInSameYear(firstOfJanuary,
+                                   as: zoned.date(from: DateComponents(year: 2025, month: 12, day: 15, hour: 12))!,
+                                   referenceCalendar: zoned), false)
+}
+
+// THE OTHER HALF OF THE CONVENTION: "this month" is read in the READER's calendar,
+// never in UTC. At 6pm on the last day of July, seven hours behind UTC, it is already
+// August in UTC — a screen that took "this month" off the UTC clock would drop every
+// July trip out of the month tile for the evening of the 31st, and out of the year
+// total on New Year's Eve.
+let minus7 = zone(-7)
+check("an evening reference is still this month",
+      MileageMath.isInSameMonth(storedDay(2026, 7, 31),
+                                as: minus7.date(from: DateComponents(year: 2026, month: 7, day: 31, hour: 18))!,
+                                referenceCalendar: minus7), true)
+check("New Year's Eve is still this year",
+      MileageMath.isInSameYear(storedDay(2026, 12, 31),
+                               as: minus7.date(from: DateComponents(year: 2026, month: 12, day: 31, hour: 18))!,
+                               referenceCalendar: minus7), true)
+
+// The stored calendar is UTC, fixed-offset, and nothing about it follows the machine
+// running this.
+check("the stored-day calendar is UTC",
+      MileageMath.storedDayCalendar.timeZone.secondsFromGMT(), 0)
+check("a stored day reads back as itself",
+      MileageMath.storedDayCalendar.component(.day, from: firstOfAugust), 1)
+check("…and in the stored month",
+      MileageMath.storedDayCalendar.component(.month, from: firstOfAugust), 8)
 
 // ── The vehicle, across storage and screen.
 print("the vehicle")
@@ -441,7 +524,15 @@ if [[ "${1:-}" == "--prove-can-fail" ]]; then
     "monthly resolves as weekly|s/return \.monthly/return .weekly/"
     "a blank school passes validation|s/!trimmedSchool\.isEmpty/true/"
     "negative miles accepted|s/miles >= 0/miles >= -1000/"
-    "the month bucket ignores the year|s/&& calendar\.component\(\.year, from: date\) == calendar\.component\(\.year, from: reference\)/\&\& true/"
+    "the month bucket ignores the year|s/&& stored\.year == now\.year//"
+    # A FIXED offset rather than `.current`: a break that reverts the pin to the
+    # device zone proves nothing on a machine whose device zone IS UTC, and a proof
+    # that depends on the runner's region is the fake-evidence shape this harness
+    # exists to refuse. Seven hours off is US Pacific, the zone the defect was found
+    # in.
+    "the stored day is read seven hours off UTC (a device zone, not the stored day)|s/TimeZone\(secondsFromGMT: 0\) \?\? \.current/TimeZone(secondsFromGMT: -25200) ?? .current/"
+    "the reference month is read in UTC instead of the reader's calendar|s/now = referenceCalendar\.dateComponents/now = storedDayCalendar.dateComponents/"
+    "the reference year is read in UTC instead of the reader's calendar|s/== referenceCalendar\.component\(\.year, from: reference\)/== storedDayCalendar.component(.year, from: reference)/"
   )
   fails=0
   for entry in "${BREAKS[@]}"; do

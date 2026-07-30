@@ -104,11 +104,22 @@ ALLOW_MARKER = re.compile(r"^\s*(?://|\*|/\*)\s*ambient-allow:\s*\S+")
 # LocationPhotoAttachmentView, TemplateFormView and the orphaned
 # TemplateReportListView were replaced by Reports/, which hand-rolls no cards.
 # MileageReportsView and RoutePlannerView were tagged AMB.7 by the generator and
-# are NOT this phase's: mileage belongs to AMB.9, and the ROUTE PLANNER belongs
+# are NOT this phase's: mileage belongs to AMB.9, and the ROUTE PLANNER belonged
 # to no phase in the list at all — the same shape as the bottom tab bar, which
-# also matched no entry because the list is organised by FEATURE. Retagged to
-# AMB.9 so the row is not read as AMB.7 having failed; where the route planner
-# really lands is the operator's call.
+# also matched no entry because the list is organised by FEATURE. Both were
+# retagged AMB.9, and the operator's 2026-07-29 sitting SETTLED the open question:
+# the route planner is folded into AMB.9. Both rows are gone with that phase.
+#
+# AMB.9 IS COMPLETE, 2026-07-29: all THREE of its rows are DELETED —
+# MileageReportsView (2), RoutePlannerView (1) and StatsView (7) all draw
+# .ambientCard now, through MileageKit, RoutePlannerKit and StatsKit. NOTE what the
+# allowlist could NOT see, which is this gate's recurring lesson in its third
+# consecutive phase: MileageDetailView and ManagerMileageView are both AMB.9-scope
+# files that hand-rolled containers and had NO rows here, because they used
+# .background(Color…) + .cornerRadius(…) rather than a rounded FILL. The detail
+# screen was converted; ManagerMileageView is deferred to AMB.12 by the operator's
+# ruling and is unconverted with a clean sweep behind it. An empty allowlist row
+# still means nothing about whether a surface is converted.
 #
 # AMB.8 IS COMPLETE, 2026-07-27: BOTH of its rows are DELETED. MyTimeOffRequestsView
 # and TimeOffApprovalView both hand-rolled a card; both now draw

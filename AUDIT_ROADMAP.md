@@ -1124,8 +1124,25 @@ other rebases onto it.
   (the trip-edit persistence check matters most — only a device can prove it),
   operator-run /code-review before push, then mockup deletion (validation
   reference outlives the port). Named, not changed: Manager Mileage's own
-  period anchor (AMB.12), the UTC-midnight one-day display class, monthly
-  day-29/31 anchors (no live org is monthly), the section-level stats gate.
+  period anchor AND its four hand-rolled currency spellings (both AMB.12's
+  screen — `Formatters.currency` is the one spelling, and the dashboard widget's
+  copy of it was deleted in the review round), monthly day-29/31 anchors (no live
+  org is monthly), the section-level stats gate, and the web app's 177
+  evening-instant report dates (a WRITE-side fix in the web repo — see
+  AMB_BATCH3_PARITY.md §6).
+  **2026-07-30 — /code-review ROUND: 8 findings + 7 cleanups fixed, 4 reasoned
+  won't-fix.** The UTC-midnight one-day class is now FIXED rather than named: the
+  app has ONE date convention — the STORED DAY (the UTC prefix of
+  `daily_job_reports.date`) — held by `MileageMath.storedDayCalendar` and the
+  `Formatters.storedDay*` formatters, so a trip stored 2026-08-01T00:00:00Z reads
+  "Fri 1", lands in August's tile, and Mileage agrees with Statistics. Also fixed:
+  the period query's GMT-formatted bounds (one trip counted under two chips), the
+  widget cache persisting never-fetched zeroes, a failed pay-period load silently
+  drawing the hardcoded 2/25/2024 grid, the home widget's spinner with no failure
+  exit, and the vehicle label's `?? .personal` round-trip on the save path.
+  Reasoned won't-fix: promoting chips/failure cards/loading states into the design
+  system and the route enum round-trip (both AMB.12's consolidation), the
+  prove-can-fail perl regexes, and re-concurrency of Mileage's load chain.
 - [ ] **AMB.10 Groups + Yearbook** (17 views, 4,504 lines) — closes batch 3 and mocks
   batch 4. **Mockups already built 2026-07-29 (see AMB.9 note above)** — AMB.10
   starts at conversion once its designs are approved in the same sitting.

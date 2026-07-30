@@ -55,6 +55,15 @@ struct RoutePlannerView: View {
     @ObservedObject private var organizationService = OrganizationService.shared
 
     @State private var schools: [School] = []
+    /// The ids of the schools that HAVE a map pin, resolved once when the list lands.
+    ///
+    /// `School.parsedCoordinates` is not a stored property — it trims quotes, splits
+    /// the string and parses two `Double`s on every access
+    /// (`SessionFormModels.swift:64`). The selected count, every row's routable badge
+    /// and the optimize gate all asked it, so a body pass re-parsed the coordinates of
+    /// every school in the organisation several times over. The answer cannot change
+    /// without the list changing, so it is computed where the list changes.
+    @State private var routableSchoolIDs: Set<String> = []
     @State private var selectedSchools: Set<String> = []
     @State private var isLoading = false
     @State private var isOptimizing = false
@@ -99,11 +108,14 @@ struct RoutePlannerView: View {
 
     /// ONLY ROUTABLE SCHOOLS COUNT. The old screen counted everything it let you
     /// tick, which is how "3 selected" became a two-stop route.
+    ///
+    /// Read on the main actor when Optimize is pressed, so the route is computed for
+    /// exactly what was on screen — the count below does not need the objects.
     private var selectedRoutableSchools: [School] {
-        schools.filter { selectedSchools.contains($0.id) && $0.parsedCoordinates != nil }
+        schools.filter { selectedSchools.contains($0.id) && routableSchoolIDs.contains($0.id) }
     }
 
-    private var selectedCount: Int { selectedRoutableSchools.count }
+    private var selectedCount: Int { selectedSchools.intersection(routableSchoolIDs).count }
 
     private var isStartAvailable: Bool {
         switch selectedStartingPoint {
@@ -309,7 +321,7 @@ struct RoutePlannerView: View {
             // which left a school with no address looking identical to one whose
             // address had not loaded.
             address: address.isEmpty ? "No address on file" : address,
-            isRoutable: school.parsedCoordinates != nil)
+            isRoutable: routableSchoolIDs.contains(school.id))
     }
 
     private var loadingRow: some View {
@@ -381,11 +393,20 @@ struct RoutePlannerView: View {
         }
 
         do {
-            schools = try await SchoolService.shared.getSchools(organizationID: orgID)
+            let loaded = try await SchoolService.shared.getSchools(organizationID: orgID)
+            schools = loaded
+            // The coordinates are parsed HERE, once per load, instead of per body pass.
+            routableSchoolIDs = Set(loaded.filter { $0.parsedCoordinates != nil }.map(\.id))
         } catch {
             // A cancellation is the view being dismissed, not a failure worth an alert.
-            let errorDesc = error.localizedDescription.lowercased()
-            if errorDesc.contains("cancel") || (error as NSError).code == NSURLErrorCancelled {
+            //
+            // TESTED AS A TYPE, not by looking for "cancel" in a sentence. The old test
+            // lowercased `localizedDescription` and searched it for a substring — a
+            // LOCALIZED, server-authored string, so on a non-English device it matched
+            // nothing (a real cancellation raised an alert on a dismissed screen) while
+            // any unrelated failure whose message happens to contain the word was
+            // swallowed instead of shown.
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
                 print("School loading was cancelled (view dismissed)")
             } else {
                 errorMessage = "Failed to load schools: \(error.localizedDescription)"

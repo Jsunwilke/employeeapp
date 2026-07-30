@@ -7,7 +7,17 @@ class PayPeriodService: ObservableObject {
     @Published var isLoading = false
     
     private let organizationService = OrganizationService.shared
-    private var cachedOrganizationID: String?
+
+    /// The organisation whose row was ACTUALLY READ, set only where the fetch
+    /// succeeded — including when that row carried no `pay_period_settings` at all.
+    ///
+    /// READABLE, because the completion `Bool` alone cannot answer the question a
+    /// caller has to ask. It is `false` both for "the org has no pay-period settings"
+    /// (a real answer: use the default 14-day grid) and for "the org could not be
+    /// read" (not an answer: the grid would be a fabricated payroll calendar). AMB.9
+    /// needs to tell those apart before it draws six chips and totals money under
+    /// them; this is the only place in the service that knows.
+    private(set) var cachedOrganizationID: String?
     
     private init() {}
     

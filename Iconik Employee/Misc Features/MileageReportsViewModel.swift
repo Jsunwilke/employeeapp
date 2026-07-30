@@ -66,9 +66,19 @@ class MileageReportsViewModel: ObservableObject {
     // These names and meanings are UNCHANGED: `DashboardWidgets.MileageWidget`
     // reads every one of them off `.shared`.
 
-    @Published var currentPeriodMileage: Double = 0
-    @Published var monthMileage: Double = 0
-    @Published var yearMileage: Double = 0
+    /// THE THREE HEADLINE TOTALS ARE DERIVED, NOT MIRRORED. They used to be stored
+    /// `@Published`s written beside the split miles on every apply — two
+    /// representations of one figure, which is how a bucket's miles and its money
+    /// come to be read off different sources. They are computed over the splits now
+    /// and keep their names, because `DashboardWidgets.MileageWidget` reads every one
+    /// of them off `.shared`.
+    var currentPeriodMileage: Double { currentPeriodSplit.totalMiles }
+    var monthMileage: Double { monthSplit.totalMiles }
+    var yearMileage: Double { yearSplit.totalMiles }
+
+    /// Trips for the selected period, NEWEST FIRST — sorted once here, where they
+    /// land, rather than by a computed `sortedRecords` the list re-sorted on every
+    /// body evaluation.
     @Published var records: [MileageRecordWrapper] = []
 
     // Personal/company split miles per bucket (rate-independent; compensation is
@@ -188,11 +198,6 @@ class MileageReportsViewModel: ObservableObject {
         return periods[selectedPeriodIndex]
     }
 
-    /// Trips, newest first.
-    var sortedRecords: [MileageRecordWrapper] {
-        records.sorted { $0.date > $1.date }
-    }
-
     /// One trip's money, at the rate its own vehicle type pays.
     func amount(for record: MileageRecordWrapper) -> Double {
         MileageMath.amount(miles: record.totalMileage,
@@ -244,11 +249,9 @@ class MileageReportsViewModel: ObservableObject {
         let cachedPeriod = UserDefaults.standard.double(forKey: Cache.periodMiles)
         let cachedMonth = UserDefaults.standard.double(forKey: Cache.monthMiles)
         let cachedYear = UserDefaults.standard.double(forKey: Cache.yearMiles)
-        currentPeriodMileage = cachedPeriod
-        monthMileage = cachedMonth
-        yearMileage = cachedYear
         // The cache holds totals, not the split, so the personal bucket carries them
-        // — the same estimate the dashboard widget makes at cold start.
+        // — the same estimate the dashboard widget makes at cold start. The three
+        // headline totals are computed over these, so seeding the buckets seeds them.
         currentPeriodPersonalMiles = cachedPeriod
         monthPersonalMiles = cachedMonth
         yearPersonalMiles = cachedYear
@@ -339,7 +342,11 @@ class MileageReportsViewModel: ObservableObject {
             return
         }
 
-        await ensurePeriods(force: force)
+        // A pay-period read that failed with nothing already built has already failed
+        // the screen with the reason. Running on would replace that with "your
+        // organization's pay periods aren't set up yet", which is a different claim
+        // and the wrong one.
+        guard await ensurePeriods(force: force) else { return }
         guard !Task.isCancelled else { return }
 
         if force || !ratesLoaded { await loadRates() }
@@ -387,6 +394,7 @@ class MileageReportsViewModel: ObservableObject {
             // An inline line says so, the same slot a failed chip fetch uses.
             print("⚠️ Mileage: month/year totals unavailable — \(error.localizedDescription)")
             periodNotice = yearTotalsFailureNotice
+            notifyLoadEnded()
         }
     }
 
@@ -479,6 +487,7 @@ class MileageReportsViewModel: ObservableObject {
             // than a total nobody fetched. The period figures above stand: they landed.
             print("⚠️ Mileage: month/year totals unavailable — \(error.localizedDescription)")
             periodNotice = yearTotalsFailureNotice
+            notifyLoadEnded()
         }
     }
 
@@ -535,11 +544,14 @@ class MileageReportsViewModel: ObservableObject {
         !Task.isCancelled && generation == periodFetchGeneration
     }
 
-    /// Lowercased, per the repo's UUID rule: Supabase stores lowercase and Swift
-    /// generates uppercase, and a `.eq` filter is a string comparison.
+    /// NO `.lowercased()`: the id already is. `UserManager.getCurrentSupabaseUserID`
+    /// lowercases the auth uuid at source (`UserManager.swift:71-79`), which is the
+    /// only producer of `userId` here, so a second fold was a no-op citing a rule that
+    /// does not apply — `daily_job_reports.user_id` is not a column this app writes
+    /// from Swift's uppercase `UUID()`.
     private func resolvedUserId() -> String? {
         guard let userId, !userId.isEmpty else { return nil }
-        return userId.lowercased()
+        return userId
     }
 
     /// True when the newest chip no longer contains today — the pay period rolled
@@ -552,14 +564,37 @@ class MileageReportsViewModel: ObservableObject {
         return newest.end < Date()
     }
 
+    /// Returns false when the carousel could not be built and the screen has already
+    /// been failed — the caller must stop rather than run on to a second, wronger
+    /// message about pay periods that "aren't set up yet".
     @MainActor
-    private func ensurePeriods(force: Bool) async {
-        guard periods.isEmpty || force || periodsAreStaleForToday else { return }
+    private func ensurePeriods(force: Bool) async -> Bool {
+        guard periods.isEmpty || force || periodsAreStaleForToday else { return true }
 
-        await loadPayPeriodSettings()
+        let settingsRead = await loadPayPeriodSettings()
         // Rebuilding the carousel under a newer load would move the selection out
         // from under the fetch that is still running.
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return false }
+
+        // A FAILED LOAD IS NOT "NO SETTINGS", and this screen used to treat them as
+        // the same thing because it threw the completion `Bool` away.
+        // `PayPeriodService` answers a settings-less org with a hardcoded
+        // 2/25/2024-anchored 14-day grid, which is the right answer for an org that
+        // genuinely has no settings row. For an org whose row could not be READ it is
+        // a fabricated payroll calendar: six chips, a hero header and every total
+        // under them describing fortnights the org may not be on, beneath a caption
+        // stating the real cycle with complete confidence.
+        //
+        // So a failed read with nothing already built says so and leaves `periods`
+        // EMPTY, which is what makes the next `load()` retry it. A failed read with
+        // periods already built keeps them — they came from a read that succeeded.
+        guard settingsRead else {
+            if periods.isEmpty {
+                fail("Couldn't load your organization's pay periods — retry when you're back online.")
+                return false
+            }
+            return true
+        }
 
         let service = payPeriodService
         let built = MileagePeriodSequence.build(now: Date(), calendar: calendar) { date in
@@ -569,14 +604,28 @@ class MileageReportsViewModel: ObservableObject {
         cycle = MileagePeriodCycle.from(type: service.payPeriodSettings?.type,
                                        isActive: service.payPeriodSettings?.isActive ?? false)
         if !periods.indices.contains(selectedPeriodIndex) { selectedPeriodIndex = 0 }
+        return true
     }
 
-    /// `PayPeriodService` is completion-based and caches per organisation, so this
-    /// is cheap on every call after the first.
-    private func loadPayPeriodSettings() async {
-        await withCheckedContinuation { continuation in
-            payPeriodService.loadPayPeriodSettings { _ in continuation.resume() }
+    /// True when the organisation's row was READ — settings or no settings.
+    ///
+    /// NOT the completion `Bool`, which cannot answer this: the service reports
+    /// `false` both for "this org carries no pay-period settings" (a real answer, and
+    /// the default grid is the documented behaviour for it) and for "the org could not
+    /// be fetched" (not an answer at all). `cachedOrganizationID` is assigned only on
+    /// the path that actually read the row, so it is the discriminator — and the
+    /// completion still gates it, because the id is only trustworthy once the call has
+    /// come back.
+    ///
+    /// `PayPeriodService` is completion-based and caches per organisation, so this is
+    /// cheap on every call after the first.
+    private func loadPayPeriodSettings() async -> Bool {
+        let hadSettings: Bool = await withCheckedContinuation { continuation in
+            payPeriodService.loadPayPeriodSettings { continuation.resume(returning: $0) }
         }
+        if hadSettings { return true }
+        let orgId = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        return !orgId.isEmpty && payPeriodService.cachedOrganizationID == orgId
     }
 
     /// Fetch this photographer's personal rate (users.amount_per_mile) and the org's
@@ -672,13 +721,14 @@ class MileageReportsViewModel: ObservableObject {
 
     @MainActor
     private func applyPeriod(_ reports: [DailyJobReport]) {
-        records = reports.map { MileageRecordWrapper(from: $0) }
+        // SORTED ONCE, HERE. The list used to read a computed `sortedRecords`, which
+        // re-sorted the whole period on every body evaluation.
+        records = reports.map { MileageRecordWrapper(from: $0) }.sorted { $0.date > $1.date }
         let split = MileageMath.accumulate(records,
                                           miles: { $0.totalMileage },
                                           vehicleType: { $0.vehicleType },
                                           personalRate: personalRate,
                                           companyCarRate: companyRate)
-        currentPeriodMileage = split.totalMiles
         currentPeriodPersonalMiles = split.personalMiles
         currentPeriodCompanyMiles = split.companyMiles
     }
@@ -692,7 +742,6 @@ class MileageReportsViewModel: ObservableObject {
                                                    vehicleType: { $0.vehicleType },
                                                    personalRate: personalRate,
                                                    companyCarRate: companyRate)
-        yearMileage = yearSplitValue.totalMiles
         yearPersonalMiles = yearSplitValue.personalMiles
         yearCompanyMiles = yearSplitValue.companyMiles
 
@@ -701,13 +750,18 @@ class MileageReportsViewModel: ObservableObject {
         // changed zone mid-filter classify two rows of the same month differently.
         let now = Date()
         let calendar = self.calendar
-        let monthRows = rows.filter { MileageMath.isInSameMonth($0.date, as: now, calendar: calendar) }
+        // THE STORED DAY IS READ IN UTC, "this month" in the device's calendar — see
+        // `MileageMath.storedDayCalendar`. Bucketing the report locally dropped every
+        // 1st-of-month trip into the previous month and made this tile disagree with
+        // Statistics about the same row.
+        let monthRows = rows.filter {
+            MileageMath.isInSameMonth($0.date, as: now, referenceCalendar: calendar)
+        }
         let monthSplitValue = MileageMath.accumulate(monthRows,
                                                     miles: { $0.totalMileage },
                                                     vehicleType: { $0.vehicleType },
                                                     personalRate: personalRate,
                                                     companyCarRate: companyRate)
-        monthMileage = monthSplitValue.totalMiles
         monthPersonalMiles = monthSplitValue.personalMiles
         monthCompanyMiles = monthSplitValue.companyMiles
 
@@ -722,6 +776,37 @@ class MileageReportsViewModel: ObservableObject {
         hasSyncedFigures = true
         state = .loaded
         cacheHeadlineTotals()
+
+        // THE SUBSCRIBER IS GATED ON THE SAME FLAG THE CACHE IS. `succeed()` runs
+        // twice per load — once when the period lands and again after the year does —
+        // and the dashboard widget's callback body writes cached_monthMileage and
+        // cached_yearMileage UNGATED (`DashboardWidgets.swift:846-856`). Firing it on
+        // the first call therefore persisted month and year figures nobody had fetched:
+        // zeroes on a cold start, read back on the next launch as real totals. The
+        // second call carries the real ones, so the widget is told then.
+        //
+        // Gated HERE rather than in the widget because the flag lives here and the
+        // widget is another phase's screen: this object knows whether the two figures
+        // it is publishing were ever loaded, and the subscriber cannot.
+        guard monthYearLoaded else { return }
+        updateCallback?()
+    }
+
+    /// THE LOAD IS OVER, however it ended — tell the subscriber.
+    ///
+    /// The gate in `succeed()` closes a real hole and opens a smaller one: on a load
+    /// whose period query SUCCEEDED and whose year query FAILED, neither `succeed()`
+    /// (gated) nor `fail()` (not called — the period figures are good) would notify,
+    /// and `MileageWidget` lowers its `isLoading` only inside this callback. A cold
+    /// start with no cache would spin there forever. This is that path's exit.
+    ///
+    /// IT CANNOT PERSIST A FIGURE NOBODY FETCHED. While `monthYearLoaded` is false the
+    /// month and year buckets still hold exactly what `init` seeded them with — the
+    /// cached totals — because `applyYearAndMonth` is the only writer and it is what
+    /// raises the flag. So the widget's ungated cache write copies back the values that
+    /// were already in those keys.
+    @MainActor
+    private func notifyLoadEnded() {
         updateCallback?()
     }
 
@@ -733,6 +818,20 @@ class MileageReportsViewModel: ObservableObject {
         // Figures that DID sync are still true, just older than now. Zeroing them
         // is the failure mode this state machine exists to remove.
         state = hasSyncedFigures ? .stale(message) : .failed(message)
+
+        // THE SUBSCRIBER IS TOLD ABOUT A FAILURE TOO, and that is a fix rather than
+        // noise. `MileageWidget` raises its own `isLoading` when it has no cache and
+        // lowers it ONLY inside this callback (`DashboardWidgets.swift:840-844`,
+        // `:857-859`) — so a cold start that could not reach the server left the home
+        // widget spinning for as long as the dashboard stayed on screen. It now
+        // renders the values it seeded itself, which on that path are zeroes: a
+        // widget showing 0 mi with no cache behind it is honest about having nothing,
+        // and an eternal spinner is not.
+        //
+        // NO CACHE KEY IS WRITTEN ON THIS PATH: `cacheHeadlineTotals()` is not called
+        // here, and the widget's own writes copy the figures it just read, which on a
+        // failure are the ones it already had.
+        updateCallback?()
     }
 
     /// EACH KEY IS WRITTEN ONLY WHEN THE FIGURE BEHIND IT WAS LOADED.

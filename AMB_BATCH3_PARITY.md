@@ -172,6 +172,8 @@ Consequences to name rather than fake: if the org's pay period is anything but a
 
 Consequences: the two Stats queries citing phantom columns fail → whole-screen error (INFER, §0.1). The same phantom columns appear at `DashboardWidgets.swift:1741` (selects `value`, filters `type` — a second suspect path) and `ShiftDetailView.swift:1281`. `DATABASE_SCHEMA.md` is stale in both directions (missing the real `vehicle_type`, listing nothing about `value`) — treat the live query as the only authority.
 
+Consequence carried FORWARD as a reasoned won't-fix (2026-07-30): the app's one date convention is **THE STORED DAY — the UTC prefix** of `daily_job_reports.date` (iOS writes a bare day = midnight UTC; Stats has always read it that way and AMB.9's Mileage now does too). Under it, the **177 rows written by the WEB app carry a real evening instant and therefore bucket one day LATE**. The correct fix is on the WRITE side — the web app should store the bare local day the way iOS does — which is `~/Desktop/Focal-Point-Supabase`, not this repo and not this phase. Re-interpreting instants locally instead would move all ~2,300 correctly-stored iOS rows to fix 177. Recorded at `StatsDay(stored:)` in `Stats/StatsRules.swift`.
+
 Not verified, flagged: `optimize-route` `verify_jwt` state (no `supabase/config.toml` in this repo); whether Google emits a trailing transition when an end point is set (the end row may display the last leg's distance twice); RLS on `daily_job_reports` against `MileageDetailView`'s unscoped in-view UPDATE; whether `getCurrentUserIDUnified()` returns lowercase (several `eq` comparisons carry no `.lowercased()`).
 
 ## 7. Drift-gate status for AMB.9
@@ -391,7 +393,7 @@ No TODO/FIXME in the directory; no `?? UUID()` fallbacks (only legitimate init d
 | **Errors never surfaced** | checklist + item screens | `viewModel.error` displayed only by the root list's alert; every failure on the checklist and detail screens is silent |
 | **Error swallowed** | `YearbookChecklistViewForSession.swift:177-181` | catch prints and shows "No Yearbook List Found" |
 | **Unbounded spinner** | `YearbookChecklistViewForSession.swift:31` | nil initial fetch → spins forever |
-| **Lowercase-UUID hazard** | `ShiftDetailView.swift:265` → Service `:33`, `:77` | `schoolId` passed with no `.lowercased()`; every `id` comparison in the service lowercases, **`school_id` and `organization_id` never do** |
+| **UUID-case inconsistency** *(SUPERSEDED — see note)* | `ShiftDetailView.swift:265` → Service `:33`, `:77` | `schoolId` passed with no `.lowercased()`; every `id` comparison in the service lowercases, **`school_id` and `organization_id` never do**. **SUPERSEDED 2026-07-30 by the refined UUID rule (CLAUDE.md):** the finding is the INCONSISTENCY, not the missing fold. Adding `.lowercased()` is only correct where the column is stored lowercase — doing it blindly reproduces the AMB.9 critical (a lowercased id made ~98% of mileage edits silent no-op 200s). AMB.10 must check each column's stored case first, then make the comparisons agree. |
 | **No org scoping on the subscription** | `YearbookShootListService.swift:365-366`, `:394` | `organizationId` param unused; realtime filter is `school_id` only |
 | Unused `@State`/deps | `YearbookChecklistView.swift:9`; `YearbookItemRow.swift:122`; `YearbookShootListsView.swift:5,7` | `showingItemDetail`; `showingImagePicker` (no picker exists); `SchoolService` never read; `selectedSchool` unused |
 | No-op filter case | VM `:308-310` | `QuickFilter.required` → `break` |
@@ -409,7 +411,7 @@ Zero literal TODO/FIXME — the gaps are prose comments (`YearbookChecklistView.
 
 ### Class Groups models (`ClassGroupModels.swift`)
 
-**`ClassGroupJob`** (`:112`): id, session_id, session_date, school_id, school_name, organization_id, job_type, class_groups `[ClassGroup]`, notes?, created_at, updated_at, created_by, last_modified_by. `init` defaults `id = UUID().uuidString` — **uppercase, violating the repo's lowercase rule**. Computed: classGroupCount, totalImageCount, hasClassGroups (unused).
+**`ClassGroupJob`** (`:112`): id, session_id, session_date, school_id, school_name, organization_id, job_type, class_groups `[ClassGroup]`, notes?, created_at, updated_at, created_by, last_modified_by. `init` defaults `id = UUID().uuidString` — uppercase. **SUPERSEDED 2026-07-30 by the refined UUID rule (CLAUDE.md):** an app-minted uppercase id is not a violation, it is what the column then STORES, and every filter against it must use it as stored. Prefer minting lowercase for NEW columns; never lowercase an id on the way into a filter against a column already holding uppercase — that is the AMB.9 critical. What AMB.10 must verify is that `class_group_jobs.id` filters use the case the rows carry. Computed: classGroupCount, totalImageCount, hasClassGroups (unused).
 
 **`ClassGroup`** (`:216`): id, grade, teacher, image_numbers `String` (free-text comma list, **not an array**), notes. Computed: displayName (unused), hasImages, imageCount = naive split count, imageNumbersArray (unused).
 

@@ -64,8 +64,25 @@ struct StatsView: View {
             .ambientNoBounceWhenShort()
         }
         .navigationTitle("Statistics")
-        .onAppear { load() }
+        .onAppear {
+            refreshReferenceIfDayChanged()
+            load()
+        }
         .onChange(of: period) { _ in load() }
+    }
+
+    /// THE REFERENCE IS STABLE WITHIN A DAY AND NEVER OLDER THAN ONE.
+    ///
+    /// It is fixed at `init` so the chip labels and the period boundaries cannot shift
+    /// under the reader mid-session. But this screen lives inside a tab shell that
+    /// keeps it alive for as long as the app is running, so past midnight — and past
+    /// New Year — a stale reference had "July" over August's window and asked the
+    /// server for the wrong month. Re-minted only when the stored day is no longer
+    /// today, which leaves the within-session stability exactly as it was.
+    private func refreshReferenceIfDayChanged() {
+        let now = Date()
+        guard !Calendar.current.isDate(reference, inSameDayAs: now) else { return }
+        reference = now
     }
 
     @ViewBuilder

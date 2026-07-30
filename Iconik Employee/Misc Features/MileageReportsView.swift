@@ -174,16 +174,14 @@ struct MileageReportsView: View {
         HStack(spacing: 10) {
             MileageFigureTile(title: "This month",
                               caption: Formatters.monthYear.string(from: Date()),
-                              miles: viewModel.monthMileage,
-                              reimbursement: viewModel.monthFigures.reimbursement,
+                              figures: viewModel.monthFigures,
                               systemImage: "calendar",
                               tint: tint,
                               isLoaded: viewModel.monthYearLoaded,
                               retry: monthYearRetry)
             MileageFigureTile(title: "This year",
                               caption: String(Calendar.current.component(.year, from: Date())),
-                              miles: viewModel.yearMileage,
-                              reimbursement: viewModel.yearFigures.reimbursement,
+                              figures: viewModel.yearFigures,
                               systemImage: "calendar.badge.clock",
                               tint: tint,
                               isLoaded: viewModel.monthYearLoaded,
@@ -205,7 +203,9 @@ struct MileageReportsView: View {
         VStack(alignment: .leading, spacing: 8) {
             AmbientSectionTitle("Trips", trailing: "\(viewModel.records.count)")
             LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
-                ForEach(viewModel.sortedRecords) { record in
+                // Already newest-first: the view model sorts once, where the trips
+                // land, rather than per body evaluation here.
+                ForEach(viewModel.records) { record in
                     Button { selectedRecord = record } label: {
                         MileageTripRow(date: record.date,
                                        school: record.schoolName,
