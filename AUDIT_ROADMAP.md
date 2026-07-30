@@ -1106,6 +1106,26 @@ other rebases onto it.
   phase); (3) whether AMB.9 may repair the two broken stats queries + the
   double-count so the redesigned screen ships REAL numbers (data-layer, needs the
   D12 exception the way AMB.6's chat repair got one).
+  **2026-07-29 LATER — DESIGNS APPROVED, CONVERSION BUILT AND ON MAIN (2fff568),
+  NOT PUSHED; awaiting operator smoke.** The sitting approved all five designs,
+  folded the Route Planner into AMB.9, and sanctioned the stats repair. Mileage
+  (root + toolbar-edit detail), Route Planner (pushed preview, honest failures,
+  surfaced skips), and Statistics (REBUILT — first render in the screen's
+  existence, live-verified on the simulator) all converted; the design lives in
+  MileageKit/Rules, RoutePlannerKit, StatsKit/Rules, which the lab imports.
+  Executable rules: test_mileage_rules.sh (101 checks/12 sabotage-proofs),
+  test_stats_rules.sh (104/14). Drift rows deleted, sweep clean. THREE
+  adversarial audit rounds + three fix rounds to convergence; headline finds all
+  fixed pre-ship: a lowercased id turning ~98% of payroll edits into silent
+  no-op 200s (every write in DailyJobReportService now proves a row changed or
+  throws), rates pinned to defaults after one failed fetch, a lowercased org-id
+  lookup against the mixed-case Firebase org id, chip-tap races, the silent
+  zero-row delete. STILL OPEN to close the phase: operator smoke both devices
+  (the trip-edit persistence check matters most — only a device can prove it),
+  operator-run /code-review before push, then mockup deletion (validation
+  reference outlives the port). Named, not changed: Manager Mileage's own
+  period anchor (AMB.12), the UTC-midnight one-day display class, monthly
+  day-29/31 anchors (no live org is monthly), the section-level stats gate.
 - [ ] **AMB.10 Groups + Yearbook** (17 views, 4,504 lines) — closes batch 3 and mocks
   batch 4. **Mockups already built 2026-07-29 (see AMB.9 note above)** — AMB.10
   starts at conversion once its designs are approved in the same sitting.
