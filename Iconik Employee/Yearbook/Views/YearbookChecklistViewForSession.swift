@@ -1,185 +1,221 @@
+//  YearbookChecklistViewForSession.swift
+//  Iconik Employee — the yearbook checklist reached FROM A SHIFT, Ambient (AMB.10)
+//
+//  Presented as a SHEET from `Schedule/ShiftDetailView.swift` (~:262), which
+//  brings its own `NavigationView` and passes the school and a
+//  `YearbookSessionContext`. That call site is a CONTRACT: the type name and the
+//  three inputs are unchanged.
+//
+//  WHAT THIS SCREEN GAINED — all four are states it did not have:
+//    · A LOAD FAILURE IS NOT "THIS SCHOOL HAS NO CHECKLIST" (claim 4). The old
+//      catch block printed the error and rendered "No Yearbook List Found — no
+//      yearbook checklist exists for X", which is a factual claim about the school
+//      made on the strength of a dropped connection. A photographer who reads it
+//      stops looking. So does a missing organization id, which rendered the same
+//      screen.
+//    · THE SPINNER ENDS. If the initial fetch came back nil the old screen span
+//      forever — no timeout, no error, no retry.
+//    · THE YEAR PICKER SCROLLS. It was a bare `VStack`, so a school with six years
+//      of books pushed the oldest ones off the bottom with no way to reach them.
+//    · EVERY WRITE IS ON THE MAIN ACTOR. The old `Task` wrote `@State` and
+//      `@Published` from a background context, and assigned view-model state from
+//      outside the view model (parity §3).
+
 import SwiftUI
 
-/// Wrapper view that loads the yearbook checklist for a specific school based on session date
 struct YearbookChecklistViewForSession: View {
     let schoolId: String
     let schoolName: String
     let sessionContext: YearbookSessionContext
-    
+
     @StateObject private var viewModel = YearbookShootListViewModel()
-    @State private var isLoading = true
-    @State private var selectedYear: String?
-    @State private var noListsFound = false
+
+    /// Which of the four things this screen can be. The old screen carried three
+    /// booleans and could not distinguish a failure from an absence.
+    private enum Phase: Equatable {
+        case loading
+        /// The school genuinely has no list.
+        case noList
+        /// The load itself failed — a different claim entirely.
+        case failed(String)
+        /// Several years exist; the photographer picks one.
+        case picking
+        /// A year is chosen and the checklist is being fetched or shown.
+        case opening
+    }
+
+    @State private var phase: Phase = .loading
+    @State private var years: [String] = []
     @State private var organizationId: String?
-    @Environment(\.presentationMode) var presentationMode
-    
+    @Environment(\.dismiss) private var dismiss
+
+    private var tint: Color { YearbookStyle.tint }
+
     var body: some View {
         Group {
-            if isLoading {
-                ProgressView("Loading yearbook checklist...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if noListsFound {
-                noListsFoundView
-            } else if let year = selectedYear {
-                if let shootList = viewModel.selectedShootList {
-                    YearbookChecklistView(
-                        shootList: shootList,
-                        sessionContext: sessionContext
-                    )
-                } else {
-                    // Still loading the selected shoot list
-                    ProgressView("Loading yearbook checklist...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else {
-                yearSelectionView
+            switch phase {
+            case .loading:
+                loadingScreen
+            case .noList:
+                noListScreen
+            case .failed(let message):
+                failureScreen(message)
+            case .picking:
+                yearPicker
+            case .opening:
+                openingScreen
             }
         }
+        // The child sets its own title (school • year) once it renders, and the
+        // inner modifier wins — as it did before this conversion.
         .navigationTitle("Yearbook Checklist")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                Button("Close") {
-                    presentationMode.wrappedValue.dismiss()
-                }
+                Button("Close") { dismiss() }
             }
         }
-        .onAppear {
-            loadYearbookList()
-        }
+        .task { await load() }
     }
-    
-    private var noListsFoundView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "list.clipboard")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
-            
-            Text("No Yearbook List Found")
-                .font(.title2)
-                .fontWeight(.semibold)
-            
-            Text("No yearbook checklist exists for \(schoolName)")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            Button("Close") {
-                presentationMode.wrappedValue.dismiss()
-            }
-            .buttonStyle(.bordered)
-        }
-        .padding()
-    }
-    
-    private var yearSelectionView: some View {
-        VStack(spacing: 20) {
-            Text("Select School Year")
-                .font(.title2)
-                .fontWeight(.semibold)
-            
-            Text("Multiple yearbook lists found for \(schoolName)")
-                .font(.body)
-                .foregroundColor(.secondary)
-            
-            ForEach(viewModel.availableYears, id: \.self) { year in
-                Button(action: {
-                    selectedYear = year
-                    if let orgId = organizationId {
-                        viewModel.loadShootList(schoolId: schoolId, schoolYear: year, organizationId: orgId)
-                    }
-                }) {
-                    HStack {
-                        Text(year)
-                            .font(.headline)
-                        
-                        if year == YearbookShootList.getCurrentSchoolYear(date: sessionContext.sessionDate) {
-                            Text("(Current)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Spacer()
-                        
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.secondary)
-                    }
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(10)
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-            .padding(.horizontal)
-        }
-    }
-    
-    private func loadYearbookList() {
-        Task {
-            do {
-                print("📋 YearbookChecklistViewForSession - Loading yearbook list")
-                print("📋 School ID: '\(schoolId)'")
-                print("📋 School Name: '\(schoolName)'")
-                print("📋 Session Date: \(sessionContext.sessionDate)")
-                
-                // Get organization ID first
-                let organizationId = await withCheckedContinuation { continuation in
-                    UserManager.shared.getCurrentUserOrganizationID { orgId in
-                        continuation.resume(returning: orgId)
-                    }
-                }
-                
-                guard let orgId = organizationId else {
-                    print("📋 No organization ID found")
-                    noListsFound = true
-                    isLoading = false
-                    return
-                }
-                
-                // Store organizationId for use in year selection
-                self.organizationId = orgId
 
-                // Get available years for this school
-                let years = try await YearbookShootListService.shared.getAvailableYears(schoolId: schoolId, organizationId: orgId)
-                
-                print("📋 Available years found: \(years)")
-                
-                if years.isEmpty {
-                    print("📋 No yearbook lists found for school ID: '\(schoolId)'")
-                    noListsFound = true
-                    isLoading = false
-                    return
-                }
-                
-                viewModel.availableYears = years
-                
-                // Calculate which school year the session falls into
-                let sessionYear = YearbookShootList.getCurrentSchoolYear(date: sessionContext.sessionDate)
-                print("📋 Calculated session year: \(sessionYear)")
-                
-                if years.contains(sessionYear) {
-                    // Load the matching year
-                    print("📋 Loading yearbook list for year: \(sessionYear)")
-                    selectedYear = sessionYear
-                    viewModel.loadShootList(schoolId: schoolId, schoolYear: sessionYear, organizationId: orgId)
-                } else if years.count == 1, let firstYear = years.first {
-                    // Only one year available, load it
-                    print("📋 Loading only available year: \(firstYear)")
-                    selectedYear = firstYear
-                    viewModel.loadShootList(schoolId: schoolId, schoolYear: firstYear, organizationId: orgId)
-                } else {
-                    // Multiple years available, let user choose
-                    print("📋 Multiple years available, showing selection")
-                    // The yearSelectionView will be shown
-                }
-                
-                isLoading = false
-            } catch {
-                print("📋 Error loading yearbook list: \(error)")
-                noListsFound = true
-                isLoading = false
-            }
+    // MARK: - The four states
+
+    private var loadingScreen: some View {
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.6)
+            YearbookLoadingRow(message: "Loading yearbook checklist…")
+                .padding(.horizontal, 16)
         }
+    }
+
+    private var noListScreen: some View {
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.6)
+            AmbientEmptyState(
+                title: "No Yearbook List Found",
+                message: "No yearbook checklist exists for \(schoolName).",
+                systemImage: "list.clipboard")
+                .padding(.horizontal, 16)
+        }
+    }
+
+    /// Claim 4, drawn: what failed, what is still unknown, and a way to try again.
+    private func failureScreen(_ message: String) -> some View {
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.6)
+            ScrollView {
+                YearbookFailureCard(
+                    systemImage: "wifi.exclamationmark",
+                    title: "Couldn't load the checklist",
+                    message: message,
+                    retryTitle: "Retry",
+                    tint: tint,
+                    retry: { Task { await load() } })
+                    .padding(.horizontal, 16)
+            }
+            .ambientNoBounceWhenShort()
+        }
+    }
+
+    /// SCROLLABLE. Six years of books are reachable now.
+    private var yearPicker: some View {
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.6)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    AmbientSectionTitle("Select school year")
+                    Text("Multiple yearbook lists found for \(schoolName).")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
+                        ForEach(years, id: \.self) { year in
+                            YearbookYearRow(
+                                year: year,
+                                isCurrent: year == YearbookShootList.getCurrentSchoolYear(
+                                    date: sessionContext.sessionDate),
+                                tint: tint) {
+                                    open(year: year)
+                                }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+            }
+            .ambientNoBounceWhenShort()
+        }
+    }
+
+    /// A year is chosen. Either the list is here, or it is still coming, or the
+    /// fetch answered with nothing — which is the case that used to spin forever.
+    @ViewBuilder
+    private var openingScreen: some View {
+        if let shootList = viewModel.selectedShootList {
+            YearbookChecklistView(shootList: shootList, sessionContext: sessionContext)
+        } else if viewModel.isLoading {
+            loadingScreen
+        } else {
+            failureScreen("\(schoolName) may well have one — this device just couldn't reach the server.")
+        }
+    }
+
+    // MARK: - Loading
+
+    /// MainActor-isolated, so every `@State` and `@Published` write below is on the
+    /// main actor by construction rather than by remembering to hop.
+    @MainActor
+    private func load() async {
+        phase = .loading
+
+        let orgId = await withCheckedContinuation { continuation in
+            UserManager.shared.getCurrentUserOrganizationID { continuation.resume(returning: $0) }
+        }
+
+        guard let orgId else {
+            // NOT "this school has no list": nothing was ever asked.
+            phase = .failed("This device couldn't work out which studio you belong to, so it couldn't ask for \(schoolName)'s checklist.")
+            return
+        }
+        organizationId = orgId
+
+        let fetched: [String]
+        do {
+            fetched = try await YearbookShootListService.shared.getAvailableYears(
+                schoolId: schoolId, organizationId: orgId)
+        } catch {
+            // THE FIX FOR CLAIM 4: the catch block no longer maps a failure onto
+            // "no checklist exists".
+            phase = .failed("\(schoolName) may well have one — this device just couldn't reach the server. (\(error.localizedDescription))")
+            return
+        }
+
+        years = fetched
+
+        guard !fetched.isEmpty else {
+            phase = .noList
+            return
+        }
+
+        let sessionYear = YearbookShootList.getCurrentSchoolYear(date: sessionContext.sessionDate)
+        if fetched.contains(sessionYear) {
+            open(year: sessionYear)
+        } else if fetched.count == 1, let only = fetched.first {
+            open(year: only)
+        } else {
+            phase = .picking
+        }
+    }
+
+    private func open(year: String) {
+        guard let orgId = organizationId else {
+            phase = .failed("This device couldn't work out which studio you belong to, so it couldn't ask for \(schoolName)'s checklist.")
+            return
+        }
+        phase = .opening
+        viewModel.loadShootList(schoolId: schoolId, schoolYear: year, organizationId: orgId)
     }
 }
 

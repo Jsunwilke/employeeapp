@@ -1,137 +1,60 @@
+//  ClassGroupSlateView.swift
+//  Iconik Employee — the shooting whiteboard, AMB.10
+//
+//  DELIBERATELY OUTSIDE THE DESIGN LANGUAGE, and that is the approved design
+//  (mockup claim 4): hard white, huge black text, no wash, no card, no dark-mode
+//  adaptation. It is held up in front of a class so the frame is labelled, and
+//  every Ambient instinct — glass, tint, restraint — makes it worse. The board
+//  itself lives in `ClassGroupsKit.swift` so the lab draws the same one; this file
+//  owns the SCREEN behaviours, which a mockup must not have (it would change the
+//  device's brightness from inside a gallery).
+//
+//  ONE APPROVED CHANGE: TAP-ANYWHERE-TO-DISMISS IS GONE. The old view laid a clear
+//  `Color` with an `onTapGesture` over the whole board, so a photographer holding a
+//  phone in one hand and a camera in the other lost the slate mid-shoot to a stray
+//  thumb — and there is no undo: they found out when the frame came back
+//  unlabelled. Only the X closes it now.
+//
+//  ALSO DELETED IN THE SAME CHANGE: the `fullScreenSlate()` View extension, which
+//  was `fullScreenCover(isPresented: .constant(true)) { self }` — recursive,
+//  un-dismissable, and with zero call sites in the app; and the `orientation`
+//  `@State` with its `orientationDidChangeNotification` subscription, which was
+//  written on every rotation and read by nothing (the layout is driven by the
+//  GeometryReader's size, which already changes when the device turns).
+//
+//  UNCHANGED, and each is deliberate:
+//    · Brightness goes to 1.0 on appear and is NEVER RESTORED — the user may have
+//      set it manually, and lowering it under them mid-shoot is worse than leaving
+//      it up.
+//    · The idle timer is disabled on appear and restored on disappear, so the board
+//      does not go dark between frames.
+//    · The status bar is hidden.
+
 import SwiftUI
 
 struct ClassGroupSlateView: View {
     let grade: String
     let teacher: String
     let schoolName: String?
-    
-    @Environment(\.presentationMode) var presentationMode
-    @State private var orientation = UIDeviceOrientation.unknown
-    
+
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Full white background
-                Color.white
-                    .edgesIgnoringSafeArea(.all)
-                
-                // Content
-                VStack(spacing: dynamicSpacing(for: geometry.size)) {
-                    // Grade in large bold text
-                    Text(grade)
-                        .font(.system(size: dynamicFontSize(for: geometry.size, multiplier: 1.0), weight: .bold, design: .default))
-                        .foregroundColor(.black)
-                        .minimumScaleFactor(0.5)
-                        .lineLimit(1)
-                    
-                    // Teacher name in large bold text
-                    Text(teacher)
-                        .font(.system(size: dynamicFontSize(for: geometry.size, multiplier: 0.9), weight: .bold, design: .default))
-                        .foregroundColor(.black)
-                        .minimumScaleFactor(0.5)
-                        .lineLimit(1)
-                    
-                    // Optional school name
-                    if let schoolName = schoolName, !schoolName.isEmpty {
-                        Text(schoolName)
-                            .font(.system(size: dynamicFontSize(for: geometry.size, multiplier: 0.5), weight: .medium, design: .default))
-                            .foregroundColor(.gray)
-                            .minimumScaleFactor(0.5)
-                            .lineLimit(1)
-                            .padding(.top, 10)
-                    }
-                }
-                .padding(40)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                
-                // Exit button overlay
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button(action: {
-                            presentationMode.wrappedValue.dismiss()
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 44))
-                                .foregroundColor(Color.gray.opacity(0.6))
-                                .background(Circle().fill(Color.white.opacity(0.9)))
-                        }
-                        .padding(20)
-                    }
-                    Spacer()
-                }
-                
-                // Tap anywhere to dismiss
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        presentationMode.wrappedValue.dismiss()
-                    }
+        ClassGroupSlateBoard(grade: grade,
+                             teacher: teacher,
+                             schoolName: schoolName) { dismiss() }
+            .statusBarHidden()
+            .onAppear {
+                // Maximize screen brightness — the board is read across a room.
+                UIScreen.main.brightness = 1.0
+                // Keep the screen awake between frames.
+                UIApplication.shared.isIdleTimerDisabled = true
             }
-        }
-        .statusBar(hidden: true)
-        .onAppear {
-            // Maximize screen brightness
-            UIScreen.main.brightness = 1.0
-            
-            // Keep screen awake
-            UIApplication.shared.isIdleTimerDisabled = true
-            
-            // Detect orientation
-            orientation = UIDevice.current.orientation
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            // Listen for orientation changes
-            orientation = UIDevice.current.orientation
-        }
-        .onDisappear {
-            // Restore idle timer
-            UIApplication.shared.isIdleTimerDisabled = false
+            .onDisappear {
+                UIApplication.shared.isIdleTimerDisabled = false
 
-            // Note: We don't restore brightness as the user may have set it manually
-        }
-    }
-    
-    // Dynamic font sizing based on screen size and orientation
-    private func dynamicFontSize(for size: CGSize, multiplier: CGFloat) -> CGFloat {
-        let baseSize: CGFloat = min(size.width, size.height) * 0.15
-        return baseSize * multiplier
-    }
-    
-    // Dynamic spacing based on screen size
-    private func dynamicSpacing(for size: CGSize) -> CGFloat {
-        return min(size.width, size.height) * 0.05
-    }
-}
-
-// MARK: - Full Screen Modifier
-extension View {
-    func fullScreenSlate() -> some View {
-        self
-            .fullScreenCover(isPresented: .constant(true)) {
-                self
+                // Note: brightness is deliberately NOT restored — the user may have
+                // set it manually.
             }
-    }
-}
-
-// MARK: - Preview
-struct ClassGroupSlateView_Previews: PreviewProvider {
-    static var previews: some View {
-        Group {
-            ClassGroupSlateView(
-                grade: "3rd Grade",
-                teacher: "Mrs. Smith",
-                schoolName: "Lincoln Elementary"
-            )
-            .previewDisplayName("Portrait")
-            
-            ClassGroupSlateView(
-                grade: "Kindergarten",
-                teacher: "Ms. Johnson",
-                schoolName: nil
-            )
-            .previewInterfaceOrientation(.landscapeLeft)
-            .previewDisplayName("Landscape")
-        }
     }
 }

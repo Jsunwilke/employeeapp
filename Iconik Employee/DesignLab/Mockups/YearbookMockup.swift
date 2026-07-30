@@ -4,52 +4,46 @@
 //  ARC SCAFFOLDING. Deleted at AMB.10's close, with the rest of the lab going at
 //  AMB.12.
 //
-//  WHAT THE DESIGN IS ARGUING, in four claims the operator can accept or reject
+//  REFACTORED AT THE CONVERSION (AMB.10): this file no longer carries its own
+//  copies of the card, the chip, the ring, the search field, the item row, the
+//  year row or the failure state. It IMPORTS them from `Yearbook/YearbookKit.swift`
+//  and asks `Yearbook/YearbookRules.swift` the same questions the real screens ask
+//  — the arc's rule since AMB.7 (`design-lives-in-production-code`). What is left
+//  here is what the lab is for: SAMPLE DATA, the state pickers, and the captions
+//  that say what each drawn state is arguing.
+//
+//  WHAT THE DESIGN ARGUED, in four claims the operator ACCEPTED on 2026-07-29 —
+//  all four are now built:
 //
 //      1. PROGRESS MUST NOT READ AS AN ERROR AT 0%.
-//         The live row colours its progress bar on a ladder — 100% green, ≥75
-//         orange, ≥50 yellow, ELSE RED (`YearbookShootListsView.swift:306`). So a
-//         brand-new list, correctly at 0%, renders a RED bar. Red in this app
-//         means something is wrong, and nothing is wrong: the season has not
-//         started. The bar gets a neutral track and ONE fill colour — the
-//         feature's own — and the number beside it does the talking.
+//         The live row coloured its progress bar on a ladder — 100% green, ≥75
+//         orange, ≥50 yellow, ELSE RED — so a brand-new list, correctly at 0%,
+//         rendered RED. Red in this app means something is wrong, and nothing was
+//         wrong: the season had not started. The bar has a neutral track and ONE
+//         fill colour, and the number beside it does the talking.
 //
 //      2. FILTERS MUST COMPOSE WITH SEARCH.
-//         Tapping "Incomplete" today routes through `clearFilters()`
-//         (`YearbookChecklistView.swift:141` → VM `:299`), which resets the
-//         category to All and WIPES the text you typed. You cannot ask "which
-//         football items are still open" — the app answers a different question
-//         and throws your question away. The chips and the field compose.
+//         Tapping "Incomplete" routed through `clearFilters()`, which reset the
+//         category to All and WIPED the text you had typed. You could not ask
+//         "which football items are still open" — the app answered a different
+//         question and threw yours away.
 //
 //      3. WHEN EVERYTHING IS "REQUIRED", NOTHING IS.
-//         `YearbookItem.required` defaults to TRUE (`YearbookModels.swift:161`),
-//         so nearly every row carries a red REQUIRED chip and the red means
-//         nothing at all. The tag inverts: the FEW optional items are marked
-//         quietly, and the default — required — needs no decoration.
+//         `YearbookItem.required` defaults to TRUE, so nearly every row carried a
+//         red REQUIRED chip and the red meant nothing at all. The tag inverts.
 //
 //      4. A FAILED LOAD MUST SAY SO.
-//         `YearbookChecklistViewForSession`'s catch block prints and shows "No
-//         Yearbook List Found" (`:177-181`), so a dropped connection is reported
-//         as a school having no checklist — the photographer walks away. And on
-//         the checklist screen `viewModel.error` is never read at all, so a failed
-//         toggle is completely silent. Both get a state that says what happened.
+//         `YearbookChecklistViewForSession`'s catch block printed and showed "No
+//         Yearbook List Found", so a dropped connection was reported as a school
+//         having no checklist. On the checklist screen `viewModel.error` was never
+//         read at all, so a failed toggle was completely silent.
 //
-//  WHAT IS NOT BEING PROPOSED
-//      No data layer, service, permission or cache changes (D12). Per
-//      AMB_BATCH3_PARITY.md §6, this mockup deliberately does NOT promise:
-//
-//        · CREATING a yearbook list. There is no create flow on iOS at all — both
-//          the toolbar "+" and the empty state's button open a sheet whose whole
-//          body is `Text("Create New Yearbook List")` (§0.3). So there is NO "+"
-//          anywhere in this design, and the empty state says where lists come from
-//          instead of offering a button that cannot work.
-//        · DELETING or COPYING a list — dead API surface, no caller, no UI.
-//        · PHOTOS or THUMBNAILS — an item carries image NUMBERS (`[String]`),
-//          never an image reference.
-//        · PER-ITEM ASSIGNMENT — the model has a completer, not an assignee.
-//
-//      Where a drawn state needs a fix, it is captioned PROPOSED so approving the
-//      design is not mistaken for approving the fix.
+//  WHAT WAS NOT PROMISED, and still is not: creating a yearbook list (there is no
+//  create flow on iOS — both the old "+" and the old empty-state button opened a
+//  sheet whose whole body was `Text("Create New Yearbook List")`), deleting or
+//  copying one (dead API surface), photos or thumbnails (an item carries image
+//  NUMBERS, never an image reference), and per-item assignment (the model has a
+//  completer, not an assignee).
 
 import SwiftUI
 
@@ -82,24 +76,18 @@ private enum YearbookListState: String, CaseIterable, Identifiable {
 // MARK: - Root: the lists, grouped by school
 
 struct YearbookMockup: View {
-    /// The feature's own colour (D11) — the registered `FeatureTheme` deeper green
-    /// from `DesignTokens.swift:48`, which today never reaches these screens.
-    static let featureTint = Color(hex: "#2E9B4F")
+    /// The feature's own colour (D11), through the kit — so the lab and the real
+    /// screens cannot be tinted differently.
+    static var featureTint: Color { YearbookStyle.tint }
 
     @State private var state: YearbookListState = .populated
     @State private var search = ""
     @State private var destination: YearbookDestination?
 
-    /// Grouped by school, ascending — the live grouping
-    /// (`YearbookShootListsView.swift`), kept.
-    private var schools: [String] {
-        Array(Set(YearbookLabData.lists.map { $0.schoolName })).sorted()
-    }
-
-    private func lists(for school: String) -> [YearbookShootList] {
-        YearbookLabData.lists
-            .filter { $0.schoolName == school }
-            .sorted { $0.schoolYear > $1.schoolYear }
+    /// Grouped by school ascending, years descending — `YearbookRules`, the same
+    /// call the real root list makes.
+    private var groups: [(school: String, lists: [YearbookShootList])] {
+        YearbookRules.groupedBySchool(YearbookRules.lists(YearbookLabData.lists, matching: search))
     }
 
     var body: some View {
@@ -140,8 +128,8 @@ struct YearbookMockup: View {
         case .populated:
             VStack(alignment: .leading, spacing: 16) {
                 searchField
-                ForEach(schools, id: \.self) { school in
-                    schoolSection(school)
+                ForEach(groups, id: \.school) { group in
+                    schoolSection(group.school, lists: group.lists)
                 }
                 noCreateNote
             }
@@ -161,39 +149,19 @@ struct YearbookMockup: View {
 
     // MARK: 1 — search, hand-rolled
 
-    /// The live screen uses `.searchable`, which the arc does not use: it puts a
-    /// system field in the nav bar, outside the wash, and on a pushed screen it
-    /// competes with the title. Hand-rolled, in the content, where it can be seen
-    /// to be populated — which matters a great deal on the checklist screen (claim 2).
+    /// The kit's field. The live screen used `.searchable`, which the arc does not
+    /// use: it puts a system field in the nav bar, outside the wash, and on a
+    /// pushed screen it competes with the title.
     private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-            TextField("Search schools, years or items", text: $search)
-                .font(.subheadline)
-            if !search.isEmpty {
-                Button {
-                    search = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .ambientCard(density: .compact, fillWidth: true)
+        YearbookSearchField(placeholder: "Search schools, years or items", text: $search)
     }
 
     // MARK: 2 — a school and its years
 
-    private func schoolSection(_ school: String) -> some View {
+    private func schoolSection(_ school: String, lists: [YearbookShootList]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             // The icon is COMPOSED beside the title rather than forked into a
-            // second section-title component. If a third surface wants one,
-            // `AmbientSectionTitle` earns an icon slot — it does not get a
-            // near-duplicate.
+            // second section-title component.
             HStack(spacing: 6) {
                 Image(systemName: "building.2")
                     .font(.footnote.weight(.semibold))
@@ -202,7 +170,7 @@ struct YearbookMockup: View {
             }
 
             LazyVStack(spacing: AmbientDensity.roomy.stackSpacing) {
-                ForEach(lists(for: school)) { list in
+                ForEach(lists) { list in
                     Button {
                         destination = .checklist(list.id)
                     } label: {
@@ -217,9 +185,9 @@ struct YearbookMockup: View {
 
     /// There is no create flow on iOS, so there is no button — and the reason is
     /// said out loud rather than left as an absence someone will "fix" by wiring a
-    /// "+" to the placeholder sheet that already exists.
+    /// "+" to the placeholder sheet that used to exist.
     private var noCreateNote: some View {
-        Text("Lists are created in the web app. iOS has never been able to create one — the existing \"+\" opens an empty placeholder sheet — so this design has no create button, deliberately.")
+        Text("Lists are created in the web app. iOS has never been able to create one — the old \"+\" opened an empty placeholder sheet — so this design has no create button, deliberately.")
             .font(.caption2)
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -234,8 +202,8 @@ struct YearbookMockup: View {
             systemImage: "list.clipboard")
     }
 
-    /// A REAL state the live screen does not have: its empty check tests the
-    /// UNFILTERED array, so filtering to zero rows renders a blank List and looks
+    /// A REAL state the live screen did not have: its empty check tested the
+    /// UNFILTERED array, so filtering to zero rows rendered a blank List and looked
     /// broken (parity §B.1).
     private var noMatchesState: some View {
         VStack(spacing: 8) {
@@ -243,7 +211,7 @@ struct YearbookMockup: View {
                 title: "No Matching Lists",
                 message: "Nothing matches \"\(search.isEmpty ? "spring" : search)\". Search covers the school, the year and the names of items inside the list.",
                 systemImage: "magnifyingglass")
-            Text("Today a search that matches nothing renders a blank screen — the empty check tests the unfiltered list.")
+            Text("Before AMB.10 a search that matched nothing rendered a blank screen — the empty check tested the unfiltered list.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -252,135 +220,22 @@ struct YearbookMockup: View {
         }
     }
 
-    /// PROPOSED — the root list has an error ALERT but no error state in the body,
-    /// and the checklist screens have neither: `viewModel.error` is set in three
-    /// places and read by one alert on one screen.
+    /// The root list had an error ALERT but no error state in the body, and the
+    /// checklist screens had neither.
     private var errorState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 30))
-                .foregroundStyle(.orange)
-            Text("Couldn't load your yearbook lists").font(.headline)
-            Text("The server didn't answer. Your lists are safe — this screen just can't show them right now.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            Button {
-                withAnimation(AmbientMotion.gentle) { state = .populated }
-            } label: {
-                Label("Try Again", systemImage: "arrow.clockwise")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
-                    // ambient-allow: a control, not a card.
-                    .background(Capsule().fill(Self.featureTint))
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
+            YearbookFailureCard(
+                title: "Couldn't load your yearbook lists",
+                message: YearbookFailureCard.genericMessage,
+                tint: Self.featureTint,
+                retry: { withAnimation(AmbientMotion.gentle) { state = .populated } })
 
-            Text("PROPOSED — today a failed load prints to the console and the screen shows the empty state, so \"the network is down\" and \"this school has no list\" look identical.")
+            Text("PROPOSED, and BUILT — before AMB.10 a failed load printed to the console and the screen showed the empty state, so \"the network is down\" and \"this school has no list\" looked identical.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 30)
-    }
-}
-
-// MARK: - The list card
-
-/// ROOMY. A school has a handful of years, not hundreds, and the two numbers that
-/// matter (how far along, how many items) both want room.
-private struct YearbookListCard: View {
-    let list: YearbookShootList
-
-    /// "2025-2026" → "2025-26". The live row computes this in a private property,
-    /// so it is restated here rather than reached for.
-    private var yearDisplay: String {
-        let parts = list.schoolYear.split(separator: "-")
-        guard parts.count == 2 else { return list.schoolYear }
-        return "\(parts[0])-\(String(parts[1]).suffix(2))"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(yearDisplay)
-                    .font(AmbientDensity.roomy.titleFont)
-                if list.isActive {
-                    AmbientBadge(text: "Current", systemImage: "star.fill",
-                                 tint: YearbookMockup.featureTint)
-                }
-                Spacer(minLength: 0)
-                if list.isCompleted {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(YearbookMockup.featureTint)
-                }
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.tertiary)
-            }
-
-            progressRow
-
-            if let summary = categorySummary {
-                Text(summary)
-                    .font(AmbientDensity.roomy.subtitleFont)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Text("Updated \(YearbookLabData.relative.localizedString(for: list.updatedAt, relativeTo: Date()))")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-        .ambientCard(density: .roomy, fillWidth: true)
-    }
-
-    /// ONE fill colour on a NEUTRAL track. No ladder, so 0% is not red — and no
-    /// divide by zero: a list whose items have not been written yet has
-    /// `total_count == 0`, and the live row hands that straight to
-    /// `ProgressView(value:total:)`.
-    private var progressRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 10) {
-                ProgressView(value: Double(list.completedCount),
-                             total: Double(max(list.totalCount, 1)))
-                    .progressViewStyle(.linear)
-                    .tint(YearbookMockup.featureTint)
-                Text("\(list.completedCount)/\(list.totalCount)")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
-            }
-
-            if list.totalCount == 0 {
-                Text("No items yet — the list exists but nothing has been added to it in the web app.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if list.completedCount == 0 {
-                Text("0% is a new list, not a problem — this bar is red on the live screen.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    /// The live one-line summary: first three categories, then "+N more".
-    private var categorySummary: String? {
-        var seen: [String] = []
-        for item in list.items where !seen.contains(item.category) {
-            seen.append(item.category)
-        }
-        guard !seen.isEmpty else { return nil }
-        let shown = seen.prefix(3).joined(separator: ", ")
-        let extra = seen.count - min(seen.count, 3)
-        return extra > 0 ? "\(shown) +\(extra) more" : shown
     }
 }
 
@@ -391,46 +246,17 @@ private struct YearbookListCard: View {
 private struct YearbookChecklistMockup: View {
     let list: YearbookShootList
 
-    private enum Quick: String, CaseIterable, Identifiable {
-        case all = "All"
-        case incomplete = "Incomplete"
-        case completed = "Completed"
-        var id: String { rawValue }
-    }
-
     @State private var items: [YearbookItem] = []
-    @State private var quick: Quick = .all
-    @State private var category: String?
-    @State private var search = ""
+    @State private var filter = YearbookFilter()
     @State private var detail: YearbookItem?
     @State private var exporting = false
 
-    private var categories: [String] {
-        var seen: [String] = []
-        for item in items where !seen.contains(item.category) {
-            seen.append(item.category)
-        }
-        return seen
-    }
+    private var categories: [String] { YearbookRules.categories(in: items) }
 
-    /// All three filters AND the search text apply together. That is the whole
-    /// claim: nothing here resets anything else.
-    private var filtered: [YearbookItem] {
-        items.filter { item in
-            switch quick {
-            case .all: break
-            case .completed: if !item.completed { return false }
-            case .incomplete: if item.completed { return false }
-            }
-            if let category, item.category != category { return false }
-            let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !query.isEmpty {
-                let haystack = "\(item.name) \(item.description ?? "")"
-                if !haystack.localizedCaseInsensitiveContains(query) { return false }
-            }
-            return true
-        }
-    }
+    /// All three filters AND the search text apply together — one call into the
+    /// same rule the real screen uses. That is the whole claim: nothing here
+    /// resets anything else.
+    private var filtered: [YearbookItem] { YearbookRules.items(items, matching: filter) }
 
     private var completedCount: Int { items.filter { $0.completed }.count }
 
@@ -442,7 +268,7 @@ private struct YearbookChecklistMockup: View {
                 VStack(alignment: .leading, spacing: 14) {
                     hero
                     filterBar
-                    searchField
+                    YearbookSearchField(placeholder: "Search items", text: $filter.searchText)
                     composeNote
                     if filtered.isEmpty { noMatches } else { sections }
                     droppedMenuItemNote
@@ -451,7 +277,8 @@ private struct YearbookChecklistMockup: View {
                 .padding(.vertical, 16)
             }
         }
-        .navigationTitle("\(list.schoolName) • \(shortYear)")
+        .navigationTitle(YearbookRules.listTitle(schoolName: list.schoolName,
+                                                 schoolYear: list.schoolYear))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -477,62 +304,17 @@ private struct YearbookChecklistMockup: View {
         }
     }
 
-    private var shortYear: String {
-        let parts = list.schoolYear.split(separator: "-")
-        guard parts.count == 2 else { return list.schoolYear }
-        return "\(parts[0])-\(String(parts[1]).suffix(2))"
-    }
-
     // MARK: 1 — the ring leads
 
+    /// Per-category progress, wrapping. The live screen showed one overall number,
+    /// so "which part of the book is behind" was a question you answered by
+    /// tapping through every category chip.
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 16) {
-                ring
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("\(completedCount) of \(items.count) completed")
-                        .font(.system(size: 19, weight: .semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("\(list.schoolName) • \(shortYear)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-
-            // Per-category progress, wrapping. The live screen shows one overall
-            // number, so "which part of the book is behind" is a question you
-            // answer by tapping through every category chip.
-            AmbientFlowLayout(spacing: 6, lineSpacing: 6) {
-                ForEach(categories, id: \.self) { name in
-                    let total = items.filter { $0.category == name }.count
-                    let done = items.filter { $0.category == name && $0.completed }.count
-                    AmbientBadge(text: "\(name) \(done)/\(total)",
-                                 tint: done == total ? YearbookMockup.featureTint : .secondary)
-                }
-            }
-        }
-        .ambientCard(density: .hero, state: .highlighted,
-                     glow: YearbookMockup.featureTint, fillWidth: true)
-    }
-
-    private var ring: some View {
-        let fraction = items.isEmpty ? 0 : Double(completedCount) / Double(items.count)
-        return ZStack {
-            // ambient-allow: a progress ring is a gauge, not a container.
-            Circle()
-                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 8)
-            Circle()
-                .trim(from: 0, to: fraction)
-                .stroke(YearbookMockup.featureTint,
-                        style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .animation(AmbientMotion.gentle, value: fraction)
-            Text("\(Int(fraction * 100))%")
-                .font(.system(size: 15, weight: .bold, design: .rounded))
-                .contentTransition(.numericText())
-        }
-        .frame(width: 64, height: 64)
+        YearbookHeroCard(schoolName: list.schoolName,
+                         schoolYear: list.schoolYear,
+                         items: items,
+                         completedCount: completedCount,
+                         totalCount: items.count)
     }
 
     // MARK: 2 — chips that compose
@@ -540,19 +322,21 @@ private struct YearbookChecklistMockup: View {
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(Quick.allCases) { option in
-                    chip(option.rawValue, selected: quick == option) {
-                        // Sets ONLY the quick filter. The live handler calls
-                        // clearFilters(), which is the defect.
-                        quick = option
+                ForEach(YearbookQuickFilter.allCases) { option in
+                    YearbookFilterChip(label: option.label,
+                                       isSelected: filter.quick == option) {
+                        // Sets ONLY the quick filter. The live handler called
+                        // clearFilters(), which was the defect.
+                        filter.quick = option
                     }
                 }
 
                 Divider().frame(height: 20)
 
                 ForEach(categories, id: \.self) { name in
-                    chip(name, selected: category == name) {
-                        category = (category == name) ? nil : name
+                    YearbookFilterChip(label: name,
+                                       isSelected: filter.category == name) {
+                        filter.category = (filter.category == name) ? nil : name
                     }
                 }
             }
@@ -561,46 +345,8 @@ private struct YearbookChecklistMockup: View {
         .padding(.horizontal, -16)
     }
 
-    private func chip(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button {
-            withAnimation(AmbientMotion.snappy) { action() }
-            AmbientHaptics.selection()
-        } label: {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(selected ? .white : .primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                // ambient-allow: a filter chip is a control, not a container.
-                .background(Capsule().fill(selected
-                                           ? AnyShapeStyle(YearbookMockup.featureTint)
-                                           : AnyShapeStyle(.ultraThinMaterial)))
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(selected ? 0 : 0.08)))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-            TextField("Search items", text: $search)
-                .font(.subheadline)
-            if !search.isEmpty {
-                Button { search = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .ambientCard(density: .compact, fillWidth: true)
-    }
-
     private var composeNote: some View {
-        Text("PROPOSED: filters and search combine — type \"team\", tap Incomplete, tap Sports, and all three hold. Today a quick filter wipes both the typed text and the chosen category.")
+        Text("Filters and search combine — type \"team\", tap Incomplete, tap Sports, and all three hold. Before AMB.10 a quick filter wiped both the typed text and the chosen category.")
             .font(.caption2)
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -615,114 +361,31 @@ private struct YearbookChecklistMockup: View {
                 if !rows.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         // The count is of the FULL category, not the filtered
-                        // subset. The live header counts what is on screen, so
-                        // under "Completed" every header reads N/N and the screen
-                        // claims the book is finished.
-                        AmbientSectionTitle(name, trailing: fullCount(name))
+                        // subset. The live header counted what was on screen, so
+                        // under "Completed" every header read N/N and the screen
+                        // claimed the book was finished.
+                        AmbientSectionTitle(name,
+                                            trailing: YearbookRules.categoryCountLabel(items, category: name))
 
                         LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
                             ForEach(rows) { item in
-                                row(item)
-                                    .ambientScrollFade()
+                                YearbookItemRow(item: item) {
+                                    toggle(item)
+                                } onTap: {
+                                    detail = item
+                                }
+                                .ambientScrollFade()
                             }
                         }
                     }
                 }
             }
 
-            Text("Category counts are of the whole category, not of what the filter left — the live header counts the filtered rows, so under \"Completed\" every heading reads N/N.")
+            Text("Category counts are of the whole category, not of what the filter left.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func fullCount(_ category: String) -> String {
-        let all = items.filter { $0.category == category }
-        let done = all.filter { $0.completed }.count
-        return "\(done)/\(all.count)"
-    }
-
-    private func row(_ item: YearbookItem) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Button {
-                toggle(item)
-            } label: {
-                Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(item.completed
-                                     ? AnyShapeStyle(YearbookMockup.featureTint)
-                                     : AnyShapeStyle(Color.secondary))
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                detail = item
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(item.name)
-                            .font(AmbientDensity.compact.titleFont)
-                            .strikethrough(item.completed)
-                            .foregroundStyle(item.completed
-                                             ? AnyShapeStyle(Color.secondary)
-                                             : AnyShapeStyle(Color.primary))
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        // THE INVERSION. Required is the default and therefore
-                        // silent; the few optional items are the ones worth
-                        // marking, and they are marked quietly.
-                        if !item.required {
-                            AmbientBadge(text: "Optional", tint: .secondary)
-                        }
-
-                        Spacer(minLength: 0)
-
-                        // The note dot tests EMPTINESS, not nil — the live row
-                        // tests `!= nil`, so an item whose note was cleared to ""
-                        // keeps its badge forever.
-                        if let notes = item.notes,
-                           !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Image(systemName: "note.text")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.orange)
-                        }
-                    }
-
-                    if let description = item.description, !description.isEmpty {
-                        Text(description)
-                            .font(AmbientDensity.compact.subtitleFont)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    if item.completed, let attribution = attribution(item) {
-                        Text(attribution)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    if let numbers = item.imageNumbers, !numbers.isEmpty {
-                        Text("\(numbers.count) \(numbers.count == 1 ? "image" : "images")")
-                            .font(.caption2)
-                            .foregroundStyle(.blue)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-        }
-        .ambientCard(density: .compact,
-                     state: item.completed ? .receded : .normal,
-                     fillWidth: true)
-    }
-
-    /// "Marisa Chen · Jul 12" — through the shared formatter cache, not a
-    /// `DateFormatter` allocated per row per body evaluation (parity §3, perf).
-    private func attribution(_ item: YearbookItem) -> String? {
-        guard let name = item.photographerName, let date = item.completedDate else { return nil }
-        return "\(name) · \(Formatters.monthDay.string(from: date))"
     }
 
     private func toggle(_ item: YearbookItem) {
@@ -748,11 +411,7 @@ private struct YearbookChecklistMockup: View {
             actionTitle: "Clear Filters",
             actionIcon: "arrow.counterclockwise",
             action: {
-                withAnimation(AmbientMotion.snappy) {
-                    quick = .all
-                    category = nil
-                    search = ""
-                }
+                withAnimation(AmbientMotion.snappy) { filter = .clear }
             },
             actionTint: YearbookMockup.featureTint)
     }
@@ -761,7 +420,7 @@ private struct YearbookChecklistMockup: View {
     /// operator's veto explicitly available — a dropped control is exactly the
     /// class of thing this arc has lost silently four times.
     private var droppedMenuItemNote: some View {
-        Text("The overflow menu keeps Export and DROPS \"Mark All Required Complete\": the live menu item calls an empty function and has never done anything. Deliberately dropped rather than quietly kept — operator may veto. Export is unchanged, including that it exports EVERY item and ignores the filters and search, despite being called exportCompletedItems.")
+        Text("The overflow menu keeps Export and DROPS \"Mark All Required Complete\": the live menu item called an empty function and had never done anything. Deliberately dropped rather than quietly kept. Export is unchanged, including that it exports EVERY item and ignores the filters and search, despite being called exportCompletedItems.")
             .font(.caption2)
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -770,9 +429,12 @@ private struct YearbookChecklistMockup: View {
 
 // MARK: - Item detail
 
-/// A sheet, as today. Three PROPOSED additions, all of them about a save that can
-/// fail: the live sheet dismisses unconditionally even on failure, surfaces no
-/// error, and discards unsaved notes when you toggle completion.
+/// A sheet, as today. Three additions, all of them about a save that can fail:
+/// the live sheet dismissed unconditionally even on failure, surfaced no error,
+/// and discarded unsaved notes when you toggled completion. All three are built —
+/// see `Yearbook/Views/YearbookItemDetailView.swift`; the lab keeps the states as
+/// a picker because a mockup can show all three at once and the real screen
+/// cannot.
 private struct YearbookItemDetailMockup: View {
     let item: YearbookItem
 
@@ -847,7 +509,7 @@ private struct YearbookItemDetailMockup: View {
                     .font(.system(size: 20, weight: .bold))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                if !item.required {
+                if YearbookRules.showsOptionalBadge(item) {
                     AmbientBadge(text: "Optional", tint: .secondary)
                 }
             }
@@ -883,7 +545,7 @@ private struct YearbookItemDetailMockup: View {
     }
 
     /// Photographer and date. The raw `completed_by_session` UUID the live sheet
-    /// prints under "Session" is DROPPED: it is a database key with no lookup
+    /// printed under "Session" is DROPPED: it is a database key with no lookup
     /// behind it, and no photographer has ever needed it.
     @ViewBuilder
     private var attributionSection: some View {
@@ -901,10 +563,10 @@ private struct YearbookItemDetailMockup: View {
                     HStack {
                         Text("Date").font(.subheadline).foregroundStyle(.secondary)
                         Spacer()
-                        Text(item.completedDate.map { Formatters.mediumDate.string(from: $0) } ?? "—")
+                        Text(item.completedDate.map { Formatters.mediumDateTime.string(from: $0) } ?? "—")
                             .font(.subheadline)
                     }
-                    Text("The raw session UUID the live sheet shows here is dropped — it is a database key with nothing behind it.")
+                    Text("The raw session UUID the live sheet showed here is dropped — it is a database key with nothing behind it.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -914,11 +576,7 @@ private struct YearbookItemDetailMockup: View {
     }
 
     private var imagesSection: some View {
-        let count = imageNumbers
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .count
+        let count = YearbookRules.parseImageNumbers(imageNumbers).count
         return AmbientFormSection(title: "Image numbers",
                                   status: count == 0 ? "none" : "\(count)",
                                   statusTint: count == 0 ? nil : .blue) {
@@ -935,8 +593,8 @@ private struct YearbookItemDetailMockup: View {
 
     private var notesSection: some View {
         AmbientFormSection(title: "Notes",
-                           status: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "optional" : "written",
-                           statusTint: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : .orange) {
+                           status: YearbookRules.hasNote(notes) ? "written" : "optional",
+                           statusTint: YearbookRules.hasNote(notes) ? .orange : nil) {
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $notes)
                     .font(.subheadline)
@@ -971,13 +629,13 @@ private struct YearbookItemDetailMockup: View {
             }
             .buttonStyle(.plain)
 
-            // PROPOSED — the live `toggleCompletion` discards whatever you typed
-            // in Notes and Image Numbers, silently, and does not tell you.
+            // The live `toggleCompletion` discarded whatever you typed in Notes and
+            // Image Numbers, silently, and did not tell you.
             if labState == .unsaved {
                 HStack(alignment: .top, spacing: 7) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption.weight(.semibold))
-                    Text("You have unsaved notes. Marking this complete saves them too — PROPOSED. Today toggling throws your edits away without a word.")
+                    Text("You have unsaved notes. Marking this complete saves them too — BUILT. Before AMB.10 toggling threw your edits away without a word.")
                         .font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
@@ -991,24 +649,14 @@ private struct YearbookItemDetailMockup: View {
         .padding(.top, 2)
     }
 
-    /// PROPOSED — the live sheet dismisses unconditionally, even when both of its
-    /// two sequential writes failed. The photographer believes it saved.
+    /// The live sheet dismissed unconditionally, even when both of its two
+    /// sequential writes failed. The photographer believed it saved.
     private var saveError: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 7) {
-                Image(systemName: "xmark.octagon.fill")
-                    .font(.caption.weight(.semibold))
-                Text("Couldn't save — the server didn't answer. Your text is still here; try Save again.")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(.red)
-            .ambientCard(density: .compact,
-                         border: .hairline(Color.red.opacity(0.4)),
-                         fillWidth: true)
+            YearbookInlineFailure(
+                message: "Couldn't save — the server didn't answer. Your text is still here; try Save again.")
 
-            Text("PROPOSED — today a failed save dismisses the sheet with no message, and the row keeps the old value until the whole screen is rebuilt.")
+            Text("BUILT — before AMB.10 a failed save dismissed the sheet with no message, and the row kept the old value until the whole screen was rebuilt.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1072,10 +720,10 @@ private struct YearbookSessionEntryMockup: View {
         }
     }
 
-    /// The live picker is a plain `VStack` of buttons that is NOT inside a
-    /// ScrollView (`YearbookChecklistViewForSession.swift`), so a school with
-    /// several years pushes the older ones off the bottom of the screen with no
-    /// way to reach them. Here it scrolls.
+    /// The live picker was a plain `VStack` of buttons NOT inside a ScrollView, so
+    /// a school with several years pushed the older ones off the bottom of the
+    /// screen with no way to reach them. Here — and now in the real screen — it
+    /// scrolls.
     private var yearPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             AmbientSectionTitle("Select school year", trailing: "scrollable")
@@ -1087,64 +735,35 @@ private struct YearbookSessionEntryMockup: View {
             ScrollView {
                 VStack(spacing: AmbientDensity.compact.stackSpacing) {
                     ForEach(YearbookLabData.years) { entry in
-                        HStack(spacing: 8) {
-                            Text(entry.year)
-                                .font(AmbientDensity.compact.titleFont)
-                            if entry.isCurrent {
-                                AmbientBadge(text: "Current", systemImage: "star.fill",
-                                             tint: YearbookMockup.featureTint)
-                            }
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .ambientCard(density: .compact, fillWidth: true)
+                        YearbookYearRow(year: entry.year, isCurrent: entry.isCurrent) {}
                     }
                 }
             }
             .frame(maxHeight: 220)
 
-            Text("Today this list is not in a ScrollView, so a school with six years of books hides the oldest three off-screen with no way to reach them.")
+            Text("Before AMB.10 this list was not in a ScrollView, so a school with six years of books hid the oldest three off-screen with no way to reach them.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    /// PROPOSED — the distinct failure state. Today the catch block prints and
-    /// renders "No Yearbook List Found / No yearbook checklist exists for X",
-    /// which is a factual claim about the school made on the strength of a
-    /// dropped connection. A photographer who reads it stops looking.
+    /// The distinct failure state. The live catch block printed and rendered "No
+    /// Yearbook List Found / No yearbook checklist exists for X", which is a
+    /// factual claim about the school made on the strength of a dropped
+    /// connection. A photographer who reads it stops looking.
     private var failureState: some View {
         VStack(alignment: .leading, spacing: 8) {
-            AmbientSectionTitle("Load failed", trailing: "PROPOSED")
+            AmbientSectionTitle("Load failed", trailing: "BUILT")
 
-            VStack(spacing: 10) {
-                Image(systemName: "wifi.exclamationmark")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.orange)
-                Text("Couldn't load the checklist").font(.headline)
-                Text("Westbrook High School may well have one — this device just couldn't reach the server.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                Button {} label: {
-                    Label("Retry", systemImage: "arrow.clockwise")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        // ambient-allow: a control, not a card.
-                        .background(Capsule().fill(YearbookMockup.featureTint))
-                }
-                .buttonStyle(.plain)
-            }
-            .frame(maxWidth: .infinity)
-            .ambientCard(density: .roomy, state: .highlighted,
-                         border: .hairline(Color.orange.opacity(0.35)),
-                         fillWidth: true, contentAlignment: .center)
+            YearbookFailureCard(
+                systemImage: "wifi.exclamationmark",
+                title: "Couldn't load the checklist",
+                message: "Westbrook High School may well have one — this device just couldn't reach the server.",
+                retryTitle: "Retry",
+                retry: {})
 
-            Text("PROPOSED — today a network failure, a missing org id and a genuinely absent list all render the same screen: \"No yearbook checklist exists for this school.\" Two of those three are lies. There is also no retry, and if the first fetch returns nil the spinner never stops.")
+            Text("Before AMB.10 a network failure, a missing org id and a genuinely absent list all rendered the same screen: \"No yearbook checklist exists for this school.\" Two of those three were lies. There was also no retry, and if the first fetch returned nil the spinner never stopped.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1163,13 +782,9 @@ private struct YearbookSessionEntryMockup: View {
 /// case the live row's `!= nil` test gets wrong.
 private enum YearbookLabData {
 
-    /// One formatter, not one per row per body evaluation — which is what the live
-    /// row does (`YearbookShootListsView.swift:206`).
-    static let relative: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter
-    }()
+    // The relative formatter that used to live here moved to `YearbookStyle` in
+    // YearbookKit — one instance for the lab AND the real screens, instead of the
+    // live row's fresh `RelativeDateTimeFormatter` per body evaluation.
 
     static let lists: [YearbookShootList] = [
         // The working list: six categories, part-done, current year.

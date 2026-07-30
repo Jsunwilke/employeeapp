@@ -447,6 +447,12 @@ class ClassGroupJobService: ObservableObject {
 
                 await MainActor.run {
                     self.classGroupJobs = jobs
+                    // AMB.10: `error` gained its first reader (the jobs list's
+                    // failure banner) and nothing ever cleared it — one transient
+                    // failure would pin the banner for the rest of the app
+                    // session. A successful fetch is the state the error
+                    // described ending, so it ends here.
+                    self.error = nil
                     self.isLoading = false
                 }
             } catch {
@@ -482,9 +488,16 @@ class ClassGroupJobService: ObservableObject {
 
                     await MainActor.run {
                         self.classGroupJobs = jobs
+                        // Same AMB.10 rule as the initial fetch: a successful
+                        // fetch ends the state the error described.
+                        self.error = nil
                         print("Real-time update: \(jobs.count) class group jobs")
                     }
                 } catch {
+                    // Deliberately keeps the rows it has and sets no error: a
+                    // failed BACKGROUND refetch over a populated screen is not
+                    // the same claim as a failed load, and the next delivery or
+                    // re-entry refetches anyway. (AMB.10, decided not omitted.)
                     print("Error in realtime update: \(error)")
                 }
             }

@@ -272,6 +272,10 @@ struct ShiftDetailView: View {
                     )
                 )
             }
+            // Stack style, matching every other sheet the yearbook/groups
+            // conversion owns — a bare NavigationView can render SPLIT on iPad,
+            // which hides the checklist behind a sidebar (AMB.10).
+            .navigationViewStyle(StackNavigationViewStyle())
         }
         .overlay {
             if isLoadingContacts {

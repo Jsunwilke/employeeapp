@@ -1157,9 +1157,64 @@ other rebases onto it.
   populations, so no fold can be right). Deliberate exceptions: the offline
   clock-out outbox drops a gone-row op loudly instead of wedging the FIFO queue;
   the session color-recalc loop stays unguarded (concurrent delete harmless).
-- [ ] **AMB.10 Groups + Yearbook** (17 views, 4,504 lines) — closes batch 3 and mocks
+- [x] **AMB.10 Groups + Yearbook** (17 views, 4,504 lines) — closes batch 3 and mocks
   batch 4. **Mockups already built 2026-07-29 (see AMB.9 note above)** — AMB.10
   starts at conversion once its designs are approved in the same sitting.
+  **2026-07-30 — BUILT, COMMITTED, pending operator smoke + /code-review before any
+  push.** Both features converted to the approved batch-3 designs; the design lives in
+  `ClassGroupsKit.swift` / `YearbookKit.swift` (the lab imports them, so the mockups
+  and the screens cannot diverge) and the logic in `ClassGroupsRules.swift` /
+  `YearbookRules.swift`, run by `scripts/test_classgroups_rules.sh` (66 checks / 15
+  prove-can-fail) and `scripts/test_yearbook_rules.sh` (93 / 23). Delete-first:
+  `AddClassGroupView.swift` (both duplicate forms → one `ClassGroupFormView`) and
+  `YearbookItemRow.swift` (row → kit, sheet → `YearbookItemDetailView`) deleted; the
+  dead recursive `fullScreenSlate()`, the placeholder yearbook create sheet, the
+  empty "Mark All Required Complete", the global `EmptyStateView`, and the
+  tap-anywhere slate dismissal are gone; old-path greps clean; drift sweep clean.
+  **Approved fixes shipped:** the year on job cards; the session date + job-level
+  notes on the detail; note bodies on rows; whole-row tap; slate keeps its school
+  name from the form path; failed loads/deletes/saves/toggles all SAY SO (the
+  empty-state-hides-a-failure law applied to both features); yearbook filters
+  compose with search; category counts are of the whole category; the 0% bar is no
+  longer red; the REQUIRED chip inverted to a quiet Optional badge; the raw session
+  UUID dropped; the un-scrollable year picker scrolls; the session-entry sheet
+  distinguishes "no list" from "couldn't load".
+  **FIVE audit rounds to convergence (rounds 1–4 all found real defects; round 5
+  clean-but-cosmetic).** The fix-round law hit again — my own round-1 fixes
+  produced the worst finding (a stale toggle that would have stamped a fabricated
+  photographer attribution) and round 3's count guard inverted round 2's. The
+  terminal shape: `toggleItemCompletion`/`updateShootListItem` now RETURN what they
+  wrote (flag + stored count) and the VM mirrors the observed values — inference
+  replaced by observation — plus a per-item in-flight guard. Two deliberate
+  one-line service exceptions, recorded: `ClassGroupJobService.error` clears on
+  successful fetches (it gained its first reader and had no exit), and the yearbook
+  org subscription's failed fetch publishes NOTHING instead of an empty list (it
+  could clobber a good list with []). Delete confirmations resolve rows at swipe
+  time against the rendered array (an IndexSet held across an alert gap deletes the
+  wrong job after a realtime re-sort). Reasoned won't-fixes: hero shows STORED
+  counters (matches root card + web; live drift 0/50); checklist still never
+  subscribes to realtime (pre-existing, recorded); cache-first staleness under the
+  new Retry (service cache, D12); haptic-before-write on the checkbox
+  (pre-existing shape).
+  **Batch-4 mockups BUILT and registered** (JobBox 1725 / Settings 925 / Manager 634
+  / Training 676 lines; gallery grouped Foundations / Batch 3 / Batch 4; sample data
+  +386 lines incl. the live job-box status distribution). 50 PROPOSED captions; the
+  operator's review sitting owns TWO new rulings: job-box "Flag for Attention"
+  (writes to three columns that DO NOT EXIST — grow the schema or delete the
+  affordances) and the iOS↔web `StatusColors` contract (three disagreeing colour
+  maps). ManagerMileageView deliberately NOT re-mocked (its inventory is batch 3's;
+  see the mockup's caption). `AMB_BATCH4_PARITY.md` (2,469 lines, live-DB verified)
+  is the parity contract for AMB.11/12; headline findings include the phantom
+  `records.photographer` column (four dead SD-card capabilities), the dead
+  `FlaggedStatusView` (a flagged photographer cannot respond), sign-in proceeding on
+  a failed profile fetch, and the time-tracking surface (10 screens) still owned by
+  NO phase — operator decisions, not design ones.
+  **Verified:** clean-derived-data builds green throughout; zero warnings from any
+  file this phase wrote; both simulators driven signed-in (iPhone: Groups
+  list/detail + Yearbook root/checklist on live data; iPad: dashboard-widget →
+  create-sheet contract, Yearbook root, batch-4 gallery). NOT verified (needs the
+  operator): write paths against the shared production DB (add/edit/delete a group,
+  toggle an item), and the on-device smoke both devices.
 
 **Batch 4**
 

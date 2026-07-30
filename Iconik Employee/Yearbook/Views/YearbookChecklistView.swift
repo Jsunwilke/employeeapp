@@ -1,306 +1,272 @@
+//  YearbookChecklistView.swift
+//  Iconik Employee — the checklist a photographer works from, Ambient (AMB.10)
+//
+//  The old screen's `progressHeader`, `filterBar`, `searchBar`, `FilterChip` and
+//  its two hand-rolled `systemGray6` bars are GONE from this file. The design
+//  lives in `Yearbook/YearbookKit.swift` (which the lab mockup imports) and every
+//  judgement in `Yearbook/YearbookRules.swift` (which a script runs).
+//
+//  WHAT THIS SCREEN GAINED:
+//    · THE FILTERS COMPOSE WITH THE SEARCH (claim 2). Every quick chip used to
+//      route through the view model's `clearFilters()`, which reset the category
+//      AND wiped the typed text — so "which football items are still open" was a
+//      question the app answered by throwing it away.
+//    · CATEGORY COUNTS ARE OF THE WHOLE CATEGORY. The old header counted the rows
+//      ON SCREEN, so under "Completed" every heading read N/N and the screen
+//      claimed the book was finished.
+//    · ERRORS ARE SURFACED. `viewModel.error` was set in three places and read by
+//      NOTHING on this screen, so a failed check-off was completely silent.
+//    · THE OPTIONAL BADGE IS THE INVERSION (claim 3) — `required` defaults to true.
+//
+//  WHAT WAS DROPPED, deliberately and with the operator's approval: the overflow
+//  menu's "Mark All Required Complete", whose handler was an EMPTY FUNCTION and
+//  had never done anything, and the menu's Filters toggle, because the filter bar
+//  is always shown now. Export is KEPT and unchanged — including the part worth
+//  knowing, that it exports EVERY item and ignores the active filters despite
+//  being called `exportCompletedItems`.
+//
+//  CLEARANCE: this screen is PUSHED from the root, and a pushed screen insets
+//  itself — a container's root inset is not inherited by what it pushes. It is
+//  NOT inset when it is presented inside the shift-detail SHEET (`sessionContext`
+//  non-nil): a sheet floats above the floating tab bar, so the clearance would be
+//  a dead gap at the bottom of the sheet.
+
 import SwiftUI
 
 struct YearbookChecklistView: View {
     @StateObject private var viewModel: YearbookShootListViewModel
     let sessionContext: YearbookSessionContext?
-    
-    @State private var showingFilters = false
-    @State private var selectedItem: YearbookItem?
-    @State private var showingItemDetail = false
-    @State private var showingExport = false
-    @State private var exportText = ""
-    
+
+    /// ONE sheet, one binding.
+    ///
+    /// FOUND ON DEVICE, and it is why this is an enum: with the old screen's TWO
+    /// stacked `.sheet` modifiers (`.sheet(item:)` for the item detail plus
+    /// `.sheet(isPresented:)` for the export), tapping an item did nothing at
+    /// all, and unifying them fixed it. NOT a general law — `ShiftDetailView`
+    /// chains four `.sheet`s that all ship and work — so the precise trigger is
+    /// unestablished; the observed fact is that THIS mixed pair failed on device
+    /// and one enum-driven sheet is the shape that cannot.
+    private enum ChecklistSheet: Identifiable {
+        case item(String)
+        case export(String)
+
+        var id: String {
+            switch self {
+            case .item(let itemId): return "item-\(itemId)"
+            case .export: return "export"
+            }
+        }
+    }
+
+    @State private var sheet: ChecklistSheet?
+
+    private var tint: Color { YearbookStyle.tint }
+
     init(shootList: YearbookShootList, sessionContext: YearbookSessionContext?) {
         let viewModel = YearbookShootListViewModel(sessionContext: sessionContext)
         viewModel.selectedShootList = shootList
         self._viewModel = StateObject(wrappedValue: viewModel)
         self.sessionContext = sessionContext
     }
-    
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Progress header
-            progressHeader
-            
-            // Filter bar
-            if !viewModel.categories.isEmpty {
-                filterBar
-            }
-            
-            // Search bar
-            if showingFilters {
-                searchBar
-            }
-            
-            // Content
-            if viewModel.isLoading && viewModel.selectedShootList == nil {
-                ProgressView("Loading checklist...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let shootList = viewModel.selectedShootList {
-                if viewModel.filteredItems.isEmpty {
-                    emptySearchResults
-                } else {
-                    checklistContent
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.75)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let list = viewModel.selectedShootList {
+                        // A failed toggle or save, said out loud. Dismissible
+                        // because the screen around it still works.
+                        if let error = viewModel.error {
+                            YearbookInlineFailure(message: error.localizedDescription) {
+                                viewModel.dismissError()
+                            }
+                        }
+                        hero(list)
+                        filterBar
+                        YearbookSearchField(placeholder: "Search items",
+                                            text: $viewModel.filter.searchText)
+                        sections
+                    } else {
+                        AmbientEmptyState(
+                            title: "Checklist not found",
+                            message: "This yearbook list is no longer available on this device.",
+                            systemImage: "list.clipboard")
+                    }
                 }
-            } else {
-                Text("Checklist not found")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
             }
+            .ambientNoBounceWhenShort()
         }
+        .modifier(YearbookPushedClearance(active: sessionContext == nil))
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
-                    Button(action: { showingFilters.toggle() }) {
-                        Label("Filters", systemImage: showingFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                    }
-                    
                     Button(action: exportChecklist) {
-                        Label("Export", systemImage: "square.and.arrow.up")
-                    }
-                    
-                    if sessionContext != nil {
-                        Divider()
-                        
-                        Button(action: markAllRequired) {
-                            Label("Mark All Required Complete", systemImage: "checkmark.circle")
-                        }
+                        Label("Export Checklist", systemImage: "square.and.arrow.up")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
             }
         }
-        .sheet(item: $selectedItem) { item in
-            YearbookItemDetailView(
-                item: item,
-                listId: viewModel.selectedShootList?.id ?? "",
-                viewModel: viewModel
-            )
-        }
-        .sheet(isPresented: $showingExport) {
-            ShareSheet(activityItems: [exportText])
+        .sheet(item: $sheet) { sheet in
+            switch sheet {
+            case .item(let itemId):
+                YearbookItemDetailView(itemId: itemId, viewModel: viewModel)
+            case .export(let text):
+                ShareSheet(activityItems: [text])
+            }
         }
     }
-    
-    // MARK: - Views
-    
+
     private var navigationTitle: String {
         guard let list = viewModel.selectedShootList else { return "Yearbook Checklist" }
-        let yearComponents = list.schoolYear.split(separator: "-")
-        let shortYear = yearComponents.count == 2 ? "\(yearComponents[0])-\(String(yearComponents[1]).suffix(2))" : list.schoolYear
-        return "\(list.schoolName) • \(shortYear)"
+        return YearbookRules.listTitle(schoolName: list.schoolName, schoolYear: list.schoolYear)
     }
-    
-    private var progressHeader: some View {
-        VStack(spacing: 8) {
-            if let list = viewModel.selectedShootList {
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text("\(list.completedCount) of \(list.totalCount) completed")
-                            .font(.headline)
-                        
-                        Text("\(Int(list.completionPercentage))% Complete")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                    
-                    ZStack {
-                        Circle()
-                            .stroke(Color.gray.opacity(0.3), lineWidth: 8)
-                        
-                        Circle()
-                            .trim(from: 0, to: CGFloat(list.completionPercentage / 100))
-                            .stroke(progressColor(for: list.completionPercentage), lineWidth: 8)
-                            .rotationEffect(.degrees(-90))
-                            .animation(.easeInOut, value: list.completionPercentage)
-                        
-                        Text("\(Int(list.completionPercentage))%")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                    .frame(width: 60, height: 60)
-                }
-                .padding()
-                .background(Color(.systemGray6))
-            }
-        }
+
+    // MARK: - 1. The hero
+
+    private func hero(_ list: YearbookShootList) -> some View {
+        YearbookHeroCard(schoolName: list.schoolName,
+                         schoolYear: list.schoolYear,
+                         items: viewModel.allItems,
+                         // The stored counters, not a recount: they are what the
+                         // root card and the web app show, and a screen that
+                         // silently disagrees with the row that opened it is worse
+                         // than one that carries the same drift.
+                         completedCount: list.completedCount,
+                         totalCount: list.totalCount,
+                         tint: tint)
     }
-    
+
+    // MARK: - 2. Chips that compose
+
+    /// Each chip sets ONE thing. Nothing here resets anything else — that is the
+    /// whole of claim 2.
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                // Quick filters
-                FilterChip(
-                    title: "All",
-                    isSelected: !viewModel.showCompletedOnly && !viewModel.showIncompleteOnly,
-                    action: { viewModel.applyQuickFilter(.all) }
-                )
-                
-                FilterChip(
-                    title: "Incomplete",
-                    isSelected: viewModel.showIncompleteOnly,
-                    action: { viewModel.applyQuickFilter(.incomplete) }
-                )
-                
-                FilterChip(
-                    title: "Completed",
-                    isSelected: viewModel.showCompletedOnly,
-                    action: { viewModel.applyQuickFilter(.completed) }
-                )
-                
-                Divider()
-                    .frame(height: 20)
-                
-                // Category filters
-                ForEach(viewModel.categories, id: \.self) { category in
-                    FilterChip(
-                        title: category,
-                        isSelected: viewModel.selectedCategory == category,
-                        action: { viewModel.selectedCategory = category }
-                    )
+            HStack(spacing: 6) {
+                ForEach(YearbookQuickFilter.allCases) { option in
+                    YearbookFilterChip(label: option.label,
+                                       isSelected: viewModel.filter.quick == option,
+                                       tint: tint) {
+                        viewModel.filter.quick = option
+                    }
                 }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-        }
-        .background(Color(.systemGray6))
-    }
-    
-    private var searchBar: some View {
-        HStack {
-            Image(systemName: "magnifyingglass")
-                .foregroundColor(.secondary)
-            
-            TextField("Search items...", text: $viewModel.searchText)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-            
-            if !viewModel.searchText.isEmpty {
-                Button(action: { viewModel.searchText = "" }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(Color(.systemGray6))
-    }
-    
-    private var checklistContent: some View {
-        List {
-            ForEach(viewModel.groupedFilteredItems, id: \.category) { category, items in
-                Section(header: categoryHeader(category: category, items: items)) {
-                    ForEach(items) { item in
-                        YearbookItemRow(
-                            item: item,
-                            onToggle: {
-                                Task {
-                                    await viewModel.toggleItemCompletion(item)
-                                }
-                            },
-                            onTap: {
-                                selectedItem = item
-                            }
-                        )
+
+                if !viewModel.categories.isEmpty {
+                    Divider().frame(height: 20)
+
+                    ForEach(viewModel.categories, id: \.self) { name in
+                        YearbookFilterChip(label: name,
+                                           isSelected: viewModel.filter.category == name,
+                                           tint: tint) {
+                            // Toggling is the only route back to "every
+                            // category" now that the quick chips no longer
+                            // reset it.
+                            viewModel.filter.category =
+                                (viewModel.filter.category == name) ? nil : name
+                        }
                     }
                 }
             }
+            .padding(.horizontal, 16)
         }
-        .listStyle(InsetGroupedListStyle())
+        .padding(.horizontal, -16)
     }
-    
-    private var emptySearchResults: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 48))
-                .foregroundColor(.gray)
-            
-            Text("No items found")
-                .font(.headline)
-            
-            Text("Try adjusting your search or filters")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            Button("Clear Filters") {
-                viewModel.clearFilters()
+
+    // MARK: - 3. The items
+
+    @ViewBuilder
+    private var sections: some View {
+        let groups = viewModel.groupedFilteredItems
+        switch YearbookRules.emptyReason(total: viewModel.allItems.count,
+                                         shown: viewModel.filteredItems.count) {
+        case .populated:
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(groups, id: \.category) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        // The count is of the FULL category, not of what the
+                        // filter left.
+                        AmbientSectionTitle(group.category,
+                                            trailing: YearbookRules.categoryCountLabel(
+                                                viewModel.allItems, category: group.category))
+
+                        LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
+                            ForEach(group.items) { item in
+                                YearbookItemRow(item: item, tint: tint) {
+                                    toggle(item)
+                                } onTap: {
+                                    sheet = .item(item.id)
+                                }
+                                .ambientScrollFade()
+                            }
+                        }
+                    }
+                }
             }
-            .buttonStyle(.bordered)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-    
-    private func categoryHeader(category: String, items: [YearbookItem]) -> some View {
-        HStack {
-            Text(category)
-                .font(.headline)
-            
-            Spacer()
-            
-            let completed = items.filter { $0.completed }.count
-            Text("\(completed)/\(items.count)")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-    }
-    
-    // MARK: - Functions
-    
-    private func progressColor(for percentage: Double) -> Color {
-        if percentage == 100 {
-            return .green
-        } else if percentage >= 75 {
-            return .orange
-        } else if percentage >= 50 {
-            return .yellow
-        } else {
-            return .red
+        case .filteredOut:
+            AmbientEmptyState(
+                title: "No Items Match",
+                message: "Nothing here matches the filter and the search together. Clear one of them.",
+                systemImage: "line.3.horizontal.decrease.circle",
+                actionTitle: "Clear Filters",
+                actionIcon: "arrow.counterclockwise",
+                action: {
+                    withAnimation(AmbientMotion.snappy) { viewModel.filter = .clear }
+                },
+                actionTint: tint)
+        case .nothingAtAll:
+            AmbientEmptyState(
+                title: "No Items Yet",
+                message: "This list exists but nothing has been added to it. Items are added in the web app.",
+                systemImage: "list.clipboard")
         }
     }
-    
-    private func markAllRequired() {
-        // Implementation for marking all required items as complete
+
+    // MARK: - Actions
+
+    private func toggle(_ item: YearbookItem) {
+        AmbientHaptics.impact(.light)
+        Task { await viewModel.toggleItemCompletion(item) }
     }
-    
+
     private func exportChecklist() {
-        exportText = viewModel.exportCompletedItems()
-        showingExport = true
+        sheet = .export(viewModel.exportCompletedItems())
     }
 }
 
-// MARK: - Filter Chip Component
-struct FilterChip: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(isSelected ? .semibold : .regular)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(isSelected ? Color.blue : Color(.systemGray5))
-                .foregroundColor(isSelected ? .white : .primary)
-                .cornerRadius(15)
-        }
+/// Clearance for the floating tab bar, applied only when this screen is PUSHED.
+///
+/// Split into a modifier so the branch is decided once at the call site and the
+/// screen's identity does not change with it.
+private struct YearbookPushedClearance: ViewModifier {
+    let active: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if active { content.tabBarClearance() } else { content }
     }
 }
 
 // MARK: - Share Sheet
+
+/// KEPT WHERE IT WAS, deliberately: `Training/PhotoCritiqueDetailView.swift:61`
+/// presents this same type, so it is a cross-feature declaration rather than a
+/// yearbook detail. Moving or renaming it would push churn into a screen AMB.10
+/// has no business touching.
 struct ShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
-    
+
     func makeUIViewController(context: Context) -> UIActivityViewController {
         UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
     }
-    
+
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 

@@ -243,8 +243,14 @@ class YearbookShootListService: ObservableObject {
 
     // MARK: - Update Operations
 
-    /// Update a specific item in the yearbook list
-    func updateShootListItem(listId: String, itemId: String, updates: [String: Any]) async throws {
+    /// Update a specific item in the yearbook list.
+    ///
+    /// RETURNS THE `completed_count` IT WROTE (AMB.10). The counter only moves
+    /// when THIS method's own read shows the flag changing, so a caller that
+    /// mirrors the count locally must mirror the observed result — inferring
+    /// "±1 per toggle" over-counts when two writes race.
+    @discardableResult
+    func updateShootListItem(listId: String, itemId: String, updates: [String: Any]) async throws -> Int {
         // Get current list
         let lists: [YearbookShootList] = try await supabase
             .from(tableName)
@@ -337,10 +343,21 @@ class YearbookShootListService: ObservableObject {
         invalidateCache(key: cacheKey)
 
         print("✅ Updated item \(itemId) in list \(listId)")
+        return newCompletedCount
     }
 
-    /// Toggle item completion status
-    func toggleItemCompletion(listId: String, itemId: String, sessionContext: YearbookSessionContext?) async throws {
+    /// Toggle item completion status.
+    ///
+    /// RETURNS WHAT IT WROTE (AMB.10): the flag value, computed from the row THIS
+    /// method read from the server — not from whatever copy the caller holds — and
+    /// the `completed_count` the write actually left behind, as OBSERVED by
+    /// `updateShootListItem` (which only moves the counter when its own read shows
+    /// the flag changing). A caller that mirrors either locally must mirror THESE
+    /// values: a stale screen inferring the flip mirrors the opposite of what
+    /// saved, and a caller inferring "±1 per toggle" over-counts when two writes
+    /// race.
+    @discardableResult
+    func toggleItemCompletion(listId: String, itemId: String, sessionContext: YearbookSessionContext?) async throws -> (completed: Bool, completedCount: Int) {
         // Get current list
         let lists: [YearbookShootList] = try await supabase
             .from(tableName)
@@ -383,7 +400,8 @@ class YearbookShootListService: ObservableObject {
             updates["photographerName"] = NSNull()
         }
 
-        try await updateShootListItem(listId: listId, itemId: itemId, updates: updates)
+        let writtenCount = try await updateShootListItem(listId: listId, itemId: itemId, updates: updates)
+        return (completed: !item.completed, completedCount: writtenCount)
     }
 
     /// Update item notes
@@ -476,10 +494,15 @@ class YearbookShootListService: ObservableObject {
                     completion(lists)
                 }
             } catch {
+                // AMB.10: a failed fetch is NOT an empty org. Publishing [] here
+                // rendered "No Yearbook Lists" on the strength of a dropped
+                // connection — the empty-state-hides-a-failure shape that kept
+                // chat dormant for a year — and it could CLOBBER a good list the
+                // awaited first load had already delivered. Failure surfacing is
+                // owned by the awaited refresh path; this callback only ever
+                // reports data it actually has. (The realtime handler below
+                // already behaves this way.)
                 print("❌ Error fetching organization yearbook lists: \(error)")
-                await MainActor.run {
-                    completion([])
-                }
             }
         }
 

@@ -59,6 +59,12 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     /// judged in one sitting; they die at AMB.10's close.
     case classGroups
     case yearbook
+    /// Batch 4 — AMB.11's remaining surface and AMB.12's tail, mocked together so
+    /// the whole rest of the arc is judged in one sitting.
+    case jobBox
+    case settings
+    case manager
+    case training
 
     var id: String { rawValue }
 
@@ -69,6 +75,20 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: return "Time Off"
         case .classGroups: return "Class Groups"
         case .yearbook: return "Yearbook"
+        case .jobBox: return "Job Box & Scan"
+        case .settings: return "Settings"
+        case .manager: return "Manager Tools"
+        case .training: return "Training"
+        }
+    }
+
+    /// Which BATCH it belongs to, so the gallery groups the arc's remaining work
+    /// rather than presenting nine peers.
+    var batch: String {
+        switch self {
+        case .specimens, .palette: return "Foundations"
+        case .timeOff, .classGroups, .yearbook: return "Batch 3"
+        case .jobBox, .settings, .manager, .training: return "Batch 4"
         }
     }
 
@@ -81,6 +101,10 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: return "AMB.8"
         case .classGroups: return "AMB.10"
         case .yearbook: return "AMB.10"
+        case .jobBox: return "AMB.11"
+        case .settings: return "AMB.12"
+        case .manager: return "AMB.12"
+        case .training: return "AMB.12"
         }
     }
 
@@ -96,6 +120,14 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "Job cards say when — with the year — and how much is done. The detail finally shows the date and the note bodies, and the whole row takes the tap. The slate stays a plain whiteboard on purpose."
         case .yearbook:
             return "0% stops reading as an error, filters compose with search instead of wiping it, OPTIONAL marks the few items that really are, and a network failure stops claiming the checklist doesn't exist."
+        case .jobBox:
+            return "One chrome instead of two, the screen finally the colour the tab bar says it is, an empty state on Search and a loading state on Stats — and the tracker says it is only showing 30 days. The shipped meter is embedded, not redesigned."
+        case .settings:
+            return "The rows people actually touch lead, the iPad sync block says who it is for, log out looks destructive while resync stops being the scary one, and every screen that can fail says so."
+        case .manager:
+            return "A denied user stops getting a live-looking form, one string stops being three states, unflagging asks first — and the flagged photographer gets a way to answer, drawn as a proposal."
+        case .training:
+            return "One word for one concept, a failed load that stops claiming you have no photos, a grid that follows the window instead of the model name, and a critique with no image that no longer crashes on Share."
         }
     }
 
@@ -106,6 +138,10 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: return "calendar.badge.clock"
         case .classGroups: return "person.3.fill"
         case .yearbook: return "list.clipboard.fill"
+        case .jobBox: return "wave.3.right.circle.fill"
+        case .settings: return "gearshape.fill"
+        case .manager: return "flag.fill"
+        case .training: return "graduationcap.fill"
         }
     }
 
@@ -120,6 +156,10 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: return TimeOffMockup.featureTint
         case .classGroups: return ClassGroupsMockup.featureTint
         case .yearbook: return YearbookMockup.featureTint
+        case .jobBox: return JobBoxMockup.featureTint
+        case .settings: return SettingsMockup.featureTint
+        case .manager: return ManagerMockup.featureTint
+        case .training: return TrainingMockup.featureTint
         }
     }
 
@@ -131,6 +171,10 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: TimeOffMockup()
         case .classGroups: ClassGroupsMockup()
         case .yearbook: YearbookMockup()
+        case .jobBox: JobBoxMockup()
+        case .settings: SettingsMockup()
+        case .manager: ManagerMockup()
+        case .training: TrainingMockup()
         }
     }
 }
@@ -138,23 +182,39 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
 // MARK: - Gallery
 
 struct DesignLabView: View {
+    /// Batch order, first appearance wins — so a new batch shows up by adding a
+    /// case to the enum and nothing else.
+    private static var batches: [String] {
+        var seen: [String] = []
+        for mockup in DesignLabMockup.allCases where !seen.contains(mockup.batch) {
+            seen.append(mockup.batch)
+        }
+        return seen
+    }
+
     var body: some View {
         List {
-            Section {
-                ForEach(DesignLabMockup.allCases) { mockup in
-                    // A plain NavigationLink row, which is the one push form a
-                    // List is reliable with inside a NavigationView. The mockups
-                    // themselves push with .ambientPush(item:) — that is where
-                    // the container actually matters, and where AMB.1's dead tap
-                    // came from.
-                    NavigationLink {
-                        DesignLabRunner(initial: mockup)
-                    } label: {
-                        row(mockup)
+            ForEach(Self.batches, id: \.self) { batch in
+                Section {
+                    ForEach(DesignLabMockup.allCases.filter { $0.batch == batch }) { mockup in
+                        // A plain NavigationLink row, which is the one push form a
+                        // List is reliable with inside a NavigationView. The mockups
+                        // themselves push with .ambientPush(item:) — that is where
+                        // the container actually matters, and where AMB.1's dead tap
+                        // came from.
+                        NavigationLink {
+                            DesignLabRunner(initial: mockup)
+                        } label: {
+                            row(mockup)
+                        }
                     }
+                } header: {
+                    Text(batch)
                 }
-            } header: {
-                Text("Mockups")
+            }
+
+            Section {
+                EmptyView()
             } footer: {
                 Text("Nothing here reads or writes your data — every screen runs on fixed sample data chosen to contain the cases that break layouts. Once you are inside, the switcher at the bottom right swaps between mockups without coming back here.")
             }

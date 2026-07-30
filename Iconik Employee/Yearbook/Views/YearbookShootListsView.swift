@@ -1,244 +1,249 @@
+//  YearbookShootListsView.swift
+//  Iconik Employee — the yearbook lists, converted to Ambient in AMB.10
+//
+//  The old screen and its `YearbookListRow` are GONE from this file, not left
+//  beside the new one. The design lives in `Yearbook/YearbookKit.swift`, which the
+//  design lab's mockup also draws with, so the mockup and this screen cannot
+//  diverge; every judgement it renders is made in `Yearbook/YearbookRules.swift`,
+//  which `scripts/test_yearbook_rules.sh` compiles and runs.
+//
+//  WHAT THIS SCREEN GAINED:
+//    · 0% NO LONGER READS AS AN ERROR. The old bar was coloured on a ladder whose
+//      bottom rung was RED, so a brand-new list — correctly at zero — rendered red.
+//    · A ZERO-ITEM LIST SAYS SO instead of handing `total: 0` to a ProgressView.
+//    · A REAL NO-MATCHES STATE. The old empty check tested the UNFILTERED array, so
+//      a search that matched nothing rendered a blank List and looked broken.
+//    · A REAL FAILURE STATE IN THE BODY. `viewModel.error` was read only by an
+//      alert, and a missing organization id printed to the console and left the
+//      screen spinning forever.
+//    · PULL-TO-REFRESH THAT WAITS. The old `.refreshable` called a subscribe method
+//      that returns immediately, so the spinner ended before any data arrived.
+//
+//  WHAT IS DELIBERATELY NOT DRAWN: a create button. There is NO create flow for a
+//  yearbook list on iOS — the old toolbar "+" and the old empty-state button both
+//  opened a sheet whose entire body was `Text("Create New Yearbook List")`
+//  (AMB_BATCH3_PARITY.md §0.3). The empty state says where lists come from instead
+//  of offering something that cannot work. Delete and copy are dead API surface
+//  with no UI, and stay that way.
+//
+//  CLEARANCE: this is a SHELL-WRAPPED feature — `MainEmployeeView.featureContainer`
+//  applies `tabBarClearance` inside its own `NavigationView`, so this root must not
+//  apply it again. The PUSHED checklist insets itself; see YearbookChecklistView.
+
 import SwiftUI
 
-struct YearbookShootListsView: View {
-    @StateObject private var viewModel = YearbookShootListViewModel()
-    @ObservedObject private var schoolService = SchoolService.shared
-    
-    @State private var selectedSchool: School?
-    @State private var showingCreateList = false
-    @State private var searchText = ""
-    @State private var currentOrganizationId: String?
-    
-    var body: some View {
-        VStack {
-            if viewModel.isLoading && viewModel.shootLists.isEmpty {
-                ProgressView("Loading yearbook lists...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if viewModel.shootLists.isEmpty {
-                emptyStateView
-            } else {
-                listContent
-            }
+/// One `@State` destination, one `.ambientPush` — the AMB.3 rule. It carries the
+/// list that was tapped rather than an index into an array the next realtime
+/// event can reorder.
+private enum YearbookListsDestination: Identifiable {
+    case checklist(YearbookShootList)
+
+    var id: String {
+        switch self {
+        case .checklist(let list): return "checklist-\(list.id)"
         }
-        .navigationTitle("Yearbook Checklists")
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: { showingCreateList = true }) {
-                    Image(systemName: "plus")
-                }
-                .disabled(currentOrganizationId == nil)
-            }
-        }
-        .searchable(text: $searchText)
-        .refreshable {
-            await loadLists()
-        }
-        .sheet(isPresented: $showingCreateList) {
-            // Create list view would go here
-            Text("Create New Yearbook List")
-        }
-        .alert("Error", isPresented: .constant(viewModel.error != nil)) {
-            Button("OK") {
-                viewModel.error = nil
-            }
-        } message: {
-            Text(viewModel.error?.localizedDescription ?? "An error occurred")
-        }
-        .onAppear {
-            loadOrganizationAndLists()
-        }
-    }
-    
-    // MARK: - Views
-    
-    private var emptyStateView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "list.clipboard")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
-            
-            Text("No Yearbook Lists")
-                .font(.title2)
-                .fontWeight(.semibold)
-            
-            Text("Create your first yearbook checklist to track photo requirements for schools.")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Button(action: { showingCreateList = true }) {
-                Label("Create Yearbook List", systemImage: "plus.circle.fill")
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-    
-    private var listContent: some View {
-        List {
-            ForEach(groupedLists, id: \.key) { schoolName, lists in
-                Section(header: schoolHeader(schoolName: schoolName)) {
-                    ForEach(lists) { list in
-                        NavigationLink(destination: YearbookChecklistView(
-                            shootList: list,
-                            sessionContext: nil
-                        )) {
-                            YearbookListRow(shootList: list)
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(InsetGroupedListStyle())
-    }
-    
-    private func schoolHeader(schoolName: String) -> some View {
-        HStack {
-            Image(systemName: "building.2")
-                .foregroundColor(.blue)
-            Text(schoolName)
-                .font(.headline)
-        }
-    }
-    
-    // MARK: - Computed Properties
-    
-    private var filteredLists: [YearbookShootList] {
-        if searchText.isEmpty {
-            return viewModel.shootLists
-        }
-        
-        return viewModel.shootLists.filter { list in
-            list.schoolName.localizedCaseInsensitiveContains(searchText) ||
-            list.schoolYear.contains(searchText) ||
-            list.items.contains { $0.name.localizedCaseInsensitiveContains(searchText) }
-        }
-    }
-    
-    private var groupedLists: [(key: String, value: [YearbookShootList])] {
-        let grouped = Dictionary(grouping: filteredLists) { $0.schoolName }
-        return grouped.sorted { $0.key < $1.key }
-    }
-    
-    // MARK: - Functions
-    
-    private func loadOrganizationAndLists() {
-        UserManager.shared.getCurrentUserOrganizationID { organizationId in
-            guard let orgId = organizationId else {
-                print("No organization ID found for current user")
-                return
-            }
-            
-            DispatchQueue.main.async {
-                self.currentOrganizationId = orgId
-                self.viewModel.loadOrganizationLists(organizationId: orgId)
-            }
-        }
-    }
-    
-    private func loadLists() async {
-        guard let orgId = currentOrganizationId else { return }
-        viewModel.loadOrganizationLists(organizationId: orgId)
     }
 }
 
-// MARK: - List Row Component
-struct YearbookListRow: View {
-    let shootList: YearbookShootList
-    
-    private var yearDisplay: String {
-        let components = shootList.schoolYear.split(separator: "-")
-        if components.count == 2 {
-            return "\(components[0])-\(String(components[1]).suffix(2))"
-        }
-        return shootList.schoolYear
+struct YearbookShootListsView: View {
+    @StateObject private var viewModel = YearbookShootListViewModel()
+
+    @State private var searchText = ""
+    @State private var currentOrganizationId: String?
+    /// Set when the org id itself could not be resolved — the case that used to
+    /// print to the console and leave the screen loading forever.
+    @State private var organizationProblem: String?
+    @State private var destination: YearbookListsDestination?
+
+    private var tint: Color { YearbookStyle.tint }
+
+    private var filteredLists: [YearbookShootList] {
+        YearbookRules.lists(viewModel.shootLists, matching: searchText)
     }
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(yearDisplay)
-                    .font(.headline)
-                
-                if shootList.isActive {
-                    Text("CURRENT")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Color.green)
-                        .foregroundColor(.white)
-                        .cornerRadius(4)
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.8)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    content
                 }
-                
-                Spacer()
-                
-                if shootList.isCompleted {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+            }
+            .ambientNoBounceWhenShort()
+            .refreshable { await reload() }
+        }
+        .navigationBarTitle("Yearbook Checklists", displayMode: .inline)
+        .ambientPush(item: $destination) { destination in
+            switch destination {
+            case .checklist(let list):
+                YearbookChecklistView(shootList: list, sessionContext: nil)
+            }
+        }
+        .onAppear { loadOrganizationAndLists() }
+    }
+
+    // MARK: - Content
+
+    @ViewBuilder
+    private var content: some View {
+        if let problem = organizationProblem {
+            failureCard(problem)
+        } else if viewModel.isLoading && viewModel.shootLists.isEmpty {
+            YearbookLoadingRow(message: "Loading yearbook lists…")
+        } else if viewModel.shootLists.isEmpty {
+            // A LOAD FAILURE AND AN EMPTY ORG ARE DIFFERENT CLAIMS. Since AMB.10
+            // the subscription publishes nothing on a failed fetch (it can no
+            // longer clobber a good list with []); the awaited refresh owns
+            // failure reporting, and when the error IS carried this screen says
+            // so rather than asserting the org has no lists.
+            if let error = viewModel.error {
+                failureCard(error.localizedDescription)
+            } else {
+                emptyState
+            }
+        } else {
+            // A failed REFRESH over a populated screen is a report, not a state:
+            // the rows behind it are real, they are just older than now.
+            if let error = viewModel.error {
+                YearbookInlineFailure(message: error.localizedDescription) {
+                    viewModel.dismissError()
                 }
             }
-            
-            // Progress
-            HStack {
-                ProgressView(value: Double(shootList.completedCount), total: Double(shootList.totalCount))
-                    .progressViewStyle(LinearProgressViewStyle(tint: progressColor))
-                
-                Text("\(shootList.completedCount)/\(shootList.totalCount)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            searchField
+            if filteredLists.isEmpty {
+                noMatchesState
+            } else {
+                ForEach(YearbookRules.groupedBySchool(filteredLists), id: \.school) { group in
+                    schoolSection(group.school, lists: group.lists)
+                }
             }
-            
-            // Categories summary
-            if let categorySummary = getCategorySummary() {
-                Text(categorySummary)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            }
-            
-            // Last updated
-            Text("Updated \(shootList.updatedAt, formatter: RelativeDateTimeFormatter())")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-        .padding(.vertical, 4)
-    }
-    
-    private var progressColor: Color {
-        let percentage = shootList.completionPercentage
-        if percentage == 100 {
-            return .green
-        } else if percentage >= 75 {
-            return .orange
-        } else if percentage >= 50 {
-            return .yellow
-        } else {
-            return .red
+            sourceNote
         }
     }
-    
-    private func getCategorySummary() -> String? {
-        let categories = Set(shootList.items.map { $0.category })
-        guard !categories.isEmpty else { return nil }
-        
-        if categories.count <= 3 {
-            return categories.sorted().joined(separator: ", ")
-        } else {
-            let first3 = Array(categories.sorted().prefix(3))
-            return "\(first3.joined(separator: ", ")) +\(categories.count - 3) more"
+
+    private var searchField: some View {
+        YearbookSearchField(placeholder: "Search schools, years or items", text: $searchText)
+    }
+
+    /// A school and its years, newest first.
+    private func schoolSection(_ school: String, lists: [YearbookShootList]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // The icon is COMPOSED beside the title rather than forked into a
+            // second section-title component.
+            HStack(spacing: 6) {
+                Image(systemName: "building.2")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(tint)
+                AmbientSectionTitle(school)
+            }
+
+            LazyVStack(spacing: AmbientDensity.roomy.stackSpacing) {
+                ForEach(lists) { list in
+                    Button {
+                        destination = .checklist(list)
+                    } label: {
+                        YearbookListCard(list: list, tint: tint)
+                    }
+                    .buttonStyle(.plain)
+                    .ambientScrollFade()
+                }
+            }
         }
+    }
+
+    /// Said out loud, so nobody "fixes" the missing "+" by wiring it back to the
+    /// placeholder sheet that used to be there.
+    private var sourceNote: some View {
+        Text("Yearbook lists are created in the web app. This screen tracks and completes them.")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: - States
+
+    private var emptyState: some View {
+        AmbientEmptyState(
+            title: "No Yearbook Lists",
+            message: "Yearbook lists are created in the web app. Once a list exists for one of your schools, it appears here.",
+            systemImage: "list.clipboard")
+    }
+
+    /// THE STATE THE OLD SCREEN DID NOT HAVE. Its empty check tested the
+    /// UNFILTERED array, so filtering to zero rows rendered a blank List.
+    private var noMatchesState: some View {
+        AmbientEmptyState(
+            title: "No Matching Lists",
+            message: "Nothing matches “\(searchText.trimmingCharacters(in: .whitespacesAndNewlines))”. Search covers the school, the year and the names of items inside the list.",
+            systemImage: "magnifyingglass",
+            actionTitle: "Clear Search",
+            actionIcon: "arrow.counterclockwise",
+            action: { withAnimation(AmbientMotion.snappy) { searchText = "" } },
+            actionTint: tint)
+    }
+
+    private func failureCard(_ message: String) -> some View {
+        YearbookFailureCard(
+            title: "Couldn't load your yearbook lists",
+            message: message,
+            tint: tint,
+            retry: { Task { await reload() } })
+    }
+
+    // MARK: - Loading
+
+    private func loadOrganizationAndLists() {
+        UserManager.shared.getCurrentUserOrganizationID { organizationId in
+            DispatchQueue.main.async {
+                guard let orgId = organizationId else {
+                    self.organizationProblem =
+                        "This device couldn't work out which studio you belong to, so it can't ask for your lists."
+                    return
+                }
+                self.organizationProblem = nil
+                self.currentOrganizationId = orgId
+                // The subscription keeps the screen live but cannot REPORT a
+                // failure (since AMB.10 its failure path publishes nothing at
+                // all — never an empty list). So the FIRST load also runs the
+                // awaited fetch, the one path that can say a fetch failed.
+                self.viewModel.loadOrganizationLists(organizationId: orgId)
+                Task { await self.viewModel.refreshOrganizationLists(organizationId: orgId) }
+            }
+        }
+    }
+
+    /// Awaited by both `.refreshable` and the failure card's Try Again, so the
+    /// spinner and the button both mean what they look like — including when the
+    /// organization id itself is still unresolved.
+    private func reload() async {
+        let orgId: String?
+        if let known = currentOrganizationId {
+            orgId = known
+        } else {
+            orgId = await withCheckedContinuation { continuation in
+                UserManager.shared.getCurrentUserOrganizationID { continuation.resume(returning: $0) }
+            }
+        }
+
+        guard let orgId else {
+            organizationProblem =
+                "This device couldn't work out which studio you belong to, so it can't ask for your lists."
+            return
+        }
+        organizationProblem = nil
+        currentOrganizationId = orgId
+        await viewModel.refreshOrganizationLists(organizationId: orgId)
     }
 }
 
 // MARK: - Preview
 struct YearbookShootListsView_Previews: PreviewProvider {
     static var previews: some View {
-        YearbookShootListsView()
+        NavigationView {
+            YearbookShootListsView()
+        }
     }
 }

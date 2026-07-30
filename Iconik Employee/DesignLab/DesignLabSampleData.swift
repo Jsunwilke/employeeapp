@@ -782,3 +782,390 @@ extension View {
         modifier(LabKitEdge(hex: hex, density: density))
     }
 }
+
+// MARK: - Job box / NFC (AMB.11, batch 4)
+
+/// One job box and its WHOLE scan log.
+///
+/// `job_boxes` is an append-only scan log (`JobBox/JobBoxProgressRules.swift`), so a
+/// box IS its rows. The lab therefore stores rows, not a status — a sample set that
+/// carried one status per box could not exercise the shipped meter at all, because
+/// the meter's two load-bearing rules (position is not completeness; progress means
+/// the CURRENT trip) are both statements about a LOG.
+///
+/// The scan points are `JobBoxScanPoint`, the production type, so the reading below
+/// is built by the same code the shift detail and the manager tracker use.
+struct LabJobBox: Identifiable {
+    let id: String
+    let boxNumber: String
+    let school: String
+    /// Nil is real and common — 336 of 1,059 live rows have a NULL or empty
+    /// photographer, and a Packed row usually has none because packing happens
+    /// before anyone is assigned.
+    let photographer: String?
+    /// Every row for this box, across all time — including a previous trip where
+    /// the sample has one.
+    let scans: [JobBoxScanPoint]
+    /// Nil where a box was never linked to a session — the case the pickup guard
+    /// exists for.
+    var shiftUid: String?
+
+    /// Through the PRODUCTION rules: this cuts the log at the last Packed scan.
+    var reading: JobBoxProgressReading { JobBoxProgressReading(log: scans) }
+
+    /// The whole-log latest, which is what the tracker's "Updated …" line reports.
+    var latest: JobBoxScanPoint? { scans.max { $0.at < $1.at } }
+
+    var stage: JobBoxTripStage? { reading.furthest }
+}
+
+/// An SD card scan row. Shaped like `records`, which the live schema proves has
+/// exactly ten columns and **no `photographer`** — so this struct deliberately has
+/// no photographer either. A lab type carrying a field the table cannot hold is how
+/// a mockup comes to promise a dead capability.
+struct LabSDRecord: Identifiable {
+    let id: String
+    let cardNumber: String
+    let school: String
+    /// The stored value, from ScanView's hardcoded list.
+    let status: String
+    let at: Date
+    /// "Jason's house" / "Andy's house" — the two hardcoded personal names in
+    /// shipped UI, written only when the status is `uploaded`.
+    var uploadedFrom: String?
+}
+
+extension DesignLabSampleData {
+
+    /// Boxes across the REAL live distribution, which is the only reason this set
+    /// can judge the meter. Live over the 351 boxes carrying a shift (2026-07-29):
+    /// 199 Packed only, 47 Packed + Picked Up, 35 walking all four, 31 Packed
+    /// straight to Turned In, 22 skipping Left Job, four never packed at all.
+    ///
+    /// Seeded to contain: a box that walked ALL FOUR stages, a box that SKIPPED two,
+    /// a box that skipped one, a packed-only box with no photographer, a box that
+    /// was NEVER packed, a box stalled in Left Job past the 12-hour threshold, a box
+    /// on its SECOND trip (so `currentTrip` has a seam to cut), and a box with no
+    /// session link at all.
+    static let jobBoxes: [LabJobBox] = [
+        // ALL FOUR STAGES. The 10%-of-boxes case, and the only one where every
+        // notch on the scrubber is filled.
+        LabJobBox(id: "jb-3028", boxNumber: "3028", school: "Riverside Elementary",
+                  photographer: "Maria Alvarez",
+                  scans: [
+                    JobBoxScanPoint(stage: .packed, who: nil, at: at(6, 40, dayOffset: -2)),
+                    JobBoxScanPoint(stage: .pickedUp, who: "Maria Alvarez", at: at(7, 15, dayOffset: -2)),
+                    JobBoxScanPoint(stage: .leftJob, who: "Maria Alvarez", at: at(15, 2, dayOffset: -2)),
+                    JobBoxScanPoint(stage: .turnedIn, who: "Maria Alvarez", at: at(17, 30, dayOffset: -2))
+                  ],
+                  shiftUid: "s-riverside"),
+        // SKIPS TWO — Packed straight to Turned In. The old bars drew this with
+        // four ticks, two of them fiction.
+        LabJobBox(id: "jb-3031", boxNumber: "3031", school: "Northgate Middle School",
+                  photographer: "Devon Wright",
+                  scans: [
+                    JobBoxScanPoint(stage: .packed, who: nil, at: at(6, 30, dayOffset: -4)),
+                    JobBoxScanPoint(stage: .turnedIn, who: "Devon Wright", at: at(18, 5, dayOffset: -4))
+                  ],
+                  shiftUid: "s-northgate"),
+        // SKIPS ONE — no Left Job scan.
+        LabJobBox(id: "jb-3044", boxNumber: "3044", school: "Westbrook High School",
+                  photographer: "Priya Nair",
+                  scans: [
+                    JobBoxScanPoint(stage: .packed, who: nil, at: at(6, 45, dayOffset: -1)),
+                    JobBoxScanPoint(stage: .pickedUp, who: "Priya Nair", at: at(7, 40, dayOffset: -1)),
+                    JobBoxScanPoint(stage: .turnedIn, who: "Priya Nair", at: at(16, 55, dayOffset: -1))
+                  ],
+                  shiftUid: "s-westbrook"),
+        // PACKED ONLY, no photographer — the single most common live shape, and the
+        // one an old bar drew inert because `.packed` fell through to a grey default.
+        LabJobBox(id: "jb-3050", boxNumber: "3050", school: "Riverside Elementary",
+                  photographer: nil,
+                  scans: [
+                    JobBoxScanPoint(stage: .packed, who: nil, at: at(16, 10, dayOffset: -1))
+                  ],
+                  shiftUid: "s-riverside-2"),
+        // STALLED IN LEFT JOB, 26 hours — past the 12-hour alert threshold, so the
+        // Scan screen's Job Box Alert banner has something real to fire on.
+        LabJobBox(id: "jb-3055", boxNumber: "3055", school: "Lincoln High School",
+                  photographer: "Sam Okafor",
+                  scans: [
+                    JobBoxScanPoint(stage: .packed, who: nil, at: at(6, 20, dayOffset: -2)),
+                    JobBoxScanPoint(stage: .pickedUp, who: "Sam Okafor", at: at(7, 5, dayOffset: -2)),
+                    JobBoxScanPoint(stage: .leftJob, who: "Sam Okafor", at: at(14, 30, dayOffset: -2))
+                  ],
+                  shiftUid: "s-lincoln"),
+        // NEVER PACKED — four live boxes look like this, and there is then no seam
+        // for `currentTrip` to cut on, so the whole log is one trip.
+        LabJobBox(id: "jb-3061", boxNumber: "3061", school: "Northgate Middle School",
+                  photographer: "June Castillo",
+                  scans: [
+                    JobBoxScanPoint(stage: .pickedUp, who: "June Castillo", at: at(8, 12, dayOffset: -6))
+                  ],
+                  shiftUid: nil),
+        // SECOND TRIP. Two complete trips in one log: the reading must show only
+        // the second, and the tracker groups by box number across ALL TIME, which
+        // is exactly why the seam matters.
+        LabJobBox(id: "jb-3072", boxNumber: "3072", school: "Westbrook High School",
+                  photographer: "Alex Fontaine",
+                  scans: [
+                    JobBoxScanPoint(stage: .packed, who: nil, at: at(6, 30, dayOffset: -48)),
+                    JobBoxScanPoint(stage: .pickedUp, who: "Devon Wright", at: at(7, 30, dayOffset: -48)),
+                    JobBoxScanPoint(stage: .leftJob, who: "Devon Wright", at: at(15, 0, dayOffset: -48)),
+                    JobBoxScanPoint(stage: .turnedIn, who: "Devon Wright", at: at(17, 0, dayOffset: -48)),
+                    JobBoxScanPoint(stage: .packed, who: nil, at: at(6, 30, dayOffset: -1)),
+                    JobBoxScanPoint(stage: .pickedUp, who: "Alex Fontaine", at: at(7, 20, dayOffset: -1))
+                  ],
+                  shiftUid: "s-westbrook-2"),
+        // NO SESSION LINK on a live pickup — the `.noJobLink` pickup warning's case.
+        LabJobBox(id: "jb-3080", boxNumber: "3080", school: "Lincoln High School",
+                  photographer: "Maria Alvarez",
+                  scans: [
+                    JobBoxScanPoint(stage: .packed, who: nil, at: at(6, 15, dayOffset: -3)),
+                    JobBoxScanPoint(stage: .pickedUp, who: "Maria Alvarez", at: at(7, 50, dayOffset: -3))
+                  ],
+                  shiftUid: nil),
+    ]
+
+    /// The four job-box statuses and their LIVE counts (1,059 rows, zero outside
+    /// the four) — so the Statistics distribution is judged against real weights
+    /// rather than a tidy quarter each.
+    static let jobBoxStatusCounts: [(status: JobBoxTripStage, count: Int)] = [
+        (.packed, 674), (.pickedUp, 160), (.turnedIn, 159), (.leftJob, 66)
+    ]
+
+    /// SD statuses and their live counts. **`Personal` is offered in every picker
+    /// and has ZERO rows** — kept in the list precisely so the design has to decide
+    /// what to do with an option nobody has ever used.
+    static let sdStatusCounts: [(status: String, count: Int)] = [
+        ("Job Box", 1791), ("Cleared", 944), ("Uploaded", 921),
+        ("Camera", 272), ("Envelope", 232), ("Camera Bag", 8), ("Personal", 0)
+    ]
+
+    /// SD rows for the search list and the history bubbles: one of each interesting
+    /// shape, including both house flags and a card whose number has a leading zero
+    /// (search is an exact string `.eq`, so "0301" and "301" are different cards).
+    static let sdRecords: [LabSDRecord] = [
+        LabSDRecord(id: "sd1", cardNumber: "1042", school: "Riverside Elementary",
+                    status: "Uploaded", at: at(19, 20, dayOffset: -1),
+                    uploadedFrom: "Andy's house"),
+        LabSDRecord(id: "sd2", cardNumber: "1042", school: "Riverside Elementary",
+                    status: "Envelope", at: at(17, 5, dayOffset: -1)),
+        LabSDRecord(id: "sd3", cardNumber: "1103", school: "Westbrook High School",
+                    status: "Job Box", at: at(6, 55, dayOffset: -1)),
+        LabSDRecord(id: "sd4", cardNumber: "1188", school: "Iconik",
+                    status: "Cleared", at: at(9, 30, dayOffset: -2)),
+        LabSDRecord(id: "sd5", cardNumber: "1207", school: "Northgate Middle School",
+                    status: "Camera", at: at(8, 2, dayOffset: -3)),
+        LabSDRecord(id: "sd6", cardNumber: "0301", school: "Lincoln High School",
+                    status: "Camera Bag", at: at(11, 45, dayOffset: -9)),
+        LabSDRecord(id: "sd7", cardNumber: "1990", school: "Riverside Elementary",
+                    status: "Uploaded", at: at(21, 10, dayOffset: -5),
+                    uploadedFrom: "Jason's house"),
+    ]
+}
+
+// MARK: - Manager features (AMB.12, batch 4)
+
+/// A row from `getTeamMembers`, which — unlike `getPhotographers` — returns
+/// INACTIVE users too, and carries only the first name into the flag picker.
+struct LabTeamMember: Identifiable {
+    let id: String
+    let firstName: String
+    let fullName: String
+    let isActive: Bool
+}
+
+/// A flagged user as the unflag list renders them: first name, the note, and who
+/// flagged them. The list SORTS by full name and DISPLAYS the first name, which is
+/// why two people sharing a first name look randomly ordered.
+struct LabFlaggedUser: Identifiable {
+    let id: String
+    let firstName: String
+    let fullName: String
+    let note: String
+    let flaggedBy: String
+    let flaggedAt: Date
+}
+
+/// One day of a photographer's mileage, for the manager's employee detail — a
+/// 14-day window, date-descending, with the company/personal split that is hidden
+/// when company mileage is zero.
+struct LabManagerMileageDay: Identifiable {
+    let id: String
+    let date: Date
+    let school: String
+    let miles: Double
+    let isCompany: Bool
+    let photoCount: Int
+}
+
+extension DesignLabSampleData {
+
+    /// The flag picker's source. Seeded with the two shapes that break it: an
+    /// INACTIVE user (who is offered anyway, because this screen calls
+    /// `getTeamMembers`), and TWO people called Chris (who are indistinguishable,
+    /// because only `firstName` is carried into the model).
+    static let teamMembers: [LabTeamMember] = [
+        LabTeamMember(id: "u1", firstName: "Maria", fullName: "Maria Alvarez", isActive: true),
+        LabTeamMember(id: "u2", firstName: "Devon", fullName: "Devon Wright", isActive: true),
+        LabTeamMember(id: "u3", firstName: "Chris", fullName: "Chris Bhatt", isActive: true),
+        LabTeamMember(id: "u4", firstName: "Chris", fullName: "Chris Okonkwo", isActive: true),
+        LabTeamMember(id: "u5", firstName: "Priya", fullName: "Priya Nair", isActive: true),
+        LabTeamMember(id: "u6", firstName: "Sam", fullName: "Sam Okafor", isActive: false),
+        LabTeamMember(id: "u7", firstName: "June", fullName: "June Castillo", isActive: true),
+    ]
+
+    /// Flagged users: a long note that must wrap, a one-word note, and the two
+    /// Chrises again — this list sorts by full name and shows first names.
+    static let flaggedUsers: [LabFlaggedUser] = [
+        LabFlaggedUser(id: "f1", firstName: "Chris", fullName: "Chris Bhatt",
+                       note: "Three Lincoln retake cards came back with no job box scan at all — please scan the box in and out on every job this week so the tracker matches the cards.",
+                       flaggedBy: "Alex Fontaine", flaggedAt: at(16, 20, dayOffset: -2)),
+        LabFlaggedUser(id: "f2", firstName: "Chris", fullName: "Chris Okonkwo",
+                       note: "Mileage report missing for 7/22.",
+                       flaggedBy: "Alex Fontaine", flaggedAt: at(9, 5, dayOffset: -5)),
+        LabFlaggedUser(id: "f3", firstName: "Devon", fullName: "Devon Wright",
+                       note: "Call the office.",
+                       flaggedBy: "June Castillo", flaggedAt: at(11, 45, dayOffset: -1)),
+    ]
+
+    /// One photographer's 14-day mileage, for the manager employee detail: a
+    /// company day, a day with more than five photos (the `+N` overflow), and a
+    /// zero-photo day.
+    static let managerMileageDays: [LabManagerMileageDay] = [
+        LabManagerMileageDay(id: "m1", date: day(-1), school: "Riverside Elementary",
+                             miles: 24.6, isCompany: false, photoCount: 7),
+        LabManagerMileageDay(id: "m2", date: day(-2), school: "Northgate Middle School",
+                             miles: 41.2, isCompany: true, photoCount: 3),
+        LabManagerMileageDay(id: "m3", date: day(-4), school: "Westbrook High School",
+                             miles: 18.0, isCompany: false, photoCount: 0),
+        LabManagerMileageDay(id: "m4", date: day(-7), school: "Lincoln High School",
+                             miles: 33.9, isCompany: false, photoCount: 2),
+        LabManagerMileageDay(id: "m5", date: day(-11), school: "Riverside Elementary",
+                             miles: 24.6, isCompany: false, photoCount: 5),
+    ]
+}
+
+// MARK: - Training (AMB.12, batch 4)
+
+/// A published critique, shaped like `Critique` in `Models.swift` — including the
+/// three different fields the app uses for one asset (`thumbnailUrl` singular on the
+/// cards, `thumbnailUrls` and `imageUrls` plural in the detail) and the `imageCount`
+/// that defaults to 0 when the column is NULL.
+struct LabCritique: Identifiable {
+    let id: String
+    /// The RAW stored value. `"example"` means good; **anything else renders as a
+    /// criticism**, including a value neither client wrote.
+    let exampleType: String
+    let notes: String?
+    let submitter: String
+    /// Decoded by the model and displayed nowhere today.
+    let submitterEmail: String
+    let createdAt: Date
+    /// What the row's `image_count` column holds. 0 is the NULL default, and it
+    /// suppresses both the "n of m" counter and the whole thumbnail strip.
+    let imageCount: Int
+    /// How many images the row REALLY has — the number `imageUrls` would return.
+    let realImageCount: Int
+    let forRole: String
+
+    var isGoodExample: Bool { exampleType == "example" }
+}
+
+extension DesignLabSampleData {
+
+    /// Seeded with every case that decides the Training design: a good example, a
+    /// needs-improvement example, a multi-image row whose `image_count` is 0 (so
+    /// production hides the strip on a row that HAS a strip), a row with an
+    /// `example_type` neither client writes (which silently renders as a
+    /// criticism), a row with NO notes, and a LEGACY row with zero images — the row
+    /// on which Save and Share crash today.
+    static let critiques: [LabCritique] = [
+        LabCritique(id: "cr1", exampleType: "example",
+                    notes: "Exactly the separation we want on a class group — front row knees turned in, back row shoulders square.",
+                    submitter: "Alex Fontaine", submitterEmail: "alex@iconikphoto.com",
+                    createdAt: at(15, 10, dayOffset: -1),
+                    imageCount: 3, realImageCount: 3, forRole: "Class Groups"),
+        LabCritique(id: "cr2", exampleType: "improvement",
+                    notes: "Backdrop crease is in every frame from this set. Steam it or move the stand a foot forward.",
+                    submitter: "June Castillo", submitterEmail: "june@iconikphoto.com",
+                    createdAt: at(9, 30, dayOffset: -3),
+                    imageCount: 2, realImageCount: 2, forRole: "Underclass"),
+        // image_count NULL -> 0, but the row really has four images. Today the
+        // counter and the entire thumbnail strip vanish on this row.
+        LabCritique(id: "cr3", exampleType: "example",
+                    notes: "Good recovery on the gym window — this is the angle to use after ten.",
+                    submitter: "Alex Fontaine", submitterEmail: "alex@iconikphoto.com",
+                    createdAt: at(17, 45, dayOffset: -6),
+                    imageCount: 0, realImageCount: 4, forRole: "Sports"),
+        // An example_type neither client writes. `type == "example"` is the whole
+        // test, so this draws as "Needs Improvement" with no way to tell.
+        LabCritique(id: "cr4", exampleType: "good_example",
+                    notes: "Nice work on the senior set.",
+                    submitter: "June Castillo", submitterEmail: "june@iconikphoto.com",
+                    createdAt: at(12, 0, dayOffset: -9),
+                    imageCount: 1, realImageCount: 1, forRole: "Seniors"),
+        // No notes at all.
+        LabCritique(id: "cr5", exampleType: "improvement", notes: nil,
+                    submitter: "Alex Fontaine", submitterEmail: "alex@iconikphoto.com",
+                    createdAt: at(8, 15, dayOffset: -14),
+                    imageCount: 1, realImageCount: 1, forRole: "Retakes"),
+        // THE LEGACY ROW: zero images. `imageUrls` defaults to [] and the detail
+        // indexes it unguarded, so Save and Share crash here today.
+        LabCritique(id: "cr6", exampleType: "example",
+                    notes: "Older critique — the image was attached before the app stored a list.",
+                    submitter: "Alex Fontaine", submitterEmail: "alex@iconikphoto.com",
+                    createdAt: at(10, 0, dayOffset: -40),
+                    imageCount: 0, realImageCount: 0, forRole: "Class Groups"),
+    ]
+}
+
+// MARK: - Settings (AMB.12, batch 4)
+
+/// A school as School Info renders it, plus what School Detail adds. Mileage is
+/// OPTIONAL because the live row shows `--` for both a genuine zero AND a failed
+/// per-school query — the two are indistinguishable today.
+struct LabSchoolInfo: Identifiable {
+    let id: String
+    let name: String
+    let address: String
+    /// Nil where the school was never geocoded — the coordinates row and the map
+    /// are conditional on this, and coordinates can never be edited.
+    let coordinates: String?
+    /// Nil means the mileage lookup returned nothing — NOT zero miles.
+    let seasonMiles: Double?
+    let reportCount: Int
+    /// Location photo labels. The delete button beside each has no confirmation
+    /// and never removes the storage object.
+    let photoLabels: [String]
+}
+
+extension DesignLabSampleData {
+
+    /// Seeded with the shapes that decide the Settings design: a school with no
+    /// coordinates (no map, unfixable), a school with NO mileage figure at all (the
+    /// `--` that means either zero or a failure), a school with a long name that has
+    /// to truncate, and a school with several location photos.
+    static let schoolsInfo: [LabSchoolInfo] = [
+        LabSchoolInfo(id: "sc1", name: "Riverside Elementary",
+                      address: "1200 Riverside Dr, Springfield",
+                      coordinates: "39.781721, -89.650148",
+                      seasonMiles: 246.4, reportCount: 11,
+                      photoLabels: ["Gym entrance", "Load-in door", "Parking"]),
+        LabSchoolInfo(id: "sc2", name: "Northgate Middle School",
+                      address: "88 Northgate Ave, Springfield",
+                      coordinates: "39.812004, -89.611930",
+                      seasonMiles: 0, reportCount: 3, photoLabels: []),
+        // No mileage figure — the row that renders "Mileage: --" today, which means
+        // either a real zero or a failed query and never says which.
+        LabSchoolInfo(id: "sc3", name: "Westbrook High School",
+                      address: "4400 Westbrook Pkwy, Springfield",
+                      coordinates: nil, seasonMiles: nil, reportCount: 0,
+                      photoLabels: ["Front office"]),
+        LabSchoolInfo(id: "sc4", name: "Lincoln High School — Performing Arts Annex",
+                      address: "9 Lincoln Sq, Springfield",
+                      coordinates: "39.799512, -89.644001",
+                      seasonMiles: 118.7, reportCount: 6, photoLabels: []),
+    ]
+}
