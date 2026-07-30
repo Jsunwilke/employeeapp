@@ -232,7 +232,14 @@ struct ClassGroupJobsListView: View {
                 DispatchQueue.main.async {
                     switch result {
                     case .success:
-                        break
+                        // THE SCREEN REFLECTS THE WRITE — refetch, don't trust
+                        // realtime. The org channel filters on organization_id,
+                        // and Supabase DELETE events carry only the primary key
+                        // (no replica identity full), so a filtered subscription
+                        // NEVER hears a delete: the card would sit there looking
+                        // deleted-but-back-later. Found live in the AMB.10
+                        // simulator smoke — the DB row was gone, the card stayed.
+                        self.loadData()
                     case .failure(let error):
                         self.deleteFailure = "This job is still there — \(error.localizedDescription)"
                         self.showingDeleteFailureAlert = true
