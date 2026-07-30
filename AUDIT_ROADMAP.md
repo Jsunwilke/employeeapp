@@ -1212,9 +1212,27 @@ other rebases onto it.
   **Verified:** clean-derived-data builds green throughout; zero warnings from any
   file this phase wrote; both simulators driven signed-in (iPhone: Groups
   list/detail + Yearbook root/checklist on live data; iPad: dashboard-widget →
-  create-sheet contract, Yearbook root, batch-4 gallery). NOT verified (needs the
-  operator): write paths against the shared production DB (add/edit/delete a group,
-  toggle an item), and the on-device smoke both devices.
+  create-sheet contract, Yearbook root, batch-4 gallery).
+  **2026-07-30 — SIMULATOR SMOKE RUN (operator-directed), including the WRITE
+  paths, all self-reverting and DB-verified clean afterward (0 test rows left):**
+  yearbook toggle round-trip (attribution "Jason Wilkey · Jul 30" stamped
+  immediately, hero 9→10→9 of 26, ring 35→38→35% — the observed-count mirror
+  proven both directions); filters+search compose live (typed "Cross" survived
+  the Incomplete tap; composed no-matches state with Clear Filters); Groups
+  create→add-row→delete-row→delete-job round trips in TWO vocabularies (a
+  Candids job and a Groups job): per-type badge icons live (camera on CANDIDS),
+  "1 group"/"1 CLUB" singulars, grade chips fill the field, the whiteboard shows
+  the school name from the form path, survives a center tap, and the typed note
+  survives the whiteboard round-trip; the saved row appears instantly (the
+  reload fix) with the note body on it and no dangling dash; both delete
+  confirmations carry the preserved copy. **ONE DEFECT FOUND BY THE SMOKE, FIXED
+  (81ac9ce): a deleted job's card stayed on the list** — the write landed (DB
+  verified) but the success path trusted realtime, and Supabase DELETE events
+  never reach a column-filtered subscription (payload carries only the PK), so
+  the refetch never fired. Success now refetches; re-verified live
+  (create→delete→card gone at the confirm). NOT simulatable, left for the
+  operator's device smoke: the Airplane-Mode failure states, haptics/feel, and
+  the batch-4 design review sitting.
 
 **Batch 4**
 
