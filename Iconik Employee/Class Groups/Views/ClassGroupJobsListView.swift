@@ -166,15 +166,21 @@ struct ClassGroupJobsListView: View {
             }
 
             if filteredJobs.isEmpty {
-                AmbientEmptyState(
-                    title: "No \(ClassGroupJobType.singularTitle(selectedTab)) Jobs",
-                    message: "Create a job for an upcoming session to start tracking \(ClassGroupJobType.rowNounPlural(selectedTab)).",
-                    systemImage: ClassGroupJobType.listEmptyIcon(selectedTab),
-                    actionTitle: "Create Job",
-                    actionIcon: "plus.circle.fill",
-                    action: { showingCreateJob = true },
-                    actionTint: tint)
-                .modifier(ClassGroupsListRow())
+                // A LOAD FAILURE AND AN EMPTY LIST ARE DIFFERENT CLAIMS (AMB.10
+                // review): with the banner above saying "couldn't load", this
+                // branch must NOT also assert the org has no jobs and offer a
+                // Create button — same fork the Yearbook root makes.
+                if failureMessage == nil {
+                    AmbientEmptyState(
+                        title: "No \(ClassGroupJobType.singularTitle(selectedTab)) Jobs",
+                        message: "Create a job for an upcoming session to start tracking \(ClassGroupJobType.rowNounPlural(selectedTab)).",
+                        systemImage: ClassGroupJobType.listEmptyIcon(selectedTab),
+                        actionTitle: "Create Job",
+                        actionIcon: "plus.circle.fill",
+                        action: { showingCreateJob = true },
+                        actionTint: tint)
+                    .modifier(ClassGroupsListRow())
+                }
             } else {
                 // ONE materialised array feeds both the ForEach and the swipe
                 // handler, so the offsets always resolve against the rows that
@@ -183,10 +189,18 @@ struct ClassGroupJobsListView: View {
                 // array.
                 let jobs = filteredJobs
                 ForEach(jobs) { job in
-                    ClassGroupJobCard(job: job)
-                        .contentShape(Rectangle())
-                        .onTapGesture { destination = .detail(job.id) }
-                        .modifier(ClassGroupsListRow())
+                    // A real Button, not an onTapGesture (AMB.10 review): a
+                    // gesture exposes no button trait or activation action, so
+                    // VoiceOver and Switch Control users could not open a job
+                    // at all. Same shape as the Yearbook root's cards.
+                    Button {
+                        destination = .detail(job.id)
+                    } label: {
+                        ClassGroupJobCard(job: job)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .modifier(ClassGroupsListRow())
                 }
                 .onDelete { offsets in deleteJobs(from: jobs, at: offsets) }
             }
@@ -232,14 +246,12 @@ struct ClassGroupJobsListView: View {
                 DispatchQueue.main.async {
                     switch result {
                     case .success:
-                        // THE SCREEN REFLECTS THE WRITE — refetch, don't trust
-                        // realtime. The org channel filters on organization_id,
-                        // and Supabase DELETE events carry only the primary key
-                        // (no replica identity full), so a filtered subscription
-                        // NEVER hears a delete: the card would sit there looking
-                        // deleted-but-back-later. Found live in the AMB.10
-                        // simulator smoke — the DB row was gone, the card stayed.
-                        self.loadData()
+                        // Nothing to do: the service removes the row from its
+                        // published array on delete success (AMB.10 review —
+                        // an earlier version re-ran loadData() here, and the
+                        // same-tick channel teardown/re-join that caused
+                        // provably killed the org realtime subscription).
+                        break
                     case .failure(let error):
                         self.deleteFailure = "This job is still there — \(error.localizedDescription)"
                         self.showingDeleteFailureAlert = true

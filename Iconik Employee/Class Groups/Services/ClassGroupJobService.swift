@@ -12,6 +12,42 @@ class ClassGroupJobService: ObservableObject {
     @Published var isLoading = false
     @Published var error: Error?
 
+    /// AMB.10 review: a zero-row PostgREST UPDATE returns 200, so every row write
+    /// proves a row matched or throws — the same `WrittenRowID`/`requireRowsWritten`
+    /// shape as `DailyJobReportService` and the five services AMB.9's sweep covered
+    /// (this service was skipped by that sweep, not excepted).
+    enum WriteError: LocalizedError, CustomDebugStringConvertible {
+        case noRowsMatched(table: String, id: String)
+        case rowNotFound(table: String, id: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .noRowsMatched:
+                return "Nothing was saved — this job may have been deleted elsewhere. Go back and try again."
+            case .rowNotFound:
+                return "Nothing was saved — this entry is no longer on the job. It may have been changed elsewhere; go back and try again."
+            }
+        }
+
+        var debugDescription: String {
+            switch self {
+            case .noRowsMatched(let table, let id):
+                return "WriteError.noRowsMatched: nothing in \(table) matches id \(id)"
+            case .rowNotFound(let table, let id):
+                return "WriteError.rowNotFound: no class_groups entry \(id) in \(table)"
+            }
+        }
+    }
+
+    private struct WrittenRowID: Decodable { let id: String }
+
+    private func requireRowsWritten(_ rows: [WrittenRowID], id: String) throws {
+        guard rows.isEmpty else { return }
+        let error = WriteError.noRowsMatched(table: tableName, id: id)
+        print("⚠️ \(error.debugDescription)")
+        throw error
+    }
+
     private var channel: RealtimeChannelV2?
 
     private init() {}
@@ -243,6 +279,32 @@ class ClassGroupJobService: ObservableObject {
         }
     }
 
+    /// Fetch ONE job by its id, exactly as stored (`class_group_jobs.id` is
+    /// app-minted UPPERCASE; no case folding). AMB.10 review: the detail screen
+    /// was refreshing one row by downloading and decoding every job in the
+    /// organization because no by-id read existed.
+    func fetchClassGroupJob(byId jobId: String, completion: @escaping (Result<ClassGroupJob?, Error>) -> Void) {
+        Task {
+            do {
+                let jobs: [ClassGroupJob] = try await supabase
+                    .from(tableName)
+                    .select()
+                    .eq("id", value: jobId)
+                    .limit(1)
+                    .execute()
+                    .value
+
+                await MainActor.run {
+                    completion(.success(jobs.first))
+                }
+            } catch {
+                await MainActor.run {
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
     /// Add a class group to an existing job
     func addClassGroup(toJobId jobId: String, classGroup: ClassGroup, completion: @escaping (Result<Void, Error>) -> Void) {
         Task {
@@ -271,7 +333,7 @@ class ClassGroupJobService: ObservableObject {
                     let last_modified_by: String
                 }
 
-                try await supabase
+                let written: [WrittenRowID] = try await supabase
                     .from(tableName)
                     .update(UpdateData(
                         class_groups: updatedGroups,
@@ -279,7 +341,10 @@ class ClassGroupJobService: ObservableObject {
                         last_modified_by: UserManager.shared.getCurrentUserIDUnified() ?? ""
                     ))
                     .eq("id", value: jobId)
+                    .select("id")
                     .execute()
+                    .value
+                try requireRowsWritten(written, id: jobId)
 
                 print("Successfully added class group to job: \(jobId)")
                 await MainActor.run {
@@ -311,11 +376,16 @@ class ClassGroupJobService: ObservableObject {
                     throw NSError(domain: "ClassGroupJobService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Job not found"])
                 }
 
-                // Update the class group in the array
+                // Update the class group in the array. A MISS IS AN ERROR, not a
+                // silent rewrite of the unchanged array (AMB.10 review): the row
+                // can be gone if another device rewrote class_groups meanwhile,
+                // and "reported saved, persisted nothing" is the failure class
+                // this repo's write rules exist to prevent.
                 var updatedGroups = job.class_groups
-                if let index = updatedGroups.firstIndex(where: { $0.id == classGroup.id }) {
-                    updatedGroups[index] = classGroup
+                guard let index = updatedGroups.firstIndex(where: { $0.id == classGroup.id }) else {
+                    throw WriteError.rowNotFound(table: tableName, id: classGroup.id)
                 }
+                updatedGroups[index] = classGroup
 
                 // Update in database
                 struct UpdateData: Encodable {
@@ -324,7 +394,7 @@ class ClassGroupJobService: ObservableObject {
                     let last_modified_by: String
                 }
 
-                try await supabase
+                let written: [WrittenRowID] = try await supabase
                     .from(tableName)
                     .update(UpdateData(
                         class_groups: updatedGroups,
@@ -332,7 +402,10 @@ class ClassGroupJobService: ObservableObject {
                         last_modified_by: UserManager.shared.getCurrentUserIDUnified() ?? ""
                     ))
                     .eq("id", value: jobId)
+                    .select("id")
                     .execute()
+                    .value
+                try requireRowsWritten(written, id: jobId)
 
                 print("Successfully updated class group in job: \(jobId)")
                 await MainActor.run {
@@ -364,7 +437,9 @@ class ClassGroupJobService: ObservableObject {
                     throw NSError(domain: "ClassGroupJobService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Job not found"])
                 }
 
-                // Remove the class group from the array
+                // Remove the class group from the array. Deleting a row that is
+                // already gone is not an error — the outcome the user asked for
+                // holds — so unlike update, a filter no-op passes through.
                 let updatedGroups = job.class_groups.filter { $0.id != classGroupId }
 
                 // Update in database
@@ -374,7 +449,7 @@ class ClassGroupJobService: ObservableObject {
                     let last_modified_by: String
                 }
 
-                try await supabase
+                let written: [WrittenRowID] = try await supabase
                     .from(tableName)
                     .update(UpdateData(
                         class_groups: updatedGroups,
@@ -382,7 +457,10 @@ class ClassGroupJobService: ObservableObject {
                         last_modified_by: UserManager.shared.getCurrentUserIDUnified() ?? ""
                     ))
                     .eq("id", value: jobId)
+                    .select("id")
                     .execute()
+                    .value
+                try requireRowsWritten(written, id: jobId)
 
                 print("Successfully deleted class group from job: \(jobId)")
                 await MainActor.run {
@@ -415,6 +493,16 @@ class ClassGroupJobService: ObservableObject {
                 await updateSessionHasJob(sessionId: sessionId, jobType: jobType, hasJob: false)
 
                 await MainActor.run {
+                    // THE SCREEN REFLECTS THE WRITE, at the service (AMB.10
+                    // review). The org channel filters on organization_id and
+                    // Supabase DELETE events carry only the primary key, so a
+                    // filtered subscription NEVER hears a delete — and having
+                    // the view rebuild the subscription instead provably killed
+                    // the channel (same-topic re-join races the in-flight
+                    // leave-ack in supabase-swift). Removing the row from the
+                    // published array here heals every consumer with no
+                    // channel churn.
+                    self.classGroupJobs.removeAll { $0.id == id }
                     completion(.success(()))
                 }
             } catch {

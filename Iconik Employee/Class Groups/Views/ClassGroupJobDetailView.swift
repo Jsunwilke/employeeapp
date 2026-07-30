@@ -239,21 +239,25 @@ struct ClassGroupJobDetailView: View {
     /// THE DEAD CONTROL THIS PHASE HAD TO FIX. `refreshJob()` was empty, so a saved
     /// row appeared only if the realtime channel happened to deliver.
     ///
-    /// It re-reads through `fetchAllClassGroupJobs`, an EXISTING service call, and
-    /// picks this job out by id. Deliberately NOT `fetchClassGroupJob(forSession:)`
-    /// — that one filters on session_id alone with no job_type, and one session can
-    /// carry both a Class Groups job and a Class Candids job, so it can hand back
-    /// the wrong row. The id is compared EXACTLY as stored (`class_group_jobs.id` is
-    /// app-minted UPPERCASE); case-folding it is the AMB.9 critical.
+    /// Re-reads ONE row by id (AMB.10 review — the first version downloaded every
+    /// job in the organization to refresh this one), compared EXACTLY as stored
+    /// (`class_group_jobs.id` is app-minted UPPERCASE; case-folding is the AMB.9
+    /// critical). A successful fetch that finds NO row is said out loud rather
+    /// than leaving the stale screen — realtime cannot heal it, because filtered
+    /// subscriptions never receive DELETE events.
     private func reloadJob() {
-        guard let organizationId = job?.organizationId, !organizationId.isEmpty else { return }
-
-        service.fetchAllClassGroupJobs(forOrganization: organizationId) { result in
+        service.fetchClassGroupJob(byId: jobId) { result in
             DispatchQueue.main.async {
                 switch result {
-                case .success(let jobs):
-                    if let refreshed = jobs.first(where: { $0.id == self.jobId }) {
+                case .success(let refreshed):
+                    if let refreshed {
                         self.job = refreshed
+                    } else {
+                        // Deleted elsewhere: show the job-not-found state
+                        // instead of silently keeping a job that no longer
+                        // exists.
+                        self.job = nil
+                        self.isLoading = false
                     }
                 case .failure(let error):
                     self.errorMessage = "Saved, but this screen couldn't refresh: \(error.localizedDescription)"

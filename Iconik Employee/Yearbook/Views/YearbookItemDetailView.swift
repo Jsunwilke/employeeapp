@@ -81,8 +81,11 @@ struct YearbookItemDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
+                    // Cancel stays LIVE during a save (AMB.10 review — while
+                    // saving, Save becomes a ProgressView, so a disabled Cancel
+                    // left NO enabled control on a hung connection; the old
+                    // sheet always kept Cancel tappable).
                     Button("Cancel") { dismiss() }
-                        .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if isSaving {

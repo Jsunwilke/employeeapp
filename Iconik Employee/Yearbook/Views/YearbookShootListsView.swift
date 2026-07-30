@@ -82,7 +82,15 @@ struct YearbookShootListsView: View {
                 YearbookChecklistView(shootList: list, sessionContext: nil)
             }
         }
-        .onAppear { loadOrganizationAndLists() }
+        // FIRST APPEARANCE ONLY (AMB.10 review): `.onAppear` refires on every
+        // pop-back from a pushed checklist, and unguarded this re-tore the org
+        // subscription AND ran two full org fetches (every list with its whole
+        // items array) per round trip. After the first load the live
+        // subscription keeps the rows current; `.refreshable` and the failure
+        // card's Try Again own the awaited path.
+        .onAppear {
+            if currentOrganizationId == nil { loadOrganizationAndLists() }
+        }
     }
 
     // MARK: - Content

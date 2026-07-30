@@ -123,8 +123,11 @@ struct ClassGroupFormView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
+                    // Cancel stays LIVE during a save (AMB.10 review — disabling
+                    // it left a hung connection with no enabled control; the old
+                    // forms always kept Cancel tappable). Dismissing abandons
+                    // the in-flight write's UI, which is what Cancel means.
                     Button("Cancel") { dismiss() }
-                        .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }

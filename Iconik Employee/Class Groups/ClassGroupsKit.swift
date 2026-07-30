@@ -223,6 +223,11 @@ struct ClassGroupRowCard: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // WITHOUT THIS the button is only tappable ON THE GLYPHS: the
+                // card fill is applied to the enclosing HStack, outside this
+                // Button, so a short title leaves most of the row dead (AMB.10
+                // review — the same on-device finding YearbookKit's row fixed).
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityHint("Edit this row")
