@@ -21,6 +21,11 @@ struct JobBoxFormView: View {
     @State private var isSubmitting = false
     @State private var showAlert = false
     @State private var alertMessage = ""
+
+    // Pickup mismatch check (JobBoxPickupRules): set when Submit finds the
+    // scanned box doesn't match what was packed for the chosen job.
+    @State private var pickupWarning: JobBoxPickupWarning? = nil
+    @State private var showPickupWarning = false
     
     // For data loading
     @State private var photographerNames: [String] = []
@@ -119,22 +124,13 @@ struct JobBoxFormView: View {
                         Button("Submit") {
                             guard !isSubmitting else { return }
                             isSubmitting = true
-                            
-                            // Pass the session UID if a session is selected
-                            let shiftUid = selectedSession?.id
-                            
-                            onSubmit(localPhotographer, selectedSchoolId, shiftUid) { success in
-                                DispatchQueue.main.async {
-                                    isSubmitting = false
-                                    if success {
-                                        dismiss()
-                                    } else {
-                                        if alertMessage.isEmpty {
-                                            alertMessage = "Submission failed. Please try again."
-                                        }
-                                        showAlert = true
-                                    }
-                                }
+
+                            if selectedStatus == "Picked Up" {
+                                // Check the scanned box against what was packed
+                                // for the job this pickup will file under.
+                                Task { await checkPickupThenSubmit() }
+                            } else {
+                                performSubmit()
                             }
                         }
                         .buttonStyle(BorderlessButtonStyle())
@@ -163,9 +159,86 @@ struct JobBoxFormView: View {
                     dismissButton: .default(Text("OK"))
                 )
             }
+            .alert(
+                pickupWarning?.title ?? "",
+                isPresented: $showPickupWarning,
+                presenting: pickupWarning
+            ) { warning in
+                Button(warning.confirmLabel, role: .destructive) {
+                    isSubmitting = true
+                    performSubmit()
+                }
+                Button("Go Back", role: .cancel) {}
+            } message: { warning in
+                Text(warning.message)
+            }
         }
     }
-    
+
+    /// The job link this submission will actually get: the picked session, or —
+    /// when none is picked — whatever ScanView's save path would safely inherit
+    /// from the box's last record (same rule, so the check and the save agree).
+    private var effectiveTargetShiftUid: String? {
+        selectedSession?.id ?? JobBoxPickupRules.inheritableShiftUid(
+            lastStatus: lastRecord?.status,
+            lastSchool: lastRecord?.school,
+            lastShiftUid: lastRecord?.shiftUid,
+            newStatus: selectedStatus,
+            selectedSchool: selectedSchool
+        )
+    }
+
+    @MainActor
+    private func checkPickupThenSubmit() async {
+        let target = effectiveTargetShiftUid
+        var packedBoxNumber: String? = nil
+        var lookupFailed = false
+        if let target, !target.isEmpty {
+            do {
+                packedBoxNumber = try await JobBoxService.shared.fetchLatestPackedRecord(
+                    forShift: target,
+                    organizationID: userManager.currentUserOrganizationID
+                )?.boxNumber
+            } catch {
+                lookupFailed = true
+            }
+        }
+
+        if let warning = JobBoxPickupRules.pickupWarning(
+            scannedBox: boxNumber,
+            targetShiftUid: target,
+            selectedSchool: selectedSchool,
+            packedBoxNumber: packedBoxNumber,
+            packedLookupFailed: lookupFailed,
+            lastSchool: lastRecord?.school
+        ) {
+            isSubmitting = false
+            pickupWarning = warning
+            showPickupWarning = true
+        } else {
+            performSubmit()
+        }
+    }
+
+    private func performSubmit() {
+        // Pass the session UID if a session is selected
+        let shiftUid = selectedSession?.id
+
+        onSubmit(localPhotographer, selectedSchoolId, shiftUid) { success in
+            DispatchQueue.main.async {
+                isSubmitting = false
+                if success {
+                    dismiss()
+                } else {
+                    if alertMessage.isEmpty {
+                        alertMessage = "Submission failed. Please try again."
+                    }
+                    showAlert = true
+                }
+            }
+        }
+    }
+
     private func loadInitialData() {
         // Set default photographer
         localPhotographer = storedUserFirstName
@@ -214,9 +287,11 @@ struct JobBoxFormView: View {
                 await MainActor.run {
                     self.availableSessions = sessions.sorted { ($0.startDate ?? Date()) < ($1.startDate ?? Date()) }
 
-                    // If there's a last record with a shiftUid, try to select that session
-                    if let lastShiftUid = self.lastRecord?.shiftUid {
-                        self.selectedSession = self.availableSessions.first { $0.id == lastShiftUid }
+                    // Pre-select the box's current trip's session — but a Turned In
+                    // record means the trip is OVER, and defaulting to it would seed
+                    // the next scan with a finished job (same trap as inheritance).
+                    if let last = self.lastRecord, !last.shiftUid.isEmpty, last.jobBoxStatus != .turnedIn {
+                        self.selectedSession = self.availableSessions.first { $0.id == last.shiftUid }
                     } else if self.availableSessions.count == 1 {
                         // Auto-select if only one session
                         self.selectedSession = self.availableSessions.first

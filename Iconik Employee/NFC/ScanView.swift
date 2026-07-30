@@ -542,9 +542,17 @@ struct ScanView: View {
             return record.boxNumber == boxNumber
         }
         
-        // Get the shiftUid from lastJobBoxRecord if not provided and it's not a "Packed" status
-        // This ensures we maintain the shiftUid even when transitioning from one status to another
-        let effectiveShiftUid = shiftUid ?? (status.lowercased() != "packed" ? lastJobBoxRecord?.shiftUid : nil)
+        // Without an explicitly chosen session, a non-Packed scan may inherit the
+        // box's previous job link — but only within the current trip and (for a
+        // pickup) the same school. Unconditional inheritance is how a Pinckneyville
+        // pickup got filed under Mt Vernon's finished job (live, 2026-07-29).
+        let effectiveShiftUid = shiftUid ?? JobBoxPickupRules.inheritableShiftUid(
+            lastStatus: lastJobBoxRecord?.status,
+            lastSchool: lastJobBoxRecord?.school,
+            lastShiftUid: lastJobBoxRecord?.shiftUid,
+            newStatus: status,
+            selectedSchool: school
+        )
         
         DatabaseManager.shared.saveJobBoxRecord(
             timestamp: timestamp,

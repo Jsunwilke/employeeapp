@@ -146,6 +146,24 @@ class JobBoxService {
         return shiftUid
     }
     
+    /// The latest Packed scan for a job, for the pickup mismatch check
+    /// (JobBoxPickupRules). Throws on transport failure so callers can fail
+    /// OPEN — no warning — instead of claiming "nothing packed" when the
+    /// network blinked.
+    func fetchLatestPackedRecord(forShift shiftUid: String, organizationID: String) async throws -> JobBox? {
+        let rows: [JobBox] = try await supabase
+            .from("job_boxes")
+            .select()
+            .eq("shift_uid", value: shiftUid)
+            .eq("organization_id", value: organizationID)
+            .eq("status", value: JobBoxStatus.packed.rawValue)
+            .order("timestamp", ascending: false)
+            .limit(1)
+            .execute()
+            .value
+        return rows.first
+    }
+
     // Listen for job box updates for a specific shift
     func listenForJobBoxes(forShift event: ICSEvent, organizationID: String, completion: @escaping ([JobBox]) -> Void) -> ListenerRegistrationWrapper {
         // Use the event ID (which is the session ID) as the shiftUid

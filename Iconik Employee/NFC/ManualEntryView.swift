@@ -25,6 +25,12 @@ struct ManualEntryView: View {
     @State private var alertMessage = ""
     @State private var lastRecord: NFCRecord? = nil
     @State private var lastJobBoxRecord: JobBox? = nil
+
+    // Pickup mismatch check (JobBoxPickupRules): set when Submit finds the
+    // entered box doesn't match what was packed for the chosen job.
+    @State private var pickupWarning: JobBoxPickupWarning? = nil
+    @State private var showPickupWarning = false
+    @State private var pendingPickupSchoolId: String? = nil
     
     // For session selection
     @State private var selectedSession: Session? = nil
@@ -270,6 +276,19 @@ struct ManualEntryView: View {
                   message: Text(alertMessage),
                   dismissButton: .default(Text("OK")))
         }
+        .alert(
+            pickupWarning?.title ?? "",
+            isPresented: $showPickupWarning,
+            presenting: pickupWarning
+        ) { warning in
+            Button(warning.confirmLabel, role: .destructive) {
+                isSubmitting = true
+                submitJobBoxData(boxNumber: cardNumber, schoolId: pendingPickupSchoolId)
+            }
+            Button("Go Back", role: .cancel) {}
+        } message: { warning in
+            Text(warning.message)
+        }
         .sheet(isPresented: $showSessionSelection) {
             NFCSessionSelectionView(
                 sessions: availableSessions,
@@ -495,11 +514,17 @@ struct ManualEntryView: View {
         }
         
         isSubmitting = true
-        
+
         if isJobBoxMode {
             // Submit job box
             let schoolId = selectedSession?.schoolId ?? schools.first { $0.name == selectedSchool }?.id
-            submitJobBoxData(boxNumber: cardNumber, schoolId: schoolId)
+            if selectedStatus == "Picked Up" {
+                // Check the entered box against what was packed for the job
+                // this pickup will file under (JobBoxPickupRules).
+                Task { await checkPickupThenSubmit(schoolId: schoolId) }
+            } else {
+                submitJobBoxData(boxNumber: cardNumber, schoolId: schoolId)
+            }
         } else {
             // Submit SD card
             let jasonValue = uploadedFromJasonsHouse ? "Yes" : ""
@@ -543,6 +568,52 @@ struct ManualEntryView: View {
         }
     }
     
+    /// The job link this submission will actually get — the picked session, or
+    /// what submitJobBoxData would safely inherit (same rule, so the check and
+    /// the save agree).
+    private var effectiveTargetShiftUid: String? {
+        selectedSession?.id ?? JobBoxPickupRules.inheritableShiftUid(
+            lastStatus: lastJobBoxRecord?.status,
+            lastSchool: lastJobBoxRecord?.school,
+            lastShiftUid: lastJobBoxRecord?.shiftUid,
+            newStatus: selectedStatus,
+            selectedSchool: selectedSchool
+        )
+    }
+
+    @MainActor
+    private func checkPickupThenSubmit(schoolId: String?) async {
+        let target = effectiveTargetShiftUid
+        var packedBoxNumber: String? = nil
+        var lookupFailed = false
+        if let target, !target.isEmpty {
+            do {
+                packedBoxNumber = try await JobBoxService.shared.fetchLatestPackedRecord(
+                    forShift: target,
+                    organizationID: userManager.currentUserOrganizationID
+                )?.boxNumber
+            } catch {
+                lookupFailed = true
+            }
+        }
+
+        if let warning = JobBoxPickupRules.pickupWarning(
+            scannedBox: cardNumber,
+            targetShiftUid: target,
+            selectedSchool: selectedSchool,
+            packedBoxNumber: packedBoxNumber,
+            packedLookupFailed: lookupFailed,
+            lastSchool: lastJobBoxRecord?.school
+        ) {
+            isSubmitting = false
+            pendingPickupSchoolId = schoolId
+            pickupWarning = warning
+            showPickupWarning = true
+        } else {
+            submitJobBoxData(boxNumber: cardNumber, schoolId: schoolId)
+        }
+    }
+
     func submitJobBoxData(boxNumber: String, schoolId: String?) {
         let timestamp = Date()
         let orgID = userManager.currentUserOrganizationID
@@ -553,16 +624,21 @@ struct ManualEntryView: View {
             return
         }
         
-        // Determine the shiftUid
+        // Determine the shiftUid. A non-Packed scan with no session picked may
+        // inherit the box's previous job link — but only within the current trip
+        // and (for a pickup) the same school (JobBoxPickupRules; the live
+        // Pinckneyville/Mt Vernon mislink, 2026-07-29).
         let effectiveShiftUid: String?
-        if selectedStatus.lowercased() == "packed" && selectedSession != nil {
-            // For Packed status, use the selected session
+        if selectedStatus.lowercased() == "packed" {
             effectiveShiftUid = selectedSession?.id
-        } else if selectedStatus.lowercased() != "packed" && lastJobBoxRecord?.shiftUid != nil {
-            // For other statuses, maintain the existing shiftUid
-            effectiveShiftUid = lastJobBoxRecord?.shiftUid
         } else {
-            effectiveShiftUid = nil
+            effectiveShiftUid = selectedSession?.id ?? JobBoxPickupRules.inheritableShiftUid(
+                lastStatus: lastJobBoxRecord?.status,
+                lastSchool: lastJobBoxRecord?.school,
+                lastShiftUid: lastJobBoxRecord?.shiftUid,
+                newStatus: selectedStatus,
+                selectedSchool: selectedSchool
+            )
         }
         
         DatabaseManager.shared.saveJobBoxRecord(
