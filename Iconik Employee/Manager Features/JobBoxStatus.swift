@@ -149,19 +149,31 @@ class JobBoxService {
     /// The latest Packed scan for a job, for the pickup mismatch check
     /// (JobBoxPickupRules). Throws on transport failure so callers can fail
     /// OPEN — no warning — instead of claiming "nothing packed" when the
-    /// network blinked.
+    /// network blinked. Bounded at 5 seconds for the same reason: the Supabase
+    /// client sets no request timeout, and a pickup on school wifi must not
+    /// sit behind URLSession's default 60s before failing open.
     func fetchLatestPackedRecord(forShift shiftUid: String, organizationID: String) async throws -> JobBox? {
-        let rows: [JobBox] = try await supabase
-            .from("job_boxes")
-            .select()
-            .eq("shift_uid", value: shiftUid)
-            .eq("organization_id", value: organizationID)
-            .eq("status", value: JobBoxStatus.packed.rawValue)
-            .order("timestamp", ascending: false)
-            .limit(1)
-            .execute()
-            .value
-        return rows.first
+        let client = supabase
+        return try await withThrowingTaskGroup(of: [JobBox].self) { group in
+            group.addTask {
+                try await client
+                    .from("job_boxes")
+                    .select()
+                    .eq("shift_uid", value: shiftUid)
+                    .eq("organization_id", value: organizationID)
+                    .eq("status", value: JobBoxStatus.packed.rawValue)
+                    .order("timestamp", ascending: false)
+                    .limit(1)
+                    .execute()
+                    .value
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                throw CancellationError()
+            }
+            defer { group.cancelAll() }
+            return try await group.next()?.first
+        }
     }
 
     // Listen for job box updates for a specific shift

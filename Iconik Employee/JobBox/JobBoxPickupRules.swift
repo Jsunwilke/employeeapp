@@ -86,9 +86,19 @@ public struct JobBoxPickupRules {
         selectedSchool: String,
         packedBoxNumber: String?,
         packedLookupFailed: Bool,
+        lastStatus: String?,
         lastSchool: String?
     ) -> JobBoxPickupWarning? {
         guard targetShiftUid?.isEmpty == false else {
+            // A same-school pack that simply carries no session link is the
+            // office's routine (58 of the last 66 live packs) — nothing is wrong
+            // with the pickup, so stay silent and save unlinked, as the app
+            // always has. Warn only when the box's own history points somewhere
+            // else: a finished trip, another school, or no history at all.
+            if (lastStatus ?? "").lowercased() != "turned in",
+               lastSchool?.isEmpty == false, lastSchool == selectedSchool {
+                return nil
+            }
             return .noJobLink(lastSchool: lastSchool)
         }
         if packedLookupFailed { return nil }

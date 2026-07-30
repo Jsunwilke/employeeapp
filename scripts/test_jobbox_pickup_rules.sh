@@ -46,10 +46,12 @@ func inherit(last: (status: String, school: String, shift: String)?,
 }
 
 func warn(box: String, target: String?, school: String,
-          packed: String?, lookupFailed: Bool = false, lastSchool: String? = nil) -> String {
+          packed: String?, lookupFailed: Bool = false,
+          lastStatus: String? = nil, lastSchool: String? = nil) -> String {
     let w = JobBoxPickupRules.pickupWarning(
         scannedBox: box, targetShiftUid: target, selectedSchool: school,
-        packedBoxNumber: packed, packedLookupFailed: lookupFailed, lastSchool: lastSchool
+        packedBoxNumber: packed, packedLookupFailed: lookupFailed,
+        lastStatus: lastStatus, lastSchool: lastSchool
     )
     switch w {
     case nil: return "none"
@@ -118,13 +120,42 @@ check("mismatch warns with both numbers",
 check("no packed record warns",
       warn(box: "3005", target: "shiftJH", school: "Jr High", packed: nil), "nothingPacked")
 
-// No job link at all: the pickup would be invisible to every tracker.
-check("no job link warns", warn(box: "3005", target: nil, school: "Jr High", packed: nil), "noJobLink")
-check("empty job link warns", warn(box: "3005", target: "", school: "Jr High", packed: nil), "noJobLink")
+// No job link, and the box's history points somewhere else: warn — the pickup
+// would be invisible to every tracker (or worse, belongs to another job).
+check("no link after turned-in warns",
+      warn(box: "3005", target: nil, school: "Jr High", packed: nil,
+           lastStatus: "Turned In", lastSchool: "Mt Vernon High"), "noJobLink")
+check("no link, different school warns",
+      warn(box: "3005", target: nil, school: "Jr High", packed: nil,
+           lastStatus: "Packed", lastSchool: "Mt Vernon High"), "noJobLink")
+check("no link, no history warns",
+      warn(box: "3005", target: "", school: "Jr High", packed: nil), "noJobLink")
+
+// But an unlinked SAME-SCHOOL pack is the office's routine (58 of the last 66
+// live packs carry no session) — nothing is wrong with the pickup, stay silent.
+check("unlinked same-school pack is silent",
+      warn(box: "3005", target: nil, school: "Jr High", packed: nil,
+           lastStatus: "Packed", lastSchool: "Jr High"), "none")
 
 // A failed lookup must fail OPEN — never accuse on a network blink.
 check("lookup failure is silent",
       warn(box: "3005", target: "shiftJH", school: "Jr High", packed: nil, lookupFailed: true), "none")
+
+// The photographer reads the message — the words carry the box numbers.
+let mismatch = JobBoxPickupRules.pickupWarning(
+    scannedBox: "3005", targetShiftUid: "shiftJH", selectedSchool: "Pinckneyville Jr High 5-8",
+    packedBoxNumber: "305", packedLookupFailed: false, lastStatus: nil, lastSchool: nil
+)
+check("mismatch message names both boxes",
+      mismatch?.message ?? "nil",
+      "This is box 3005, but box 305 was packed for Pinckneyville Jr High 5-8. Make sure you have the right box.")
+let unlinked = JobBoxPickupRules.pickupWarning(
+    scannedBox: "3005", targetShiftUid: nil, selectedSchool: "Jr High",
+    packedBoxNumber: nil, packedLookupFailed: false, lastStatus: "Turned In", lastSchool: "Mt Vernon High"
+)
+check("no-link message names last location",
+      unlinked?.message ?? "nil",
+      "This pickup isn't linked to a session, so the job's tracker won't show it. The box was last at Mt Vernon High. Go back and select a session, or save without one.")
 
 print("")
 if failed == 0 {
@@ -155,6 +186,7 @@ if [[ "${1:-}" == "--prove-can-fail" ]]; then
     "mismatch compare inverted|s/if packedBoxNumber == scannedBox \{ return nil \}/if packedBoxNumber != scannedBox { return nil }/"
     "lookup failure accuses anyway|s/if packedLookupFailed \{ return nil \}//"
     "missing job link goes silent|s/return \.noJobLink\(lastSchool: lastSchool\)/return nil/"
+    "same-school routine pack warns anyway|s/lastSchool == selectedSchool/lastSchool != selectedSchool/"
   )
   fails=0
   for entry in "${BREAKS[@]}"; do
@@ -167,8 +199,17 @@ if [[ "${1:-}" == "--prove-can-fail" ]]; then
       fails=$((fails+1))
       continue
     fi
-    if run_suite "$WORK/broken.swift" >/dev/null 2>&1; then
+    # A compile failure is NOT proof — the mutation must produce a program the
+    # tests catch, not a program that doesn't build.
+    set +e
+    run_suite "$WORK/broken.swift" >/dev/null 2>&1
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then
       echo "  NOT PROVEN $label  (suite still passed with the rule reverted)"
+      fails=$((fails+1))
+    elif [[ $rc -eq 2 ]]; then
+      echo "  NOT PROVEN $label  (mutation broke the build — rewrite it to compile)"
       fails=$((fails+1))
     else
       echo "  proven     $label"

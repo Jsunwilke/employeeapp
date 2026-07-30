@@ -145,33 +145,36 @@ struct JobBoxFormView: View {
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
                 }
-            .navigationTitle("Job Box Entry")
-            .onAppear {
-                loadInitialData()
+        }
+        // These modifiers hang off the Form itself, like ManualEntryView's do.
+        // They used to hang off the last Section, which left the two alerts
+        // attached to a list row — an attachment point never verified to present.
+        .navigationTitle("Job Box Entry")
+        .onAppear {
+            loadInitialData()
+        }
+        .onChange(of: localPhotographer) { _ in
+            updateAvailableSessions()
+        }
+        .alert(isPresented: $showAlert) {
+            Alert(
+                title: Text("Error"),
+                message: Text(alertMessage),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+        .alert(
+            pickupWarning?.title ?? "",
+            isPresented: $showPickupWarning,
+            presenting: pickupWarning
+        ) { warning in
+            Button(warning.confirmLabel, role: .destructive) {
+                isSubmitting = true
+                performSubmit()
             }
-            .onChange(of: localPhotographer) { _ in
-                updateAvailableSessions()
-            }
-            .alert(isPresented: $showAlert) {
-                Alert(
-                    title: Text("Error"),
-                    message: Text(alertMessage),
-                    dismissButton: .default(Text("OK"))
-                )
-            }
-            .alert(
-                pickupWarning?.title ?? "",
-                isPresented: $showPickupWarning,
-                presenting: pickupWarning
-            ) { warning in
-                Button(warning.confirmLabel, role: .destructive) {
-                    isSubmitting = true
-                    performSubmit()
-                }
-                Button("Go Back", role: .cancel) {}
-            } message: { warning in
-                Text(warning.message)
-            }
+            Button("Go Back", role: .cancel) {}
+        } message: { warning in
+            Text(warning.message)
         }
     }
 
@@ -194,12 +197,16 @@ struct JobBoxFormView: View {
         var packedBoxNumber: String? = nil
         var lookupFailed = false
         if let target, !target.isEmpty {
-            do {
-                packedBoxNumber = try await JobBoxService.shared.fetchLatestPackedRecord(
-                    forShift: target,
-                    organizationID: userManager.currentUserOrganizationID
-                )?.boxNumber
-            } catch {
+            if OfflineDataManager.shared.isOnline {
+                do {
+                    packedBoxNumber = try await JobBoxService.shared.fetchLatestPackedRecord(
+                        forShift: target,
+                        organizationID: userManager.currentUserOrganizationID
+                    )?.boxNumber
+                } catch {
+                    lookupFailed = true
+                }
+            } else {
                 lookupFailed = true
             }
         }
@@ -210,6 +217,7 @@ struct JobBoxFormView: View {
             selectedSchool: selectedSchool,
             packedBoxNumber: packedBoxNumber,
             packedLookupFailed: lookupFailed,
+            lastStatus: lastRecord?.status,
             lastSchool: lastRecord?.school
         ) {
             isSubmitting = false

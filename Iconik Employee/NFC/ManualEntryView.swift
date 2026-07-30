@@ -474,8 +474,11 @@ struct ManualEntryView: View {
                 selectedStatus = jobBoxStatuses.first ?? ""
             }
             
-            // If there's a shiftUid and we're not in Packed status, try to find the session
-            if selectedStatus.lowercased() != "packed" && !last.shiftUid.isEmpty {
+            // If there's a shiftUid and we're not in Packed status, try to find the
+            // session — but never from a Turned In record: that trip is over
+            // (unreachable today since the status cycle wraps Turned In to Packed,
+            // guarded anyway to match JobBoxFormView).
+            if selectedStatus.lowercased() != "packed" && !last.shiftUid.isEmpty && last.jobBoxStatus != .turnedIn {
                 // Find the session in available sessions
                 if let matchingSession = availableSessions.first(where: { $0.id == last.shiftUid }) {
                     selectedSession = matchingSession
@@ -587,12 +590,16 @@ struct ManualEntryView: View {
         var packedBoxNumber: String? = nil
         var lookupFailed = false
         if let target, !target.isEmpty {
-            do {
-                packedBoxNumber = try await JobBoxService.shared.fetchLatestPackedRecord(
-                    forShift: target,
-                    organizationID: userManager.currentUserOrganizationID
-                )?.boxNumber
-            } catch {
+            if OfflineDataManager.shared.isOnline {
+                do {
+                    packedBoxNumber = try await JobBoxService.shared.fetchLatestPackedRecord(
+                        forShift: target,
+                        organizationID: userManager.currentUserOrganizationID
+                    )?.boxNumber
+                } catch {
+                    lookupFailed = true
+                }
+            } else {
                 lookupFailed = true
             }
         }
@@ -603,6 +610,7 @@ struct ManualEntryView: View {
             selectedSchool: selectedSchool,
             packedBoxNumber: packedBoxNumber,
             packedLookupFailed: lookupFailed,
+            lastStatus: lastJobBoxRecord?.status,
             lastSchool: lastJobBoxRecord?.school
         ) {
             isSubmitting = false
