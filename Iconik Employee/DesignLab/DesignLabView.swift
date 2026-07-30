@@ -199,6 +199,11 @@ struct DesignLabView: View {
         }
         .navigationTitle("Design Lab")
         .navigationBarTitleDisplayMode(.inline)
+        // The lab is a PUSHED screen, and a pushed screen does its own tab-bar
+        // clearance (BottomTabBar.swift's rule — a container's root inset is not
+        // inherited by what it pushes). Without this the gallery's last card is
+        // trapped under the floating bar.
+        .tabBarClearance()
     }
 
     private func row(_ mockup: DesignLabMockup) -> some View {
@@ -260,6 +265,12 @@ private struct DesignLabRunner: View {
         }
         .navigationTitle(current.title)
         .navigationBarTitleDisplayMode(.inline)
+        // Same rule as the gallery above: the runner is itself a pushed screen.
+        // The inset raises the switcher AND every mockup's bottom-anchored
+        // chrome (Class Groups' floating "+") clear of the floating tab bar,
+        // and lets each mockup's last row scroll out from under it. Found by
+        // the operator on the Class Groups mockup — the bar sat on the "+".
+        .tabBarClearance()
     }
 
     private var switcher: some View {
