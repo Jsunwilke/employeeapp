@@ -47,6 +47,22 @@ class TimeOffService: ObservableObject {
         }
     }
 
+    /// Zero-row write guard: a PostgREST UPDATE whose filter matches nothing
+    /// returns 200, so an edit/cancel/approve/deny against a missing row used to
+    /// report success and change nothing. Every update in this file appends
+    /// `.select("id")` and throws when no row matched (the
+    /// `DailyJobReportService.requireRowsWritten` shape). `time_off_requests.id`
+    /// is used exactly as decoded — the column holds lowercase, uppercase AND
+    /// mixed-case ids (23/35/68 of 126 live rows, verified 2026-07-30), so no
+    /// case fold can ever be correct.
+    private struct WrittenRowID: Decodable { let id: String }
+
+    private func requireRowsWritten(_ rows: [WrittenRowID], id: String) throws {
+        guard rows.isEmpty else { return }
+        print("⚠️ TimeOffService: write matched no rows in time_off_requests for id \(id)")
+        throw NSError(domain: "TimeOffService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Nothing was saved — this request may have been deleted elsewhere. Pull to refresh and try again."])
+    }
+
     deinit {
         Task { [weak requestsChannel] in
             await requestsChannel?.unsubscribe()
@@ -411,11 +427,14 @@ class TimeOffService: ObservableObject {
         )
 
         do {
-            try await supabase.database
+            let written: [WrittenRowID] = try await supabase.database
                 .from("time_off_requests")
                 .update(updateData)
                 .eq("id", value: requestId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: requestId)
 
             isLoading = false
 
@@ -457,11 +476,14 @@ class TimeOffService: ObservableObject {
         )
 
         do {
-            try await supabase.database
+            let written: [WrittenRowID] = try await supabase.database
                 .from("time_off_requests")
                 .update(updateData)
                 .eq("id", value: requestId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: requestId)
 
             // If request was using PTO, release the reserved hours
             if existingRequest.is_paid_time_off == true, let ptoHours = existingRequest.pto_hours_requested {
@@ -518,11 +540,14 @@ class TimeOffService: ObservableObject {
         )
 
         do {
-            try await supabase.database
+            let written: [WrittenRowID] = try await supabase.database
                 .from("time_off_requests")
                 .update(updateData)
                 .eq("id", value: requestId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: requestId)
 
             // If request uses PTO, deduct the hours
             if request.is_paid_time_off == true, let ptoHours = request.pto_hours_requested {
@@ -583,11 +608,14 @@ class TimeOffService: ObservableObject {
         )
 
         do {
-            try await supabase.database
+            let written: [WrittenRowID] = try await supabase.database
                 .from("time_off_requests")
                 .update(updateData)
                 .eq("id", value: requestId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: requestId)
 
             // If request was using PTO, release the reserved hours
             if request.is_paid_time_off == true, let ptoHours = request.pto_hours_requested {
@@ -647,11 +675,14 @@ class TimeOffService: ObservableObject {
         )
 
         do {
-            try await supabase.database
+            let written: [WrittenRowID] = try await supabase.database
                 .from("time_off_requests")
                 .update(updateData)
                 .eq("id", value: requestId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: requestId)
 
             isLoading = false
 

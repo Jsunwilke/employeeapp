@@ -18,6 +18,21 @@ class PTOService: ObservableObject {
 
     private init() {}
 
+    /// Zero-row write guard: a PostgREST UPDATE whose filter matches nothing
+    /// returns 200, so a balance write against a missing/mismatched row would
+    /// report success and change nothing — PTO money. Every update in this file
+    /// appends `.select("id")` and throws when no row matched (the
+    /// `DailyJobReportService.requireRowsWritten` shape). `pto_balances.id` is
+    /// a composite "orgId_userId" string (34 of 35 live rows mixed-case,
+    /// verified 2026-07-30) and is used exactly as fetched — no case fold.
+    private struct WrittenRowID: Decodable { let id: String }
+
+    private func requireRowsWritten(_ rows: [WrittenRowID], id: String) throws {
+        guard rows.isEmpty else { return }
+        print("⚠️ PTOService: write matched no rows in pto_balances for id \(id)")
+        throw NSError(domain: "PTOService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Nothing was saved — your PTO balance record could not be found. Pull to refresh and try again."])
+    }
+
     deinit {
         Task { [weak balanceChannel] in
             await balanceChannel?.unsubscribe()
@@ -231,11 +246,14 @@ class PTOService: ObservableObject {
         )
 
         do {
-            try await supabase.database
+            let written: [WrittenRowID] = try await supabase.database
                 .from("pto_balances")
                 .update(updateData)
                 .eq("id", value: balance.id)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: balance.id)
 
             self.currentBalance = balance
             self.lastBalanceUpdate = Date()
@@ -270,11 +288,14 @@ class PTOService: ObservableObject {
         )
 
         do {
-            try await supabase.database
+            let written: [WrittenRowID] = try await supabase.database
                 .from("pto_balances")
                 .update(updateData)
                 .eq("id", value: balance.id)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: balance.id)
 
             self.currentBalance = balance
             self.lastBalanceUpdate = Date()
@@ -307,11 +328,14 @@ class PTOService: ObservableObject {
         )
 
         do {
-            try await supabase.database
+            let written: [WrittenRowID] = try await supabase.database
                 .from("pto_balances")
                 .update(updateData)
                 .eq("id", value: balance.id)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: balance.id)
 
             self.currentBalance = balance
             self.lastBalanceUpdate = Date()
