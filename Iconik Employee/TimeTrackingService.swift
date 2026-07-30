@@ -31,6 +31,22 @@ class TimeTrackingService: ObservableObject {
         UserDefaults.standard.string(forKey: "userOrganizationID")
     }
 
+    /// Zero-row write guard: a PostgREST UPDATE/DELETE whose filter matches
+    /// nothing returns 200, so a write against a deleted entry used to report
+    /// success and change nothing — payroll data. Every update/delete in this
+    /// file appends `.select("id")` and throws when no row matched (the
+    /// `DailyJobReportService.requireRowsWritten` shape). `time_entries.id` is
+    /// used exactly as decoded — the column holds lowercase, uppercase AND
+    /// mixed-case ids (579/862/1165 of 2,606 live rows, verified 2026-07-30),
+    /// so no case fold can ever be correct.
+    private struct WrittenRowID: Decodable { let id: String }
+
+    private func requireRowsWritten(_ rows: [WrittenRowID], id: String) throws {
+        guard rows.isEmpty else { return }
+        print("⚠️ TimeTrackingService: write matched no rows in time_entries for id \(id)")
+        throw TimeTrackingError.entryNotFound
+    }
+
     // Persistent cache and network monitoring
     private let persistentCache = TimeEntryCacheManager.shared
     private let networkMonitor = NWPathMonitor()
@@ -190,8 +206,16 @@ class TimeTrackingService: ObservableObject {
                         total_hours: op.totalHours ?? 0,
                         status: "clocked-out", notes: op.notes
                     )
-                    try await supabase.from("time_entries")
-                        .update(update).eq("id", value: op.entryId).execute()
+                    let written: [WrittenRowID] = try await supabase.from("time_entries")
+                        .update(update).eq("id", value: op.entryId)
+                        .select("id").execute().value
+                    // A zero-row match here means the clock-in row is gone from the
+                    // server — replaying can never succeed, so don't throw (that
+                    // would wedge the FIFO outbox forever). Log loudly and let the
+                    // op be removed below, which is what silently happened before.
+                    if written.isEmpty {
+                        print("⚠️ TimeTrackingService: offline clock-out for \(op.entryId) matched no rows — entry no longer exists on the server; dropping the queued op")
+                    }
                 }
                 await TimeClockOutbox.shared.remove(id: op.id)
                 print("⏱️ TimeTrackingService: synced offline \(op.kind.rawValue) for \(op.entryId)")
@@ -326,11 +350,14 @@ class TimeTrackingService: ObservableObject {
             notes: notes?.trimmingCharacters(in: .whitespacesAndNewlines)
         )
 
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from("time_entries")
             .update(updateData)
             .eq("id", value: activeEntry.id)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, id: activeEntry.id)
 
         await checkCurrentStatus()
         await cacheCurrentEntry()
@@ -388,11 +415,14 @@ class TimeTrackingService: ObservableObject {
             notes: notes?.trimmingCharacters(in: .whitespacesAndNewlines)
         )
 
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from("time_entries")
             .update(updateData)
             .eq("id", value: activeEntry.id)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, id: activeEntry.id)
 
         await checkCurrentStatus()
         await cacheCurrentEntry()
@@ -427,11 +457,14 @@ class TimeTrackingService: ObservableObject {
             updated_at: Date()
         )
 
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from("time_entries")
             .update(updateData)
             .eq("id", value: activeEntry.id)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, id: activeEntry.id)
 
         // Refresh current status to update local state
         await checkCurrentStatus()
@@ -786,11 +819,14 @@ class TimeTrackingService: ObservableObject {
                 notes: notes
             )
 
-            try await supabase
+            let written: [WrittenRowID] = try await supabase
                 .from("time_entries")
                 .update(updateData)
                 .eq("id", value: entryId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: entryId)
 
             // Update local copy
             if let currentEntry = currentTimeEntry, currentEntry.id == entryId {
@@ -849,11 +885,14 @@ class TimeTrackingService: ObservableObject {
             notes: notes?.trimmingCharacters(in: .whitespacesAndNewlines)
         )
 
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from("time_entries")
             .update(updateData)
             .eq("id", value: entryId)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, id: entryId)
     }
 
     func deleteTimeEntry(entryId: String) async throws {
@@ -885,11 +924,14 @@ class TimeTrackingService: ObservableObject {
         }
 
         // Delete the entry
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from("time_entries")
             .delete()
             .eq("id", value: entryId)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, id: entryId)
     }
 
     func getSessionsForDate(_ date: Date) async throws -> [Session] {

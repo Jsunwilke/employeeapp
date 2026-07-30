@@ -13,6 +13,24 @@ class SessionService: ObservableObject {
     private let monitor = NWPathMonitor()
     private let monitorQueue = DispatchQueue(label: "NetworkMonitor")
 
+    /// Zero-row write guard: a PostgREST UPDATE/DELETE whose filter matches
+    /// nothing returns 200, so a session edit/delete/publish against a missing
+    /// row used to report success and change nothing. The write sites below
+    /// append `.select("id")` and throw when no row matched (the
+    /// `DailyJobReportService.requireRowsWritten` shape). Ids are used exactly
+    /// as decoded — `sessions.id` holds lowercase AND mixed-case ids (719/404
+    /// of 1,123 live rows, verified 2026-07-30), so no case fold can be correct.
+    /// The color-recalculation loop is deliberately NOT guarded: a session
+    /// deleted mid-loop is harmless there, and throwing would abort an edit
+    /// whose real write already landed.
+    private struct WrittenRowID: Decodable { let id: String }
+
+    private func requireRowsWritten(_ rows: [WrittenRowID], table: String, id: String) throws {
+        guard rows.isEmpty else { return }
+        print("⚠️ SessionService: write matched no rows in \(table) for id \(id)")
+        throw SessionError.notFound
+    }
+
     // MARK: - Decoder Error Helper
     private func describeDecodingError(_ error: Error) -> String {
         guard let decodingError = error as? DecodingError else {
@@ -716,11 +734,14 @@ class SessionService: ObservableObject {
 
         // Update the sessions row (shared job data only). The date/time are
         // reconciled into session_days below.
-        try await supabase
+        let sessionWritten: [WrittenRowID] = try await supabase
             .from("sessions")
             .update(updateData)
             .eq("id", value: sessionId)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(sessionWritten, table: "sessions", id: sessionId)
 
         // Keep the session_days source of truth in sync. iOS edits ONE day of the
         // session — the day the user opened (`dayId`). Update THAT row, not blindly the
@@ -734,11 +755,14 @@ class SessionService: ObservableObject {
                 "end_time": .string(formData.endTime),
                 "updated_at": .string(Date().ISO8601Format())
             ]
-            try await supabase
+            let dayWritten: [WrittenRowID] = try await supabase
                 .from("session_days")
                 .update(dayUpdate)
                 .eq("id", value: targetDayId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(dayWritten, table: "session_days", id: targetDayId)
         } else {
             let dayInsert = SessionDayInsert(
                 id: UUID().uuidString.lowercased(),
@@ -779,11 +803,14 @@ class SessionService: ObservableObject {
                     "photographers": photographersJSON,
                     "updated_at": .string(Date().ISO8601Format())
                 ]
-                try await supabase
+                let crewWritten: [WrittenRowID] = try await supabase
                     .from("session_days")
                     .update(crewUpdate)
                     .eq("id", value: targetDayId)
+                    .select("id")
                     .execute()
+                    .value
+                try requireRowsWritten(crewWritten, table: "session_days", id: targetDayId)
             }
         }
 
@@ -873,11 +900,14 @@ class SessionService: ObservableObject {
         }
 
         // Delete from Supabase
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from("sessions")
             .delete()
             .eq("id", value: id)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, table: "sessions", id: id)
 
         // Recalculate colors for the date
         try await recalculateSessionColorsForDate(organizationID: session.organization_id, date: session.date)
@@ -888,14 +918,17 @@ class SessionService: ObservableObject {
     // MARK: - Publishing
 
     func publishSession(sessionId: String) async throws {
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from("sessions")
             .update([
                 "is_published": AnyJSON.bool(true),
                 "updated_at": AnyJSON.string(Date().ISO8601Format())
             ])
             .eq("id", value: sessionId)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, table: "sessions", id: sessionId)
 
         print("✅ Published session: \(sessionId)")
     }
@@ -904,7 +937,7 @@ class SessionService: ObservableObject {
         // Sessions on a date are resolved via session_days now.
         let ids = try await sessionIds(onDate: date)
         guard !ids.isEmpty else { return }
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from("sessions")
             .update([
                 "is_published": AnyJSON.bool(true),
@@ -912,7 +945,12 @@ class SessionService: ObservableObject {
             ])
             .eq("organization_id", value: organizationID)
             .in("id", values: ids)
+            .select("id")
             .execute()
+            .value
+        // Multi-row publish: some ids may be orphaned day rows, but matching
+        // NONE of them means nothing was published though sessions exist.
+        try requireRowsWritten(written, table: "sessions", id: ids.joined(separator: ","))
 
         print("✅ Published all sessions for date: \(date)")
     }

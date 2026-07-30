@@ -6,6 +6,42 @@ class YearbookShootListService: ObservableObject {
     private let supabase = SupabaseManager.shared.client
     private let tableName = "yearbook_shoot_lists"
 
+    // MARK: - Zero-Row Write Guard
+
+    /// A PostgREST UPDATE/DELETE whose filter matches nothing returns 200 with an
+    /// empty body. Every id filter in this file used to `.lowercased()` the id, but
+    /// `yearbook_shoot_lists.id` holds Firebase-era MIXED-CASE ids (50 of 50 live
+    /// rows, verified 2026-07-30) — the folded id matched zero rows, so every item
+    /// toggle/note/image-number save reported success and persisted nothing. Ids are
+    /// now used exactly as stored, and every write proves a row matched (same
+    /// `WrittenRowID`/`requireRowsWritten` shape as `DailyJobReportService`).
+    enum WriteError: LocalizedError, CustomDebugStringConvertible {
+        case noRowsMatched(table: String, id: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .noRowsMatched:
+                return "Nothing was saved — this list may have been deleted elsewhere. Pull to refresh and try again."
+            }
+        }
+
+        var debugDescription: String {
+            switch self {
+            case .noRowsMatched(let table, let id):
+                return "WriteError.noRowsMatched: nothing in \(table) matches id \(id)"
+            }
+        }
+    }
+
+    private struct WrittenRowID: Decodable { let id: String }
+
+    private func requireRowsWritten(_ rows: [WrittenRowID], id: String) throws {
+        guard rows.isEmpty else { return }
+        let error = WriteError.noRowsMatched(table: tableName, id: id)
+        print("⚠️ \(error.debugDescription)")
+        throw error
+    }
+
     // Cache for offline support
     private var cachedLists: [String: YearbookShootList] = [:]
     private let cacheQueue = DispatchQueue(label: "com.iconik.yearbook.cache")
@@ -163,7 +199,7 @@ class YearbookShootListService: ObservableObject {
         let sourceLists: [YearbookShootList] = try await supabase
             .from(tableName)
             .select()
-            .eq("id", value: fromListId.lowercased())
+            .eq("id", value: fromListId)
             .limit(1)
             .execute()
             .value
@@ -213,7 +249,7 @@ class YearbookShootListService: ObservableObject {
         let lists: [YearbookShootList] = try await supabase
             .from(tableName)
             .select()
-            .eq("id", value: listId.lowercased())
+            .eq("id", value: listId)
             .limit(1)
             .execute()
             .value
@@ -283,15 +319,18 @@ class YearbookShootListService: ObservableObject {
             let updated_at: Date
         }
 
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from(tableName)
             .update(UpdateData(
                 items: updatedItems,
                 completed_count: newCompletedCount,
                 updated_at: Date()
             ))
-            .eq("id", value: listId.lowercased())
+            .eq("id", value: listId)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, id: listId)
 
         // Invalidate cache
         let cacheKey = "\(list.school_id)_\(list.school_year)"
@@ -306,7 +345,7 @@ class YearbookShootListService: ObservableObject {
         let lists: [YearbookShootList] = try await supabase
             .from(tableName)
             .select()
-            .eq("id", value: listId.lowercased())
+            .eq("id", value: listId)
             .limit(1)
             .execute()
             .value
@@ -485,11 +524,14 @@ class YearbookShootListService: ObservableObject {
 
     /// Delete a yearbook shoot list
     func deleteYearbookShootList(listId: String) async throws {
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from(tableName)
             .delete()
-            .eq("id", value: listId.lowercased())
+            .eq("id", value: listId)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, id: listId)
 
         print("🗑️ Deleted yearbook list: \(listId)")
     }
