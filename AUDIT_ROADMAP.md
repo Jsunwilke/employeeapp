@@ -1091,7 +1091,11 @@ other rebases onto it.
 
 **Batch 3**
 
-- [ ] **AMB.9 Mileage + Stats** — number-heavy; stat tiles and charts.
+- [x] **AMB.9 Mileage + Stats (+ Route Planner)** — SHIPPED + PUSHED + CLOSED
+  2026-07-30 (origin/main c7ffc42..ccb0716). Smoke PASSED both devices;
+  /code-review run: 8 findings, 7 fixed, 1 reasoned won't-fix (web-side date
+  convention). The three mockups deleted at close; MileageKit/RoutePlannerKit/
+  StatsKit + the two executable rules scripts are the living design.
   **2026-07-29 — BATCH-3 MOCKUPS BUILT (all five: Mileage, Route Planner, Stats,
   Class Groups, Yearbook), in the lab on iPhone AND iPad, awaiting the operator's
   review sitting (D10 blocks conversion until then).** The inventory is

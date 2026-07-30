@@ -48,14 +48,15 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     /// port it validated. Its awkward states — Packed-then-Turned-In, a box on its
     /// second trip — are covered executably by
     /// `scripts/test_jobbox_progress_rules.sh` instead of by a screen.
-    /// Batch 3, mocked at the START of AMB.9 (AMB.8 named them unbuilt — same
-    /// call AMB.6 made about batch 2). Mileage/Route Planner/Stats are AMB.9's;
-    /// Class Groups/Yearbook are AMB.10's, mocked now so the batch is judged in
-    /// one sitting. Where the Route Planner LANDS is an open operator decision —
-    /// its entry says so.
-    case mileage
-    case routePlanner
-    case stats
+    /// AMB.9's three mockups (Mileage, Route Planner, Statistics) were DELETED
+    /// at its close (2026-07-30) — the operator confirmed the converted screens
+    /// on both devices and the /code-review passed, so the validation references
+    /// had outlived the ports. Their arithmetic lives on executably in
+    /// `scripts/test_mileage_rules.sh` and `scripts/test_stats_rules.sh`, and
+    /// the shared drawing in MileageKit/RoutePlannerKit/StatsKit, which the
+    /// converted screens use directly.
+    /// Batch 3's remaining two are AMB.10's, mocked with the batch so it was
+    /// judged in one sitting; they die at AMB.10's close.
     case classGroups
     case yearbook
 
@@ -66,9 +67,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
         case .timeOff: return "Time Off"
-        case .mileage: return "Mileage"
-        case .routePlanner: return "Route Planner"
-        case .stats: return "Statistics"
         case .classGroups: return "Class Groups"
         case .yearbook: return "Yearbook"
         }
@@ -81,9 +79,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
         case .timeOff: return "AMB.8"
-        case .mileage: return "AMB.9"
-        case .routePlanner: return "AMB.9 · phase open"
-        case .stats: return "AMB.9"
         case .classGroups: return "AMB.10"
         case .yearbook: return "AMB.10"
         }
@@ -97,12 +92,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
         case .timeOff:
             return "Five surfaces. The balance moves out of Settings to the top of the screen it is about, status gets ONE rendering instead of three, and the manager queue admits it is a queue."
-        case .mileage:
-            return "The money leads: what the period owes you, split personal and company, always. A failed load stops reading as $0.00, and a card is titled by what it shows."
-        case .routePlanner:
-            return "Optimize stops vanishing, a school with no map pin says so, a failed optimization stops looking like success, and the route reads as a timeline. Which phase builds it is still your call."
-        case .stats:
-            return "The live screen has never rendered — its queries name columns that don't exist, and one chart is fabricated. This is Statistics when every number is real: one scroll, no fake weather."
         case .classGroups:
             return "Job cards say when — with the year — and how much is done. The detail finally shows the date and the note bodies, and the whole row takes the tap. The slate stays a plain whiteboard on purpose."
         case .yearbook:
@@ -115,9 +104,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
         case .timeOff: return "calendar.badge.clock"
-        case .mileage: return "car.fill"
-        case .routePlanner: return "map.fill"
-        case .stats: return "chart.bar.fill"
         case .classGroups: return "person.3.fill"
         case .yearbook: return "list.clipboard.fill"
         }
@@ -132,9 +118,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: return .purple
         case .palette: return .pink
         case .timeOff: return TimeOffMockup.featureTint
-        case .mileage: return MileageMockup.featureTint
-        case .routePlanner: return RoutePlannerMockup.featureTint
-        case .stats: return StatsMockup.featureTint
         case .classGroups: return ClassGroupsMockup.featureTint
         case .yearbook: return YearbookMockup.featureTint
         }
@@ -146,9 +129,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
         case .timeOff: TimeOffMockup()
-        case .mileage: MileageMockup()
-        case .routePlanner: RoutePlannerMockup()
-        case .stats: StatsMockup()
         case .classGroups: ClassGroupsMockup()
         case .yearbook: YearbookMockup()
         }
