@@ -1147,6 +1147,16 @@ other rebases onto it.
   Reasoned won't-fix: promoting chips/failure cards/loading states into the design
   system and the route enum round-trip (both AMB.12's consolidation), the
   prove-can-fail perl regexes, and re-concurrency of Mileage's load chain.
+  **2026-07-30 — WRITE-GUARD SWEEP CLOSED (f9200cc, smoke passed).** The follow-on
+  the review round named: `YearbookShootListService` case-folded ids against
+  all-mixed-case Firebase ids (50/50 live rows), so every yearbook item toggle,
+  note and image-number save was a silent zero-row 200 — folds dropped, and the
+  `requireRowsWritten` guard now covers every update/delete in
+  YearbookShootListService, TimeTrackingService, PTOService, TimeOffService and
+  SessionService (live column case verified per table; all hold mixed
+  populations, so no fold can be right). Deliberate exceptions: the offline
+  clock-out outbox drops a gone-row op loudly instead of wedging the FIFO queue;
+  the session color-recalc loop stays unguarded (concurrent delete harmless).
 - [ ] **AMB.10 Groups + Yearbook** (17 views, 4,504 lines) — closes batch 3 and mocks
   batch 4. **Mockups already built 2026-07-29 (see AMB.9 note above)** — AMB.10
   starts at conversion once its designs are approved in the same sitting.
