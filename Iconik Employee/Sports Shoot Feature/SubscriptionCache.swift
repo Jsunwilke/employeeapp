@@ -522,7 +522,7 @@ final class SubscriptionCache {
     private func _applySubjectUpdate(galleryId: String, subjectId: UUID, fields: SubjectSyncFields) {
         var map = subjectsByGallery[galleryId] ?? [:]
         let base: FPSubject = map[subjectId] ?? FPSubject(id: subjectId, galleryId: galleryId)
-        // Reuse the canonical apply helper. Per feedback_match_existing_patterns_exactly:
+        // Reuse the canonical apply helper. Per ~/Brain/rules/match-existing-patterns.md:
         // SubjectSyncService.applyFieldsToSubject is the single source of truth for
         // "apply non-nil SubjectSyncFields onto an FPSubject" — duplicating its body
         // here would be a parallel implementation, exactly what rule 19.1 forbids.

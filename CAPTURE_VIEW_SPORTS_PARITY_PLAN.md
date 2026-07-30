@@ -293,8 +293,8 @@ Total estimated work: 2-3 focused days for items 5, 7, 4, 1; another 1-2 days fo
 
 ## Memory rules cited in this plan
 
-- feedback_research_before_porting.md — every item lists FP Sports references with file:line numbers.
-- feedback_grep_callers_first.md — Item 6's revised scope came directly from grepping callers.
+- ~/Brain/rules/research-before-porting.md — every item lists FP Sports references with file:line numbers.
+- ~/Brain/rules/trace-impact-before-changing.md — Item 6's revised scope came directly from grepping callers.
 - feedback_dont_touch_captura_roster.md — SportsShootDetailView is explicitly out of scope.
-- feedback_correctness_over_speed.md — no MVP framing; each item's scope is "what does FP Sports actually do" not "what's the minimum we can ship."
-- feedback_plan_readability.md — this plan contains zero backticks per the rule.
+- ~/Brain/rules/correctness-over-speed.md — no MVP framing; each item's scope is "what does FP Sports actually do" not "what's the minimum we can ship."
+- ~/Brain/rules/plan-readability.md — this plan contains zero backticks per the rule.
