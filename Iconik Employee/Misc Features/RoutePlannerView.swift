@@ -1,10 +1,51 @@
-//
 //  RoutePlannerView.swift
-//  Iconik Employee
+//  Iconik Employee — the Route Planner, converted to Ambient in AMB.9
 //
-//  View for planning optimized routes between multiple schools
-//  Uses Google Routes API to find the most efficient driving order
+//  Draws with `RoutePlannerKit.swift`, which the design lab's mockup also draws
+//  with — so this screen and the approved design cannot diverge. The old screen's
+//  hand-rolled search bar, inset-grouped `List`, segmented pickers, text-list
+//  preview and `SchoolRowView` are GONE from this file, not left beside the new
+//  ones.
 //
+//  WHAT CHANGED BEYOND THE PAINT, each approved by the operator on 2026-07-29 and
+//  each a defect the parity inventory named (AMB_BATCH3_PARITY.md §3):
+//
+//    1. THE TWO-MODES-ONE-BOOLEAN SWAP IS DEAD. `showingRoutePreview` swapped two
+//       full-screen modes inside one screen, so the preview drew the system
+//       "Route Planner" bar PLUS a hand-rolled "Optimized Route" header — two
+//       stacked title rows. The preview is now a PUSHED screen through one
+//       `.ambientPush(item:)`, and it applies its own `.tabBarClearance()`
+//       because a container's root inset is not inherited by what it pushes.
+//
+//    2. A SCHOOL WITH NO MAP PIN SAYS SO AND CANNOT BE PICKED. It used to be
+//       tickable, counted in "3 selected", and then dropped by the optimizer's
+//       `validSchools` filter with no notice anywhere. The selected count now
+//       counts only routable schools.
+//
+//    3. THE OPTIMIZE BUTTON NO LONGER VANISHES. The whole bottom bar rendered
+//       only at two or more selections — below two there was no button and no
+//       explanation.
+//
+//    4. A FAILED OPTIMIZATION IS NOT PRESENTED AS A ROUTE. No `optimizedOrder`
+//       used to mean the service handed back the user's own list with zero miles
+//       and the view's `> 0` gate hid the totals. The service now throws with the
+//       server's real message and this screen shows it; the preview is not pushed.
+//
+//    5. SKIPPED SCHOOLS ARE LISTED. `skippedShipments` was decoded, counted and
+//       printed to the console only.
+//
+//    6. THE PREVIEW IS A SNAPSHOT. Its start/end labels used to read live
+//       `@State` that `checkAddressAvailability()` could mutate from a realtime
+//       organisation-coordinate update while the preview was on screen — so the
+//       displayed start could silently become something the route was not
+//       computed for. Everything the preview draws is captured at optimize time.
+//
+//  WHAT IS DELIBERATELY UNCHANGED, and named so the omissions are not silent:
+//  the fixed 2-second GPS `Task.sleep` (a location strategy, not a design
+//  question), the Edge Function's 10,000:1 distance:time cost model and its
+//  per-request OAuth exchange, `SchoolService.getSchools` not filtering
+//  `is_active`, and location permission still being surfaced only as a message
+//  after the timeout. All four are data-layer or server work.
 
 import SwiftUI
 import CoreLocation
@@ -12,62 +53,165 @@ import CoreLocation
 struct RoutePlannerView: View {
     @StateObject private var locationManager = RouteLocationManager()
     @ObservedObject private var organizationService = OrganizationService.shared
+
     @State private var schools: [School] = []
     @State private var selectedSchools: Set<String> = []
     @State private var isLoading = false
     @State private var isOptimizing = false
+    /// A school-load failure. Kept as the alert it has always been.
     @State private var errorMessage: String?
+    /// An optimization failure, drawn INLINE beside the button that caused it —
+    /// the message belongs next to the control, not behind an OK.
+    @State private var optimizeFailure: String?
     @State private var searchText = ""
-    @State private var showingRoutePreview = false
 
-    // Starting point selection
     @State private var selectedStartingPoint: StartingPointType = .currentLocation
-
-    // End point selection
-    @State private var addEndPoint: Bool = false
+    @State private var addEndPoint = false
     @State private var selectedEndPoint: EndPointType = .home
 
-    // Route result with distances
-    @State private var routeResult: OptimizedRouteResult?
+    @State private var hasHomeAddress = false
+    @State private var hasWorkAddress = false
 
-    // Address availability
-    @State private var hasHomeAddress: Bool = false
-    @State private var hasWorkAddress: Bool = false
+    /// One enum, one `.ambientPush` — the AMB.3 rule. It carries the whole
+    /// preview, so nothing the preview draws can change under it.
+    @State private var destination: RoutePlannerDestination?
 
+    private enum RoutePlannerDestination: Identifiable {
+        case preview(RoutePreviewModel)
+
+        var id: String { "preview" }
+    }
+
+    private var tint: Color { RoutePlannerStyle.tint }
+
+    // MARK: - Derived state
+
+    /// Name and address only, which is what the live filter searches. Widening it
+    /// to city/state/zip/district is a behaviour change, not a restyle.
     private var filteredSchools: [School] {
-        if searchText.isEmpty {
-            return schools
-        }
+        let trimmed = searchText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return schools }
         return schools.filter { school in
-            school.name.localizedCaseInsensitiveContains(searchText) ||
-            (school.address?.localizedCaseInsensitiveContains(searchText) ?? false)
+            school.name.localizedCaseInsensitiveContains(trimmed)
+            || (school.address?.localizedCaseInsensitiveContains(trimmed) ?? false)
         }
     }
 
-    private var selectedSchoolsList: [School] {
-        schools.filter { selectedSchools.contains($0.id) }
+    /// ONLY ROUTABLE SCHOOLS COUNT. The old screen counted everything it let you
+    /// tick, which is how "3 selected" became a two-stop route.
+    private var selectedRoutableSchools: [School] {
+        schools.filter { selectedSchools.contains($0.id) && $0.parsedCoordinates != nil }
     }
 
-    private var canOptimize: Bool {
-        guard selectedSchools.count >= 2 else { return false }
+    private var selectedCount: Int { selectedRoutableSchools.count }
 
-        // Check if selected starting point is available
+    private var isStartAvailable: Bool {
         switch selectedStartingPoint {
-        case .currentLocation:
-            return true // Will request location when optimizing
-        case .homeAddress:
-            return hasHomeAddress
-        case .workAddress:
-            return hasWorkAddress
+        case .currentLocation: return true // requested when optimizing
+        case .homeAddress: return hasHomeAddress
+        case .workAddress: return hasWorkAddress
         }
     }
+
+    private var canOptimize: Bool { selectedCount >= 2 && isStartAvailable }
+
+    /// The reason the button is inert, so a disabled control teaches the rule.
+    private var optimizeCaption: String? {
+        if selectedCount < 2 { return "Select at least two schools" }
+        if !isStartAvailable { return startWarning }
+        return nil
+    }
+
+    private var startWarning: String? {
+        switch selectedStartingPoint {
+        case .currentLocation: return nil
+        case .homeAddress: return hasHomeAddress ? nil : "Home address not set in profile"
+        case .workAddress: return hasWorkAddress ? nil : "Organization address not available"
+        }
+    }
+
+    private var endWarning: String? {
+        switch selectedEndPoint {
+        case .home: return hasHomeAddress ? nil : "Home address not set in profile"
+        case .work: return hasWorkAddress ? nil : "Organization address not available"
+        }
+    }
+
+    private var noEndPointPossible: Bool { !hasHomeAddress && !hasWorkAddress }
+
+    // MARK: - Choice-row labels
+    //
+    // The approved design labels the start options "Current Location / Home /
+    // Work". `StartingPointType.rawValue` spells the last two "Home Address" and
+    // "Work Address", so the mapping lives here — the kit takes plain strings and
+    // does not know these enums exist.
+
+    private static func label(for type: StartingPointType) -> String {
+        switch type {
+        case .currentLocation: return "Current Location"
+        case .homeAddress: return "Home"
+        case .workAddress: return "Work"
+        }
+    }
+
+    private static func startingPoint(forLabel label: String) -> StartingPointType? {
+        StartingPointType.allCases.first { Self.label(for: $0) == label }
+    }
+
+    private var startSelection: Binding<String?> {
+        Binding(get: { Self.label(for: selectedStartingPoint) },
+                set: { newValue in
+                    guard let newValue, let type = Self.startingPoint(forLabel: newValue) else { return }
+                    selectedStartingPoint = type
+                })
+    }
+
+    private var endSelection: Binding<String?> {
+        Binding(get: { selectedEndPoint.rawValue },
+                set: { newValue in
+                    guard let newValue, let type = EndPointType(rawValue: newValue) else { return }
+                    selectedEndPoint = type
+                })
+    }
+
+    // MARK: - Body
 
     var body: some View {
-        VStack(spacing: 0) {
-            if showingRoutePreview {
-                routePreviewView
-            } else {
-                schoolSelectionView
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.8)
+
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let optimizeFailure {
+                            // RETRY ONLY WHEN IT WILL RUN. `optimizeRoute()`
+                            // guard-returns unless `canOptimize`, so if the
+                            // selection changed after the failure the old Retry
+                            // cleared the card and did nothing at all — the failure
+                            // looked dismissed and no route was planned. Without it
+                            // the card says what to change instead.
+                            RouteFailureCard(message: optimizeFailure,
+                                             hint: canOptimize ? nil : "Adjust your selection, then optimize again.",
+                                             tint: tint,
+                                             retry: canOptimize ? {
+                                                 self.optimizeFailure = nil
+                                                 optimizeRoute()
+                                             } : nil)
+                        }
+                        RouteSearchCard(text: $searchText)
+                        routeSection
+                        schoolsSection
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 16)
+                }
+                .ambientNoBounceWhenShort()
+
+                RouteOptimizeBar(enabled: canOptimize,
+                                 isOptimizing: isOptimizing,
+                                 caption: optimizeCaption,
+                                 tint: tint,
+                                 action: optimizeRoute)
             }
         }
         .navigationTitle("Route Planner")
@@ -79,6 +223,12 @@ struct RoutePlannerView: View {
         .onChange(of: organizationService.organizationCoordinates) { _ in
             checkAddressAvailability()
         }
+        .ambientPush(item: $destination) { destination in
+            switch destination {
+            case .preview(let model):
+                RoutePreviewScreen(model: model)
+            }
+        }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }
         } message: {
@@ -86,439 +236,125 @@ struct RoutePlannerView: View {
         }
     }
 
-    // MARK: - School Selection View
+    // MARK: - Start and end
 
-    private var schoolSelectionView: some View {
-        VStack(spacing: 0) {
-            // Manual search bar above the list
+    private var routeSection: some View {
+        RouteEndpointsSection(
+            status: selectedCount == 1 ? "1 stop" : "\(selectedCount) stops",
+            statusTint: selectedCount >= 2 ? tint : nil,
+            startOptions: StartingPointType.allCases.map(Self.label(for:)),
+            start: startSelection,
+            startWarning: startWarning,
+            addsEndPoint: $addEndPoint,
+            endOptions: EndPointType.allCases.map(\.rawValue),
+            end: endSelection,
+            endWarning: endWarning,
+            endPointDisabled: noEndPointPossible,
+            // The live screen's footer, kept verbatim. It names only "home"
+            // although a work address also satisfies the end point — a pre-existing
+            // copy asymmetry the parity inventory records; rewriting it is not this
+            // phase's call.
+            endPointNote: noEndPointPossible
+                ? "Set your home address in Settings to enable end point"
+                : nil,
+            tint: tint)
+    }
+
+    // MARK: - The school list
+
+    private var schoolsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.gray)
-                TextField("Search schools...", text: $searchText)
-                    .textFieldStyle(.plain)
-                if !searchText.isEmpty {
-                    Button(action: { searchText = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
+                Text("Schools")
+                    .font(.footnote.weight(.semibold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(selectedCount) selected")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                if !selectedSchools.isEmpty {
+                    Button("Clear") {
+                        withAnimation(AmbientMotion.snappy) { selectedSchools.removeAll() }
                     }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(tint)
                 }
             }
-            .padding(8)
-            .background(Color(.systemGray6))
-            .cornerRadius(10)
-            .padding(.horizontal)
-            .padding(.vertical, 8)
 
-            List {
-                // Starting Point Section
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Start From")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-
-                        Picker("Starting Point", selection: $selectedStartingPoint) {
-                            ForEach(StartingPointType.allCases) { type in
-                                Text(type.shortName)
-                                    .tag(type)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        // Warning for unavailable addresses
-                        if selectedStartingPoint == .homeAddress && !hasHomeAddress {
-                            Label("Home address not set in profile", systemImage: "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        }
-                        if selectedStartingPoint == .workAddress && !hasWorkAddress {
-                            Label("Organization address not available", systemImage: "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-
-                // End Point Section
-                Section {
-                    Toggle(isOn: $addEndPoint) {
-                        HStack {
-                            Image(systemName: "flag.checkered")
-                            Text("Add End Point")
-                        }
-                    }
-                    .disabled(!hasHomeAddress && !hasWorkAddress)
-
-                    if addEndPoint {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("End At")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-
-                            Picker("End Point", selection: $selectedEndPoint) {
-                                ForEach(EndPointType.allCases) { type in
-                                    Text(type.rawValue)
-                                        .tag(type)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-
-                            // Warning for unavailable end point
-                            if selectedEndPoint == .home && !hasHomeAddress {
-                                Label("Home address not set in profile", systemImage: "exclamationmark.triangle")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                            }
-                            if selectedEndPoint == .work && !hasWorkAddress {
-                                Label("Organization address not available", systemImage: "exclamationmark.triangle")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                } footer: {
-                    if !hasHomeAddress && !hasWorkAddress {
-                        Text("Set your home address in Settings to enable end point")
-                    }
-                }
-
-                // Schools Section
-                Section {
+            if isLoading && schools.isEmpty {
+                loadingRow
+            } else if filteredSchools.isEmpty {
+                emptyState
+            } else {
+                LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
                     ForEach(filteredSchools) { school in
-                        SchoolRowView(
-                            school: school,
-                            isSelected: selectedSchools.contains(school.id),
-                            onToggle: {
-                                toggleSchoolSelection(school)
-                            }
-                        )
-                    }
-                } header: {
-                    HStack {
-                        Text("Schools")
-                        Spacer()
-                        Text("\(selectedSchools.count) selected")
-                            .foregroundColor(.secondary)
-                        if !selectedSchools.isEmpty {
-                            Button("Clear") {
-                                selectedSchools.removeAll()
-                            }
-                            .font(.caption)
+                        RouteSchoolRow(model: rowModel(for: school),
+                                       isSelected: selectedSchools.contains(school.id),
+                                       tint: tint) {
+                            toggleSchoolSelection(school)
                         }
                     }
                 }
             }
-            .listStyle(.insetGrouped)
-
-            // Bottom action bar
-            if selectedSchools.count >= 2 {
-                optimizeButton
-            }
-        }
-        .overlay {
-            if isLoading {
-                ProgressView("Loading schools...")
-                    .padding()
-                    .background(Color(.systemBackground))
-                    .cornerRadius(8)
-                    .shadow(radius: 4)
-            }
         }
     }
 
-    private var optimizeButton: some View {
-        VStack(spacing: 0) {
-            Divider()
-
-            Button(action: optimizeRoute) {
-                HStack {
-                    if isOptimizing {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(0.8)
-                    } else {
-                        Image(systemName: "arrow.triangle.swap")
-                    }
-                    Text(isOptimizing ? "Optimizing..." : "Optimize Route")
-                        .fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(canOptimize ? Color.blue : Color.gray)
-                .foregroundColor(.white)
-                .cornerRadius(10)
-            }
-            .disabled(isOptimizing || !canOptimize)
-            .padding()
-        }
-        .background(Color(.systemBackground))
+    private func rowModel(for school: School) -> RouteSchoolRowModel {
+        let address = school.address?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return RouteSchoolRowModel(
+            id: school.id,
+            name: school.name,
+            // The old row simply omitted the line when the address was empty,
+            // which left a school with no address looking identical to one whose
+            // address had not loaded.
+            address: address.isEmpty ? "No address on file" : address,
+            isRoutable: school.parsedCoordinates != nil)
     }
 
-    // MARK: - Route Preview View
-
-    private var routePreviewView: some View {
-        VStack(spacing: 0) {
-            // Header with total distance
-            routePreviewHeader
-
-            // Route list with distances
-            routeListWithDistances
-
-            // Open in Maps buttons
-            mapButtons
+    private var loadingRow: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+            Text("Loading schools…").font(.subheadline).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
+        .ambientCard(density: .compact, fillWidth: true)
     }
 
-    private var routePreviewHeader: some View {
-        VStack(spacing: 8) {
-            // Navigation header
-            HStack {
-                Button(action: { showingRoutePreview = false }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                        Text("Edit")
-                    }
-                }
-
-                Spacer()
-
-                Text("Optimized Route")
-                    .font(.headline)
-
-                Spacer()
-
-                // Invisible spacer for centering
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left")
-                    Text("Edit")
-                }
-                .opacity(0)
-            }
-
-            // Total distance display
-            if let result = routeResult, result.totalDistanceMiles > 0 {
-                HStack(spacing: 16) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "car.fill")
-                            .foregroundColor(.blue)
-                        Text(result.formattedTotalDistance)
-                            .fontWeight(.semibold)
-                    }
-
-                    HStack(spacing: 4) {
-                        Image(systemName: "clock.fill")
-                            .foregroundColor(.blue)
-                        Text(result.formattedTotalDuration)
-                            .fontWeight(.semibold)
-                    }
-                }
-                .font(.subheadline)
-                .padding(.vertical, 8)
-                .padding(.horizontal, 16)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(8)
-            }
+    /// The live screen has NO empty state: no schools, or no search match, leaves a
+    /// blank section reading "0 selected".
+    @ViewBuilder
+    private var emptyState: some View {
+        if schools.isEmpty {
+            AmbientEmptyState(
+                title: "No schools yet",
+                message: "Routes are built from your organization's schools. An administrator adds them in Settings.",
+                systemImage: "building.2")
+        } else {
+            AmbientEmptyState(title: "No schools match",
+                              message: "Search looks at the name and the address.",
+                              systemImage: "magnifyingglass")
         }
-        .padding()
-        .background(Color(.systemGroupedBackground))
-    }
-
-    private var routeListWithDistances: some View {
-        List {
-            // Starting point section
-            Section {
-                startingPointRow
-            }
-
-            // Stops section with distances
-            Section("Stops") {
-                ForEach(Array((routeResult?.schools ?? []).enumerated()), id: \.element.id) { index, school in
-                    VStack(alignment: .leading, spacing: 0) {
-                        // Leg distance from previous stop
-                        if let result = routeResult,
-                           index < result.legs.count,
-                           result.legs[index].distanceMeters > 0 {
-                            HStack {
-                                Image(systemName: "arrow.down")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Text(result.legs[index].formattedDistance)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("•")
-                                    .foregroundColor(.secondary)
-                                Text(result.legs[index].formattedDuration)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.leading, 40)
-                            .padding(.bottom, 4)
-                        }
-
-                        // School row
-                        schoolStopRow(index: index, school: school)
-                    }
-                }
-            }
-
-            // End point section (if enabled)
-            if addEndPoint, let result = routeResult, result.endPointType != nil {
-                Section {
-                    endPointRow
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-    }
-
-    private var startingPointRow: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 28, height: 28)
-                Image(systemName: selectedStartingPoint.icon)
-                    .font(.system(size: 14))
-                    .foregroundColor(.white)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(selectedStartingPoint.rawValue)
-                    .font(.headline)
-                Text("Starting point")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func schoolStopRow(index: Int, school: School) -> some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.blue)
-                    .frame(width: 28, height: 28)
-                Text("\(index + 1)")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(school.name)
-                    .font(.headline)
-                if let address = school.address, !address.isEmpty {
-                    Text(address)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var endPointRow: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Distance to end point
-            if let result = routeResult,
-               let lastLeg = result.legs.last,
-               result.endPointType != nil,
-               lastLeg.distanceMeters > 0 {
-                HStack {
-                    Image(systemName: "arrow.down")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Text(lastLeg.formattedDistance)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text("•")
-                        .foregroundColor(.secondary)
-                    Text(lastLeg.formattedDuration)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.leading, 40)
-                .padding(.bottom, 4)
-            }
-
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 28, height: 28)
-                    Image(systemName: selectedEndPoint.icon)
-                        .font(.system(size: 14))
-                        .foregroundColor(.white)
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(selectedEndPoint.rawValue)
-                        .font(.headline)
-                    Text("End point")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .padding(.vertical, 4)
-        }
-    }
-
-    private var mapButtons: some View {
-        VStack(spacing: 0) {
-            Divider()
-
-            VStack(spacing: 12) {
-                // Apple Maps
-                Button(action: openInAppleMaps) {
-                    HStack {
-                        Image(systemName: "map.fill")
-                        Text("Open in Apple Maps")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-                }
-
-                // Google Maps
-                Button(action: openInGoogleMaps) {
-                    HStack {
-                        Image(systemName: "globe")
-                        Text("Open in Google Maps")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(Color(.systemGray5))
-                    .foregroundColor(.primary)
-                    .cornerRadius(10)
-                }
-            }
-            .padding()
-        }
-        .background(Color(.systemBackground))
     }
 
     // MARK: - Actions
 
     private func toggleSchoolSelection(_ school: School) {
-        if selectedSchools.contains(school.id) {
-            selectedSchools.remove(school.id)
-        } else {
-            selectedSchools.insert(school.id)
+        withAnimation(AmbientMotion.snappy) {
+            if selectedSchools.contains(school.id) {
+                selectedSchools.remove(school.id)
+            } else {
+                selectedSchools.insert(school.id)
+            }
         }
+        AmbientHaptics.selection()
     }
 
     private func checkAddressAvailability() {
         hasHomeAddress = RouteOptimizerService.isEndPointAvailable(.home)
         hasWorkAddress = RouteOptimizerService.isEndPointAvailable(.work)
 
-        // Default to available starting point
+        // Default to an available starting point
         if selectedStartingPoint == .homeAddress && !hasHomeAddress {
             selectedStartingPoint = .currentLocation
         }
@@ -526,7 +362,7 @@ struct RoutePlannerView: View {
             selectedStartingPoint = .currentLocation
         }
 
-        // Default to available end point
+        // Default to an available end point
         if selectedEndPoint == .home && !hasHomeAddress && hasWorkAddress {
             selectedEndPoint = .work
         }
@@ -539,18 +375,17 @@ struct RoutePlannerView: View {
         isLoading = true
         defer { isLoading = false }
 
-        do {
-            guard let orgID = UserDefaults.standard.string(forKey: "userOrganizationID") else {
-                errorMessage = "Organization ID not found"
-                return
-            }
+        guard let orgID = UserDefaults.standard.string(forKey: "userOrganizationID") else {
+            errorMessage = "Organization ID not found"
+            return
+        }
 
+        do {
             schools = try await SchoolService.shared.getSchools(organizationID: orgID)
         } catch {
-            // Check if error is cancellation-related
+            // A cancellation is the view being dismissed, not a failure worth an alert.
             let errorDesc = error.localizedDescription.lowercased()
             if errorDesc.contains("cancel") || (error as NSError).code == NSURLErrorCancelled {
-                // Task was cancelled - ignore this error
                 print("School loading was cancelled (view dismissed)")
             } else {
                 errorMessage = "Failed to load schools: \(error.localizedDescription)"
@@ -559,200 +394,229 @@ struct RoutePlannerView: View {
     }
 
     private func optimizeRoute() {
-        guard selectedSchools.count >= 2 else { return }
+        guard canOptimize else { return }
 
         isOptimizing = true
+        optimizeFailure = nil
+        AmbientHaptics.impact(.medium)
 
-        Task {
-            defer {
-                Task { @MainActor in
-                    isOptimizing = false
+        // The schools are read HERE, on the main actor, so the route is computed
+        // for exactly what was on screen when the button was pressed.
+        let schoolsToOptimize = selectedRoutableSchools
+        let startingPoint = selectedStartingPoint
+        let wantsEndPoint = addEndPoint
+        let endPoint = selectedEndPoint
+
+        Task { @MainActor in
+            defer { isOptimizing = false }
+
+            let startCoordinates: CLLocationCoordinate2D
+            switch startingPoint {
+            case .currentLocation:
+                if let location = locationManager.location {
+                    startCoordinates = location.coordinate
+                } else {
+                    // UNCHANGED, deliberately: a fixed 2-second wait for a GPS fix
+                    // is a location strategy, and replacing it is not a design
+                    // change (parity §3 item 6).
+                    locationManager.requestLocation()
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+                    guard let location = locationManager.location else {
+                        optimizeFailure = "Unable to get current location. Please enable location services."
+                        return
+                    }
+                    startCoordinates = location.coordinate
                 }
+
+            case .homeAddress:
+                guard let coords = RouteOptimizerService.getCoordinates(for: .homeAddress, currentLocation: nil) else {
+                    optimizeFailure = "Home address not available. Please set it in your profile."
+                    return
+                }
+                startCoordinates = coords
+
+            case .workAddress:
+                guard let coords = RouteOptimizerService.getCoordinates(for: .workAddress, currentLocation: nil) else {
+                    optimizeFailure = "Work address not available."
+                    return
+                }
+                startCoordinates = coords
+            }
+
+            let endCoordinates = wantsEndPoint
+                ? RouteOptimizerService.getEndPointCoordinates(for: endPoint)
+                : nil
+            if wantsEndPoint && endCoordinates == nil {
+                optimizeFailure = "\(endPoint.rawValue) address not available, so it can't be the end point."
+                return
             }
 
             do {
-                // Get starting coordinates based on selection
-                let startCoordinates: CLLocationCoordinate2D
-
-                switch selectedStartingPoint {
-                case .currentLocation:
-                    // Get current location
-                    if let location = locationManager.location {
-                        startCoordinates = location.coordinate
-                    } else {
-                        // Request location if not available
-                        locationManager.requestLocation()
-                        try await Task.sleep(nanoseconds: 2_000_000_000) // Wait 2 seconds
-
-                        guard let location = locationManager.location else {
-                            await MainActor.run {
-                                errorMessage = "Unable to get current location. Please enable location services."
-                            }
-                            return
-                        }
-                        startCoordinates = location.coordinate
-                    }
-
-                case .homeAddress:
-                    guard let coords = RouteOptimizerService.getCoordinates(for: .homeAddress, currentLocation: nil) else {
-                        await MainActor.run {
-                            errorMessage = "Home address not available. Please set it in your profile."
-                        }
-                        return
-                    }
-                    startCoordinates = coords
-
-                case .workAddress:
-                    guard let coords = RouteOptimizerService.getCoordinates(for: .workAddress, currentLocation: nil) else {
-                        await MainActor.run {
-                            errorMessage = "Work address not available."
-                        }
-                        return
-                    }
-                    startCoordinates = coords
-                }
-
-                // Get end coordinates if enabled
-                let endCoordinates: CLLocationCoordinate2D?
-                let endType: EndPointType?
-
-                if addEndPoint {
-                    endCoordinates = RouteOptimizerService.getEndPointCoordinates(for: selectedEndPoint)
-                    endType = selectedEndPoint
-                } else {
-                    endCoordinates = nil
-                    endType = nil
-                }
-
-                await performOptimization(
-                    from: startCoordinates,
+                let result = try await RouteOptimizerService.shared.optimizeRoute(
+                    schools: schoolsToOptimize,
+                    startingFrom: startCoordinates,
+                    startingPointType: startingPoint,
                     endLocation: endCoordinates,
-                    endPointType: endType
-                )
-            } catch {
-                await MainActor.run {
-                    errorMessage = "Failed to optimize route: \(error.localizedDescription)"
+                    endPointType: wantsEndPoint ? endPoint : nil)
+
+                // A result with no stops is the same lie in a different shape.
+                guard !result.schools.isEmpty else {
+                    optimizeFailure = "The route came back with no stops in it."
+                    return
                 }
+
+                destination = .preview(RoutePreviewModel(
+                    result: result,
+                    startLabel: Self.label(for: startingPoint),
+                    endLabel: wantsEndPoint ? endPoint.rawValue : nil,
+                    startingPoint: startingPoint,
+                    endCoordinates: endCoordinates))
+            } catch {
+                optimizeFailure = error.localizedDescription
             }
         }
     }
+}
 
-    private func performOptimization(
-        from location: CLLocationCoordinate2D,
-        endLocation: CLLocationCoordinate2D?,
-        endPointType: EndPointType?
-    ) async {
-        do {
-            let schoolsToOptimize = selectedSchoolsList
-            let result = try await RouteOptimizerService.shared.optimizeRoute(
-                schools: schoolsToOptimize,
-                startingFrom: location,
-                startingPointType: selectedStartingPoint,
-                endLocation: endLocation,
-                endPointType: endPointType
-            )
+// MARK: - The preview, as a snapshot
 
-            await MainActor.run {
-                routeResult = result
-                showingRoutePreview = true
+/// Everything the preview draws, captured when Optimize was pressed. Holding the
+/// timeline as already-built kit entries is what makes the snapshot real: there is
+/// nothing left for a realtime organisation update to change under it.
+private struct RoutePreviewModel {
+    let entries: [RouteTimelineEntry]
+    let totalDistanceLabel: String
+    let totalDurationLabel: String
+    let skippedSchools: [String]
+    /// The optimized order, for handing to a map app.
+    let schools: [School]
+    let startingPoint: StartingPointType
+    let endCoordinates: CLLocationCoordinate2D?
+
+    init(result: OptimizedRouteResult,
+         startLabel: String,
+         endLabel: String?,
+         startingPoint: StartingPointType,
+         endCoordinates: CLLocationCoordinate2D?) {
+        self.totalDistanceLabel = RoutePlannerFormat.distance(miles: result.totalDistanceMiles)
+        self.totalDurationLabel = RoutePlannerFormat.duration(minutes: result.totalDurationMinutes)
+        self.skippedSchools = result.skippedSchools
+        self.schools = result.schools
+        self.startingPoint = startingPoint
+        self.endCoordinates = endCoordinates
+
+        // `legs[i]` is the leg ARRIVING at row i's successor: leg 0 is start → stop
+        // 1, leg n is the last stop → the end point. So each row carries the leg
+        // LEAVING it, and the final row carries none.
+        func legLabel(_ index: Int) -> String? {
+            guard index >= 0 && index < result.legs.count else { return nil }
+            let leg = result.legs[index]
+            return RoutePlannerFormat.leg(miles: leg.distanceMiles, minutes: leg.durationMinutes)
+        }
+
+        var entries: [RouteTimelineEntry] = [
+            RouteTimelineEntry(id: "start",
+                               marker: .start,
+                               title: startLabel,
+                               subtitle: "Starting point",
+                               legLabel: legLabel(0))
+        ]
+
+        for (index, school) in result.schools.enumerated() {
+            let address = school.address?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            entries.append(RouteTimelineEntry(
+                id: "stop-\(index)-\(school.id)",
+                marker: .stop(index + 1),
+                title: school.name,
+                subtitle: address.isEmpty ? "No address on file" : address,
+                legLabel: legLabel(index + 1)))
+        }
+
+        if let endLabel {
+            entries.append(RouteTimelineEntry(id: "end",
+                                              marker: .end,
+                                              title: endLabel,
+                                              subtitle: "End point"))
+        }
+
+        self.entries = entries
+    }
+}
+
+private struct RoutePreviewScreen: View {
+    let model: RoutePreviewModel
+
+    @State private var errorMessage: String?
+
+    private var tint: Color { RoutePlannerStyle.tint }
+
+    var body: some View {
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.6)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    RouteTotalsHero(distanceLabel: model.totalDistanceLabel,
+                                    durationLabel: model.totalDurationLabel,
+                                    tint: tint)
+                    if !model.skippedSchools.isEmpty {
+                        RouteSkippedNotice(names: model.skippedSchools)
+                    }
+                    RouteTimeline(entries: model.entries, tint: tint)
+                    RouteMapButtons(tint: tint,
+                                    openAppleMaps: openInAppleMaps,
+                                    openGoogleMaps: openInGoogleMaps)
+                    RoutePreviewFootnote()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
             }
-        } catch {
-            await MainActor.run {
-                errorMessage = "Failed to optimize route: \(error.localizedDescription)"
-            }
+            .ambientNoBounceWhenShort()
+        }
+        // A PUSHED screen insets itself: a safe-area inset does not travel out of a
+        // navigation container into what that container pushes.
+        .tabBarClearance()
+        .navigationTitle("Optimized Route")
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("Route Planner", isPresented: .constant(errorMessage != nil)) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
         }
     }
 
     private func openInAppleMaps() {
-        guard let result = routeResult else { return }
-
-        let endCoords = addEndPoint ? RouteOptimizerService.getEndPointCoordinates(for: selectedEndPoint) : nil
-
         guard let url = RouteOptimizerService.appleMapsURL(
-            for: result.schools,
-            startingPoint: selectedStartingPoint,
-            endLocation: endCoords
+            for: model.schools,
+            startingPoint: model.startingPoint,
+            endLocation: model.endCoordinates
         ) else {
             errorMessage = "Unable to generate Apple Maps URL"
             return
         }
-
         UIApplication.shared.open(url)
     }
 
+    /// THE WELL-FORMED UNIVERSAL LINK, UNCONDITIONALLY.
+    ///
+    /// The installed-app branch used to rewrite the https prefix onto
+    /// `comgooglemaps://?` — which produced a doubled `?` and parameters in the
+    /// wrong scheme, and `comgooglemaps` IS in `LSApplicationQueriesSchemes`, so
+    /// the broken URL won whenever Google Maps was installed. It also carried a
+    /// force-unwrapped `URL(string:)!`. Google Maps claims its own universal
+    /// links, so opening the https URL lands in the app when it is installed and
+    /// in the browser when it is not.
     private func openInGoogleMaps() {
-        guard let result = routeResult else { return }
-
-        let endCoords = addEndPoint ? RouteOptimizerService.getEndPointCoordinates(for: selectedEndPoint) : nil
-
         guard let url = RouteOptimizerService.googleMapsURL(
-            for: result.schools,
-            startingPoint: selectedStartingPoint,
-            endLocation: endCoords
+            for: model.schools,
+            startingPoint: model.startingPoint,
+            endLocation: model.endCoordinates
         ) else {
             errorMessage = "Unable to generate Google Maps URL"
             return
         }
-
-        // Check if Google Maps is installed
-        if UIApplication.shared.canOpenURL(URL(string: "comgooglemaps://")!) {
-            // Convert web URL to app URL
-            if let appURL = URL(string: url.absoluteString.replacingOccurrences(of: "https://www.google.com/maps/dir/", with: "comgooglemaps://?")) {
-                UIApplication.shared.open(appURL)
-                return
-            }
-        }
-
-        // Fall back to web URL
         UIApplication.shared.open(url)
-    }
-}
-
-// MARK: - School Row View
-
-private struct SchoolRowView: View {
-    let school: School
-    let isSelected: Bool
-    let onToggle: () -> Void
-
-    var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: 12) {
-                // Checkbox
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title2)
-                    .foregroundColor(isSelected ? .blue : .gray)
-
-                // School info
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(school.name)
-                        .font(.body)
-                        .foregroundColor(.primary)
-
-                    if let address = school.address, !address.isEmpty {
-                        Text(address)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer()
-
-                // Coordinate indicator
-                if school.parsedCoordinates != nil {
-                    Image(systemName: "mappin.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.caption)
-                } else {
-                    Image(systemName: "mappin.slash")
-                        .foregroundColor(.orange)
-                        .font(.caption)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -762,7 +626,7 @@ private class RouteLocationManager: NSObject, ObservableObject, CLLocationManage
     private let manager = CLLocationManager()
 
     @Published var location: CLLocation?
-    @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
+    private var authorizationStatus: CLAuthorizationStatus = .notDetermined
 
     override init() {
         super.init()
@@ -812,7 +676,7 @@ private class RouteLocationManager: NSObject, ObservableObject, CLLocationManage
 }
 
 #Preview {
-    NavigationStack {
+    NavigationView {
         RoutePlannerView()
     }
 }

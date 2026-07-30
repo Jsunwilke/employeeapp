@@ -154,6 +154,29 @@ enum Formatters {
         let f = DateFormatter(); f.dateStyle = .full; f.timeStyle = .none; return f
     }()
 
+    /// "$1,234.50" — grouped, ALWAYS two decimals.
+    ///
+    /// Added in AMB.9, which needed one currency string for a screen whose whole
+    /// job is "what am I owed" and found four spellings of it in the app: a
+    /// `NumberFormatter` allocated per render in `SummaryCardView` (no minimum
+    /// fraction digits, so a whole-dollar total rendered "$12"), a
+    /// `String(format: "$%.2f")` in the dashboard's mileage widget (no thousands
+    /// separator, so four-figure years read "$1234.50"), a `"$\(…, specifier:
+    /// "%.2f")"` interpolation in the old detail screen, and Stats' `$<Int>` bars
+    /// which truncate the cents away entirely. Two of those are money that reads
+    /// wrong rather than money that reads differently.
+    ///
+    /// USD and `en_US` are pinned, matching the approved mockup: pay is in dollars
+    /// and a device set to another region must not relabel a reimbursement with its
+    /// own currency symbol while leaving the number alone — that would state a
+    /// figure in a currency nobody is being paid in.
+    static func currency(_ value: Double) -> String {
+        currencyFormatter.string(from: NSNumber(value: value))
+            // A NumberFormatter returns nil only for a non-finite value, where a
+            // "$0.00" would be a claim. `%.2f` renders "nan"/"inf" honestly.
+            ?? String(format: "$%.2f", value)
+    }
+
     /// "Today" / "Tomorrow" / "Yesterday", else the weekday name.
     static func relativeDay(_ date: Date) -> String {
         let calendar = Calendar.current
@@ -175,6 +198,16 @@ enum Formatters {
     // MARK: private
 
     private static var zonedISODate: [String: DateFormatter] = [:]
+
+    private static let currencyFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.currencyCode = "USD"
+        f.locale = Locale(identifier: "en_US")
+        f.minimumFractionDigits = 2
+        f.maximumFractionDigits = 2
+        return f
+    }()
 
     /// Fixed-format: pins `en_US_POSIX` so parsing is calendar-independent.
     private static func fixed(_ format: String) -> DateFormatter {

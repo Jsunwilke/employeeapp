@@ -133,8 +133,6 @@ _ALLOWLIST_SOURCE = """
 Iconik Employee/AllFeaturesView.swift|AMB.12|1
 Iconik Employee/Components/AddressAutocompleteField.swift|AMB.12|2
 Iconik Employee/Components/LoadingOverlay.swift|AMB.12|1
-Iconik Employee/Misc Features/MileageReportsView.swift|AMB.9|2
-Iconik Employee/Misc Features/RoutePlannerView.swift|AMB.9|1
 Iconik Employee/NFC/DeleteConfirmationAlert.swift|AMB.11|1
 Iconik Employee/NFC/JobBoxNotification.swift|AMB.11|2
 Iconik Employee/NFC/ScanView.swift|AMB.11|2
@@ -143,7 +141,6 @@ Iconik Employee/Schedule/RealTimeSyncIndicator.swift|AMB.1 residual|1
 Iconik Employee/SessionSelectionView.swift|AMB.12|1
 Iconik Employee/Settings/EmployeeInfoView.swift|AMB.12|1
 Iconik Employee/Settings/SchoolDetailView.swift|AMB.12|3
-Iconik Employee/StatsView.swift|AMB.9|7
 Iconik Employee/TimeEntryListView.swift|AMB.12|2
 Iconik Employee/TimeTrackingButton.swift|AMB.12|2
 Iconik Employee/TimeTrackingMainView.swift|AMB.12|2

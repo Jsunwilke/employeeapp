@@ -1,70 +1,50 @@
 //  RoutePlannerMockup.swift
 //  Iconik Employee — the Route Planner mockup, built in batch 3
 //
-//  ARC SCAFFOLDING. Deleted at the close of whichever phase converts the screen.
+//  ARC SCAFFOLDING. Deleted at the close of AMB.12, with the lab.
 //
-//  WHERE THIS SCREEN LANDS IS AN OPEN OPERATOR DECISION.
-//      The Route Planner belongs to NO phase in the arc registry. The card-drift
-//      gate's own header says so: its row was tagged AMB.9 by the generator only
-//      so it would not read as AMB.7 having failed, and "where the route planner
-//      really lands is the operator's call"
-//      (`scripts/check_card_drift.py:106-111`). This mockup exists so batch 3
-//      shows the whole "On the road" family — Mileage and the Route Planner share
-//      a palette family and a job — and so the operator can judge them together.
-//      APPROVING THIS MOCKUP DOES NOT DECIDE THE PHASE. It decides what the
-//      screen should look like whenever it is built.
+//  APPROVED BY THE OPERATOR 2026-07-29, AND REPOINTED IN THE SAME PHASE.
+//      The screen was folded into AMB.9 and built. This file no longer holds a
+//      single private view: every piece it draws now lives in
+//      `Misc Features/RoutePlannerKit.swift`, which `RoutePlannerView` draws with
+//      too. What remains here is the LAB HARNESS — the state picker and the sample
+//      data — so the operator can still walk the four states without a network,
+//      and so a change to the design shows up in both places or neither. That
+//      direction is the whole mechanism (the TimeOffKit pattern from AMB.8): the
+//      mockup imports production code, never the other way round.
 //
-//  WHAT THE DESIGN IS ARGUING, in four claims
+//  WHAT THE DESIGN ARGUED, in four claims — all four now shipped
 //
-//      1. THE OPTIMIZE BUTTON MUST NOT VANISH.
-//         Today the whole bottom bar renders only at two or more selections
-//         (parity §3, Mode A) — below two there is no button, no caption, and no
-//         explanation. A control that disappears teaches nothing; a disabled
-//         control with a reason teaches the rule in one glance. So Optimize is
-//         ALWAYS on screen, disabled below two with "Select at least two schools".
+//      1. THE OPTIMIZE BUTTON MUST NOT VANISH. The old screen rendered the whole
+//         bottom bar only at two or more selections. `RouteOptimizeBar` is always
+//         on screen, disabled below two with "Select at least two schools".
 //
-//      2. A SCHOOL WITH NO MAP PIN SAYS SO.
-//         Coordinate-less schools are selectable, counted in "3 selected", and
-//         then silently dropped by the optimizer's `validSchools` filter
-//         (`RouteOptimizerService.swift:203`) — with no notice anywhere. The
-//         current screen even draws a slashed-pin indicator beside them, which
-//         does not block selection and does not say what it means. Here the row
-//         says it in words and cannot be selected. PROPOSED: the drop happens in
-//         the service, so making this true is a data-layer change.
+//      2. A SCHOOL WITH NO MAP PIN SAYS SO. Coordinate-less schools were
+//         selectable, counted, and then silently dropped by the optimizer's
+//         `validSchools` filter. `RouteSchoolRow` says it in words and cannot be
+//         selected; the count counts only routable schools.
 //
-//      3. A FAILED OPTIMIZATION MUST NOT LOOK LIKE SUCCESS.
-//         When Google returns no order the service silently returns the ORIGINAL
-//         order with `totalDistanceMiles: 0`, and the `> 0` gate then hides the
-//         totals pill — so the user sees their own list back, unlabelled, and
-//         nothing that says it failed (parity §3, dead-list item 4). Skipped
-//         schools are decoded, counted and printed to the console only. Both are
-//         drawn here as visible notices.
+//      3. A FAILED OPTIMIZATION MUST NOT LOOK LIKE SUCCESS. The service now
+//         throws with the server's real message instead of returning the original
+//         order at zero miles, the totals draw unconditionally, and skipped
+//         schools are listed rather than printed to the console.
 //
-//      4. THE RESULT READS AS A TIMELINE.
-//         The route is a text list today: a green start row, numbered stops, an
-//         optional red end row, with per-leg captions hidden whenever a leg
-//         rounds to zero. There is no map and there cannot be one — no polyline
-//         is requested from the server and MapKit is not imported. So the design
-//         commits to the honest form: a vertical timeline, drawn with the line
-//         and dots derived from MEASURED height (the AMB.11 geometry lesson —
-//         constant offsets in a flexing column drift apart at Dynamic Type).
+//      4. THE RESULT READS AS A TIMELINE. There is no map and cannot be one — no
+//         polyline is requested and MapKit is not imported — so the honest form is
+//         a vertical timeline whose positions are derived from MEASURED height
+//         (the AMB.11 geometry lesson). That geometry lives in `RouteTimeline`.
 //
-//  WHAT IS NOT BEING PROPOSED
-//      No data layer, service or optimizer change (D12). The malformed
-//      `comgooglemaps://` deep link, the discarded server error, the 2-second
-//      GPS sleep and the 10,000:1 distance:time cost model are recorded in
-//      AMB_BATCH3_PARITY.md §3 and are NOT fixed here. Both map buttons are dead
-//      in the mockup.
+//  BOTH MAP BUTTONS ARE STILL DEAD HERE, because the lab has no route to hand to
+//  a map app. They are live on the real screen.
 
 import SwiftUI
 
 // MARK: - Destinations
 
-/// One enum, one `.ambientPush`. The live screen swaps two full-screen modes with
-/// a boolean; here the preview is PUSHED, which is what the lab is for — a mode
-/// swap inside one screen is exactly how the app ended up drawing two stacked
-/// title rows in preview mode (parity §3).
-private enum RoutePlannerDestination: String, Identifiable {
+/// One enum, one `.ambientPush`. The old screen swapped two full-screen modes
+/// with a boolean, which is how it ended up drawing two stacked title rows in
+/// preview mode.
+private enum RoutePlannerLabDestination: String, Identifiable {
     case preview
 
     var id: String { rawValue }
@@ -81,12 +61,12 @@ private enum RoutePlannerLabState: String, CaseIterable, Identifiable {
     var isPreview: Bool { self == .preview || self == .previewSkips }
 }
 
-// MARK: - Mode A — selection
+// MARK: - Selection
 
 struct RoutePlannerMockup: View {
-    /// `FeatureTheme.color(for: "routePlanner")` — the "On the road" family it
-    /// shares with Mileage.
-    static let featureTint = Color(hex: "#F76B15")
+    /// Kept as the name the lab's own chrome reads (`DesignLabView`), pointed at
+    /// the one definition in the kit.
+    static var featureTint: Color { RoutePlannerStyle.tint }
 
     @State private var state: RoutePlannerLabState = .selection
     @State private var query = ""
@@ -95,9 +75,9 @@ struct RoutePlannerMockup: View {
     @State private var endAt: String? = "Home"
     @State private var selected: Set<String> = ["ws-1", "ws-3", "ws-5"]
     @State private var optimizing = false
-    @State private var destination: RoutePlannerDestination?
+    @State private var destination: RoutePlannerLabDestination?
 
-    private var schools: [LabRouteSchool] {
+    private var rows: [RouteSchoolRowModel] {
         guard state != .selectionEmpty else { return [] }
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return RouteSample.schools }
@@ -107,10 +87,9 @@ struct RoutePlannerMockup: View {
         }
     }
 
-    /// Only routable schools count. The current screen counts everything it let
-    /// you tick, which is how "3 selected" becomes a two-stop route.
+    /// Only routable schools count.
     private var selectedCount: Int {
-        RouteSample.schools.filter { selected.contains($0.id) && $0.hasCoordinates }.count
+        RouteSample.schools.filter { selected.contains($0.id) && $0.isRoutable }.count
     }
 
     var body: some View {
@@ -122,7 +101,7 @@ struct RoutePlannerMockup: View {
                     VStack(alignment: .leading, spacing: 14) {
                         labControl
                         if state.isPreview { previewHint }
-                        searchField
+                        RouteSearchCard(text: $query)
                         routeSection
                         schoolsSection
                     }
@@ -131,7 +110,17 @@ struct RoutePlannerMockup: View {
                 }
                 .ambientNoBounceWhenShort()
 
-                optimizeBar
+                RouteOptimizeBar(enabled: selectedCount >= 2,
+                                 isOptimizing: optimizing,
+                                 caption: selectedCount < 2 ? "Select at least two schools" : nil,
+                                 tint: Self.featureTint) {
+                    optimizing = true
+                    AmbientHaptics.impact(.medium)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                        optimizing = false
+                        destination = .preview
+                    }
+                }
             }
         }
         .ambientPush(item: $destination) { destination in
@@ -161,71 +150,22 @@ struct RoutePlannerMockup: View {
             .font(.caption2).foregroundStyle(.tertiary)
     }
 
-    // MARK: search
-
-    /// Hand-rolled, as the app's is — `.searchable` is out at the iOS 16.6 floor
-    /// for this shell, and the live filter searches name and address only, which
-    /// this repeats rather than quietly widening (that would be a data change).
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").font(.footnote).foregroundStyle(.secondary)
-            TextField("Search schools", text: $query)
-                .font(.subheadline)
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.footnote).foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .ambientCard(density: .compact, fillWidth: true)
-    }
-
     // MARK: start and end
 
     private var routeSection: some View {
-        AmbientFormSection(title: "Route",
-                           status: "\(selectedCount) stop\(selectedCount == 1 ? "" : "s")",
-                           statusTint: selectedCount >= 2 ? Self.featureTint : nil) {
-            VStack(alignment: .leading, spacing: 12) {
-                AmbientChoiceRow(title: "Start from",
-                                 options: ["Current Location", "Home", "Work"],
-                                 selection: $startFrom,
-                                 tint: Self.featureTint)
-
-                // The warning the live screen shows, kept — and now attached to
-                // the option it is about rather than floating under the picker.
-                if startFrom == "Work" {
-                    warningLine("Organization address not set")
-                }
-
-                Divider()
-
-                Toggle(isOn: $addsEndPoint) {
-                    Text("Add end point").font(.subheadline.weight(.semibold))
-                }
-                .tint(Self.featureTint)
-
-                if addsEndPoint {
-                    AmbientChoiceRow(title: "End at",
-                                     options: ["Home", "Work"],
-                                     selection: $endAt,
-                                     tint: Self.featureTint)
-                    if endAt == "Work" {
-                        warningLine("Organization address not set")
-                    }
-                }
-            }
-        }
-    }
-
-    private func warningLine(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill").font(.caption2.weight(.semibold))
-            Text(text).font(.caption)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(.orange)
+        RouteEndpointsSection(
+            status: "\(selectedCount) stop\(selectedCount == 1 ? "" : "s")",
+            statusTint: selectedCount >= 2 ? Self.featureTint : nil,
+            startOptions: ["Current Location", "Home", "Work"],
+            start: $startFrom,
+            // The lab pretends the organisation address is unset, so the warning
+            // the real screen shows for an unavailable option can be seen here.
+            startWarning: startFrom == "Work" ? "Organization address not available" : nil,
+            addsEndPoint: $addsEndPoint,
+            endOptions: ["Home", "Work"],
+            end: $endAt,
+            endWarning: endAt == "Work" ? "Organization address not available" : nil,
+            tint: Self.featureTint)
     }
 
     // MARK: the school list
@@ -250,62 +190,31 @@ struct RoutePlannerMockup: View {
                 }
             }
 
-            if schools.isEmpty {
+            if rows.isEmpty {
                 emptyState
             } else {
                 LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
-                    ForEach(schools) { school in
-                        schoolRow(school)
+                    ForEach(rows) { row in
+                        RouteSchoolRow(model: row,
+                                       isSelected: selected.contains(row.id),
+                                       tint: Self.featureTint) {
+                            withAnimation(AmbientMotion.snappy) {
+                                if selected.contains(row.id) {
+                                    selected.remove(row.id)
+                                } else {
+                                    selected.insert(row.id)
+                                }
+                            }
+                            AmbientHaptics.selection()
+                        }
                     }
                 }
             }
         }
     }
 
-    private func schoolRow(_ school: LabRouteSchool) -> some View {
-        let on = selected.contains(school.id)
-        return Button {
-            guard school.hasCoordinates else { return }
-            withAnimation(AmbientMotion.snappy) {
-                if on { selected.remove(school.id) } else { selected.insert(school.id) }
-            }
-            AmbientHaptics.selection()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(school.hasCoordinates
-                                     ? (on ? AnyShapeStyle(Self.featureTint) : AnyShapeStyle(.secondary))
-                                     : AnyShapeStyle(.quaternary))
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(school.name)
-                        .font(AmbientDensity.compact.titleFont)
-                        .lineLimit(1)
-                    Text(school.address)
-                        .font(AmbientDensity.compact.subtitleFont)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    // PROPOSED — today this school is tickable, is counted, and is
-                    // then dropped by the service with no notice at all.
-                    if !school.hasCoordinates {
-                        AmbientBadge(text: "No map pin — can't be routed",
-                                     systemImage: "mappin.slash", tint: .orange)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .opacity(school.hasCoordinates ? 1 : 0.55)
-            .ambientCard(density: .compact,
-                         border: on ? .hairline(Self.featureTint.opacity(0.5)) : .none,
-                         fillWidth: true)
-        }
-        .buttonStyle(.plain)
-        .disabled(!school.hasCoordinates)
-    }
-
-    /// The live screen has NO empty state: no schools, or no search match, leaves
-    /// a blank section reading "0 selected".
+    /// The old screen had NO empty state: no schools, or no search match, left a
+    /// blank section reading "0 selected".
     @ViewBuilder
     private var emptyState: some View {
         if state == .selectionEmpty {
@@ -319,77 +228,56 @@ struct RoutePlannerMockup: View {
                               systemImage: "magnifyingglass")
         }
     }
-
-    // MARK: the bottom bar — always present
-
-    private var optimizeBar: some View {
-        VStack(spacing: 6) {
-            Button {
-                optimizing = true
-                AmbientHaptics.impact(.medium)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-                    optimizing = false
-                    destination = .preview
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    if optimizing {
-                        ProgressView().tint(.white)
-                        Text("Optimizing…")
-                    } else {
-                        Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                        Text("Optimize Route")
-                    }
-                }
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                // ambient-allow: a filled primary action is a control, not a card.
-                .background(Capsule().fill(selectedCount >= 2
-                                           ? Self.featureTint
-                                           : Color.gray.opacity(0.55)))
-            }
-            .buttonStyle(.plain)
-            .disabled(selectedCount < 2 || optimizing)
-
-            if selectedCount < 2 {
-                Text("Select at least two schools")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 10)
-        .padding(.bottom, 12)
-        .background(.ultraThinMaterial)
-    }
 }
 
-// MARK: - Mode B — the preview
+// MARK: - The preview
 
-/// The result, as a timeline. Every position is derived from MEASURED height:
-/// each row's marker column is a `GeometryReader`, the dot sits one radius down
-/// from the row's top edge, and the connector runs from there to the measured
-/// bottom — so the line still meets the dots at the largest Dynamic Type size,
-/// which a stack of constant offsets does not (the AMB.11 lesson).
 private struct RoutePreviewMockup: View {
     let showsSkips: Bool
     let startLabel: String
     let endLabel: String?
 
-    private var stops: [LabRouteSchool] { RouteSample.optimizedStops }
+    private var entries: [RouteTimelineEntry] {
+        var entries: [RouteTimelineEntry] = [
+            RouteTimelineEntry(id: "start",
+                               marker: .start,
+                               title: startLabel,
+                               subtitle: "Starting point",
+                               legLabel: RouteSample.legLabel(0))
+        ]
+        for (index, stop) in RouteSample.optimizedStops.enumerated() {
+            entries.append(RouteTimelineEntry(id: stop.id,
+                                              marker: .stop(index + 1),
+                                              title: stop.name,
+                                              subtitle: stop.address,
+                                              legLabel: RouteSample.legLabel(index + 1)))
+        }
+        if let endLabel {
+            entries.append(RouteTimelineEntry(id: "end",
+                                              marker: .end,
+                                              title: endLabel,
+                                              subtitle: "End point"))
+        }
+        return entries
+    }
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: RoutePlannerMockup.featureTint, intensity: 0.6)
+            AmbientBackdrop(tint: RoutePlannerStyle.tint, intensity: 0.6)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    totals
-                    if showsSkips { skipNotice }
-                    timeline
-                    mapButtons
-                    footnote
+                    RouteTotalsHero(distanceLabel: RouteSample.totalDistanceLabel,
+                                    durationLabel: RouteSample.totalDurationLabel)
+                    if showsSkips {
+                        RouteSkippedNotice(names: RouteSample.skipped)
+                    }
+                    RouteTimeline(entries: entries)
+                    RouteMapButtons(openAppleMaps: {}, openGoogleMaps: {})
+                    RoutePreviewFootnote()
+                    Text("Both map buttons are dead in the lab — there is no route here to hand to a map app.")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
@@ -398,262 +286,50 @@ private struct RoutePreviewMockup: View {
         .navigationTitle("Optimized Route")
         .navigationBarTitleDisplayMode(.inline)
     }
-
-    /// Drawn unconditionally. The live totals pill is gated on distance > 0, which
-    /// is exactly the condition a FAILED optimization produces — so the one time
-    /// the user most needs to be told something is wrong, the number is hidden.
-    private var totals: some View {
-        HStack(spacing: 16) {
-            HStack(spacing: 6) {
-                Image(systemName: "car.fill").font(.footnote.weight(.semibold))
-                Text(RouteSample.totalDistanceLabel)
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-            }
-            Divider().frame(height: 26)
-            HStack(spacing: 6) {
-                Image(systemName: "clock.fill").font(.footnote.weight(.semibold))
-                Text(RouteSample.totalDurationLabel)
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-            }
-            Spacer(minLength: 0)
-        }
-        .ambientCard(density: .hero,
-                     state: .highlighted,
-                     glow: RoutePlannerMockup.featureTint,
-                     fillWidth: true)
-    }
-
-    /// PROPOSED — `skippedShipments` is decoded, counted and printed to the
-    /// console today and surfaced nowhere (parity §3, item 3).
-    private var skipNotice: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill").font(.footnote.weight(.semibold))
-                Text("2 schools skipped").font(.subheadline.weight(.semibold))
-                Spacer(minLength: 0)
-            }
-            ForEach(RouteSample.skipped, id: \.self) { name in
-                Text("· \(name)").font(.caption)
-            }
-            Text("PROPOSED — the router already tells the app which schools it refused; today that list only reaches the console.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .foregroundStyle(.orange)
-        .ambientCard(density: .compact,
-                     border: .hairline(Color.orange.opacity(0.45)),
-                     fillWidth: true)
-    }
-
-    private var timeline: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            AmbientSectionTitle("Route", trailing: "\(stops.count) stops")
-            VStack(spacing: 0) {
-                timelineRow(marker: .start,
-                            isLast: false,
-                            title: startLabel,
-                            subtitle: "Starting point",
-                            leg: RouteSample.legs.first)
-
-                ForEach(Array(stops.enumerated()), id: \.element.id) { index, stop in
-                    timelineRow(marker: .stop(index + 1),
-                                isLast: endLabel == nil && index == stops.count - 1,
-                                title: stop.name,
-                                subtitle: stop.address,
-                                leg: RouteSample.legs.count > index + 1
-                                     ? RouteSample.legs[index + 1] : nil)
-                }
-
-                if let endLabel {
-                    timelineRow(marker: .end,
-                                isLast: true,
-                                title: endLabel,
-                                subtitle: "End point",
-                                leg: nil)
-                }
-            }
-            .ambientCard(density: .roomy, fillWidth: true)
-        }
-    }
-
-    private enum Marker {
-        case start
-        case stop(Int)
-        case end
-
-        var color: Color {
-            switch self {
-            case .start: return .green
-            case .stop: return .blue
-            case .end: return .red
-            }
-        }
-    }
-
-    private func timelineRow(marker: Marker,
-                             isLast: Bool,
-                             title: String,
-                             subtitle: String,
-                             leg: LabRouteLeg?) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            markerColumn(marker: marker, isLast: isLast)
-                .frame(width: 22)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(subtitle)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                // Per-leg caption. Drawn even at zero — a leg that rounds to
-                // "0.0 mi" disappears entirely today, so two stops at the same
-                // school read as one.
-                if let leg {
-                    Text("\(leg.distanceLabel) · \(leg.durationLabel)")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(RoutePlannerMockup.featureTint)
-                        .padding(.top, 4)
-                        .padding(.bottom, 10)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 6)
-    }
-
-    /// The measured column. `dotRadius` is the ONLY constant: everything else —
-    /// where the line starts, where it stops — is read off `proxy.size.height`.
-    private func markerColumn(marker: Marker, isLast: Bool) -> some View {
-        let dotRadius: CGFloat = 7
-        return GeometryReader { proxy in
-            let centerX = proxy.size.width / 2
-            ZStack(alignment: .topLeading) {
-                if !isLast {
-                    Path { path in
-                        path.move(to: CGPoint(x: centerX, y: dotRadius * 2))
-                        path.addLine(to: CGPoint(x: centerX, y: proxy.size.height))
-                    }
-                    .stroke(Color.primary.opacity(0.18),
-                            style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                }
-
-                markerDot(marker, radius: dotRadius)
-                    .position(x: centerX, y: dotRadius)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func markerDot(_ marker: Marker, radius: CGFloat) -> some View {
-        switch marker {
-        case .start, .end:
-            Circle()
-                .fill(marker.color)
-                .frame(width: radius * 2, height: radius * 2)
-        case .stop(let number):
-            ZStack {
-                Circle().fill(marker.color)
-                Text("\(number)")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: radius * 2 + 4, height: radius * 2 + 4)
-        }
-    }
-
-    private var mapButtons: some View {
-        HStack(spacing: 10) {
-            Button {} label: {
-                Label("Apple Maps", systemImage: "map.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-                    // ambient-allow: a filled primary action is a control.
-                    .background(Capsule().fill(RoutePlannerMockup.featureTint))
-            }
-            .buttonStyle(.plain)
-
-            Button {} label: {
-                Label("Google Maps", systemImage: "globe")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-                    // ambient-allow: a secondary control, not a container.
-                    .background(Capsule().fill(.ultraThinMaterial))
-                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12)))
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private var footnote: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("There is no map, and cannot be one yet: the router is asked not to return a drawable route.")
-                .font(.caption2).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Durations are travel time only — the 5 minutes allowed at each school is not included. Both map buttons are dead in the lab.")
-                .font(.caption2).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
 }
 
 // MARK: - Sample data
 
-private struct LabRouteSchool: Identifiable {
-    let id: String
-    let name: String
-    let address: String
-    /// Two of the eight have none. That is the case the design exists to fix.
-    let hasCoordinates: Bool
-}
-
-private struct LabRouteLeg {
-    let miles: Double
-    let minutes: Int
-
-    var distanceLabel: String { String(format: "%.1f mi", miles) }
-    var durationLabel: String { minutes == 0 ? "under a minute" : "\(minutes) min" }
-}
-
 private enum RouteSample {
     /// Addresses of deliberately varying length — the short one and the one that
-    /// must truncate on a 375pt screen both have to read.
-    static let schools: [LabRouteSchool] = [
-        LabRouteSchool(id: "ws-1", name: "Northgate Elementary",
-                       address: "412 Northgate Rd, Fairview", hasCoordinates: true),
-        LabRouteSchool(id: "ws-2", name: "Cedar Valley Day School",
-                       address: "8 Mill Ln", hasCoordinates: false),
-        LabRouteSchool(id: "ws-3", name: "Westfield Consolidated High School",
-                       address: "1900 West Westfield Township Boulevard, Suite 2, Westfield", hasCoordinates: true),
-        LabRouteSchool(id: "ws-4", name: "Pinehurst Elementary",
-                       address: "77 Pinehurst Ave, Bellmore", hasCoordinates: true),
-        LabRouteSchool(id: "ws-5", name: "St. Bartholomew Academy",
-                       address: "620 Chapel St, Old Town", hasCoordinates: true),
-        LabRouteSchool(id: "ws-6", name: "Lakeshore Charter",
-                       address: "Lot 4, County Rd 19", hasCoordinates: false),
-        LabRouteSchool(id: "ws-7", name: "Riverbend Middle School",
-                       address: "3300 Riverbend Pkwy, Ashford", hasCoordinates: true),
-        LabRouteSchool(id: "ws-8", name: "Oakmont Prep",
-                       address: "15 Oakmont Sq, Granton", hasCoordinates: true)
+    /// must truncate on a 375pt screen both have to read. Two of the eight have no
+    /// map pin; that is the case the design exists to fix.
+    static let schools: [RouteSchoolRowModel] = [
+        RouteSchoolRowModel(id: "ws-1", name: "Northgate Elementary",
+                            address: "412 Northgate Rd, Fairview", isRoutable: true),
+        RouteSchoolRowModel(id: "ws-2", name: "Cedar Valley Day School",
+                            address: "8 Mill Ln", isRoutable: false),
+        RouteSchoolRowModel(id: "ws-3", name: "Westfield Consolidated High School",
+                            address: "1900 West Westfield Township Boulevard, Suite 2, Westfield", isRoutable: true),
+        RouteSchoolRowModel(id: "ws-4", name: "Pinehurst Elementary",
+                            address: "77 Pinehurst Ave, Bellmore", isRoutable: true),
+        RouteSchoolRowModel(id: "ws-5", name: "St. Bartholomew Academy",
+                            address: "620 Chapel St, Old Town", isRoutable: true),
+        RouteSchoolRowModel(id: "ws-6", name: "Lakeshore Charter",
+                            address: "Lot 4, County Rd 19", isRoutable: false),
+        RouteSchoolRowModel(id: "ws-7", name: "Riverbend Middle School",
+                            address: "3300 Riverbend Pkwy, Ashford", isRoutable: true),
+        RouteSchoolRowModel(id: "ws-8", name: "Oakmont Prep",
+                            address: "15 Oakmont Sq, Granton", isRoutable: true)
     ]
 
-    static let optimizedStops: [LabRouteSchool] = [
+    static let optimizedStops: [RouteSchoolRowModel] = [
         schools[0], schools[4], schools[2]
     ]
 
-    /// One more leg than stops: start → 1, 1 → 2, 2 → 3.
-    static let legs: [LabRouteLeg] = [
-        LabRouteLeg(miles: 12.3, minutes: 24),
-        LabRouteLeg(miles: 9.1, minutes: 18),
-        LabRouteLeg(miles: 17.0, minutes: 30)
+    /// One more leg than stops: start → 1, 1 → 2, 2 → 3. Formatted through the
+    /// kit's formatter, so the lab cannot round differently from the app.
+    private static let legs: [(miles: Double, minutes: Double)] = [
+        (12.3, 24), (9.1, 18), (17.0, 29.6)
     ]
 
-    static let totalDistanceLabel = "38.4 mi"
-    static let totalDurationLabel = "1h 12m"
+    static func legLabel(_ index: Int) -> String? {
+        guard index >= 0 && index < legs.count else { return nil }
+        return RoutePlannerFormat.leg(miles: legs[index].miles, minutes: legs[index].minutes)
+    }
+
+    static let totalDistanceLabel = RoutePlannerFormat.distance(miles: 38.4)
+    static let totalDurationLabel = RoutePlannerFormat.duration(minutes: 71.6)
 
     static let skipped = ["Cedar Valley Day School", "Lakeshore Charter"]
 }

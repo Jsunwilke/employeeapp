@@ -12,6 +12,62 @@ class DailyJobReportService: ObservableObject {
 
     private init() {}
 
+    // MARK: - Writes that cannot silently miss
+
+    /// A write whose filter matched nothing.
+    ///
+    /// A PostgREST UPDATE **or DELETE** that matches ZERO rows returns 200. Nothing
+    /// throws, so every caller of every write in this file used to report a change it
+    /// had not made — the exact failure FLG.1 traced on `users` (a zero-row PostgREST
+    /// UPDATE returns 200). Making it a thrown error is what turns a future
+    /// id/filter mismatch into a visible failure instead of a payroll edit that
+    /// evaporates.
+    enum WriteError: LocalizedError, CustomDebugStringConvertible {
+        /// `table`/`id` are carried for the LOG, not the label: the mismatch this
+        /// usually means — a case-folded or otherwise rewritten id — is invisible
+        /// without them, and invisible to the user either way.
+        case noRowsMatched(table: String, id: String)
+
+        /// THE USER-FACING SENTENCE, AND NOTHING ELSE IN IT. Every caller composes
+        /// this into its own lead ("That report could not be deleted: …"), so the old
+        /// version stacked two sentences and a table name into one line:
+        /// "That report could not be deleted: That report couldn't be changed:
+        /// nothing in daily_job_reports matches id <uuid>." It is deliberately
+        /// verb-neutral — this fires for the deletes as well as the updates — and says
+        /// what happened and what to do, with no schema in it.
+        var errorDescription: String? {
+            switch self {
+            case .noRowsMatched:
+                return "Nothing was changed — this report may have been deleted elsewhere. Pull to refresh and try again."
+            }
+        }
+
+        /// The table and the id, for the log line and the debugger.
+        var debugDescription: String {
+            switch self {
+            case .noRowsMatched(let table, let id):
+                return "WriteError.noRowsMatched: nothing in \(table) matches id \(id)"
+            }
+        }
+    }
+
+    /// The rows a write reports back. This SDK's `update`/`delete` already return
+    /// the affected rows by default; `.select("id")` narrows that representation to
+    /// the id column so a write does not haul 28 columns back to be counted.
+    private struct WrittenRowID: Decodable { let id: String }
+
+    /// Throw when a write reported no rows. Called by EVERY update AND the delete in
+    /// this file, not only by the one that was found lying.
+    private func requireRowsWritten(_ rows: [WrittenRowID], table: String, id: String) throws {
+        guard rows.isEmpty else { return }
+        let error = WriteError.noRowsMatched(table: table, id: id)
+        // The table and the id go to the log, where they are useful; the label gets
+        // the plain sentence.
+        print("⚠️ \(error.debugDescription)")
+        errorMessage = error.errorDescription
+        throw error
+    }
+
     // MARK: - Decoder Error Helper
 
     /// Extract detailed information from decoding errors
@@ -393,11 +449,67 @@ class DailyJobReportService: ObservableObject {
         }
 
         do {
-            try await supabase
+            let written: [WrittenRowID] = try await supabase
                 .from("daily_job_reports")
                 .update(updateData)
                 .eq("id", value: report.id)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, table: "daily_job_reports", id: report.id)
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    // MARK: - Update Mileage Only
+
+    /// Update the three mileage columns of one filed report.
+    ///
+    /// ADDED IN AMB.9. `MileageDetailView` used to `import Supabase` and write this
+    /// UPDATE inline from the view body — the only write in the app with no service
+    /// method behind it. `updateReport` cannot serve it: that method needs a whole
+    /// `DailyJobReport`, and the mileage screen holds a three-field wrapper, so
+    /// calling it would mean re-sending 28 columns the screen never read.
+    ///
+    /// THE ID IS USED EXACTLY AS DECODED — no case change. The repo's lowercase-UUID
+    /// rule is about columns SUPABASE MINTS lowercase (`users.id`), and it does not
+    /// apply here: `daily_job_reports.id` is a TEXT column whose values are written
+    /// by this app from Swift's own `UUID`, which is UPPERCASE — 2,470 of the 2,521
+    /// live rows are uppercase. Lowercasing the id therefore matched ZERO rows, and a
+    /// zero-row PostgREST UPDATE returns 200 (the FLG.1 lesson), so every mileage
+    /// edit reported success and changed nothing. `.select("id")` below is the
+    /// structural half of that fix: a write that matches nothing now throws.
+    ///
+    /// NOT ADDED, deliberately: a user or organisation filter. The write is
+    /// unscoped exactly as it was, so RLS remains the only cross-tenant guard.
+    /// Tightening it changes who can edit what, which is an authorization change
+    /// rather than a design one — recorded in AMB_BATCH3_PARITY.md §2.
+    func updateMileage(recordId: String,
+                       schoolName: String,
+                       vehicleType: String,
+                       totalMileage: Double) async throws {
+        isLoading = true
+        errorMessage = nil
+
+        defer { isLoading = false }
+
+        let updateData: [String: AnyJSON] = [
+            "total_mileage": .double(totalMileage),
+            "school_or_destination": .string(schoolName),
+            "vehicle_type": .string(vehicleType)
+        ]
+
+        do {
+            let written: [WrittenRowID] = try await supabase
+                .from("daily_job_reports")
+                .update(updateData)
+                .eq("id", value: recordId)
+                .select("id")
+                .execute()
+                .value
+            try requireRowsWritten(written, table: "daily_job_reports", id: recordId)
         } catch {
             errorMessage = error.localizedDescription
             throw error
@@ -406,7 +518,16 @@ class DailyJobReportService: ObservableObject {
 
     // MARK: - Delete Report
 
-    /// Delete a report by its ID
+    /// Delete a report by its ID.
+    ///
+    /// A ZERO-ROW DELETE THROWS, like the updates above. A PostgREST DELETE whose
+    /// filter matches nothing returns 200 with an empty body, so this method used to
+    /// report a deletion it had not performed — and both callers act on that: the
+    /// editor dismisses, the list removes the row locally. The report then reappears
+    /// on the next load with no explanation. Same `WrittenRowID`/`requireRowsWritten`
+    /// mechanism as `updateReport` and `updateMileage`; `daily_job_reports.id` is used
+    /// exactly as decoded (no case change) for the reason documented on
+    /// `updateMileage`.
     func deleteReport(reportId: String) async throws {
         isLoading = true
         errorMessage = nil
@@ -414,11 +535,14 @@ class DailyJobReportService: ObservableObject {
         defer { isLoading = false }
 
         do {
-            try await supabase
+            let written: [WrittenRowID] = try await supabase
                 .from("daily_job_reports")
                 .delete()
                 .eq("id", value: reportId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, table: "daily_job_reports", id: reportId)
         } catch {
             errorMessage = error.localizedDescription
             throw error

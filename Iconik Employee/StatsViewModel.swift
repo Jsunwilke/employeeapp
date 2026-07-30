@@ -1,566 +1,210 @@
+//  StatsViewModel.swift
+//  Iconik Employee — the Statistics data layer, repaired in AMB.9
+//
+//  THE SCREEN HAD NEVER RENDERED. Opened on a signed-in simulator 2026-07-29 it
+//  read "Error Loading Data — column daily_job_reports.start_time does not
+//  exist", with no content on any tab. Two of its five queries named four columns
+//  that do not exist in the shared database (`daily_job_reports.start_time` and
+//  `.end_time`, `schools.value` and `.type` — all four proved absent by live
+//  query), and one failing query replaced the entire screen. So this file is a
+//  rewrite, not a restyle, under the operator's 2026-07-29 approval covering the
+//  design AND the query repair.
+//
+//  WHAT CHANGED, AND WHY EACH CHANGE IS A CORRECTNESS FIX RATHER THAN A TASTE ONE
+//
+//    · ONE fetch of `daily_job_reports` per load, selecting all eight columns
+//      the screen needs, instead of FOUR full reads of the same table for the
+//      same window. Four reads is four chances to fail and four inconsistent
+//      snapshots of a table another photographer is writing to.
+//
+//    · AN EXPLICIT `.limit(...)`. No query on the old screen carried one, so
+//      PostgREST's default cap silently truncated the read — a statistics screen
+//      quietly reporting a fraction of the org's miles. The table holds ~2,500
+//      rows org-wide today.
+//
+//    · NO `schools` QUERY AT ALL. "Schools visited" now derives from the
+//      destinations the reports actually carry, so it counts places that were
+//      visited rather than every school on the org's list (the old figure
+//      included never-visited schools, and its query named absent columns).
+//
+//    · THE DATE COLUMN IS DECODED AS A STRING and reduced to a day. The Supabase
+//      decoder only parses whole ISO8601 timestamps, so a bare "2026-07-15"
+//      throws and empties the whole fetch — the same trap `DailyJobReport` and
+//      `JobBox` both already work around. `StatsDay` does it in one place.
+//
+//    · ALL ARITHMETIC LEFT. Every number is computed by `Stats/StatsRules.swift`,
+//      which `scripts/test_stats_rules.sh` compiles and runs. This file fetches
+//      and decodes; it does not add anything up.
+//
+//  DELETED WITH THE REWRITE, not left beside it: the fabricated weather table
+//  (five literal rows, 930 invented jobs), `MonthlyRevenueData`/`monthlyRevenue`
+//  (dead), `MileageData` and its `john`/`sarah`/`mike` fields and name subscript,
+//  the average-job-time computation (no column exists to compute it from), and
+//  the doubled mileage accumulator.
+
 import Foundation
 import Supabase
 import SwiftUI
-import MapKit
 
-// MARK: - Data Models
+@MainActor
+final class StatsViewModel: ObservableObject {
 
-struct MileageData: Identifiable {
-    let id = UUID()
-    let month: String
-    let john: Double
-    let sarah: Double
-    let mike: Double
-    let total: Double
-    var personal: Double = 0
-    var company: Double = 0
-
-    // This allows dynamic access to properties by name
-    subscript(key: String) -> Any? {
-        switch key {
-        case "month": return month
-        case "John": return john
-        case "Sarah": return sarah
-        case "Mike": return mike
-        case "total": return total
-        default: return nil
-        }
+    /// Loading, loaded or failed — one state, so a failure cannot be rendered as
+    /// an empty period and an empty period cannot be rendered as a failure. Both
+    /// happened on the old screen, in opposite directions.
+    enum LoadState {
+        case loading
+        case loaded(StatsAggregate)
+        case failed(String)
     }
-}
 
-struct LocationData: Identifiable {
-    let id = UUID()
-    let name: String
-    var visits: Int  // Changed to var to allow mutation
-    var mileage: Double  // Changed to var to allow mutation
-}
+    @Published private(set) var state: LoadState = .loading
 
-struct JobTypeData: Identifiable {
-    let id = UUID()
-    let name: String
-    let value: Double
-}
+    /// The ceiling on one read of `daily_job_reports`. Above this the numbers
+    /// would be quietly wrong, so it is far above the live row count rather than
+    /// a page size: ~2,500 rows org-wide today.
+    static let reportRowLimit = 5000
 
-struct PhotographerData: Identifiable {
-    let id = UUID()
-    let name: String
-    let jobs: Int
-    let miles: Double
-    let avgJobTime: Double
-}
-
-struct WeatherImpactData: Identifiable {
-    let id = UUID()
-    let weather: String
-    let jobs: Int
-    let onTimeArrival: Int
-}
-
-struct MonthlyRevenueData: Identifiable {
-    let id = UUID()
-    let month: String
-    let revenue: Double
-    let mileageReimbursement: Double
-}
-
-class StatsViewModel: ObservableObject {
-    // Published properties to update UI
-    @Published var mileageData: [MileageData] = []
-    @Published var locationData: [LocationData] = []
-    @Published var jobTypeData: [JobTypeData] = []
-    @Published var photographerData: [PhotographerData] = []
-    @Published var weatherImpactData: [WeatherImpactData] = []
-    @Published var monthlyRevenue: [MonthlyRevenueData] = []
-    @Published var isLoading: Bool = true
-    @Published var errorMessage: String = ""
-
-    // Org company-car rate (NULL → 0.10). Personal miles in this org-wide analytics
-    // view use the standard personal fallback since there's no single personal rate.
-    @Published var companyCarRate: Double = VehicleRates.defaultCompanyCarRate
-
-    /// Org-level reimbursement estimate: personal miles at the IRS standard fallback,
-    /// company miles at the org rate. (This view never had per-photographer rates.)
-    func reimbursement(for item: MileageData) -> Double {
-        item.personal * VehicleRates.defaultMileageRate + item.company * companyCarRate
-    }
-    
-    // AppStorage for user organization ID (needed for filtering data)
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
 
-    // Supabase client
     private var supabase: SupabaseClient { SupabaseManager.shared.client }
-    
-    // Computed properties for summary statistics
-    var totalMileage: Int {
-        Int(mileageData.reduce(0) { $0 + $1.total })
-    }
-    
-    var totalJobs: Int {
-        Int(jobTypeData.reduce(0) { $0 + $1.value })
-    }
-    
-    var totalPhotographers: Int {
-        photographerData.count
-    }
-    
-    var totalLocations: Int {
-        locationData.count
-    }
-    
-    var avgMileagePerMonth: Int {
-        if mileageData.isEmpty { return 0 }
-        return totalMileage / max(mileageData.count, 1)
-    }
-    
-    var avgJobsPerPhotographer: Int {
-        if photographerData.isEmpty { return 0 }
-        return totalJobs / max(totalPhotographers, 1)
-    }
-    
-    var avgVisitsPerLocation: Double {
-        if locationData.isEmpty { return 0 }
-        let totalVisits = locationData.reduce(0) { $0 + $1.visits }
-        return Double(totalVisits) / Double(max(totalLocations, 1))
-    }
-    
-    // Get list of photographer names for charting
-    var photographerNames: [String] {
-        photographerData.map { $0.name }.prefix(3).map { $0 }
-    }
-    
-    // MARK: - Data Loading
-    
-    func loadData(timeRange: TimeRange) {
-        isLoading = true
-        errorMessage = ""
-        
-        // Use real data from Supabase
-        loadRealData(timeRange: timeRange)
-    }
-    
-    // MARK: - Real Data Implementation
-    
-    // Main function to fetch real data from Supabase
-    func loadRealData(timeRange: TimeRange) {
-        // Get date range based on selected time frame
-        let (startDate, endDate) = getDateRange(for: timeRange)
+    private var loadTask: Task<Void, Never>?
 
-        // Reset all data arrays
-        mileageData = []
-        locationData = []
-        jobTypeData = []
-        photographerData = []
-        weatherImpactData = []
-        monthlyRevenue = []
+    // MARK: - Load
 
-        // Use async Task to load all data
-        Task {
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { await self.fetchMileageDataAsync(startDate: startDate, endDate: endDate) }
-                group.addTask { await self.fetchLocationDataAsync(startDate: startDate, endDate: endDate) }
-                group.addTask { await self.fetchJobTypeDataAsync(startDate: startDate, endDate: endDate) }
-                group.addTask { await self.fetchPhotographerDataAsync(startDate: startDate, endDate: endDate) }
-                group.addTask { await self.fetchWeatherImpactDataAsync(startDate: startDate, endDate: endDate) }
-            }
+    func load(period: StatsPeriod, reference: Date) {
+        // The old screen refetched all five queries on every appearance with no
+        // guard and let them race to write one error message. One task, cancelled
+        // when it is superseded.
+        loadTask?.cancel()
+        state = .loading
 
-            await MainActor.run {
-                self.isLoading = false
+        let organizationID = storedUserOrganizationID
+        let window = period.window(reference: reference)
 
-                // If no data was loaded, show error
-                if self.mileageData.isEmpty && self.locationData.isEmpty && self.jobTypeData.isEmpty {
-                    self.errorMessage = "No data available for the selected time period"
-                }
-            }
-        }
-    }
-    
-    // MARK: - Fetch Mileage Data
-
-    private func fetchMileageDataAsync(startDate: Date, endDate: Date) async {
-        // Ensure we have an organization ID
-        guard !storedUserOrganizationID.isEmpty else {
-            await MainActor.run {
-                self.errorMessage = "No organization ID found"
-            }
+        guard !organizationID.isEmpty else {
+            state = .failed("Your account isn't linked to an organization yet, so there's nothing to add up.")
             return
         }
 
-        do {
-            // Fetch the org company-car rate for the reimbursement estimate.
-            struct OrgRateRecord: Decodable { let company_car_rate: Double? }
-            if let orgRow = try? await supabase
-                .from("organizations")
-                .select("company_car_rate")
-                .eq("id", value: storedUserOrganizationID)
-                .limit(1)
-                .execute()
-                .value as [OrgRateRecord] {
-                let resolved = VehicleRates.resolveCompanyCarRate(orgRow.first?.company_car_rate)
-                await MainActor.run { self.companyCarRate = resolved }
-            }
-
-            struct ReportRecord: Decodable {
-                let date: Date?
-                let your_name: String?
-                let total_mileage: Double?
-                let vehicle_type: String?
-            }
-
-            let reports: [ReportRecord] = try await supabase
-                .from("daily_job_reports")
-                .select("date, your_name, total_mileage, vehicle_type")
-                .eq("organization_id", value: storedUserOrganizationID)
-                .gte("date", value: startDate.ISO8601Format())
-                .lte("date", value: endDate.ISO8601Format())
-                .execute()
-                .value
-
-            guard !reports.isEmpty else { return }
-
-            // Group reports by month
-            var reportsByMonth: [String: [String: Double]] = [:]
-            let monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-            let calendar = Calendar.current
-
-            for report in reports {
-                guard let date = report.date,
-                      let photographerName = report.your_name,
-                      let mileage = report.total_mileage else {
-                    continue
-                }
-
-                let month = calendar.component(.month, from: date) - 1
-                let monthName = monthNames[month]
-
-                if reportsByMonth[monthName] == nil {
-                    reportsByMonth[monthName] = ["John": 0, "Sarah": 0, "Mike": 0, "total": 0, "personal": 0, "company": 0]
-                }
-
-                if reportsByMonth[monthName]?.index(forKey: photographerName) != nil {
-                    reportsByMonth[monthName]?[photographerName, default: 0] += mileage
-                } else {
-                    reportsByMonth[monthName]?["total", default: 0] += mileage
-                }
-
-                reportsByMonth[monthName]?["total", default: 0] += mileage
-
-                // Personal/company split
-                if VehicleRates.isCompany(report.vehicle_type) {
-                    reportsByMonth[monthName]?["company", default: 0] += mileage
-                } else {
-                    reportsByMonth[monthName]?["personal", default: 0] += mileage
-                }
-            }
-
-            // Convert dictionary to array
-            var mileageResult: [MileageData] = []
-            let sortedMonths = reportsByMonth.keys.sorted { key1, key2 in
-                guard let index1 = monthNames.firstIndex(of: key1),
-                      let index2 = monthNames.firstIndex(of: key2) else {
-                    return false
-                }
-                return index1 < index2
-            }
-
-            for month in sortedMonths {
-                guard let monthData = reportsByMonth[month] else { continue }
-
-                let item = MileageData(
-                    month: month,
-                    john: monthData["John"] ?? 0,
-                    sarah: monthData["Sarah"] ?? 0,
-                    mike: monthData["Mike"] ?? 0,
-                    total: monthData["total"] ?? 0,
-                    personal: monthData["personal"] ?? 0,
-                    company: monthData["company"] ?? 0
-                )
-                mileageResult.append(item)
-            }
-
-            await MainActor.run {
-                self.mileageData = mileageResult
-            }
-        } catch {
-            await MainActor.run {
-                self.errorMessage = "Error fetching mileage data: \(error.localizedDescription)"
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let reports = try await self.fetchReports(organizationID: organizationID, window: window)
+                let people = try await self.fetchPeople(organizationID: organizationID)
+                let companyCarRate = try await self.fetchCompanyCarRate(organizationID: organizationID)
+                if Task.isCancelled { return }
+                let aggregate = StatsAggregator.aggregate(reports: reports,
+                                                          people: people,
+                                                          companyCarRate: companyCarRate,
+                                                          period: period,
+                                                          reference: reference)
+                self.state = .loaded(aggregate)
+            } catch {
+                if Task.isCancelled { return }
+                self.state = .failed(error.localizedDescription)
             }
         }
     }
-    
-    // MARK: - Fetch Location Data
 
-    private func fetchLocationDataAsync(startDate: Date, endDate: Date) async {
-        do {
-            // Get list of all schools
-            struct SchoolRecord: Decodable {
-                let id: String
-                let value: String?
-            }
+    // MARK: - The one report fetch
 
-            let schoolDocs: [SchoolRecord] = try await supabase
-                .from("schools")
-                .select("id, value")
-                .eq("organization_id", value: storedUserOrganizationID)
-                .execute()
-                .value
+    /// The seven columns that EXIST on `daily_job_reports` and are needed here,
+    /// read once for the whole screen. `date` comes back as text and is reduced
+    /// to a day; see `StatsDay`.
+    private struct ReportRow: Decodable {
+        let user_id: String?
+        let your_name: String?
+        let date: String?
+        let total_mileage: Double?
+        let vehicle_type: String?
+        let school_or_destination: String?
+        let job_descriptions: [String]?
 
-            guard !schoolDocs.isEmpty else { return }
+        /// Written out rather than synthesized: a type with a hand-written
+        /// `init(from:)` does not get a generated `CodingKeys`.
+        enum CodingKeys: String, CodingKey {
+            case user_id, your_name, date, total_mileage, vehicle_type
+            case school_or_destination, job_descriptions
+        }
 
-            // Map of school names to location data
-            var schoolData: [String: LocationData] = [:]
-            for doc in schoolDocs {
-                if let value = doc.value {
-                    schoolData[value] = LocationData(name: value, visits: 0, mileage: 0)
-                }
-            }
-
-            // Fetch job reports
-            struct ReportRecord: Decodable {
-                let school_or_destination: String?
-                let total_mileage: Double?
-                let date: Date?
-            }
-
-            let reports: [ReportRecord] = try await supabase
-                .from("daily_job_reports")
-                .select("school_or_destination, total_mileage, date")
-                .eq("organization_id", value: storedUserOrganizationID)
-                .gte("date", value: startDate.ISO8601Format())
-                .lte("date", value: endDate.ISO8601Format())
-                .execute()
-                .value
-
-            // Track visited locations per day
-            var visitedLocationsPerDay = Set<String>()
-            let calendar = Calendar.current
-
-            for report in reports {
-                guard let schoolName = report.school_or_destination,
-                      let mileage = report.total_mileage,
-                      let date = report.date else {
-                    continue
-                }
-
-                let components = calendar.dateComponents([.year, .month, .day], from: date)
-                let dateString = String(format: "%04d-%02d-%02d",
-                                        components.year ?? 0,
-                                        components.month ?? 0,
-                                        components.day ?? 0)
-
-                let visitKey = "\(schoolName)_\(dateString)"
-                let isFirstVisitOfDay = !visitedLocationsPerDay.contains(visitKey)
-
-                if var location = schoolData[schoolName] {
-                    location.mileage += mileage
-                    if isFirstVisitOfDay {
-                        location.visits += 1
-                        visitedLocationsPerDay.insert(visitKey)
-                    }
-                    schoolData[schoolName] = location
-                } else {
-                    let location = LocationData(
-                        name: schoolName,
-                        visits: isFirstVisitOfDay ? 1 : 0,
-                        mileage: mileage
-                    )
-                    if isFirstVisitOfDay {
-                        visitedLocationsPerDay.insert(visitKey)
-                    }
-                    schoolData[schoolName] = location
-                }
-            }
-
-            var locationResult = Array(schoolData.values)
-            locationResult.sort { $0.visits > $1.visits }
-
-            await MainActor.run {
-                self.locationData = locationResult
-            }
-        } catch {
-            await MainActor.run {
-                self.errorMessage = "Error fetching location data: \(error.localizedDescription)"
-            }
+        /// EVERY FIELD IS TOLERANT. A strict field throws on the first row that
+        /// disagrees with it and a thrown decode empties the ENTIRE fetch — which
+        /// on this screen presents as "no reports in July", the empty-state class
+        /// this project keeps paying for (JobBox: 316 of 1,055 live rows carry a
+        /// NULL the strict version would have died on).
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            user_id = (try? c.decodeIfPresent(String.self, forKey: .user_id)) ?? nil
+            your_name = (try? c.decodeIfPresent(String.self, forKey: .your_name)) ?? nil
+            date = (try? c.decodeIfPresent(String.self, forKey: .date)) ?? nil
+            total_mileage = (try? c.decodeIfPresent(Double.self, forKey: .total_mileage)) ?? nil
+            vehicle_type = (try? c.decodeIfPresent(String.self, forKey: .vehicle_type)) ?? nil
+            school_or_destination = (try? c.decodeIfPresent(String.self, forKey: .school_or_destination)) ?? nil
+            job_descriptions = (try? c.decodeIfPresent([String].self, forKey: .job_descriptions)) ?? nil
         }
     }
-    
-    // MARK: - Fetch Job Type Data
 
-    private func fetchJobTypeDataAsync(startDate: Date, endDate: Date) async {
-        do {
-            struct ReportRecord: Decodable {
-                let job_descriptions: [String]?
-            }
+    private func fetchReports(organizationID: String, window: StatsWindow) async throws -> [StatsReport] {
+        let rows: [ReportRow] = try await supabase
+            .from("daily_job_reports")
+            .select("user_id, your_name, date, total_mileage, vehicle_type, school_or_destination, job_descriptions")
+            .eq("organization_id", value: organizationID)
+            // Day strings, not instants: the column is a day and the filter says
+            // so. `lt` on the first day of the following month includes the last
+            // day of the period whatever time of day its timestamp carries.
+            .gte("date", value: window.queryFirstDayString)
+            .lt("date", value: window.queryEndExclusiveString)
+            .limit(Self.reportRowLimit)
+            .execute()
+            .value
 
-            let reports: [ReportRecord] = try await supabase
-                .from("daily_job_reports")
-                .select("job_descriptions")
-                .eq("organization_id", value: storedUserOrganizationID)
-                .gte("date", value: startDate.ISO8601Format())
-                .lte("date", value: endDate.ISO8601Format())
-                .execute()
-                .value
-
-            var jobTypeCounts: [String: Int] = [:]
-
-            for report in reports {
-                if let jobDescriptions = report.job_descriptions {
-                    for jobType in jobDescriptions {
-                        jobTypeCounts[jobType, default: 0] += 1
-                    }
-                }
-            }
-
-            var jobTypeResult: [JobTypeData] = []
-            for (jobType, count) in jobTypeCounts {
-                jobTypeResult.append(JobTypeData(name: jobType, value: Double(count)))
-            }
-            jobTypeResult.sort { $0.value > $1.value }
-
-            await MainActor.run {
-                self.jobTypeData = jobTypeResult
-            }
-        } catch {
-            await MainActor.run {
-                self.errorMessage = "Error fetching job types: \(error.localizedDescription)"
-            }
+        return rows.map { row in
+            StatsReport(userId: row.user_id,
+                        yourName: row.your_name,
+                        day: StatsDay(stored: row.date),
+                        miles: row.total_mileage ?? 0,
+                        vehicleType: row.vehicle_type,
+                        destination: row.school_or_destination,
+                        jobDescriptions: row.job_descriptions ?? [])
         }
     }
-    
-    // MARK: - Fetch Photographer Data
 
-    private func fetchPhotographerDataAsync(startDate: Date, endDate: Date) async {
-        do {
-            // First, get all users in the organization
-            struct UserRecord: Decodable {
-                let first_name: String?
-            }
+    // MARK: - Rates and names
 
-            let userDocs: [UserRecord] = try await supabase
-                .from("users")
-                .select("first_name")
-                .eq("organization_id", value: storedUserOrganizationID)
-                .execute()
-                .value
-
-            guard !userDocs.isEmpty else { return }
-
-            var photographerNames: [String] = []
-            for doc in userDocs {
-                if let firstName = doc.first_name {
-                    photographerNames.append(firstName)
-                }
-            }
-
-            // Fetch job reports
-            struct ReportRecord: Decodable {
-                let your_name: String?
-                let total_mileage: Double?
-                let start_time: Date?
-                let end_time: Date?
-            }
-
-            let reports: [ReportRecord] = try await supabase
-                .from("daily_job_reports")
-                .select("your_name, total_mileage, start_time, end_time")
-                .eq("organization_id", value: storedUserOrganizationID)
-                .gte("date", value: startDate.ISO8601Format())
-                .lte("date", value: endDate.ISO8601Format())
-                .execute()
-                .value
-
-            var jobsByPhotographer: [String: Int] = [:]
-            var mileageByPhotographer: [String: Double] = [:]
-            var timeByPhotographer: [String: [Double]] = [:]
-
-            for report in reports {
-                guard let photographerName = report.your_name,
-                      let mileage = report.total_mileage else {
-                    continue
-                }
-
-                var jobDuration: Double = 3.0 // Default
-                if let startTime = report.start_time, let endTime = report.end_time {
-                    jobDuration = endTime.timeIntervalSince(startTime) / 3600
-                }
-
-                jobsByPhotographer[photographerName, default: 0] += 1
-                mileageByPhotographer[photographerName, default: 0] += mileage
-
-                if timeByPhotographer[photographerName] == nil {
-                    timeByPhotographer[photographerName] = []
-                }
-                timeByPhotographer[photographerName]?.append(jobDuration)
-            }
-
-            var photographerResult: [PhotographerData] = []
-
-            for name in photographerNames {
-                guard let jobs = jobsByPhotographer[name], jobs > 0 else { continue }
-
-                let miles = mileageByPhotographer[name] ?? 0
-                let jobTimes = timeByPhotographer[name] ?? []
-                let avgJobTime = jobTimes.isEmpty ? 3.0 : jobTimes.reduce(0, +) / Double(jobTimes.count)
-
-                photographerResult.append(PhotographerData(
-                    name: name,
-                    jobs: jobs,
-                    miles: miles,
-                    avgJobTime: avgJobTime
-                ))
-            }
-
-            photographerResult.sort { $0.jobs > $1.jobs }
-
-            await MainActor.run {
-                self.photographerData = photographerResult
-            }
-        } catch {
-            await MainActor.run {
-                self.errorMessage = "Error fetching photographer data: \(error.localizedDescription)"
-            }
-        }
+    /// id, first_name, amount_per_mile — exactly what `ManagerMileageView`
+    /// selects, because this screen's reimbursement figure now uses the same rule
+    /// and must therefore use the same inputs.
+    private struct UserRow: Decodable {
+        let id: String
+        let first_name: String?
+        let amount_per_mile: Double?
     }
-    
-    // MARK: - Fetch Weather Impact Data
 
-    private func fetchWeatherImpactDataAsync(startDate: Date, endDate: Date) async {
-        // Since we don't have actual weather data in the database,
-        // we'll create a reasonable approximation based on seasons and known weather patterns
-
-        // Create mock weather impact data
-        let weatherImpactResult: [WeatherImpactData] = [
-            WeatherImpactData(weather: "Clear", jobs: 320, onTimeArrival: 95),
-            WeatherImpactData(weather: "Cloudy", jobs: 280, onTimeArrival: 92),
-            WeatherImpactData(weather: "Rain", jobs: 180, onTimeArrival: 85),
-            WeatherImpactData(weather: "Snow", jobs: 90, onTimeArrival: 70),
-            WeatherImpactData(weather: "Fog", jobs: 60, onTimeArrival: 80)
-        ]
-
-        // In a real implementation, we would analyze job reports and correlate with weather data
-        await MainActor.run {
-            self.weatherImpactData = weatherImpactResult
-        }
+    private func fetchPeople(organizationID: String) async throws -> [StatsPersonRecord] {
+        let rows: [UserRow] = try await supabase
+            .from("users")
+            .select("id, first_name, amount_per_mile")
+            .eq("organization_id", value: organizationID)
+            .execute()
+            .value
+        return rows.map { StatsPersonRecord(id: $0.id, firstName: $0.first_name, amountPerMile: $0.amount_per_mile) }
     }
-    
-    // MARK: - Helper Methods
-    
-    // Helper function to get date range for queries
-    private func getDateRange(for timeRange: TimeRange) -> (Date, Date) {
-        let calendar = Calendar.current
-        let now = Date()
-        let endDate = now
-        
-        let startDate: Date
-        
-        switch timeRange {
-        case .month:
-            startDate = calendar.date(byAdding: .month, value: -1, to: now) ?? now
-        case .quarter:
-            startDate = calendar.date(byAdding: .month, value: -3, to: now) ?? now
-        case .year:
-            startDate = calendar.date(byAdding: .year, value: -1, to: now) ?? now
-        }
-        
-        return (startDate, endDate)
+
+    private struct OrgRateRow: Decodable { let company_car_rate: Double? }
+
+    /// The raw org rate, NULL tolerated — `VehicleRates` resolves it. NOT
+    /// `try?`-swallowed: a failed read here would silently value every company
+    /// mile at the 10¢ fallback, which is the shape the manager screen ships and
+    /// this one is not repeating.
+    private func fetchCompanyCarRate(organizationID: String) async throws -> Double? {
+        let rows: [OrgRateRow] = try await supabase
+            .from("organizations")
+            .select("company_car_rate")
+            .eq("id", value: organizationID)
+            .limit(1)
+            .execute()
+            .value
+        return rows.first?.company_car_rate
     }
 }

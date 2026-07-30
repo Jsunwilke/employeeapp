@@ -1,292 +1,264 @@
-//
 //  MileageDetailView.swift
-//  Iconik Employee
+//  Iconik Employee — one trip, converted to Ambient in AMB.9
 //
-//  Created by administrator on 4/27/25.
+//  The old screen is GONE from this file: the hand-rolled card with its manual
+//  dark-mode branch, the inline Save/Cancel/Edit buttons sitting halfway down the
+//  content, the nav modifiers and BOTH `.alert`s attached INSIDE the ScrollView,
+//  the deprecated `presentationMode`, and the in-view Supabase UPDATE.
 //
-
+//  WHAT CHANGED, and why each is in scope:
+//    · EDIT IS A TOOLBAR MODE. Edit → Cancel/Save in the nav bar. An edit that
+//      changes a payroll figure should be a mode you enter, not a pair of buttons
+//      between two cards.
+//    · SAVE IS DISABLED IN FLIGHT and shows a spinner. The old button stayed live,
+//      so a second tap fired a second UPDATE.
+//    · PERSONAL IS BADGED. The old read mode drew an orange "Company car" line and
+//      NOTHING AT ALL for a personal trip — absence was the only signal.
+//    · ONE INLINE MESSAGE INSTEAD OF TWO STACKED ALERTS. Two `.alert` modifiers on
+//      one view is the shape where one swallows the other; validation and failure
+//      are drawn where the mistake is.
+//    · `errorMessage` IS CLEARED on entry to Save and on Cancel. It never was, so a
+//      resolved failure kept re-appearing.
+//    · THE SCHOOLS DEAD END IS GONE. The form tested `schoolOptions.isEmpty` and
+//      drew "Loading schools..." whenever it was true — so an org with ZERO schools
+//      showed a spinner forever beside an unsatisfiable "Please select a school.",
+//      and a FAILED load looked identical. Three situations, three states
+//      (`MileageSchoolsState`).
+//    · THE WRITE MOVED TO THE SERVICE. `DailyJobReportService.updateMileage` owns
+//      it, and it sends the record id EXACTLY as decoded: `daily_job_reports.id` is
+//      text written by Swift's own uppercase `UUID`, so lowercasing it matched zero
+//      rows — and a zero-row PostgREST UPDATE returns 200. The service now asks for
+//      the written rows back and throws when there are none, which is what makes the
+//      failure reach the notice below instead of dismissing as a save.
+//
+//  WHAT IS DELIBERATELY UNCHANGED, and named rather than silently carried:
+//    · THE RATES ARE STILL CAPTURED AT PUSH TIME. A parent whose rate fetch has not
+//      landed pins 0.67/0.10 for this screen's lifetime. The root now loads rates
+//      before its first row can be tapped, but the parameter is still a snapshot.
+//    · THE SCHOOL IS STILL STORED BY NAME, not by id — a rename orphans history.
+//      That is a data-model change (`daily_job_reports.school_or_destination` is
+//      text) and belongs with the reports arc, not a restyle.
+//    · THERE IS STILL NO PERMISSION OR OWNERSHIP GATE on editing, and the UPDATE
+//      carries no user/org filter — RLS is the only cross-tenant guard. Moving an
+//      authorization boundary is not a design phase's call.
+//    · THE SCREEN STILL EXPOSES 3 OF 28 COLUMNS and has no route to the full
+//      report. There is no such route in the data layer to draw.
+//
+//  CLEARANCE: this screen is PUSHED, so it insets ITSELF — a container's root inset
+//  is not inherited by what it pushes (see Navigation/BottomTabBar.swift).
 
 import SwiftUI
-import Supabase
 
 struct MileageDetailView: View {
     let record: MileageReportsViewModel.MileageRecordWrapper
     let personalRate: Double
     let companyRate: Double
 
-    // Local copies of the record data for editing
-    @State private var localMileage: String
-    @State private var localSchoolName: String
-    @State private var localVehicleType: String
-    @State private var isEditing: Bool = false
+    // Local copies of the record data for editing.
+    @State private var schoolName: String
+    @State private var vehicleChoice: String?
+    @State private var milesText: String
+
+    @State private var isEditing = false
+    @State private var isSaving = false
+    /// Validation and failure are one line, drawn under the form.
+    @State private var noticeMessage: String?
+
     @State private var schoolOptions: [MileageSchoolItem] = []
-    @State private var errorMessage: String = ""
-    @State private var showingErrorAlert: Bool = false
-    @State private var showingSuccessAlert: Bool = false
-    
-    // To dismiss the view when saving
-    @Environment(\.presentationMode) var presentationMode
-    @Environment(\.colorScheme) var colorScheme
-    
-    // User organization for filtering schools
+    @State private var schoolsState: MileageSchoolsState = .loading
+    @State private var hasRequestedSchools = false
+
+    @Environment(\.dismiss) private var dismiss
+
     @AppStorage("userOrganizationID") private var storedUserOrganizationID: String = ""
-    
-    // Date formatter for header
-    private var dateFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .long
-        return formatter
-    }
-    
+
+    private var tint: Color { MileageStyle.tint }
+
     init(record: MileageReportsViewModel.MileageRecordWrapper, personalRate: Double, companyRate: Double) {
         self.record = record
         self.personalRate = personalRate
         self.companyRate = companyRate
-        _localMileage = State(initialValue: String(format: "%.1f", record.totalMileage))
-        _localSchoolName = State(initialValue: record.schoolName)
-        _localVehicleType = State(initialValue: record.vehicleType)
+        _schoolName = State(initialValue: record.schoolName)
+        _vehicleChoice = State(initialValue: MileageVehicle.from(storage: record.vehicleType).choiceLabel)
+        _milesText = State(initialValue: MileageFigures.oneDecimal(record.totalMileage))
     }
-    
+
+    // MARK: - Derived
+
+    private var vehicle: MileageVehicle {
+        MileageVehicle.from(choiceLabel: vehicleChoice ?? "") ?? .personal
+    }
+
+    private var rate: Double {
+        VehicleRates.rate(forVehicleType: vehicle.storageValue,
+                          personalRate: personalRate,
+                          companyCarRate: companyRate)
+    }
+
+    /// What the hero shows while the field is being typed into. An unreadable field
+    /// reads as zero miles here and is REJECTED by Save — it is not written.
+    private var miles: Double {
+        Double(milesText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                // Card with mileage details
-                VStack(spacing: 16) {
-                    // Date
-                    Text(dateFormatter.string(from: record.date))
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                    
-                    // School name
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.6)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    MileageDetailHero(school: schoolName,
+                                      date: record.date,
+                                      miles: miles,
+                                      vehicle: vehicle,
+                                      rate: rate,
+                                      tint: tint)
+
                     if isEditing {
-                        if schoolOptions.isEmpty {
-                            Text("Loading schools...")
-                                .foregroundColor(.secondary)
-                                .onAppear(perform: loadSchools)
-                        } else {
-                            SearchableMileageSchoolPicker(
-                                selectedSchoolName: $localSchoolName,
-                                schools: schoolOptions,
-                                title: "School"
-                            )
-                            .padding(.horizontal)
-                            .frame(maxWidth: .infinity)
-                            .background(Color(.secondarySystemBackground))
-                            .cornerRadius(8)
-                        }
+                        MileageEditForm(schoolName: $schoolName,
+                                        vehicleChoice: $vehicleChoice,
+                                        milesText: $milesText,
+                                        schools: schoolOptions,
+                                        schoolsState: schoolsState,
+                                        validationMessage: noticeMessage,
+                                        retrySchools: { loadSchools(force: true) },
+                                        tint: tint)
                     } else {
-                        Text(localSchoolName)
-                            .font(.title3)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
+                        MileageDetailReadRows(school: schoolName, vehicle: vehicle, miles: miles)
+                        if let noticeMessage {
+                            MileageInlineNotice(message: noticeMessage)
+                        }
                     }
 
-                    // Vehicle type
-                    if isEditing {
-                        Picker("Vehicle", selection: $localVehicleType) {
-                            Text("Personal").tag("personal")
-                            Text("Company").tag("company")
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal)
-                    } else if VehicleRates.isCompany(localVehicleType) {
-                        Text("Company car")
-                            .font(.subheadline)
-                            .foregroundColor(.orange)
-                    }
-
-                    // Mileage & Reimbursement
-                    HStack(spacing: 40) {
-                        VStack(spacing: 5) {
-                            if isEditing {
-                                TextField("Miles", text: $localMileage)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.center)
-                                    .font(.system(size: 42, weight: .bold, design: .rounded))
-                                    .padding(.horizontal)
-                                    .frame(minWidth: 120)
-                            } else {
-                                Text(localMileage)
-                                    .font(.system(size: 42, weight: .bold, design: .rounded))
-                            }
-                            Text("miles")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        VStack(spacing: 5) {
-                            Text("$\(calculateReimbursement(), specifier: "%.2f")")
-                                .font(.system(size: 42, weight: .bold, design: .rounded))
-                                .foregroundColor(.blue)
-                            Text("reimbursement")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(.top, 5)
+                    MileageEditFootnote()
                 }
-                .padding(.vertical, 30)
-                .padding(.horizontal)
-                .frame(maxWidth: .infinity)
-                .background(colorScheme == .dark ? Color(.systemGray6) : Color(.systemGray6).opacity(0.5))
-                .cornerRadius(16)
-                .padding(.horizontal)
-                
-                // Edit button
-                if isEditing {
-                    HStack(spacing: 20) {
-                        // Cancel Button
-                        Button(action: {
-                            // Reset to original values and exit edit mode
-                            localMileage = String(format: "%.1f", record.totalMileage)
-                            localSchoolName = record.schoolName
-                            localVehicleType = record.vehicleType
-                            isEditing = false
-                        }) {
-                            Text("Cancel")
-                                .font(.headline)
-                                .padding()
-                                .frame(maxWidth: .infinity)
-                                .background(Color.gray.opacity(0.2))
-                                .foregroundColor(.primary)
-                                .cornerRadius(12)
-                        }
-                        
-                        // Save Button
-                        Button(action: saveChanges) {
-                            Text("Save")
-                                .font(.headline)
-                                .padding()
-                                .frame(maxWidth: .infinity)
-                                .background(Color.blue)
-                                .foregroundColor(.white)
-                                .cornerRadius(12)
-                        }
-                    }
-                    .padding(.horizontal)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+            }
+            .ambientNoBounceWhenShort()
+        }
+        // A PUSHED screen insets itself: a safe-area inset does not travel out of
+        // the shell's navigation container into what it pushes.
+        .tabBarClearance()
+        .navigationTitle("Trip")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { toolbarContent }
+    }
+
+    // MARK: - Toolbar
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        if isEditing {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("Cancel") { cancelEditing() }
+                    .disabled(isSaving)
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if isSaving {
+                    ProgressView()
                 } else {
-                    Button(action: { isEditing = true }) {
-                        Text("Edit Mileage")
-                            .font(.headline)
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(12)
-                    }
-                    .padding(.horizontal)
+                    Button("Save") { save() }
+                        .font(.body.weight(.semibold))
                 }
             }
-            .padding(.vertical)
-            .navigationTitle("Mileage Details")
-            .navigationBarTitleDisplayMode(.inline)
-            .alert(isPresented: $showingErrorAlert) {
-                Alert(
-                    title: Text("Error"),
-                    message: Text(errorMessage),
-                    dismissButton: .default(Text("OK"))
-                )
-            }
-            .alert("Changes Saved", isPresented: $showingSuccessAlert) {
-                Button("OK") {
-                    presentationMode.wrappedValue.dismiss()
-                }
-            } message: {
-                Text("Your mileage update has been saved successfully.")
+        } else {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Edit") { beginEditing() }
             }
         }
     }
-    
-    // Calculate reimbursement amount at the vehicle-appropriate rate.
-    private func calculateReimbursement() -> Double {
-        let miles = Double(localMileage) ?? 0.0
-        let rate = VehicleRates.rate(forVehicleType: localVehicleType, personalRate: personalRate, companyCarRate: companyRate)
-        return miles * rate
+
+    // MARK: - Mode
+
+    private func beginEditing() {
+        noticeMessage = nil
+        withAnimation(AmbientMotion.snappy) { isEditing = true }
+        loadSchools()
     }
-    
-    // Load school options from Supabase
-    private func loadSchools() {
+
+    private func cancelEditing() {
+        schoolName = record.schoolName
+        vehicleChoice = MileageVehicle.from(storage: record.vehicleType).choiceLabel
+        milesText = MileageFigures.oneDecimal(record.totalMileage)
+        // Cleared on Cancel: a message about an edit that no longer exists is noise.
+        noticeMessage = nil
+        withAnimation(AmbientMotion.snappy) { isEditing = false }
+    }
+
+    // MARK: - Save
+
+    private func save() {
+        guard !isSaving else { return }
+        // Cleared on ENTRY, so a second attempt is not judged by the first one's
+        // message.
+        noticeMessage = nil
+
+        let validation = MileageEditValidation.evaluate(school: schoolName,
+                                                        vehicle: vehicle,
+                                                        milesText: milesText)
+        guard case .valid(let school, let vehicle, let miles) = validation else {
+            noticeMessage = validation.message
+            return
+        }
+
+        milesText = MileageFigures.oneDecimal(miles)
+        isSaving = true
+
         Task {
             do {
-                let supabase = SupabaseManager.shared.client
-
-                struct SchoolRecord: Decodable {
-                    let id: String
-                    let name: String?
-                }
-
-                let schools: [SchoolRecord] = try await supabase
-                    .from("schools")
-                    .select("id, name")
-                    .eq("organization_id", value: storedUserOrganizationID)
-                    .execute()
-                    .value
-
+                try await DailyJobReportService.shared.updateMileage(recordId: record.id,
+                                                                    schoolName: school,
+                                                                    vehicleType: vehicle.storageValue,
+                                                                    totalMileage: miles)
                 await MainActor.run {
-                    var temp: [MileageSchoolItem] = []
-                    for school in schools {
-                        if let name = school.name {
-                            temp.append(MileageSchoolItem(id: school.id, name: name))
-                        }
-                    }
-                    temp.sort { $0.name.lowercased() < $1.name.lowercased() }
-                    schoolOptions = temp
+                    isSaving = false
+                    AmbientHaptics.impact(.medium)
+                    // Success pops. The list reloads on reappearance.
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    isSaving = false
+                    // Edit mode STAYS: the typed values are still on screen and the
+                    // save can be tried again.
+                    noticeMessage = "Couldn't save this trip — \(error.localizedDescription)"
+                }
+            }
+        }
+    }
 
-                    // Pre-select the matching school if possible
-                    if let matched = temp.first(where: { $0.name == record.schoolName }) {
-                        localSchoolName = matched.name
+    // MARK: - Schools
+
+    /// Loaded through `SchoolService`, which either returns or throws — so "no
+    /// schools" and "the load failed" are distinguishable. `DatabaseManager`'s
+    /// refresh is deliberately not used: it calls back only when the data CHANGED
+    /// and its failure path calls back with an empty array, which is how a spinner
+    /// runs forever and a failure reads as an empty organisation.
+    private func loadSchools(force: Bool = false) {
+        guard force || !hasRequestedSchools else { return }
+        hasRequestedSchools = true
+        schoolsState = .loading
+
+        Task {
+            do {
+                let schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
+                let items = schools
+                    .map { MileageSchoolItem(id: $0.id, name: $0.name) }
+                    .sorted { $0.name.lowercased() < $1.name.lowercased() }
+                await MainActor.run {
+                    schoolOptions = items
+                    schoolsState = items.isEmpty ? .empty : .ready
+                    // Keep the report's own school selected when it is one of them;
+                    // when it is not, the typed value stands rather than being
+                    // silently blanked.
+                    if let matched = items.first(where: { $0.name == record.schoolName }) {
+                        schoolName = matched.name
                     }
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    showingErrorAlert = true
-                }
-            }
-        }
-    }
-    
-    // Save changes to Supabase
-    private func saveChanges() {
-        guard let mileage = Double(localMileage) else {
-            errorMessage = "Invalid mileage value. Please enter a number."
-            showingErrorAlert = true
-            return
-        }
-
-        if localSchoolName.isEmpty {
-            errorMessage = "Please select a school."
-            showingErrorAlert = true
-            return
-        }
-
-        Task {
-            do {
-                let supabase = SupabaseManager.shared.client
-
-                print("📝 Saving mileage - ID: \(record.id), Mileage: \(mileage), School: \(localSchoolName)")
-
-                let updateData: [String: AnyJSON] = [
-                    "total_mileage": .double(mileage),
-                    "school_or_destination": .string(localSchoolName),
-                    "vehicle_type": .string(localVehicleType)
-                ]
-                try await supabase
-                    .from("daily_job_reports")
-                    .update(updateData)
-                    .eq("id", value: record.id)
-                    .execute()
-
-                print("✅ Mileage saved successfully")
-
-                await MainActor.run {
-                    showingSuccessAlert = true
-                }
-            } catch {
-                print("❌ Mileage save error: \(error)")
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    showingErrorAlert = true
+                    schoolsState = .failed("Couldn't load your organization's schools — \(error.localizedDescription)")
                 }
             }
         }
@@ -294,6 +266,7 @@ struct MileageDetailView: View {
 }
 
 // We need this struct for the school picker
+// (`Components/SearchableSchoolPicker.swift`'s mileage variant takes it).
 struct MileageSchoolItem: Identifiable, Hashable {
     let id: String
     let name: String

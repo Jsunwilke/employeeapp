@@ -1,276 +1,224 @@
+//  MileageReportsView.swift
+//  Iconik Employee — Mileage Reports, converted to Ambient in AMB.9
+//
+//  The old screen and its `SummaryCardView` — two hand-rolled cards, a
+//  `NumberFormatter` allocated per render, and the "Current Period" title that
+//  stayed put while its values were replaced — are GONE from this file, not left
+//  beside the new one. Every piece of the design now lives in
+//  `Misc Features/MileageKit.swift`, which the design lab's mockup also draws with,
+//  so the mockup and this screen cannot diverge.
+//
+//  WHAT THIS SCREEN GAINED, and why each is in scope:
+//    · THE MONEY LEADS. The selected period's reimbursement is the big number.
+//    · THE SPLIT IS ALWAYS VISIBLE, including at zero company miles.
+//    · THE HEADER IS DERIVED FROM THE SELECTION, so it cannot say "Current Period"
+//      over a past period's totals.
+//    · REAL PAY-PERIOD BOUNDARIES. Six chips walked back through
+//      `PayPeriodService`, so a weekly or monthly org gets its own cycle — and the
+//      caption states which one it is reading.
+//    · LOADING, EMPTY, FAILURE AND STALE STATES. The screen had none of the four,
+//      and both fetch paths swallowed their failure, so a failed load read
+//      "0.0 miles / $0.00".
+//
+//  CLEARANCE: this is a SHELL-WRAPPED feature — `MainEmployeeView.featureContainer`
+//  applies `tabBarClearance` inside its own `NavigationView`, so this root must not
+//  apply it again. The DETAIL is pushed and insets itself; see MileageDetailView.
+//
+//  DELIBERATELY NOT DRAWN: an "add trip" button. Mileage is one of 28 columns of a
+//  daily job report and there is no add flow anywhere in the app; an empty state
+//  that invites you to create something you cannot create is worse than one that
+//  explains where the numbers come from.
+
 import SwiftUI
 
 struct MileageReportsView: View {
     @StateObject var viewModel: MileageReportsViewModel
-    @State private var selectedPeriodStart: Date
-    
-    // Assume the user's home address is stored in AppStorage.
-    @AppStorage("userHomeAddress") private var userHomeAddress: String = ""
-    
-    // Create an array of available pay periods (current + previous five).
-    private var availablePeriods: [Date] {
-        var periods: [Date] = []
-        let calendar = Calendar.current
-        let periodLength = 14
-        var currentStart = viewModel.currentPeriodStart
-        
-        for _ in 0..<6 {
-            periods.append(currentStart)
-            if let nextStart = calendar.date(byAdding: .day, value: -periodLength, to: currentStart) {
-                currentStart = nextStart
-            }
-        }
-        return periods
-    }
-    
-    // Formatter for period card display.
-    private var cardFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
-        return formatter
-    }
-    
-    // Formatter for full period range display.
-    private var fullRangeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        return formatter
-    }
-    
-    // Formatter for current month's full name.
-    private var monthName: String {
-        let formatter = DateFormatter()
-        let monthIndex = Calendar.current.component(.month, from: Date()) - 1
-        return formatter.monthSymbols[monthIndex]
-    }
-    
+
+    /// One `@State` destination, one `.ambientPush` — the AMB.3 rule.
+    @State private var selectedRecord: MileageReportsViewModel.MileageRecordWrapper?
+
+    private var tint: Color { MileageStyle.tint }
+
     init(userName: String) {
-        let vm = MileageReportsViewModel(userName: userName)
-        _viewModel = StateObject(wrappedValue: vm)
-        _selectedPeriodStart = State(initialValue: vm.currentPeriodStart)
+        _viewModel = StateObject(wrappedValue: MileageReportsViewModel(userName: userName))
     }
-    
+
     var body: some View {
-        VStack(spacing: 12) {
-                
-                // Carousel-style period picker.
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(availablePeriods, id: \.self) { period in
-                            Button(action: {
-                                selectedPeriodStart = period
-                                viewModel.loadRecords(forPayPeriodStart: period)
-                            }) {
-                                VStack {
-                                    Text(cardFormatter.string(from: period))
-                                        .font(.headline)
-                                        .foregroundColor(selectedPeriodStart == period ? .white : .primary)
-                                    Text("to")
-                                        .font(.caption)
-                                        .foregroundColor(selectedPeriodStart == period ? .white : .secondary)
-                                    if let periodEnd = Calendar.current.date(byAdding: .day, value: 13, to: period) {
-                                        Text(cardFormatter.string(from: periodEnd))
-                                            .font(.headline)
-                                            .foregroundColor(selectedPeriodStart == period ? .white : .primary)
-                                    }
-                                }
-                                .padding(8)
-                                .background(selectedPeriodStart == period ? Color.blue : Color.gray.opacity(0.2))
-                                .cornerRadius(8)
-                            }
+        ZStack {
+            AmbientBackdrop(tint: tint, intensity: 0.8)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    switch viewModel.state {
+                    case .loading:
+                        hero
+                        periodCarousel
+                        monthAndYear
+                        MileageTripsLoading()
+                    case .loaded:
+                        hero
+                        periodCarousel
+                        // A CHIP FETCH THAT FAILED, said inline. The figures above
+                        // are current for the period now selected — the selection
+                        // reverted — so this is not the stale banner's claim that
+                        // everything on screen is older than now.
+                        if let notice = viewModel.periodNotice {
+                            MileageInlineNotice(message: notice, systemImage: "arrow.clockwise")
                         }
-                    }
-                    .padding(.horizontal)
-                }
-                
-                // Display full selected period dates.
-                if let periodEnd = Calendar.current.date(byAdding: .day, value: 13, to: selectedPeriodStart) {
-                    Text("Selected Period: \(fullRangeFormatter.string(from: selectedPeriodStart)) - \(fullRangeFormatter.string(from: periodEnd))")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                
-                // Summary info - Enhanced with more compact card-based UI
-                VStack(spacing: 12) {
-                    // Current period and monthly in a row
-                    HStack(alignment: .top, spacing: 10) {
-                        // Current Period card
-                        SummaryCardView(
-                            title: "Current Period",
-                            miles: viewModel.currentPeriodMileage,
-                            reimbursement: viewModel.currentPeriodSplit.totalCompensation,
-                            split: viewModel.currentPeriodSplit,
-                            iconName: "calendar",
-                            color: .blue
-                        )
-
-                        // Monthly card
-                        SummaryCardView(
-                            title: "Miles in \(monthName)",
-                            miles: viewModel.monthMileage,
-                            reimbursement: viewModel.monthSplit.totalCompensation,
-                            split: viewModel.monthSplit,
-                            iconName: "clock",
-                            color: .green
-                        )
-                    }
-
-                    // Yearly card (full width)
-                    SummaryCardView(
-                        title: "Miles this Year",
-                        miles: viewModel.yearMileage,
-                        reimbursement: viewModel.yearSplit.totalCompensation,
-                        split: viewModel.yearSplit,
-                        iconName: "calendar.badge.clock",
-                        color: .orange,
-                        isWide: true
-                    )
-                }
-                .padding(.horizontal)
-                
-                // List of mileage records with updated navigation link to MileageDetailView
-                List {
-                    ForEach(viewModel.records.sorted(by: { $0.date > $1.date })) { record in
-                        NavigationLink(destination: MileageDetailView(
-                            record: record,
-                            personalRate: viewModel.personalRate,
-                            companyRate: viewModel.companyRate
-                        )) {
-                            HStack(alignment: .center) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(formatDate(record.date))
-                                        .font(.headline)
-
-                                    HStack(spacing: 6) {
-                                        Text(record.schoolName)
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
-                                        if VehicleRates.isCompany(record.vehicleType) {
-                                            Text("Company")
-                                                .font(.caption2)
-                                                .fontWeight(.medium)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(Color.orange.opacity(0.15))
-                                                .foregroundColor(.orange)
-                                                .cornerRadius(4)
-                                        }
-                                    }
-                                }
-
-                                Spacer()
-
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text("\(record.totalMileage, specifier: "%.1f") miles")
-                                        .font(.system(.body, design: .rounded))
-                                        .fontWeight(.medium)
-
-                                    Text("$\(record.totalMileage * VehicleRates.rate(forVehicleType: record.vehicleType, personalRate: viewModel.personalRate, companyCarRate: viewModel.companyRate), specifier: "%.2f")")
-                                        .font(.footnote)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .padding(.vertical, 4)
+                        monthAndYear
+                        if viewModel.records.isEmpty {
+                            MileageEmptyTripsState()
+                        } else {
+                            tripsSection
                         }
+                    case .stale(let message):
+                        MileageStaleFiguresBanner(retry: { viewModel.retry() }, tint: tint)
+                        hero
+                        periodCarousel
+                        monthAndYear
+                        // The trips list is NOT drawn empty here: "no trips this
+                        // period" would be a claim, and the banner has just said
+                        // the screen could not reach the server. The figures are
+                        // last-synced; the list is simply unknown.
+                        if !viewModel.records.isEmpty {
+                            tripsSection
+                        } else {
+                            MileageInlineNotice(message: message, systemImage: "wifi.slash")
+                        }
+                    case .failed(let message):
+                        MileageFailureCard(message: message, tint: tint) { viewModel.retry() }
+                        // The carousel stays: picking another period is a legitimate
+                        // way to retry, and removing it would strand the screen.
+                        periodCarousel
                     }
                 }
-                .listStyle(InsetGroupedListStyle())
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
             }
+            .ambientNoBounceWhenShort()
+        }
         .navigationBarTitle("Mileage Reports", displayMode: .inline)
-        .onAppear {
-            viewModel.loadRecords(forPayPeriodStart: selectedPeriodStart)
-            viewModel.loadYearAndMonthMileage()
+        .ambientPush(item: $selectedRecord) { record in
+            MileageDetailView(record: record,
+                              personalRate: viewModel.personalRate,
+                              companyRate: viewModel.companyRate)
+        }
+        // ONE call. The old screen called both loaders here while the first already
+        // chained the second, so every appearance fetched the year twice.
+        .onAppear { viewModel.load() }
+    }
+
+    // MARK: - 1. The money
+
+    private var hero: some View {
+        MileageHeroCard(header: headerLabel,
+                        figures: viewModel.currentPeriodFigures,
+                        tint: tint,
+                        // The header moves on the tap; the money arrives later. For
+                        // that gap the figures are redacted rather than left
+                        // standing under a header that already changed.
+                        isRefreshing: viewModel.isFetchingPeriod)
+    }
+
+    /// "This pay period · Jul 20 – Aug 2" when the current period is selected, the
+    /// bare range when it is not. Derived, never typed.
+    private var headerLabel: String {
+        guard let period = viewModel.selectedPeriod else {
+            // Before the pay-period service answers there is no range to state, and
+            // inventing one is what put a selection on a period that did not exist.
+            return "This pay period"
+        }
+        return period.headerLabel(monthDay: { Formatters.monthDay.string(from: $0) })
+    }
+
+    // MARK: - 2. The period carousel
+
+    private var periodCarousel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(viewModel.periods) { period in
+                        MileagePeriodChip(
+                            label: period.rangeLabel(monthDay: { Formatters.monthDay.string(from: $0) }),
+                            isCurrent: period.isCurrent,
+                            isSelected: period.index == viewModel.selectedPeriodIndex,
+                            tint: tint) {
+                                viewModel.selectPeriod(index: period.index)
+                            }
+                    }
+                }
+                .ambientScrollTargets()
+            }
+            .ambientCarousel(margin: 16)
+            .padding(.horizontal, -16)
+
+            // The org's REAL cycle, read from its pay-period settings. The mockup
+            // marked this PROPOSED because the labels stepped a hardcoded 14 days;
+            // both the labels and this caption now come from the same resolver.
+            Text(viewModel.cycle.caption)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
-    
-    // Format date as "Month Day, Year"
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM d, yyyy"
-        return formatter.string(from: date)
+
+    // MARK: - 3. Month and year
+
+    /// THESE TWO TILES ARE GATED ON THEIR OWN FETCH, not on the screen's state. The
+    /// period query and the year query succeed and fail independently, so a `.loaded`
+    /// screen can carry month and year figures nobody ever fetched — and they would
+    /// render as `0.0 miles · $0.00`, a real-looking total. Until the year query
+    /// lands, each tile says so itself rather than leaning on an inline notice that
+    /// the next chip tap clears.
+    private var monthAndYear: some View {
+        HStack(spacing: 10) {
+            MileageFigureTile(title: "This month",
+                              caption: Formatters.monthYear.string(from: Date()),
+                              miles: viewModel.monthMileage,
+                              reimbursement: viewModel.monthFigures.reimbursement,
+                              systemImage: "calendar",
+                              tint: tint,
+                              isLoaded: viewModel.monthYearLoaded,
+                              retry: monthYearRetry)
+            MileageFigureTile(title: "This year",
+                              caption: String(Calendar.current.component(.year, from: Date())),
+                              miles: viewModel.yearMileage,
+                              reimbursement: viewModel.yearFigures.reimbursement,
+                              systemImage: "calendar.badge.clock",
+                              tint: tint,
+                              isLoaded: viewModel.monthYearLoaded,
+                              retry: monthYearRetry)
+        }
     }
-}
 
-// Separate view for summary cards to ensure proper formatting
-struct SummaryCardView: View {
-    let title: String
-    let miles: Double
-    let reimbursement: Double
-    var split: VehicleRates.Split? = nil
-    let iconName: String
-    let color: Color
-    var isWide: Bool = false
+    /// No retry offered while the first load is still running: the tiles are unloaded
+    /// because nothing has answered YET, and a control that re-runs what is already
+    /// running reads as a failure that has not happened.
+    private var monthYearRetry: (() -> Void)? {
+        if case .loading = viewModel.state { return nil }
+        return { viewModel.retry() }
+    }
 
-    var body: some View {
+    // MARK: - 4. The trips
+
+    private var tripsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 4) {
-                Image(systemName: iconName)
-                    .font(.headline)
-                    .foregroundColor(color)
-
-                Text(title)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-
-                Spacer()
-            }
-
-            HStack(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(formatMiles(miles))
-                        .font(.title3)
-                        .fontWeight(.bold)
-
-                    Text("miles")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(formatCurrency(reimbursement))
-                        .font(.headline)
-
-                    Text("reimbursement")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            AmbientSectionTitle("Trips", trailing: "\(viewModel.records.count)")
+            LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
+                ForEach(viewModel.sortedRecords) { record in
+                    Button { selectedRecord = record } label: {
+                        MileageTripRow(date: record.date,
+                                       school: record.schoolName,
+                                       miles: record.totalMileage,
+                                       amount: viewModel.amount(for: record),
+                                       isCompany: record.vehicle == .company,
+                                       tint: tint)
+                    }
+                    .buttonStyle(.plain)
+                    .ambientScrollFade()
                 }
             }
-
-            // Personal/company breakdown — only shown once company miles exist.
-            if let split = split, split.hasCompany {
-                Text("Personal \(formatMiles(split.personalMiles)) · Company \(formatMiles(split.companyMiles)) mi")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
+            MileageSourceNote()
         }
-        .padding(10)
-        .frame(minHeight: 85)
-        .frame(maxWidth: isWide ? .infinity : nil)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.secondarySystemBackground))
-                .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
-        )
-    }
-    
-    // Helper functions for proper formatting
-    private func formatMiles(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = 1
-        formatter.minimumFractionDigits = 1
-        return formatter.string(from: NSNumber(value: value)) ?? "0.0"
-    }
-    
-    private func formatCurrency(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: value)) ?? "$0.00"
     }
 }

@@ -1,8 +1,70 @@
+//  MileageReportsViewModel.swift
+//  Iconik Employee — the Mileage Reports data layer, rebuilt in AMB.9
+//
+//  THE OLD VERSION IS GONE FROM THIS FILE, not left beside the new one. What it did
+//  and why each piece changed:
+//
+//    · SELECTION IS AN INDEX, RESOLVED AFTER THE SERVICE ANSWERS. It used to be a
+//      `Date` seeded in the VIEW's `init` from `currentPeriodStart`, which was
+//      `Date()` until an async completion replaced it — so on first render the
+//      selected date matched none of the six cards.
+//    · THE CAROUSEL'S BOUNDARIES ARE THE ORG'S REAL ONES. The view stepped its
+//      labels back by a hardcoded 14 days while the data came from
+//      `PayPeriodService`. Now both come from the same resolver, walked backwards a
+//      day at a time (`MileagePeriodSequence`), so a weekly or monthly org gets its
+//      own cycle and the caption says which.
+//    · FAILURES ARE PUBLISHED. Both fetch paths swallowed their error to a `print`,
+//      so a failed load rendered "0.0 miles / $0.00" — indistinguishable from a
+//      genuinely empty period. `state` now carries the failure, and when figures
+//      from a previous successful load exist they are shown behind a banner rather
+//      than replaced with zeroes.
+//    · ONE FETCH PER APPEARANCE. `.onAppear` called both loaders while
+//      `loadRecordsInternal` already chained the second, and every carousel tap
+//      re-fetched the rates. Rates load once; a tap loads only the period.
+//    · `calculateMileage(forPeriodStart:periodEnd:)` IS DELETED — 19 lines, zero
+//      callers.
+//    · THE IDENTITY LOGGING IS DELETED. Twelve-plus emoji `print`s, several of them
+//      printing a user id.
+//
+//  WHAT IS DELIBERATELY LEFT AS IT WAS, because changing it changes another screen:
+//    · `updateCallback` IS STILL A SINGLE SLOT. A second subscriber silently
+//      unsubscribes the first. The home dashboard's `MileageWidget` depends on this
+//      exact mechanism (`DashboardWidgets.swift:851`), and turning it into a list of
+//      observers is a change to a screen this phase does not own.
+//    · THERE ARE STILL TWO INSTANCES. The widget uses `.shared`; the screen builds
+//      its own. An edit refreshes the screen and the dashboard goes stale until it
+//      reloads. Same reason: the fix belongs where the widget lives.
+//    · COMPENSATION IS Σ(miles × TODAY's rate). No per-report rate is stored, so a
+//      historical rate cannot be recovered — see MileageRules.swift's header.
+//
+//  All arithmetic is in MileageRules.swift, which is compiled and RUN by
+//  scripts/test_mileage_rules.sh.
+
 import Foundation
 import SwiftUI
 
+/// What the screen is showing right now.
+///
+/// FOUR STATES, and the distinction between the last two is the point: a failure
+/// with nothing behind it is an error card, and a failure with figures behind it is
+/// those figures plus a banner saying how old they are. Collapsing them is how a
+/// stale number gets read as a current one.
+enum MileageScreenState: Equatable {
+    case loading
+    case loaded
+    /// Nothing to show. The error card and its Retry.
+    case failed(String)
+    /// Figures from a previous successful load, plus the banner.
+    case stale(String)
+}
+
 class MileageReportsViewModel: ObservableObject {
     static let shared = MileageReportsViewModel()
+
+    // MARK: - Published figures
+    //
+    // These names and meanings are UNCHANGED: `DashboardWidgets.MileageWidget`
+    // reads every one of them off `.shared`.
 
     @Published var currentPeriodMileage: Double = 0
     @Published var monthMileage: Double = 0
@@ -23,31 +85,125 @@ class MileageReportsViewModel: ObservableObject {
     @Published var personalRate: Double = VehicleRates.defaultMileageRate
     @Published var companyRate: Double = VehicleRates.defaultCompanyCarRate
 
+    // MARK: - Published screen state
+
+    /// The six chips, newest first. Empty until the pay-period service answers.
+    @Published var periods: [MileagePeriod] = []
+    /// Which chip is selected, by index. 0 is the current period.
+    @Published var selectedPeriodIndex: Int = 0
+    /// Which cycle the org is on, for the caption under the carousel.
+    @Published var cycle: MileagePeriodCycle = .biweekly
+    @Published var state: MileageScreenState = .loading
+    /// True while a CHIP fetch is in flight. The header is derived from the
+    /// selection, so between the tap and the answer the figures under it belong to
+    /// the period you just left — the hero redacts them rather than letting them
+    /// stand under the new header.
+    @Published var isFetchingPeriod = false
+    /// A chip fetch that failed. The figures on screen are current for the period
+    /// the selection reverted to, so this is a transient line under them, NOT the
+    /// stale banner — nothing here is older than it says.
+    @Published var periodNotice: String?
+
     var userName: String = ""
     var userId: String?
 
-    /// Split (miles + compensation) for a bucket, using the current resolved rates.
+    /// MINTED FRESH ON EVERY READ, never captured at init. `PayPeriodService`
+    /// re-reads `TimeZone.current` on every call, so a calendar frozen at init
+    /// starts disagreeing with it the moment the device changes zone — and the two
+    /// then mint boundaries an hour apart, which the carousel's contiguity guard
+    /// (`MileagePeriodSequence.build`) reads as a gap and collapses the six chips to
+    /// one. `.shared` outlives many appearances, so "at init" can be days ago.
+    var calendar: Calendar { Calendar.current }
+
+    private let payPeriodService = PayPeriodService.shared
+    private var updateCallback: (() -> Void)?
+    /// Rates are org/user configuration, not per-period data: fetched once per
+    /// screen rather than on every carousel tap.
+    private var ratesLoaded = false
+    /// True once any load has succeeded, or once the cold-start cache produced a
+    /// non-zero figure — which is what makes a later failure `.stale` rather than
+    /// `.failed`.
+    private var hasSyncedFigures = false
+    /// True once `applyYearAndMonth` has actually run this session. Until then the
+    /// month and year figures are the cache's or zero — NOT fetched — and neither
+    /// the widget's cache nor a `.loaded` state may claim otherwise.
+    ///
+    /// PUBLISHED, because the two tiles are the ones making the claim: while this is
+    /// false they draw an explicit unloaded presentation instead of a number. Relying
+    /// on `periodNotice` to carry that caveat did not hold — it is a shared slot that
+    /// the next chip tap clears, and the tiles were left reading $0.00 as a total.
+    @Published private(set) var monthYearLoaded = false
+    /// The one in-flight load. Cancelled by every new load or selection, so two
+    /// fetches cannot land out of order and write one another's figures.
+    private var loadTask: Task<Void, Never>?
+    /// A full load already running. A double `.onAppear` must not fetch everything
+    /// twice concurrently; `force` (Retry) still preempts.
+    ///
+    /// RAISED SYNCHRONOUSLY WHERE THE TASK IS CREATED, not in the task body: two
+    /// `.onAppear`s in the same turn both read the flag before any body had run, so
+    /// both passed the guard and both loads went out.
+    private var isLoadingEverything = false
+    /// Bumped where a full load starts. The clear is guarded by it — exactly like
+    /// `endPeriodFetch` — so a superseded load finishing later cannot lower the flag
+    /// while its replacement is still running.
+    private var loadEverythingGeneration = 0
+    /// Bumped by every period fetch. The apply is guarded by it, so a superseded
+    /// fetch cannot write its figures or clear the in-flight flag under a newer one.
+    private var periodFetchGeneration = 0
+
+    /// The three headline totals, persisted on every successful load of the CURRENT
+    /// period so a failure has something honest to fall back to. Same pattern and
+    /// the same keys the home dashboard's mileage widget already uses
+    /// (`DashboardWidgets.swift:717-719`) — one cache for one set of figures rather
+    /// than a second store that can disagree with it.
+    private enum Cache {
+        static let periodMiles = "cached_currentPeriodMileage"
+        static let monthMiles = "cached_monthMileage"
+        static let yearMiles = "cached_yearMileage"
+    }
+
+    // MARK: - Derived
+
+    /// Split (miles + compensation) for a bucket, through the ONE accumulator.
+    /// Computed rather than stored so a rate that lands after the miles still
+    /// revalues the money.
     private func split(personalMiles: Double, companyMiles: Double) -> VehicleRates.Split {
-        var s = VehicleRates.Split()
-        s.personalMiles = personalMiles
-        s.companyMiles = companyMiles
-        s.personalCompensation = personalMiles * personalRate
-        s.companyCompensation = companyMiles * companyRate
-        return s
+        MileageMath.split(personalMiles: personalMiles,
+                          companyMiles: companyMiles,
+                          personalRate: personalRate,
+                          companyCarRate: companyRate)
     }
 
     var currentPeriodSplit: VehicleRates.Split { split(personalMiles: currentPeriodPersonalMiles, companyMiles: currentPeriodCompanyMiles) }
     var monthSplit: VehicleRates.Split { split(personalMiles: monthPersonalMiles, companyMiles: monthCompanyMiles) }
     var yearSplit: VehicleRates.Split { split(personalMiles: yearPersonalMiles, companyMiles: yearCompanyMiles) }
 
-    let calendar = Calendar.current
-    var currentPeriodStart: Date = Date()
-    var currentPeriodEnd: Date = Date()
+    var currentPeriodFigures: MileageFigures { MileageFigures(split: currentPeriodSplit) }
+    var monthFigures: MileageFigures { MileageFigures(split: monthSplit) }
+    var yearFigures: MileageFigures { MileageFigures(split: yearSplit) }
 
-    private let payPeriodService = PayPeriodService.shared
-    private var updateCallback: (() -> Void)?
+    /// The selected period, or nil while the pay-period service has not answered.
+    var selectedPeriod: MileagePeriod? {
+        guard periods.indices.contains(selectedPeriodIndex) else { return periods.first }
+        return periods[selectedPeriodIndex]
+    }
 
-    // Local wrapper model to hold report data
+    /// Trips, newest first.
+    var sortedRecords: [MileageRecordWrapper] {
+        records.sorted { $0.date > $1.date }
+    }
+
+    /// One trip's money, at the rate its own vehicle type pays.
+    func amount(for record: MileageRecordWrapper) -> Double {
+        MileageMath.amount(miles: record.totalMileage,
+                           vehicleType: record.vehicleType,
+                           personalRate: personalRate,
+                           companyCarRate: companyRate)
+    }
+
+    // MARK: - Model
+
+    /// Local wrapper model to hold report data.
     struct MileageRecordWrapper: Identifiable {
         let id: String
         let date: Date
@@ -72,306 +228,559 @@ class MileageReportsViewModel: ObservableObject {
             self.schoolName = schoolName
             self.vehicleType = vehicleType
         }
+
+        var vehicle: MileageVehicle { MileageVehicle.from(storage: vehicleType) }
     }
-    
+
+    // MARK: - Init
+
     init(userName: String = "") {
         self.userName = userName.isEmpty ? (UserDefaults.standard.string(forKey: "userFirstName") ?? "") : userName
-        
-        // Get the current user's ID for more reliable filtering
-        if let userId = UserManager.shared.getCurrentUserIDUnified() {
-            self.userId = userId
-            print("🚗 MileageReportsViewModel: Initialized with userId: \(userId), userName: \(self.userName)")
-        } else {
-            print("⚠️ MileageReportsViewModel: No authenticated user, using userName: \(self.userName)")
-        }
-        
-        // Load pay period settings and calculate current period
-        payPeriodService.loadPayPeriodSettings { [weak self] success in
-            guard let self = self else { return }
-            
-            if let (start, end) = self.payPeriodService.getCurrentPayPeriod() {
-                self.currentPeriodStart = start
-                self.currentPeriodEnd = end
-                
-                // Log the calculated period for debugging
-                let dateFormatter = DateFormatter()
-                dateFormatter.dateStyle = .medium
-                dateFormatter.timeStyle = .short
-                print("📅 MileageReportsViewModel: Current period from PayPeriodService: \(dateFormatter.string(from: start)) to \(dateFormatter.string(from: end))")
-            } else {
-                // Fallback to default calculation if service fails
-                print("⚠️ MileageReportsViewModel: Failed to get pay period from service, using fallback")
-                self.setDefaultPayPeriod()
-            }
-        }
+        self.userId = UserManager.shared.getCurrentUserIDUnified()
+
+        // Seed the headline figures from the last successful load, so a cold start
+        // that cannot reach the server shows the last real numbers behind a banner
+        // instead of a screen full of zeroes.
+        let cachedPeriod = UserDefaults.standard.double(forKey: Cache.periodMiles)
+        let cachedMonth = UserDefaults.standard.double(forKey: Cache.monthMiles)
+        let cachedYear = UserDefaults.standard.double(forKey: Cache.yearMiles)
+        currentPeriodMileage = cachedPeriod
+        monthMileage = cachedMonth
+        yearMileage = cachedYear
+        // The cache holds totals, not the split, so the personal bucket carries them
+        // — the same estimate the dashboard widget makes at cold start.
+        currentPeriodPersonalMiles = cachedPeriod
+        monthPersonalMiles = cachedMonth
+        yearPersonalMiles = cachedYear
+        hasSyncedFigures = cachedPeriod != 0 || cachedMonth != 0 || cachedYear != 0
+
+        // NO pay-period fetch here. The old init started one and the view read
+        // `currentPeriodStart` synchronously in its own init to seed the selection,
+        // which is exactly how the selection came to match none of the chips.
     }
-    
-    // Add callback support for updates
+
+    // MARK: - Subscription (unchanged mechanism — see the file header)
+
     func listenForMileageUpdates(completion: @escaping () -> Void) {
         self.updateCallback = completion
     }
 
-    /// Fetch this photographer's personal rate (users.amount_per_mile) and the org's
-    /// company-car rate (organizations.company_car_rate). Both fall back via VehicleRates.
-    func loadRates() {
-        Task {
-            let supabase = SupabaseManager.shared.client
+    // MARK: - Loading
 
-            if let userId = userId {
-                struct PersonalRateResponse: Codable { let amount_per_mile: Double? }
-                do {
-                    let rows: [PersonalRateResponse] = try await supabase
-                        .from("users")
-                        .select("amount_per_mile")
-                        .eq("id", value: userId)
-                        .limit(1)
-                        .execute()
-                        .value
-                    let resolved = VehicleRates.resolvePersonalRate(rows.first?.amount_per_mile)
-                    await MainActor.run { self.personalRate = resolved }
-                } catch {
-                    print("Error fetching personal mileage rate: \(error.localizedDescription)")
-                }
-            }
+    /// The dashboard widget's entry point, unchanged in name and meaning: load the
+    /// current period plus the month and year totals.
+    func loadRecords() {
+        load()
+    }
 
-            let orgId = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
-            if !orgId.isEmpty {
-                struct CompanyRateResponse: Codable { let company_car_rate: Double? }
-                do {
-                    let rows: [CompanyRateResponse] = try await supabase
-                        .from("organizations")
-                        .select("company_car_rate")
-                        .eq("id", value: orgId)
-                        .limit(1)
-                        .execute()
-                        .value
-                    let resolved = VehicleRates.resolveCompanyCarRate(rows.first?.company_car_rate)
-                    await MainActor.run { self.companyRate = resolved }
-                } catch {
-                    print("Error fetching company-car rate: \(error.localizedDescription)")
-                }
-            }
+    /// Load everything the screen needs. One call per appearance — and one at a
+    /// time: `.onAppear` fires twice on some navigation paths and the old version
+    /// would have run two full loads side by side.
+    func load(force: Bool = false) {
+        if isLoadingEverything && !force { return }
+        let generation = beginLoadEverything()
+        startLoadTask { await $0.loadEverything(force: force, generation: generation) }
+    }
+
+    /// The error card's Retry — and the stale banner's: re-read the settings, the
+    /// rates and the figures.
+    func retry() {
+        let generation = beginLoadEverything()
+        startLoadTask { model in
+            // FROM `.stale`, THE FIGURES STAY. `.loading` is the skeleton state: it
+            // drops the banner and replaces real last-synced figures with a
+            // placeholder, so tapping the banner's own Retry destroyed the only
+            // numbers on screen and left nothing if the retry also failed. The
+            // in-flight signal is `isFetchingPeriod`, raised by the fetch itself and
+            // lowered by it, so it cannot be left stuck on an early return.
+            if case .stale = model.state {} else { model.state = .loading }
+            model.periodNotice = nil
+            await model.loadEverything(force: true, generation: generation)
         }
     }
-    
-    private func setDefaultPayPeriod() {
-        // Fallback calculation using the old reference date
-        let payPeriodFormatter = DateFormatter()
-        payPeriodFormatter.dateFormat = "M/d/yyyy"
-        payPeriodFormatter.locale = Locale(identifier: "en_US_POSIX")
-        guard let referenceDate = payPeriodFormatter.date(from: "2/25/2024") else {
+
+    /// A carousel tap. Loads the selected period, and the rates or the year ONLY when
+    /// those have never resolved (see `loadSelectedPeriod`) — every tap used to be a
+    /// three-query round trip.
+    func selectPeriod(index: Int) {
+        guard periods.indices.contains(index), index != selectedPeriodIndex else { return }
+        let previous = selectedPeriodIndex
+        selectedPeriodIndex = index
+        periodNotice = nil
+        startLoadTask { await $0.loadSelectedPeriod(revertingTo: previous) }
+    }
+
+    /// ONE task, cancelled when it is superseded — the shape `StatsViewModel.load`
+    /// already ships (`StatsViewModel.swift:79`). Without it two chip taps race and
+    /// the slower answer wins, leaving one period's money under another's header
+    /// permanently, because nothing re-fetches until the screen is reopened.
+    private func startLoadTask(_ work: @escaping @MainActor (MileageReportsViewModel) async -> Void) {
+        loadTask?.cancel()
+        loadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await work(self)
+        }
+    }
+
+    @MainActor
+    private func loadEverything(force: Bool, generation loadGeneration: Int) async {
+        defer { endLoadEverything(loadGeneration) }
+
+        // A CANCELLED TASK MUTATES NOTHING. Every await below is a point at which a
+        // newer load may have superseded this one, and this body sets flags, rebuilds
+        // the carousel and bumps the fetch generation — under the survivor, if it is
+        // allowed to keep running.
+        guard !Task.isCancelled else { return }
+
+        if !hasSyncedFigures { state = .loading }
+
+        guard let userId = resolvedUserId() else {
+            fail("We couldn't tell who is signed in, so there is nothing to load. Sign out and back in to try again.")
             return
         }
-        
-        let referenceStartOfDay = calendar.startOfDay(for: referenceDate)
-        let today = Date()
-        let daysSinceReference = calendar.dateComponents([.day], from: referenceStartOfDay, to: today).day ?? 0
-        let periodLength = 14
-        let periodsElapsed = daysSinceReference / periodLength
-        
-        if let currentStart = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay),
-           let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: currentStart),
-           let currentEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) {
-            self.currentPeriodStart = currentStart
-            self.currentPeriodEnd = currentEnd
-        }
-    }
-    
-    /// Loads mileage records for the given pay period. If none provided, uses the current period.
-    func loadRecords(forPayPeriodStart payPeriodStart: Date? = nil) {
-        // Refresh rates alongside records so compensation is always current.
-        loadRates()
 
-        // If we're using the current period and it hasn't been set yet, wait for it
-        if payPeriodStart == nil && currentPeriodStart == currentPeriodEnd {
-            // Load pay period settings first
-            payPeriodService.loadPayPeriodSettings { [weak self] success in
-                guard let self = self else { return }
-                
-                if let (start, end) = self.payPeriodService.getCurrentPayPeriod() {
-                    self.currentPeriodStart = start
-                    self.currentPeriodEnd = end
-                } else {
-                    self.setDefaultPayPeriod()
-                }
-                
-                // Now load records with the updated period
-                self.loadRecordsInternal(forPayPeriodStart: nil)
-            }
+        await ensurePeriods(force: force)
+        guard !Task.isCancelled else { return }
+
+        if force || !ratesLoaded { await loadRates() }
+        guard !Task.isCancelled else { return }
+
+        guard let period = selectedPeriod else {
+            fail("Your organization's pay periods aren't set up yet, so there is no period to total.")
             return
         }
-        
-        loadRecordsInternal(forPayPeriodStart: payPeriodStart)
-    }
-    
-    private func loadRecordsInternal(forPayPeriodStart payPeriodStart: Date? = nil) {
-        let periodStart = payPeriodStart ?? currentPeriodStart
-        let periodEnd: Date
 
-        if let customStart = payPeriodStart {
-            // Calculate end date for custom period using PayPeriodService
-            if let settings = payPeriodService.payPeriodSettings,
-               let (_, end) = payPeriodService.getPayPeriod(for: customStart, settings: settings) {
-                periodEnd = end
+        let generation = beginPeriodFetch()
+        defer { endPeriodFetch(generation) }
+
+        // TWO FETCHES, TWO FATES. They used to share one do/catch, so a failed year
+        // query threw away a period result that had already arrived and failed the
+        // whole screen — the hero went to an error card because two TILES could not
+        // be totalled.
+        let periodReports: [DailyJobReport]
+        do {
+            periodReports = try await DailyJobReportService.shared.getReports(
+                userId: userId, startDate: period.start, endDate: period.end)
+        } catch {
+            guard isCurrent(generation) else { return }
+            fail(MileageFailureCard.genericMessage, underlying: error)
+            return
+        }
+        guard isCurrent(generation) else { return }
+
+        applyPeriod(periodReports)
+        periodNotice = nil
+        succeed()
+
+        do {
+            let yearReports = try await DailyJobReportService.shared.getReports(
+                userId: userId, startDate: yearStart, endDate: yearEnd)
+            guard isCurrent(generation) else { return }
+            // Sets `monthYearLoaded`; `succeed()` runs again so the month and year
+            // cache keys — which are gated on that flag — are actually written.
+            applyYearAndMonth(yearReports)
+            succeed()
+        } catch {
+            guard isCurrent(generation) else { return }
+            // `monthYearLoaded` stays false: the two tiles were never fetched, so
+            // nothing downstream (the widget's cache included) may claim they were.
+            // An inline line says so, the same slot a failed chip fetch uses.
+            print("⚠️ Mileage: month/year totals unavailable — \(error.localizedDescription)")
+            periodNotice = yearTotalsFailureNotice
+        }
+    }
+
+    @MainActor
+    private func loadSelectedPeriod(revertingTo previousIndex: Int? = nil) async {
+        // Superseded before the body even started: bumping the fetch generation here
+        // would make the survivor's own apply look stale and discard a good result.
+        guard !Task.isCancelled else { return }
+        guard let userId = resolvedUserId(), let period = selectedPeriod else { return }
+
+        let generation = beginPeriodFetch()
+        let requestedIndex = selectedPeriodIndex
+        defer { endPeriodFetch(generation) }
+
+        // A CHIP TAP CAN BE THE FIRST THING THAT EVER FETCHES. `selectPeriod` cancels
+        // the in-flight full load, so a tap during the first appearance can cancel the
+        // rates fetch — and nothing re-ran it until the NEXT appearance, so the whole
+        // session drew its money at the 0.67/0.10 defaults. Guarded on `ratesLoaded`
+        // exactly as `loadEverything` guards it, so a tap costs nothing once both
+        // lookups have resolved.
+        //
+        // Inside the in-flight window on purpose: `beginPeriodFetch` has already
+        // raised `isFetchingPeriod`, so the hero redacts for the rates round-trip too
+        // rather than standing unredacted under a header that has already moved.
+        if !ratesLoaded { await loadRates() }
+        guard isCurrent(generation), requestedIndex == selectedPeriodIndex else { return }
+
+        // TWO FETCHES, TWO FATES — the same split `loadEverything` carries. One
+        // do/catch over both meant a failing YEAR query threw away a period result
+        // that had already arrived: the selection reverted and the screen said
+        // "Couldn't load that period" about a period that had loaded fine.
+        let reports: [DailyJobReport]
+        do {
+            reports = try await DailyJobReportService.shared.getReports(
+                userId: userId, startDate: period.start, endDate: period.end)
+        } catch {
+            guard isCurrent(generation), requestedIndex == selectedPeriodIndex else { return }
+            // THE SELECTION GOES BACK. The figures on screen belong to the period
+            // that DID load, and the header is derived from the selection — so
+            // leaving the new chip selected after a failed fetch would put a header
+            // over totals from a different fortnight. That is the exact defect this
+            // conversion removed ("Current Period" over a past period's numbers) in
+            // a new costume, so the honest move is to keep the header and the
+            // figures describing the same period and say the fetch failed.
+            if let previousIndex, periods.indices.contains(previousIndex) {
+                selectedPeriodIndex = previousIndex
+            }
+            if case .loaded = state {
+                // NOT `.stale`. That banner says "everything here is older than
+                // now", and after reverting the selection it is not: these are the
+                // current figures for the period now selected, fetched this session.
+                // One fetch failed, so one line says so and nothing else changes.
+                //
+                // Gated on the state being `.loaded` rather than on
+                // `hasSyncedFigures`: from `.stale` (cold start on cache) or
+                // `.failed` the figures really are not current, and `fail(...)`
+                // keeps whichever of those two is true.
+                print("⚠️ Mileage: period fetch failed — \(error.localizedDescription)")
+                periodNotice = periodFetchFailureNotice
             } else {
-                // Fallback to 14-day period
-                if let tempEnd = calendar.date(byAdding: .day, value: 13, to: customStart),
-                   let customEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) {
-                    periodEnd = customEnd
-                } else {
-                    periodEnd = currentPeriodEnd
-                }
+                fail(MileageFailureCard.genericMessage, underlying: error)
             }
+            return
+        }
+        // Only the fetch that is still the current selection may write figures. Two
+        // taps in flight otherwise land in whatever order the network returns them,
+        // and the header — derived from the selection — sits over the loser's money
+        // until the screen is reopened.
+        guard isCurrent(generation), requestedIndex == selectedPeriodIndex else { return }
+
+        // APPLIED AS SOON AS IT LANDS, before the year fetch is even attempted, so
+        // nothing downstream can discard it.
+        applyPeriod(reports)
+        periodNotice = nil
+        succeed()
+
+        // THE CHIP PATH IS ALSO THE RECOVERY PATH. After a failed first load the month
+        // and year figures have never been fetched, so this tap loads them too — the
+        // tiles otherwise stay in their unloaded presentation for the whole session.
+        guard !monthYearLoaded else { return }
+        do {
+            let yearReports = try await DailyJobReportService.shared.getReports(
+                userId: userId, startDate: yearStart, endDate: yearEnd)
+            guard isCurrent(generation), requestedIndex == selectedPeriodIndex else { return }
+            applyYearAndMonth(yearReports)
+            succeed()
+        } catch {
+            guard isCurrent(generation), requestedIndex == selectedPeriodIndex else { return }
+            // `monthYearLoaded` stays false, so the two tiles keep drawing "—" rather
+            // than a total nobody fetched. The period figures above stand: they landed.
+            print("⚠️ Mileage: month/year totals unavailable — \(error.localizedDescription)")
+            periodNotice = yearTotalsFailureNotice
+        }
+    }
+
+    /// "Couldn't load that period — still showing Jul 20 – Aug 2".
+    private var periodFetchFailureNotice: String {
+        guard let period = selectedPeriod else {
+            return "Couldn't load that period."
+        }
+        let range = period.rangeLabel(monthDay: { Formatters.monthDay.string(from: $0) })
+        return "Couldn't load that period — still showing \(range)."
+    }
+
+    /// The month and year query failed while the period query succeeded. The hero is
+    /// current; the two tiles are not, and must not be read as real totals.
+    private var yearTotalsFailureNotice: String {
+        "Couldn't load your month and year totals — the pay-period figures above are current."
+    }
+
+    // MARK: - In-flight bookkeeping
+
+    /// Raised where a full load is CREATED, before any await. See
+    /// `isLoadingEverything`.
+    private func beginLoadEverything() -> Int {
+        loadEverythingGeneration += 1
+        isLoadingEverything = true
+        return loadEverythingGeneration
+    }
+
+    /// Only the newest full load may lower the flag — otherwise a superseded load
+    /// finishing later reopens the gate while its replacement is still fetching, and
+    /// a third `.onAppear` runs a second full load beside it.
+    private func endLoadEverything(_ generation: Int) {
+        guard generation == loadEverythingGeneration else { return }
+        isLoadingEverything = false
+    }
+
+    @MainActor
+    private func beginPeriodFetch() -> Int {
+        periodFetchGeneration += 1
+        isFetchingPeriod = true
+        return periodFetchGeneration
+    }
+
+    /// Only the newest fetch may lower the flag: a superseded one finishing later
+    /// would otherwise clear the indicator while a fetch is still running.
+    @MainActor
+    private func endPeriodFetch(_ generation: Int) {
+        guard generation == periodFetchGeneration else { return }
+        isFetchingPeriod = false
+    }
+
+    @MainActor
+    private func isCurrent(_ generation: Int) -> Bool {
+        !Task.isCancelled && generation == periodFetchGeneration
+    }
+
+    /// Lowercased, per the repo's UUID rule: Supabase stores lowercase and Swift
+    /// generates uppercase, and a `.eq` filter is a string comparison.
+    private func resolvedUserId() -> String? {
+        guard let userId, !userId.isEmpty else { return nil }
+        return userId.lowercased()
+    }
+
+    /// True when the newest chip no longer contains today — the pay period rolled
+    /// over while this instance was alive. `.shared` outlives many appearances (the
+    /// dashboard widget holds it), so without this the carousel would keep offering
+    /// a "current" period that ended days ago and the hero would title a past
+    /// fortnight "This pay period".
+    private var periodsAreStaleForToday: Bool {
+        guard let newest = periods.first else { return true }
+        return newest.end < Date()
+    }
+
+    @MainActor
+    private func ensurePeriods(force: Bool) async {
+        guard periods.isEmpty || force || periodsAreStaleForToday else { return }
+
+        await loadPayPeriodSettings()
+        // Rebuilding the carousel under a newer load would move the selection out
+        // from under the fetch that is still running.
+        guard !Task.isCancelled else { return }
+
+        let service = payPeriodService
+        let built = MileagePeriodSequence.build(now: Date(), calendar: calendar) { date in
+            service.getPayPeriod(for: date)
+        }
+        periods = built
+        cycle = MileagePeriodCycle.from(type: service.payPeriodSettings?.type,
+                                       isActive: service.payPeriodSettings?.isActive ?? false)
+        if !periods.indices.contains(selectedPeriodIndex) { selectedPeriodIndex = 0 }
+    }
+
+    /// `PayPeriodService` is completion-based and caches per organisation, so this
+    /// is cheap on every call after the first.
+    private func loadPayPeriodSettings() async {
+        await withCheckedContinuation { continuation in
+            payPeriodService.loadPayPeriodSettings { _ in continuation.resume() }
+        }
+    }
+
+    /// Fetch this photographer's personal rate (users.amount_per_mile) and the org's
+    /// company-car rate (organizations.company_car_rate). Both fall back via
+    /// VehicleRates. A rate failure is NOT a screen failure — the fallbacks are the
+    /// documented behaviour — so it does not set `state`.
+    ///
+    /// A FAILURE IS NOT AN ANSWER. `ratesLoaded` used to be set unconditionally at
+    /// the end, so one failed or cancelled fetch pinned the defaults (0.67 / 0.10)
+    /// on this instance for as long as it lived — and `.shared` lives as long as the
+    /// app, because the dashboard widget holds it. Most photographers have their own
+    /// `amount_per_mile`, so that is the hero's money wrong until the app restarts.
+    /// It is now set only when BOTH lookups resolved, and a lookup resolves when the
+    /// query SUCCEEDED — a successful query returning no row, or a null column, is a
+    /// real answer ("no rate set", take the fallback); a thrown query is not an
+    /// answer at all and is retried by the next `load()`.
+    @MainActor
+    private func loadRates() async {
+        let supabase = SupabaseManager.shared.client
+
+        // RESOLVED BY ABSENCE ONLY WHERE RE-ASKING IS IMPOSSIBLE. With no signed-in
+        // id there is nothing to ask and never will be on this instance — `userId` is
+        // read once in `init` and `loadEverything` has already failed the screen in
+        // that case — so calling that an answer costs nothing.
+        //
+        // THE ORG ID IS NOT SUCH A CASE, and treating it as one was wrong money. It
+        // comes from UserDefaults, which `UserManager`'s resolver fills in
+        // asynchronously and GIVES UP ON after three tries while `RootView` renders
+        // anyway — so an empty org id at this moment means "not known yet", not "no
+        // answer". Marking it resolved pinned `ratesLoaded`, and with it the 0.10
+        // company-car default, for the life of `.shared` — which is the life of the
+        // app, because the dashboard widget holds it. It now leaves `companyResolved`
+        // false so the next load re-asks: the cost is one single-row select per
+        // appearance until the id shows up, which is the right trade against a
+        // company-car rate that is silently the wrong one all day.
+        var personalResolved = true
+        var companyResolved = true
+
+        if let userId = resolvedUserId() {
+            struct PersonalRateResponse: Codable { let amount_per_mile: Double? }
+            personalResolved = false
+            do {
+                let rows: [PersonalRateResponse] = try await supabase
+                    .from("users")
+                    .select("amount_per_mile")
+                    .eq("id", value: userId)
+                    .limit(1)
+                    .execute()
+                    .value
+                guard !Task.isCancelled else { return }
+                personalRate = VehicleRates.resolvePersonalRate(rows.first?.amount_per_mile)
+                personalResolved = true
+            } catch {
+                guard !Task.isCancelled else { return }
+                print("⚠️ Mileage: personal rate unavailable, using the default — \(error.localizedDescription)")
+            }
+        }
+
+        // NOT `.lowercased()`. `organizations.id` carries mixed-case Firebase ids
+        // (production's is `T6XeeaUNoOp8VJqq36wi`), and `.eq` is a string comparison
+        // — case-folding it matches ZERO rows and silently yields the fallback rate.
+        // The repo's lowercase-UUID rule is about columns SUPABASE MINTS as `uuid`,
+        // not about carried-over Firebase text ids. Used exactly as stored, which is
+        // what `OrganizationService.getOrganization` does.
+        let orgId = UserDefaults.standard.string(forKey: "userOrganizationID") ?? ""
+        if orgId.isEmpty {
+            // NOT AN ANSWER — see above. The next load re-asks.
+            companyResolved = false
         } else {
-            periodEnd = currentPeriodEnd
-        }
-
-        // Log the date range we're querying
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .medium
-        print("🚗 Loading mileage records from \(dateFormatter.string(from: periodStart)) to \(dateFormatter.string(from: periodEnd))")
-
-        guard let userId = userId else {
-            print("🚗 No userId available for mileage query")
-            return
-        }
-
-        Task {
+            struct CompanyRateResponse: Codable { let company_car_rate: Double? }
+            companyResolved = false
             do {
-                print("🚗 Querying mileage reports by userId: \(userId)")
-                let reports = try await DailyJobReportService.shared.getReports(
-                    userId: userId,
-                    startDate: periodStart,
-                    endDate: periodEnd
-                )
-
-                await MainActor.run {
-                    // Log how many documents were found
-                    print("Found \(reports.count) reports for the period")
-
-                    // Convert DailyJobReport to local wrapper models
-                    self.records = reports.map { MileageRecordWrapper(from: $0) }
-
-                    // Since we already filtered by date in the query, just sum all records
-                    self.currentPeriodMileage = self.records.reduce(0) { $0 + $1.totalMileage }
-                    self.currentPeriodPersonalMiles = self.records
-                        .filter { !VehicleRates.isCompany($0.vehicleType) }
-                        .reduce(0) { $0 + $1.totalMileage }
-                    self.currentPeriodCompanyMiles = self.records
-                        .filter { VehicleRates.isCompany($0.vehicleType) }
-                        .reduce(0) { $0 + $1.totalMileage }
-                    print("🚗 Pay period mileage: \(self.currentPeriodMileage) miles from \(self.records.count) records")
-
-                    // Also load month and year totals
-                    self.loadYearAndMonthMileage()
-
-                    // Notify listener of update
-                    self.updateCallback?()
-                }
+                let rows: [CompanyRateResponse] = try await supabase
+                    .from("organizations")
+                    .select("company_car_rate")
+                    .eq("id", value: orgId)
+                    .limit(1)
+                    .execute()
+                    .value
+                guard !Task.isCancelled else { return }
+                companyRate = VehicleRates.resolveCompanyCarRate(rows.first?.company_car_rate)
+                companyResolved = true
             } catch {
-                print("Error fetching mileage reports: \(error.localizedDescription)")
+                guard !Task.isCancelled else { return }
+                print("⚠️ Mileage: company-car rate unavailable, using the default — \(error.localizedDescription)")
             }
+        }
+
+        if personalResolved && companyResolved { ratesLoaded = true }
+    }
+
+    // MARK: - Applying results
+
+    @MainActor
+    private func applyPeriod(_ reports: [DailyJobReport]) {
+        records = reports.map { MileageRecordWrapper(from: $0) }
+        let split = MileageMath.accumulate(records,
+                                          miles: { $0.totalMileage },
+                                          vehicleType: { $0.vehicleType },
+                                          personalRate: personalRate,
+                                          companyCarRate: companyRate)
+        currentPeriodMileage = split.totalMiles
+        currentPeriodPersonalMiles = split.personalMiles
+        currentPeriodCompanyMiles = split.companyMiles
+    }
+
+    @MainActor
+    private func applyYearAndMonth(_ reports: [DailyJobReport]) {
+        let rows = reports.map { MileageRecordWrapper(from: $0) }
+
+        let yearSplitValue = MileageMath.accumulate(rows,
+                                                   miles: { $0.totalMileage },
+                                                   vehicleType: { $0.vehicleType },
+                                                   personalRate: personalRate,
+                                                   companyCarRate: companyRate)
+        yearMileage = yearSplitValue.totalMiles
+        yearPersonalMiles = yearSplitValue.personalMiles
+        yearCompanyMiles = yearSplitValue.companyMiles
+
+        // ONE READ, hoisted out of the closure. `calendar` mints a fresh
+        // `Calendar.current` on every access, so reading it per row let a device that
+        // changed zone mid-filter classify two rows of the same month differently.
+        let now = Date()
+        let calendar = self.calendar
+        let monthRows = rows.filter { MileageMath.isInSameMonth($0.date, as: now, calendar: calendar) }
+        let monthSplitValue = MileageMath.accumulate(monthRows,
+                                                    miles: { $0.totalMileage },
+                                                    vehicleType: { $0.vehicleType },
+                                                    personalRate: personalRate,
+                                                    companyCarRate: companyRate)
+        monthMileage = monthSplitValue.totalMiles
+        monthPersonalMiles = monthSplitValue.personalMiles
+        monthCompanyMiles = monthSplitValue.companyMiles
+
+        // THE ONLY PLACE THIS BECOMES TRUE. Everything downstream that claims the
+        // month and year figures are real — the widget's cache, the two tiles'
+        // `.loaded` state — is gated on it.
+        monthYearLoaded = true
+    }
+
+    @MainActor
+    private func succeed() {
+        hasSyncedFigures = true
+        state = .loaded
+        cacheHeadlineTotals()
+        updateCallback?()
+    }
+
+    @MainActor
+    private func fail(_ message: String, underlying: Error? = nil) {
+        if let underlying {
+            print("⚠️ Mileage load failed: \(underlying.localizedDescription)")
+        }
+        // Figures that DID sync are still true, just older than now. Zeroing them
+        // is the failure mode this state machine exists to remove.
+        state = hasSyncedFigures ? .stale(message) : .failed(message)
+    }
+
+    /// EACH KEY IS WRITTEN ONLY WHEN THE FIGURE BEHIND IT WAS LOADED.
+    ///
+    /// The period key needs the CURRENT period selected: the cache is what the
+    /// dashboard widget shows before its own fetch lands, so filling it from a
+    /// period the user happened to browse back to would make the home screen state
+    /// last fortnight's miles as this fortnight's.
+    ///
+    /// The month and year keys need `monthYearLoaded`, for the same reason one step
+    /// further: the chip path does not fetch them, so writing them from a chip
+    /// success persisted whatever they happened to hold — zero on a session whose
+    /// only successful load was a chip tap — and the widget then read that zero back
+    /// on the next cold start as a real total.
+    private func cacheHeadlineTotals() {
+        if selectedPeriod?.isCurrent == true {
+            UserDefaults.standard.set(currentPeriodMileage, forKey: Cache.periodMiles)
+        }
+        if monthYearLoaded {
+            UserDefaults.standard.set(monthMileage, forKey: Cache.monthMiles)
+            UserDefaults.standard.set(yearMileage, forKey: Cache.yearMiles)
         }
     }
-    
-    /// Calculate the mileage total for the selected period.
-    func calculateMileage(forPeriodStart periodStart: Date, periodEnd: Date) {
-        print("🚗 Calculating mileage for period...")
-        print("   - Period start: \(periodStart)")
-        print("   - Period end: \(periodEnd)")
-        print("   - Total records available: \(records.count)")
-        
-        let currentRecords = records.filter { record in
-            let inRange = record.date >= periodStart && record.date <= periodEnd
-            if !inRange {
-                print("   - Record date \(record.date) is outside range")
-            }
-            return inRange
-        }
-        
-        currentPeriodMileage = currentRecords.reduce(0) { $0 + $1.totalMileage }
-        
-        // Log the calculation for debugging
-        print("🚗 Calculated mileage for period: \(currentPeriodMileage) miles from \(currentRecords.count) records")
+
+    // MARK: - The calendar year the tiles count
+
+    /// EACH BOUNDARY READS `calendar` ONCE. It mints a fresh `Calendar.current` per
+    /// access, so the two-access version could take the year from one zone and mint
+    /// the date in another — an off-by-an-hour Jan 1 at the edge of a zone change,
+    /// which is a whole day of trips in or out of the year total.
+    private var yearStart: Date {
+        let calendar = self.calendar
+        var comps = DateComponents()
+        comps.year = calendar.component(.year, from: Date())
+        comps.month = 1
+        comps.day = 1
+        return calendar.date(from: comps) ?? Date()
     }
-    
-    /// Loads records for the current calendar year and calculates:
-    ///   - total mileage for the current month
-    ///   - total mileage for the year
-    func loadYearAndMonthMileage() {
-        print("🚗 Loading year and month mileage totals...")
 
-        let currentYear = calendar.component(.year, from: Date())
-
-        // Start of year
-        var startComps = DateComponents()
-        startComps.year = currentYear
-        startComps.month = 1
-        startComps.day = 1
-        let yearStart = calendar.date(from: startComps)!
-
-        // End of year - set to last second of the year
-        var endComps = DateComponents()
-        endComps.year = currentYear
-        endComps.month = 12
-        endComps.day = 31
-        endComps.hour = 23
-        endComps.minute = 59
-        endComps.second = 59
-        let yearEnd = calendar.date(from: endComps)!
-
-        // Log the year range for debugging
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .medium
-        print("Loading year mileage from \(dateFormatter.string(from: yearStart)) to \(dateFormatter.string(from: yearEnd))")
-
-        guard let userId = userId else {
-            print("🚗 No userId available for year/month mileage query")
-            return
-        }
-
-        Task {
-            do {
-                let reports = try await DailyJobReportService.shared.getReports(
-                    userId: userId,
-                    startDate: yearStart,
-                    endDate: yearEnd
-                )
-
-                await MainActor.run {
-                    // Log how many documents were found for the year
-                    print("Found \(reports.count) reports for the year")
-
-                    // Convert to tuples for processing
-                    let allRecords = reports.map { (date: $0.date, mileage: $0.total_mileage, vehicleType: $0.vehicle_type ?? "personal") }
-
-                    // Sum mileage for the entire year (total + split)
-                    self.yearMileage = allRecords.reduce(0) { $0 + $1.mileage }
-                    self.yearPersonalMiles = allRecords.filter { !VehicleRates.isCompany($0.vehicleType) }.reduce(0) { $0 + $1.mileage }
-                    self.yearCompanyMiles = allRecords.filter { VehicleRates.isCompany($0.vehicleType) }.reduce(0) { $0 + $1.mileage }
-
-                    // Sum mileage for the current month (total + split)
-                    let currentMonth = self.calendar.component(.month, from: Date())
-                    let monthRecords = allRecords.filter {
-                        self.calendar.component(.month, from: $0.date) == currentMonth &&
-                        self.calendar.component(.year, from: $0.date) == currentYear
-                    }
-                    self.monthMileage = monthRecords.reduce(0) { $0 + $1.mileage }
-                    self.monthPersonalMiles = monthRecords.filter { !VehicleRates.isCompany($0.vehicleType) }.reduce(0) { $0 + $1.mileage }
-                    self.monthCompanyMiles = monthRecords.filter { VehicleRates.isCompany($0.vehicleType) }.reduce(0) { $0 + $1.mileage }
-
-                    print("🚗 Calculated year mileage: \(self.yearMileage) miles from \(allRecords.count) total records")
-                    print("🚗 Calculated month mileage: \(self.monthMileage) miles from \(monthRecords.count) month records")
-                    print("🚗 Current year: \(currentYear), Current month: \(currentMonth)")
-
-                    // Notify listener of update
-                    self.updateCallback?()
-                }
-            } catch {
-                print("Error fetching yearly reports: \(error.localizedDescription)")
-            }
-        }
+    private var yearEnd: Date {
+        let calendar = self.calendar
+        var comps = DateComponents()
+        comps.year = calendar.component(.year, from: Date())
+        comps.month = 12
+        comps.day = 31
+        comps.hour = 23
+        comps.minute = 59
+        comps.second = 59
+        return calendar.date(from: comps) ?? Date()
     }
 }

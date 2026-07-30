@@ -13,28 +13,18 @@ import Supabase
 // MARK: - Public Types
 
 /// Starting point options for route optimization
+///
+/// `icon` and `shortName` were deleted with the converted screen: the segmented
+/// picker that used `shortName` and the icon-in-a-circle rows that used `icon` are
+/// both gone (the timeline draws plain markers), and the approved design's option
+/// labels are mapped in `RoutePlannerView` rather than restated here. The
+/// `rawValue`s still travel to the Edge Function as the origin's label.
 enum StartingPointType: String, CaseIterable, Identifiable {
     case currentLocation = "Current Location"
     case homeAddress = "Home Address"
     case workAddress = "Work Address"
 
     var id: String { rawValue }
-
-    var icon: String {
-        switch self {
-        case .currentLocation: return "location.fill"
-        case .homeAddress: return "house.fill"
-        case .workAddress: return "building.2.fill"
-        }
-    }
-
-    var shortName: String {
-        switch self {
-        case .currentLocation: return "Current"
-        case .homeAddress: return "Home"
-        case .workAddress: return "Work"
-        }
-    }
 }
 
 /// End point options for route optimization
@@ -43,16 +33,15 @@ enum EndPointType: String, CaseIterable, Identifiable {
     case work = "Work"
 
     var id: String { rawValue }
-
-    var icon: String {
-        switch self {
-        case .home: return "house.fill"
-        case .work: return "building.2.fill"
-        }
-    }
 }
 
 /// Distance/duration information for a route leg
+///
+/// NO DISPLAY STRINGS HERE. `formattedDistance` / `formattedDuration` were deleted
+/// when the screen was converted: `formattedDuration` did `Int(durationMinutes)`,
+/// so 59.6 minutes read "59 min", while the approved design's own formatter
+/// rounded. Two formatters cannot disagree if there is only one, and it lives in
+/// `RoutePlannerKit.RoutePlannerFormat` — which the lab mockup draws with too.
 struct RouteLeg: Codable {
     let distanceMeters: Double
     let durationSeconds: Double
@@ -64,21 +53,6 @@ struct RouteLeg: Codable {
     var durationMinutes: Double {
         durationSeconds / 60.0
     }
-
-    var formattedDistance: String {
-        String(format: "%.1f mi", distanceMiles)
-    }
-
-    var formattedDuration: String {
-        let minutes = Int(durationMinutes)
-        if minutes < 60 {
-            return "\(minutes) min"
-        } else {
-            let hours = minutes / 60
-            let remainingMinutes = minutes % 60
-            return "\(hours)h \(remainingMinutes)m"
-        }
-    }
 }
 
 /// Result of route optimization including schools and distance data
@@ -87,23 +61,14 @@ struct OptimizedRouteResult {
     let totalDistanceMiles: Double
     let totalDurationMinutes: Double
     let legs: [RouteLeg]
-    let startingPointType: StartingPointType
+    /// Schools the router REFUSED to fit into the route, by name.
+    ///
+    /// `skippedShipments` has always been decoded, counted and printed to the
+    /// console, and surfaced nowhere — so a route quietly missing two of your
+    /// stops looked exactly like a route with all of them. The preview now lists
+    /// these.
+    let skippedSchools: [String]
     let endPointType: EndPointType?
-
-    var formattedTotalDistance: String {
-        String(format: "%.1f mi", totalDistanceMiles)
-    }
-
-    var formattedTotalDuration: String {
-        let minutes = Int(totalDurationMinutes)
-        if minutes < 60 {
-            return "\(minutes) min"
-        } else {
-            let hours = minutes / 60
-            let remainingMinutes = minutes % 60
-            return "\(hours)h \(remainingMinutes)m"
-        }
-    }
 }
 
 // MARK: - Service
@@ -159,12 +124,6 @@ class RouteOptimizerService {
         }
     }
 
-    /// Checks if a starting point type is available (has valid coordinates)
-    @MainActor
-    static func isStartingPointAvailable(_ type: StartingPointType, currentLocation: CLLocationCoordinate2D?) -> Bool {
-        return getCoordinates(for: type, currentLocation: currentLocation) != nil
-    }
-
     /// Checks if an end point type is available (has valid coordinates)
     @MainActor
     static func isEndPointAvailable(_ type: EndPointType) -> Bool {
@@ -177,10 +136,15 @@ class RouteOptimizerService {
     /// - Parameters:
     ///   - schools: Array of schools to visit
     ///   - startingFrom: Starting location coordinates
-    ///   - startingPointType: Type of starting point for display purposes
+    ///   - startingPointType: Labels the origin in the request sent to the Edge
+    ///     Function. It is NO LONGER echoed back on the result: that member was
+    ///     set on every path and read by nothing, and the converted screen
+    ///     snapshots its own start label when it pushes the preview.
     ///   - endLocation: Optional end location coordinates
-    ///   - endPointType: Type of end point for display purposes
-    /// - Returns: OptimizedRouteResult with schools, distances, and metadata
+    ///   - endPointType: Type of end point, carried through to the result
+    /// - Returns: OptimizedRouteResult with schools, distances, skipped schools
+    ///   and metadata. THROWS rather than returning a zero-mile result when the
+    ///   optimization did not actually happen.
     func optimizeRoute(
         schools: [School],
         startingFrom: CLLocationCoordinate2D,
@@ -188,29 +152,17 @@ class RouteOptimizerService {
         endLocation: CLLocationCoordinate2D? = nil,
         endPointType: EndPointType? = nil
     ) async throws -> OptimizedRouteResult {
-        guard !schools.isEmpty else {
-            return OptimizedRouteResult(
-                schools: [],
-                totalDistanceMiles: 0,
-                totalDurationMinutes: 0,
-                legs: [],
-                startingPointType: startingPointType,
-                endPointType: endPointType
-            )
-        }
+        // BOTH EMPTY GUARDS THROW. They used to return a zero-mile "result", which
+        // is the same failure-masking shape as the missing-order case below: the
+        // caller could not tell it apart from a route that really was zero miles
+        // long. The converted screen cannot reach either — it refuses to optimize
+        // below two ROUTABLE selections — so this is honesty in a path that is
+        // now unreachable rather than a behaviour change the user will see.
+        guard !schools.isEmpty else { throw RouteOptimizerError.noRoutableSchools }
 
         // Filter schools with valid coordinates
         let validSchools = schools.filter { $0.parsedCoordinates != nil }
-        guard !validSchools.isEmpty else {
-            return OptimizedRouteResult(
-                schools: [],
-                totalDistanceMiles: 0,
-                totalDurationMinutes: 0,
-                legs: [],
-                startingPointType: startingPointType,
-                endPointType: endPointType
-            )
-        }
+        guard !validSchools.isEmpty else { throw RouteOptimizerError.noRoutableSchools }
 
         // Build the request body for the Edge Function
         let origin = OptimizeLocation(
@@ -255,32 +207,30 @@ class RouteOptimizerService {
         print("   Optimized order: \(response.optimizedOrder?.description ?? "nil")")
         print("   Skipped shipments: \(response.skippedShipments?.description ?? "nil")")
 
+        // THE SERVER'S OWN WORDS REACH THE USER. This used to read `response.error`,
+        // print it, and then throw a hardcoded `apiError(statusCode: 500)` — so a
+        // configuration problem, a quota refusal and a malformed request all
+        // surfaced as the same meaningless status code, and five of the seven error
+        // cases were unreachable.
         guard response.success else {
-            let errorMessage = response.error ?? "Unknown error"
-            print("RouteOptimizerService: Edge Function error: \(errorMessage)")
-            throw RouteOptimizerError.apiError(statusCode: 500)
+            throw RouteOptimizerError.serverMessage(Self.readableMessage(response.error))
         }
 
-        // Log any skipped shipments
-        if let skipped = response.skippedShipments, !skipped.isEmpty {
-            print("⚠️ Google API skipped \(skipped.count) shipment(s):")
-            for skip in skipped {
-                print("   - Index \(skip.index): \(skip.label ?? "Unknown")")
+        // The schools the router refused. Resolved to NAMES here rather than being
+        // printed and dropped — the label the server echoes back is what we sent,
+        // and the index is the position in `validSchools`.
+        let skippedSchools: [String] = (response.skippedShipments ?? []).map { skip in
+            if skip.index >= 0 && skip.index < validSchools.count {
+                return validSchools[skip.index].name
             }
-        } else {
-            print("✅ No skipped shipments (or field is nil)")
+            return skip.label ?? "Unknown school"
         }
 
+        // NO SILENT FALLBACK TO THE ORIGINAL ORDER. This used to return the
+        // user's own list with `totalDistanceMiles: 0`, and the view's `> 0` gate
+        // then hid the totals — so a failed optimization rendered as a route.
         guard let optimizedOrder = response.optimizedOrder, !optimizedOrder.isEmpty else {
-            print("RouteOptimizerService: No optimized order returned, using original order")
-            return OptimizedRouteResult(
-                schools: validSchools,
-                totalDistanceMiles: 0,
-                totalDurationMinutes: 0,
-                legs: [],
-                startingPointType: startingPointType,
-                endPointType: endPointType
-            )
+            throw RouteOptimizerError.noOrderReturned(Self.readableMessage(response.error))
         }
 
         // Debug: Log the schools sent and order received
@@ -288,8 +238,12 @@ class RouteOptimizerService {
         print("   Starting from: \(startingFrom.latitude), \(startingFrom.longitude)")
         print("   Schools sent (in order):")
         for (index, school) in validSchools.enumerated() {
-            let coords = school.parsedCoordinates!
-            print("     [\(index)] \(school.name) at \(coords.lat), \(coords.lng)")
+            // Optional-bound rather than force-unwrapped. The filter above makes
+            // this safe today, and a `!` that is only safe because of a line
+            // fifty lines away is one edit from a crash in a debug print.
+            if let coords = school.parsedCoordinates {
+                print("     [\(index)] \(school.name) at \(coords.lat), \(coords.lng)")
+            }
         }
         print("   Optimized order received from API: \(optimizedOrder)")
         print("   Total distance: \(response.totalDistanceMeters ?? 0)m")
@@ -315,9 +269,18 @@ class RouteOptimizerService {
             totalDistanceMiles: totalDistanceMeters * 0.000621371,
             totalDurationMinutes: totalDurationSeconds / 60.0,
             legs: legs,
-            startingPointType: startingPointType,
+            skippedSchools: skippedSchools,
             endPointType: endPointType
         )
+    }
+
+    /// The server's message, trimmed — or nil when it said nothing usable, so the
+    /// error type can supply its own wording rather than printing "Unknown error"
+    /// at the user.
+    private static func readableMessage(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     // MARK: - Map App URLs
@@ -477,28 +440,33 @@ private struct OptimizeRouteResponse: Codable {
 
 // MARK: - Errors
 
+/// THREE CASES, ALL OF THEM REACHABLE.
+///
+/// There were seven, five of them unreachable — `invalidURL`, `invalidResponse`,
+/// `noApiKey`, `noProjectID` and `noStartingPoint` were never thrown from anywhere
+/// (the API keys live in the Edge Function, not the app), and the one that WAS
+/// thrown, `apiError(statusCode: 500)`, was a hardcoded number standing in front
+/// of the message the server had actually sent. Deleted rather than left as a menu
+/// of errors the app cannot produce.
 enum RouteOptimizerError: Error, LocalizedError {
-    case invalidURL
-    case invalidResponse
-    case apiError(statusCode: Int)
-    case noApiKey
-    case noProjectID
-    case noStartingPoint
+    /// The Edge Function reported failure. Carries the server's own text when it
+    /// sent any.
+    case serverMessage(String?)
+    /// The call succeeded but came back with no order — the case that used to be
+    /// disguised as a zero-mile route.
+    case noOrderReturned(String?)
+    /// Nothing was sent that could be routed. Unreachable from the converted
+    /// screen, which refuses to optimize below two routable schools.
+    case noRoutableSchools
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL:
-            return "Invalid URL for route optimization"
-        case .invalidResponse:
-            return "Invalid response from route optimization API"
-        case .apiError(let statusCode):
-            return "Route optimization API error (status: \(statusCode))"
-        case .noApiKey:
-            return "Google API key not configured"
-        case .noProjectID:
-            return "Google Cloud Project ID not configured"
-        case .noStartingPoint:
-            return "Starting point address not available"
+        case .serverMessage(let message):
+            return message ?? "The route service reported an error but did not say what it was."
+        case .noOrderReturned(let message):
+            return message ?? "The route service did not return an order for these schools."
+        case .noRoutableSchools:
+            return "None of the selected schools have a map pin, so there is nothing to route."
         }
     }
 }
