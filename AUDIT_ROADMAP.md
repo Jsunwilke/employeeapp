@@ -1092,8 +1092,23 @@ other rebases onto it.
 **Batch 3**
 
 - [ ] **AMB.9 Mileage + Stats** — number-heavy; stat tiles and charts.
+  **2026-07-29 — BATCH-3 MOCKUPS BUILT (all five: Mileage, Route Planner, Stats,
+  Class Groups, Yearbook), in the lab on iPhone AND iPad, awaiting the operator's
+  review sitting (D10 blocks conversion until then).** The inventory is
+  `AMB_BATCH3_PARITY.md`, written source-inward BEFORE the mockups. Its headline,
+  VERIFIED live on the signed-in simulator and against the live DB: **the
+  Statistics screen has never rendered** — it selects `daily_job_reports.start_time`
+  / `end_time` and `schools.value`, none of which exist, so every tab hides behind
+  "Error Loading Data"; the Weather chart is hardcoded fake data; total mileage is
+  double-counted; the trends chart only knows the literal names John/Sarah/Mike.
+  Open for the operator at the sitting: (1) approve/reject each design; (2) where
+  the ROUTE PLANNER lands (tagged AMB.9 by the drift-gate generator, belongs to no
+  phase); (3) whether AMB.9 may repair the two broken stats queries + the
+  double-count so the redesigned screen ships REAL numbers (data-layer, needs the
+  D12 exception the way AMB.6's chat repair got one).
 - [ ] **AMB.10 Groups + Yearbook** (17 views, 4,504 lines) — closes batch 3 and mocks
-  batch 4.
+  batch 4. **Mockups already built 2026-07-29 (see AMB.9 note above)** — AMB.10
+  starts at conversion once its designs are approved in the same sitting.
 
 **Batch 4**
 
