@@ -1322,6 +1322,40 @@ other rebases onto it.
   driven reliably from the simulator tooling. The primary live-update path is Supabase
   realtime and is unchanged. `/code-review` was NOT run; the operator chose to close without
   it, and this work touches no schema, RLS, auth, PowerSync or Captura path.
+
+  **2026-07-30 — THE REST OF THE SURFACE BUILT (0d8c43d, committed NOT pushed).** All 18
+  views converted to the approved batch-4 design per `AMB_BATCH4_PARITY.md` Part One; both
+  batch-4 sitting rulings implemented: **Flag for Attention built for real** (additive
+  `flagged`/`flag_note`/`flagged_at` in `supabase/drafts/20260730_amb11_jobbox_flag_columns.sql`
+  — the classifier blocked live DDL, so the OPERATOR APPLIES IT; writes prove rows matched,
+  a box reads flagged from its current trip via `JobBoxFlagRules` (25 checks), tracker shows
+  badge + note + unflag) and the **one job-box color contract** (packed periwinkle #6B7FD7 —
+  no grey — green reserved for Turned In; StatusColors' disagreeing job-box map DELETED,
+  `JobBoxTripStage.meterTint` authoritative, `STATUS_COLORS_DOCUMENTATION.md` rewritten as
+  the iOS↔web contract; web follow-on owed, incl. the stale root `status-colors.json`).
+  One chrome (rail + 3 nested NavigationViews deleted), registered scan color, tappable
+  alert banner → Search deep link, honest no-NFC/no-writer states, real
+  loading/empty/failure+retry everywhere, in-sheet titles/validation/error surfaces, session
+  choice unified WITH a No-session row (D12 kept the old "None" capability),
+  `NFCRoutingRules` centralizes 3001/rings/12h-threshold (50 checks; both SD advance
+  variants modeled explicitly — unifying them needs an operator ruling).
+  **Two adversarial audits + a fix round + follow-ups: 30 findings, 24 fixed, 6 reasoned
+  won't-fix** (global stats empty state per mockup; duplicate supplementary history fetch;
+  WriteNFC success-invalidate alert race — pre-existing, device-only; single "Manual Entry"
+  title; per-section→global empty coherence; F3 kept deliberately: Photographer Activity now
+  obeys the Time Frame chips, documented at the call site). The worst finds: sheet write
+  failures surfaced NOTHING (the dismiss-reload erased the only error channel — in-sheet
+  cards now), and the searchable school picker could display one school while saving another
+  (component-level resync; "Iconik" verified a real active school row live).
+  **Simulator smoke (live data): iPhone full pass** — all five tabs, tracker, edit sheet's
+  record-scan → observed-row mirror → Search swipe-delete round trip, DB read back clean
+  (0 test rows); deep link + its un-stick fix verified; iPad reach via All Features
+  confirmed to the feature list (the Scan ROW's dispatch did not fire in the simulator —
+  shell device-conditional territory, §0.18/§0.19, AMB.12's; verify on the operator's iPad).
+  **Open to close the phase:** operator applies the flag SQL, operator smoke both devices,
+  operator runs `/code-review`, then the JobBox mockup + gallery entry die (AMB.7 rule:
+  the validation reference outlives the port until the smoke passes). NFC hardware paths
+  (reader/writer branches, the TAG-vs-NDEF entitlement flag) remain device-only checks.
 - [ ] **AMB.12 Settings, Manager, Training** (~6,600 lines) — the tail, converted per D9.
   Closes the arc and deletes the lab harness + its menu entry.
 

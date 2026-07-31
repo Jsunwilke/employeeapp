@@ -462,6 +462,10 @@ nothing is built on primitives that are still moving (D5).
             Closes batch 3 and mocks batch 4.
 
     AMB.11  Job box / NFC                (18 views, 5,198 lines)    BATCH 4
+            BUILT 2026-07-30 (0d8c43d): full conversion + Flag for Attention
+            real + the one color contract. Pending: operator applies the flag
+            SQL draft, both-device smoke, /code-review. Closeout detail in
+            AUDIT_ROADMAP.md.
 
     AMB.12  Settings, Manager, Training  (about 6,600 lines)        BATCH 4
             The tail (D9). Lowest traffic, converted last, and by this point
