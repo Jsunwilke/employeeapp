@@ -14,15 +14,27 @@
 //    - the 200pt disc is the REGISTERED feature colour #2AA7D8, not a hand-rolled
 //      orange gradient;
 //    - the Job Box Alert banner is REBUILT here from kit components and is now a
-//      TAP TARGET into Search filtered to "Left Job" (approved PROPOSED). The old
-//      `NFC/JobBoxNotification.swift` is DELETED in the same change, and with it
-//      its private `formatTime` (finding N51) and its hardcoded "12 hours"
-//      (N27) — the threshold's words are now DERIVED from the number;
+//      TAP TARGET. The old `NFC/JobBoxNotification.swift` is DELETED in the same
+//      change, and with it its private `formatTime` (finding N51) and its
+//      hardcoded "12 hours" (N27) — the threshold's words are now DERIVED from
+//      the number;
 //    - ONE error surface: an NFC read error is a single `AmbientNoteCard`, no
 //      longer an inline box AND a toast at once (N52);
 //    - a pre-emptive NFC availability check (approved PROPOSED) — the disc used
 //      to be live on hardware that cannot scan and the device answered after the
 //      fact.
+//
+//  OPERATOR RULING 2026-07-31: the banner tap OFFERS THE FIX. It used to open
+//  Search filtered to "Left Job" — a filtered list of a problem, with no way to
+//  act on it, for boxes that are typically months-old strays nobody will ever
+//  re-scan. It now presents the "Left-behind boxes" sheet, one card per stalled
+//  box with a "Mark Turned In" button that writes the Turned In scan through the
+//  app's standard job-box writer. The Search deep link is DELETED with it
+//  (delete-first): `onNavigateToSearch` is gone from this view and from the
+//  container's `.scan` case. Statistics keeps its own deep link.
+//
+//  The three sheets are ONE `.sheet(item:)` (the AMB.10 rule) — the two form
+//  sheets used to be stacked `.sheet(isPresented:)` modifiers.
 //
 //  Fixed in passing: N23 (the realtime `for await` Task is stored and cancelled —
 //  the wrapper only unsubscribes the channel), N25 (an empty organization id says
@@ -33,14 +45,57 @@ import SwiftUI
 import CoreNFC
 import Supabase
 
+/// One stalled "Left Job" box, resolved to concrete values AT THE MOMENT THE
+/// SHEET IS PRESENTED.
+///
+/// A snapshot, deliberately (the AMB.10 wrong-row class): `leftJobBoxes` is
+/// re-computed by `checkForLeftJobBoxes()` on every realtime change, so a list
+/// that read through to it could reorder or replace a row under a finger that
+/// was already on its way down — and the button writes a row that names a school
+/// and a job. What the sheet shows and what the button writes are the same
+/// values, fixed when the sheet opened.
+private struct LeftBehindBox: Identifiable {
+    /// The `job_boxes` row id of the box's latest scan — the identity the sheet
+    /// tracks its in-flight writes and its removals by.
+    let id: String
+    let boxNumber: String
+    let school: String
+    let schoolId: String?
+    let shiftUid: String?
+    let photographer: String
+    let leftAt: Date
+}
+
 struct ScanView: View {
-    /// Set by `NFCContainerView`. The Job Box Alert banner uses it to open Search
-    /// filtered to "Left Job" in job-box mode — the route the banner has never had.
-    var onNavigateToSearch: ((String, Bool) -> Void)? = nil
+    /// The sheets this screen can present. ONE presentation mechanism (the
+    /// AMB.10 rule): this used to be two separate `.sheet(isPresented:)`
+    /// modifiers, and the operator ruling added a third surface — stacked
+    /// `isPresented` sheets are the pair that fails on device.
+    private enum ScanSheet: Identifiable {
+        case sdCardForm
+        case jobBoxForm
+        /// Carries its rows, so the sheet is built from the snapshot rather than
+        /// from live state. See `LeftBehindBox`.
+        case leftBehind([LeftBehindBox])
+
+        var id: String {
+            switch self {
+            case .sdCardForm: return "sdCardForm"
+            case .jobBoxForm: return "jobBoxForm"
+            case .leftBehind: return "leftBehind"
+            }
+        }
+    }
 
     @StateObject var nfcReader = NFCReaderCoordinator()
-    @State private var showingForm = false
-    @State private var showingJobBoxForm = false
+
+    @State private var sheet: ScanSheet?
+
+    /// WHICH sheet was up, for `onDismiss` — `sheet(item:onDismiss:)` hands the
+    /// dismissal closure nothing and `sheet` is already nil by the time it runs.
+    /// Same pattern as the manager tracker.
+    @State private var lastPresented: ScanSheet?
+
     @State private var school = ""
     @State private var schoolId: String? = nil
     @State private var status = "Job Box"
@@ -152,13 +207,73 @@ struct ScanView: View {
             jobBoxStreamTask = nil
             nfcReader.errorMessage = nil
         }
-        .sheet(isPresented: $showingForm, onDismiss: {
-            // Reset state when form is dismissed
-            nfcReader.scannedCardNumber = nil
-            school = ""
-            schoolId = nil
-            status = "Job Box"
-        }) {
+        .sheet(item: $sheet, onDismiss: {
+            // The FORM sheets reset the scan state they were built from. The
+            // left-behind sheet is not a scan and owns none of it, so it must
+            // not clear the school/status a scan in progress is holding.
+            switch lastPresented {
+            case .sdCardForm, .jobBoxForm:
+                nfcReader.scannedCardNumber = nil
+                school = ""
+                schoolId = nil
+                status = "Job Box"
+            case .leftBehind, .none:
+                break
+            }
+        }) { which in
+            switch which {
+            case .sdCardForm: sdCardFormSheet
+            case .jobBoxForm: jobBoxFormSheet
+            case .leftBehind(let boxes):
+                JobBoxLeftBehindSheet(
+                    boxes: boxes,
+                    markTurnedIn: { box, done in markTurnedIn(box, completion: done) },
+                    onAllCleared: {
+                        sheet = nil
+                        // Offline the write is QUEUED, and the toast must say so —
+                        // the same gate WriteNFCView uses (the AMB.11 review's
+                        // offline-claims-success class).
+                        toastMessage = offlineManager.isOnline
+                            ? "Marked turned in"
+                            : "Marked turned in — will sync when you're back online"
+                        isSuccessToast = true
+                        showToast = true
+                    }
+                )
+            }
+        }
+        .alert(isPresented: $showAlert) {
+            Alert(title: Text("Info"),
+                  message: Text(alertMessage),
+                  dismissButton: .default(Text("OK")))
+        }
+        .loadingOverlay(isPresented: $isLoading, message: loadingMessage)
+        .toast(isPresented: $showToast, message: toastMessage, isSuccess: isSuccessToast)
+        .onChange(of: nfcReader.errorMessage) { newValue in
+            // Clear any error message after 10 seconds. NOT toasted any more —
+            // the card above is the one place this is said (N52).
+            if newValue != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                    if nfcReader.errorMessage == newValue {
+                        nfcReader.errorMessage = nil
+                    }
+                }
+            }
+        }
+    }
+
+    /// Present a sheet, remembering which one for `onDismiss`.
+    private func present(_ next: ScanSheet) {
+        lastPresented = next
+        sheet = next
+    }
+
+    // MARK: - Sheets
+
+    /// `Group` rather than `@ViewBuilder`: the branch is the sheet's whole
+    /// body, and the group keeps that one expression.
+    private var sdCardFormSheet: some View {
+        Group {
             if let cardNumber = nfcReader.scannedCardNumber {
                 FormView(
                     cardNumber: cardNumber,
@@ -197,23 +312,22 @@ struct ScanView: View {
                     },
                     onCancel: {
                         nfcReader.scannedCardNumber = nil
-                        showingForm = false
+                        sheet = nil
                     }
                 )
             } else {
                 // N26: both sheet bodies were `if let` with no `else`, so a blank
                 // sheet was reachable whenever the number was cleared between the
                 // presentation decision and the body running.
-                sheetFallback { showingForm = false }
+                sheetFallback { sheet = nil }
             }
         }
-        .sheet(isPresented: $showingJobBoxForm, onDismiss: {
-            // Reset state when form is dismissed
-            nfcReader.scannedCardNumber = nil
-            school = ""
-            schoolId = nil
-            status = "Job Box"
-        }) {
+    }
+
+    /// `Group` rather than `@ViewBuilder`: the branch is the sheet's whole
+    /// body, and the group keeps that one expression.
+    private var jobBoxFormSheet: some View {
+        Group {
             if let boxNumber = nfcReader.scannedCardNumber {
                 JobBoxFormView(
                     boxNumber: boxNumber,
@@ -251,29 +365,11 @@ struct ScanView: View {
                     },
                     onCancel: {
                         nfcReader.scannedCardNumber = nil
-                        showingJobBoxForm = false
+                        sheet = nil
                     }
                 )
             } else {
-                sheetFallback { showingJobBoxForm = false }
-            }
-        }
-        .alert(isPresented: $showAlert) {
-            Alert(title: Text("Info"),
-                  message: Text(alertMessage),
-                  dismissButton: .default(Text("OK")))
-        }
-        .loadingOverlay(isPresented: $isLoading, message: loadingMessage)
-        .toast(isPresented: $showToast, message: toastMessage, isSuccess: isSuccessToast)
-        .onChange(of: nfcReader.errorMessage) { newValue in
-            // Clear any error message after 10 seconds. NOT toasted any more —
-            // the card above is the one place this is said (N52).
-            if newValue != nil {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-                    if nfcReader.errorMessage == newValue {
-                        nfcReader.errorMessage = nil
-                    }
-                }
+                sheetFallback { sheet = nil }
             }
         }
     }
@@ -297,13 +393,19 @@ struct ScanView: View {
     /// target it has never had. It used to report a problem and offer no route to
     /// fix it: no button, no tap gesture, not dismissible.
     ///
+    /// The tap now opens the FIX (operator, 2026-07-31), not a filtered list: the
+    /// boxes here are typically months-old strays that will never be re-scanned,
+    /// so the sheet lets each one be marked Turned In from where the problem is
+    /// reported. The snapshot is taken HERE, at the tap, and nothing the sheet
+    /// shows or writes can change under it afterwards.
+    ///
     /// The threshold's WORDS come from `NFCRoutingRules` rather than being typed,
     /// so the sentence cannot disagree with the number it describes (the old copy
     /// said "over 12 hours" while the threshold drops to 5 minutes in debug).
     private var alertBanner: some View {
         Button {
             AmbientHaptics.impact(.light)
-            onNavigateToSearch?(JobBoxStatus.leftJob.rawValue, true)
+            present(.leftBehind(leftBehindSnapshot))
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -327,7 +429,21 @@ struct ScanView: View {
             .ambientCard(density: .compact, fill: .tint(.orange), fillWidth: true)
         }
         .buttonStyle(.plain)
-        .accessibilityHint("Opens Search filtered to boxes left at a job")
+        .accessibilityHint("Opens the list of boxes left at a job, where each one can be marked turned in")
+    }
+
+    /// The banner's boxes, resolved to concrete values for the sheet. Read once,
+    /// at the tap — see `LeftBehindBox`.
+    private var leftBehindSnapshot: [LeftBehindBox] {
+        leftJobBoxes.map { record, _ in
+            LeftBehindBox(id: record.id,
+                          boxNumber: record.boxNumber,
+                          school: record.school ?? "",
+                          schoolId: record.schoolId.isEmpty ? nil : record.schoolId,
+                          shiftUid: record.shiftUid.isEmpty ? nil : record.shiftUid,
+                          photographer: record.scannedBy,
+                          leftAt: record.timestampDate)
+        }
     }
 
     private var alertSummary: String {
@@ -601,7 +717,7 @@ struct ScanView: View {
                     self.showToast = true
 
                     // Close form and reset state
-                    self.showingForm = false
+                    self.sheet = nil
                     self.nfcReader.scannedCardNumber = nil
 
                     // Then notify completion
@@ -685,7 +801,7 @@ struct ScanView: View {
                     }
 
                     // Close form and reset state
-                    self.showingJobBoxForm = false
+                    self.sheet = nil
                     self.nfcReader.scannedCardNumber = nil
 
                     // No need to manually refresh since the Supabase realtime listener
@@ -702,6 +818,63 @@ struct ScanView: View {
                     // The sheet is still open on failure, so the message has to
                     // reach it — the toast is behind it.
                     completion(false, message)
+                }
+            }
+        }
+    }
+
+    // MARK: - Marking a left-behind box turned in
+
+    /// Write the Turned In scan for one stalled box.
+    ///
+    /// A scan ROW, not an edit — the same semantics as every other writer on this
+    /// shared table (the NFC scan path, the web app, and the manager tracker's
+    /// correction in `ManagerJobBoxViewModel.recordScan`): one row per status
+    /// change, read latest-by-timestamp, so the history stays true and the crew
+    /// push trigger fires. It goes through `DatabaseManager.saveJobBoxRecord`,
+    /// the app's standard job-box insert, so this write queues offline and writes
+    /// the session back exactly like a scanned one.
+    ///
+    /// The school, school id and shift link are carried from the box's LATEST
+    /// record — the same fields the tracker's correction carries — so the Turned
+    /// In row lands on the job the box was left at rather than on nothing.
+    ///
+    /// - Parameter completion: nil on success, a message on failure. Always on
+    ///   the main actor: `saveJobBoxRecord` answers on main on the ONLINE path
+    ///   but calls back on the caller's thread when it queues offline.
+    private func markTurnedIn(_ box: LeftBehindBox, completion: @escaping (String?) -> Void) {
+        let orgID = userManager.currentUserOrganizationID
+        guard !orgID.isEmpty else {
+            completion("User organization not found.")
+            return
+        }
+
+        DatabaseManager.shared.saveJobBoxRecord(
+            timestamp: Date(),
+            // The signed-in photographer, exactly as `checkForLeftJobBoxes`
+            // matched the box to them in the first place — the banner cannot be
+            // on screen with an empty first name.
+            photographer: storedUserFirstName,
+            boxNumber: box.boxNumber,
+            school: box.school,
+            schoolId: box.schoolId,
+            status: JobBoxStatus.turnedIn.rawValue,
+            organizationID: orgID,
+            userId: UserManager.shared.getCurrentUserID() ?? "",
+            shiftUid: box.shiftUid
+        ) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    // The banner shrinks immediately, and the re-run confirms it
+                    // against the server (a realtime change would do it too, but
+                    // only when the device is online).
+                    self.leftJobBoxes.removeAll { record, _ in record.boxNumber == box.boxNumber }
+                    self.checkForLeftJobBoxes()
+                    completion(nil)
+
+                case .failure(let error):
+                    completion("Box #\(box.boxNumber) didn't save: \(error.localizedDescription)")
                 }
             }
         }
@@ -751,7 +924,7 @@ struct ScanView: View {
                         }
                     }
                 }
-                self.showingForm = true
+                self.present(.sdCardForm)
 
             case .failure(let error):
                 print("DEBUG: Error fetching last record: \(error.localizedDescription)")
@@ -762,7 +935,7 @@ struct ScanView: View {
                 // raised at the same moment the sheet was presented, so it was
                 // covered by the very form it was describing.
                 self.historyUnavailable = true
-                self.showingForm = true
+                self.present(.sdCardForm)
             }
         }
     }
@@ -800,7 +973,7 @@ struct ScanView: View {
                     self.status = "" // Will be set when session is selected
                 }
 
-                self.showingJobBoxForm = true
+                self.present(.jobBoxForm)
 
             case .failure(let error):
                 print("DEBUG: Error fetching last job box record: \(error.localizedDescription)")
@@ -816,8 +989,156 @@ struct ScanView: View {
                 self.schoolId = nil
                 self.status = ""
 
-                self.showingJobBoxForm = true
+                self.present(.jobBoxForm)
             }
+        }
+    }
+}
+
+// MARK: - The left-behind sheet
+
+/// The Job Box Alert banner's fix (operator, 2026-07-31): every stalled box, and
+/// a button per box that writes its Turned In scan.
+///
+/// It works on a SNAPSHOT handed to it at presentation and never reads the live
+/// list — see `LeftBehindBox`. Rows leave this list when their write succeeds,
+/// not when the underlying query changes, so a tap always writes the box that was
+/// under the finger.
+private struct JobBoxLeftBehindSheet: View {
+    /// Writes one box's Turned In scan; answers nil on success or a message on
+    /// failure, on the main actor.
+    let markTurnedIn: (LeftBehindBox, @escaping (String?) -> Void) -> Void
+    /// The last box cleared. The caller closes the sheet and says so — a toast
+    /// raised from in here would be raised underneath this sheet.
+    let onAllCleared: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    /// The snapshot, owned and mutated by this sheet.
+    @State private var remaining: [LeftBehindBox]
+
+    /// The boxes whose write is in flight, by row id — a per-box guard, because
+    /// several can be marked one after another without waiting.
+    @State private var inFlight: Set<String> = []
+
+    /// THE SHEET'S OWN FAILURE SURFACE (the AMB.11 review class): a toast raised
+    /// by the caller would be drawn under this sheet, where the one person who
+    /// needs it cannot read it.
+    @State private var errorText: String?
+
+    init(boxes: [LeftBehindBox],
+         markTurnedIn: @escaping (LeftBehindBox, @escaping (String?) -> Void) -> Void,
+         onAllCleared: @escaping () -> Void) {
+        self.markTurnedIn = markTurnedIn
+        self.onAllCleared = onAllCleared
+        _remaining = State(initialValue: boxes)
+    }
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                AmbientBackdrop()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let errorText {
+                            AmbientNoteCard(title: "That didn't save",
+                                            text: errorText,
+                                            accent: .red,
+                                            density: .compact)
+                        }
+
+                        if remaining.isEmpty {
+                            // Momentary — clearing the last box closes this sheet
+                            // — but a sheet must never be able to present blank
+                            // (N26).
+                            AmbientNoteCard(title: "All clear",
+                                            text: "Every box you left at a job has been marked turned in.",
+                                            density: .compact)
+                        } else {
+                            ForEach(remaining) { box in
+                                card(for: box)
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+            .navigationTitle("Left-behind boxes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func card(for box: LeftBehindBox) -> some View {
+        let working = inFlight.contains(box.id)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                AmbientBadge(text: "Box \(box.boxNumber)",
+                             tint: JobBoxTripStage.leftJob.meterTint)
+                Spacer(minLength: 8)
+                Text("Left \(JobBoxFormat.elapsed(since: box.leftAt))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !box.school.isEmpty {
+                Text(box.school)
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text(box.photographer.isEmpty ? "Photographer not recorded" : box.photographer)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button {
+                turnIn(box)
+            } label: {
+                HStack(spacing: 8) {
+                    if working { ProgressView().tint(.white) }
+                    Text(working ? "Marking…" : "Mark Turned In")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                // ambient-allow: a completion control, not a container. The fill
+                // is the Turned In stage colour from the status contract — this
+                // finishes the box's trip, so it wears the colour that says so
+                // rather than the red of a destructive action.
+                .background(Capsule().fill(JobBoxTripStage.turnedIn.meterTint))
+            }
+            .buttonStyle(.plain)
+            .disabled(working)
+            .accessibilityLabel("Mark box \(box.boxNumber) turned in")
+        }
+        .ambientCard(fillWidth: true)
+    }
+
+    private func turnIn(_ box: LeftBehindBox) {
+        guard !inFlight.contains(box.id) else { return }
+        errorText = nil
+        inFlight.insert(box.id)
+
+        markTurnedIn(box) { failure in
+            inFlight.remove(box.id)
+
+            if let failure {
+                withAnimation(AmbientMotion.snappy) { errorText = failure }
+                return
+            }
+
+            AmbientHaptics.impact(.medium)
+            withAnimation(AmbientMotion.snappy) {
+                remaining.removeAll { $0.id == box.id }
+            }
+            if remaining.isEmpty { onAllCleared() }
         }
     }
 }

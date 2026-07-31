@@ -35,10 +35,14 @@ import SwiftUI
 struct NFCContainerView: View {
     @State private var selectedFeature: NFCFeature = .scan
 
-    /// Cross-tab deep link, kept exactly: Statistics' distribution rows and (new
-    /// in AMB.11) the Scan screen's Job Box Alert banner both route into Search
-    /// pre-filtered. These are `SearchView`'s existing init parameters, so they
-    /// land when the tab is re-created.
+    /// Cross-tab deep link, kept exactly: Statistics' distribution rows route
+    /// into Search pre-filtered. These are `SearchView`'s existing init
+    /// parameters, so they land when the tab is re-created.
+    ///
+    /// The Scan screen's Job Box Alert banner used this too until the operator's
+    /// 2026-07-31 ruling; it now presents its own sheet that MARKS the stalled
+    /// boxes turned in, so `ScanView` takes no `onNavigateToSearch` at all
+    /// (delete-first). Statistics is the only caller left.
     @State private var initialSearchStatus: String? = nil
     @State private var initialIsJobBoxMode: Bool = false
 
@@ -118,9 +122,7 @@ struct NFCContainerView: View {
     private var content: some View {
         switch selectedFeature {
         case .scan:
-            ScanView(onNavigateToSearch: { status, isJobBox in
-                showSearch(status: status, isJobBox: isJobBox)
-            })
+            ScanView()
         case .search:
             SearchView(initialStatus: initialSearchStatus,
                        initialIsJobBoxMode: initialIsJobBoxMode)
