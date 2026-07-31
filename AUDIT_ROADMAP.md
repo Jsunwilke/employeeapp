@@ -1352,9 +1352,31 @@ other rebases onto it.
   (0 test rows); deep link + its un-stick fix verified; iPad reach via All Features
   confirmed to the feature list (the Scan ROW's dispatch did not fire in the simulator —
   shell device-conditional territory, §0.18/§0.19, AMB.12's; verify on the operator's iPad).
-  **Open to close the phase:** operator applies the flag SQL, operator smoke both devices,
-  operator runs `/code-review`, then the JobBox mockup + gallery entry die (AMB.7 rule:
-  the validation reference outlives the port until the smoke passes). NFC hardware paths
+  **2026-07-31 — flag SQL APPLIED by the operator and read back (all three columns live).
+  Operator /code-review ROUND (f7a2c94): 8 finder angles, ~40 candidates, 11 verified,
+  8 findings (6 CONFIRMED correctness, 1 efficiency, 1 PLAUSIBLE edge) — ALL FIXED.**
+  The worst was this phase's own flag feature one layer deeper: under an active TEXT
+  search the tracker picked each box's summary row from the search-FILTERED rows while
+  flag read/unflag cut the current trip from the full log — a flag could land on a
+  pre-trip row, invisible and unclearable (the search now decides only which boxes are
+  LISTED, never which row represents one). Also: Manual Entry's session pre-select
+  silently re-packing a mid-trip box (pre-existing, the sibling form's guards
+  replicated); the failure card hiding a loaded list; the 30-day copy lying under Today
+  + the number-search promise made TRUE (server-side box_number filter, unbounded —
+  VISIBLE CHANGE: number search reaches past 30 days); refresh bypassing cancellation
+  (publish generation token); the whitespace-note dead-but-live flag CTA; the
+  settings-only dismissal reload; nil flagged_at copy. Cleanups: the copied users.id no
+  longer lowercased on the tracker insert (the UUID-case rule), the org-blind "Iconik"
+  comment corrected, stale columns-don't-exist comments updated. Review also surfaced
+  two OPERATOR rulings parked for AMB.12: the flag is carried to Search/Stats/Scan reads
+  but rendered only on the tracker (should photographers see it?), and flag/unflag has
+  no server-side permission gate (org-RLS only — the same posture as the whole surface,
+  TOF.1's class). Deferred consolidations recorded for AMB.12: primary-button/list-row/
+  session-section/pickup-orchestration duplication, jobBoxStatusRing deriving from
+  JobBoxTripStage, JobBoxStatsRules extraction, JobBoxDTO retirement, refcounted
+  listener store replacing the generation token, settings-slider publish debounce.
+  **Open to close the phase:** operator smoke both devices (checklist grew an AMB.11
+  section), then the JobBox mockup + gallery entry die (AMB.7 rule). NFC hardware paths
   (reader/writer branches, the TAG-vs-NDEF entitlement flag) remain device-only checks.
 - [ ] **AMB.12 Settings, Manager, Training** (~6,600 lines) — the tail, converted per D9.
   Closes the arc and deletes the lab harness + its menu entry.
