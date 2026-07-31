@@ -69,6 +69,20 @@ struct ManualEntryView: View {
 
     // For session selection
     @State private var selectedSession: Session? = nil
+
+    /// Raised by `updateJobBoxDefaults` immediately before it assigns
+    /// `selectedSession` itself, and consumed by the `onChange` on
+    /// `sessionSection`. The same protection `JobBoxFormView` carries, for the
+    /// same reason (review round).
+    ///
+    /// A PROGRAMMATIC pre-select is not a choice. Without the flag, the
+    /// pre-select fired the user-intent branch, which forces "Packed" — so a
+    /// mid-trip box whose number had just advanced the status to "Picked Up"
+    /// was silently knocked back to "Packed" by the very lookup that found its
+    /// session. Raised ONLY when the assignment will really change the value:
+    /// `onChange` does not fire on an unchanged one, and a flag nobody consumes
+    /// would swallow the user's next pick.
+    @State private var programmaticSessionChange = false
     @State private var showSessionSelection = false
     @State private var availableSessions: [Session] = []
     /// The two states the session control never had.
@@ -292,6 +306,13 @@ struct ManualEntryView: View {
             }
         }
         .onChange(of: selectedSession) { newSession in
+            // A PROGRAMMATIC pre-select is not a choice: consume the flag and
+            // leave school and status exactly as the number's own defaults set
+            // them. See `programmaticSessionChange`.
+            if programmaticSessionChange {
+                programmaticSessionChange = false
+                return
+            }
             if let session = newSession {
                 // Find the school by ID so the name matches the school record exactly
                 let schoolId = session.schoolId
@@ -301,7 +322,12 @@ struct ManualEntryView: View {
                     // Fallback to session's school name if not found
                     selectedSchool = session.schoolName
                 }
-                selectedStatus = "Packed"
+                // Only a BRAND-NEW box is forced to "Packed" (JobBoxFormView's
+                // rule, replicated): a box with history is mid-trip, and its
+                // advanced status must survive a user picking the session.
+                if lastJobBoxRecord == nil {
+                    selectedStatus = "Packed"
+                }
             } else {
                 // CLEARED via the sheet's "No session" row — the exact inverse of
                 // the branch above: drop the session's school so the number's own
@@ -625,8 +651,12 @@ struct ManualEntryView: View {
             // (unreachable today since the status cycle wraps Turned In to Packed,
             // guarded anyway to match JobBoxFormView).
             if selectedStatus.lowercased() != "packed" && !last.shiftUid.isEmpty && last.jobBoxStatus != .turnedIn {
-                // Find the session in available sessions
-                if let matchingSession = availableSessions.first(where: { $0.id == last.shiftUid }) {
+                // Find the session in available sessions. PROGRAMMATIC — the
+                // flag is raised only when the value will really change, since
+                // `onChange` does not fire on an unchanged one.
+                if let matchingSession = availableSessions.first(where: { $0.id == last.shiftUid }),
+                   matchingSession.id != selectedSession?.id {
+                    programmaticSessionChange = true
                     selectedSession = matchingSession
                 }
             }

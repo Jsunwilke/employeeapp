@@ -44,16 +44,18 @@ struct JobBox: Identifiable, Codable {
 
     /// "Flag for Attention", AMB.11 2026-07-30.
     ///
-    /// These three columns are added by
-    /// `supabase/drafts/20260730_amb11_jobbox_flag_columns.sql`. The manager
-    /// tracker's flag swipe, context-menu item and sheet have ALWAYS written them
-    /// and they never existed — PostgREST rejected the statement as a unit, so no
-    /// job box has ever been flagged (the FLG.1 defect class).
+    /// These three columns were added by
+    /// `supabase/drafts/20260730_amb11_jobbox_flag_columns.sql`, applied live on
+    /// 2026-07-31. The manager tracker's flag swipe, context-menu item and sheet
+    /// had ALWAYS written them and they never existed — PostgREST rejected the
+    /// statement as a unit, so no job box had ever been flagged (the FLG.1
+    /// defect class).
     ///
-    /// Decoded with `decodeIfPresent` like every other field here, so a build
-    /// running against a database where the migration has not landed yet reads
-    /// `flagged == false` rather than throwing — and a thrown decode empties the
-    /// WHOLE fetch, which would present as "no job boxes".
+    /// Decoded with `decodeIfPresent` like every other field here. The migration
+    /// has landed, so this is now resilience rather than a waiting room: a
+    /// thrown decode empties the WHOLE fetch, which would present as "no job
+    /// boxes", and a build talking to a database without these columns reads
+    /// `flagged == false` instead.
     ///
     /// A box READS as flagged when any row of its CURRENT TRIP is flagged; that
     /// rule lives in `JobBox/JobBoxFlagRules.swift`, not here.
@@ -144,7 +146,8 @@ extension JobBox {
         school_id = try c.decodeIfPresent(String.self, forKey: .school_id)
         user_id = try c.decodeIfPresent(String.self, forKey: .user_id)
 
-        // The flag columns may not exist yet on the database this build talks to.
+        // Tolerant, so a database without the flag columns (they landed live
+        // 2026-07-31) reads "not flagged" instead of emptying the whole fetch.
         flagged = try c.decodeIfPresent(Bool.self, forKey: .flagged) ?? false
         flag_note = try c.decodeIfPresent(String.self, forKey: .flag_note)
 

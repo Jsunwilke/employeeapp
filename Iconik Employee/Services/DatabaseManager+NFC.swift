@@ -372,10 +372,10 @@ class DatabaseManager: ObservableObject {
                         /// holds the real flag state instead of silently
                         /// defaulting to "not flagged" — this fetch feeds Search,
                         /// Statistics, the scan history and the job box form.
-                        /// Optional, so a database where
                         /// `supabase/drafts/20260730_amb11_jobbox_flag_columns.sql`
-                        /// has not landed yet decodes them as absent rather than
-                        /// throwing and emptying the whole fetch.
+                        /// landed live on 2026-07-31; they stay Optional for
+                        /// resilience, so a database without them decodes them as
+                        /// absent rather than throwing and emptying the whole fetch.
                         let flagged: Bool?
                         let flag_note: String?
                         let flagged_at: Date?

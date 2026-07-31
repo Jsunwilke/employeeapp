@@ -14,8 +14,9 @@
 //    · "FLAG FOR ATTENTION" IS REAL (operator ruling, batch-4 sitting). It always
 //      wrote `flagged` / `flag_note` / `flagged_at` and none of those columns
 //      existed, so PostgREST rejected the statement as a unit and no box has ever
-//      been flagged. The columns are added by
-//      `supabase/drafts/20260730_amb11_jobbox_flag_columns.sql`; the write now
+//      been flagged. The columns were added by
+//      `supabase/drafts/20260730_amb11_jobbox_flag_columns.sql`, applied live on
+//      2026-07-31; the write now
 //      PROVES a row matched (a zero-row PostgREST UPDATE returns 200 — the AMB.9
 //      lesson), a flagged box READS as flagged on its row, and there is an unflag.
 //    · THE DATE FILTER IS GONE. `selectedDate` was written by a DatePicker and
@@ -26,8 +27,11 @@
 //      pickedUp-purple / leftJob-orange / turnedIn-green; the stage colour now
 //      comes from the meter and the box badge, which every other job-box surface
 //      also uses.
-//    · THE 30-DAY WINDOW SAYS SO. Both queries are bounded at 30 days and nothing
-//      said it, so a box last scanned five weeks ago read as "No job boxes found".
+//    · THE WINDOW SAYS SO, AND SAYS THE RIGHT ONE. The queries were bounded and
+//      nothing said it, so a box last scanned five weeks ago read as "No job
+//      boxes found". The note and the empty state now name the window the rows
+//      on screen actually came from — today, the last 30 days, or (review round)
+//      a box-number search, which is not time-bounded at all.
 //    · THE CARD-NUMBER BRANCHES ARE GONE. `cardNumber` was hardcoded to "" on
 //      every row this screen built, so the row pill, two sheet rows, both grouping
 //      keys and one search leg were structurally unreachable.
@@ -186,10 +190,33 @@ class ManagerJobBoxViewModel: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var errorMessage: String = ""
 
+    /// WHAT THE LIST ON SCREEN ACTUALLY COVERS.
+    ///
+    /// Published with the rows themselves rather than derived from the filter,
+    /// so the note and the empty state describe the DATA, not the control that
+    /// will fetch it on the next debounce tick.
+    enum Window {
+        case today
+        case thirtyDays
+        /// A box-number search: not time-bounded at all. See `reload`.
+        case allTimeForBox
+    }
+
+    @Published private(set) var window: Window = .thirtyDays
+
     /// True while the field holds a number: typing `3028` lists every scan row for
     /// that box, typing `Lincoln` lists one row per box. Two list semantics behind
     /// one field — kept deliberately, it is how managers look a box up.
-    private var isNumberSearch: Bool = false
+    ///
+    /// PER-REQUEST, not stored (review round): it used to be a view-model field
+    /// written at fetch time and read again at consume time, so a request that
+    /// landed after the field had been retyped grouped its rows by the NEW
+    /// semantics. It is computed once per load and threaded through.
+    private static func isNumberQuery(_ text: String) -> Bool {
+        !text.isEmpty &&
+            text.rangeOfCharacter(from: .decimalDigits) != nil &&
+            text.rangeOfCharacter(from: .letters) == nil
+    }
 
     // Store organization ID
     private var organizationID: String = ""
@@ -201,6 +228,22 @@ class ManagerJobBoxViewModel: ObservableObject {
     /// The keystroke debounce. The old screen fired a full network refetch on every
     /// single keystroke.
     private var debounceTask: Task<Void, Never>?
+
+    /// The generation of the NEWEST load intent. Every publish is guarded on it,
+    /// so a fetch that is no longer the newest lands silently.
+    ///
+    /// `loadTask` alone was not enough (review round): `.refreshable` awaits
+    /// `reload()` DIRECTLY, so a pull-to-refresh never occupies the task slot and
+    /// nothing could cancel it — a retype during the pull left the older answer
+    /// overwriting the newer list. Same shape as `SearchView.searchGeneration`.
+    private var publishGeneration = 0
+
+    /// Take the next generation, so anything already in flight publishes nothing.
+    @discardableResult
+    private func beginRequest() -> Int {
+        publishGeneration += 1
+        return publishGeneration
+    }
 
     private static let searchDebounce: UInt64 = 300_000_000 // 300ms
 
@@ -216,6 +259,9 @@ class ManagerJobBoxViewModel: ObservableObject {
             // WAS A SILENT RETURN. The guard inside `loadJobBoxes` could never be
             // reached from `onAppear`, so a missing organization id rendered as
             // "No job boxes found" — the empty-state-hides-a-failure shape.
+            // The generation bump makes this message final: a fetch still in
+            // flight from a previous organization id cannot overwrite it.
+            beginRequest()
             isLoading = false
             errorMessage = "We couldn't tell which organization you belong to, so job boxes can't be loaded."
             return
@@ -231,6 +277,9 @@ class ManagerJobBoxViewModel: ObservableObject {
     /// first load.
     func loadJobBoxes() {
         loadTask?.cancel()
+        // A new INTENT, so anything in flight — including a pull-to-refresh,
+        // which holds no task slot — publishes nothing when it lands.
+        beginRequest()
         isLoading = true
         errorMessage = ""
         loadTask = Task { await self.reload() }
@@ -254,6 +303,8 @@ class ManagerJobBoxViewModel: ObservableObject {
     ///   spinner, and raising `isLoading` there would replace the list — the thing
     ///   being pulled — with the loading card mid-gesture.
     func reload(showingSpinner: Bool = true) async {
+        let generation = beginRequest()
+
         guard !organizationID.isEmpty else {
             isLoading = false
             errorMessage = "We couldn't tell which organization you belong to, so job boxes can't be loaded."
@@ -271,16 +322,17 @@ class ManagerJobBoxViewModel: ObservableObject {
         isLoading = showingSpinner
         errorMessage = ""
 
-        // Check if we're searching by box number (numeric search)
-        isNumberSearch = !searchText.isEmpty && searchText.rangeOfCharacter(from: .decimalDigits) != nil &&
-            searchText.rangeOfCharacter(from: .letters) == nil
+        // Check if we're searching by box number (numeric search). Captured for
+        // THIS request — see `isNumberQuery`.
+        let isNumberSearch = Self.isNumberQuery(searchText)
 
         // Query all job boxes
         let calendar = Calendar.current
         let thirtyDaysAgo = calendar.date(byAdding: .day, value: -30, to: Date()) ?? Date()
 
         do {
-            var jobBoxes: [JobBox]
+            let jobBoxes: [JobBox]
+            let window: Window
 
             // Build query based on filters. The time filters run on `timestamp` —
             // the column that exists and that every scan writes. They used to run on
@@ -290,6 +342,7 @@ class ManagerJobBoxViewModel: ObservableObject {
                 let startOfDay = calendar.startOfDay(for: Date())
                 let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
 
+                window = .today
                 jobBoxes = try await supabase
                     .from("job_boxes")
                     .select()
@@ -298,7 +351,37 @@ class ManagerJobBoxViewModel: ObservableObject {
                     .lt("timestamp", value: endOfDay.ISO8601Format())
                     .execute()
                     .value
+            } else if isNumberSearch {
+                // DELIBERATELY UNBOUNDED IN TIME (review round). The window note
+                // promises that searching a box's number shows "every scan on
+                // it", and with a 30-day floor here that promise was false — the
+                // note described a way out of the window that did not exist.
+                //
+                // The 30-day floor is what kept this fetch small, so dropping it
+                // has to be paid for: the box number moves INTO the query as a
+                // substring filter instead of being applied client-side over the
+                // whole organization's rows. The rule is unchanged — the client
+                // filter below still decides the final list, and it matches the
+                // same substring — but the server now returns one box's scans
+                // (43 rows on the busiest live box) instead of every scan the
+                // organization has ever recorded.
+                //
+                // The pattern is built from the DIGITS of the query, not the raw
+                // string: `isNumberQuery` admits punctuation, and `%` / `_` in a
+                // LIKE pattern are wildcards. A digits-only pattern can only ever
+                // return a SUPERSET of what the client filter accepts, so no
+                // matching row can be lost.
+                let digits = searchText.filter(\.isNumber)
+                window = .allTimeForBox
+                jobBoxes = try await supabase
+                    .from("job_boxes")
+                    .select()
+                    .eq("organization_id", value: organizationID)
+                    .like("box_number", pattern: "%\(digits)%")
+                    .execute()
+                    .value
             } else {
+                window = .thirtyDays
                 jobBoxes = try await supabase
                     .from("job_boxes")
                     .select()
@@ -308,10 +391,10 @@ class ManagerJobBoxViewModel: ObservableObject {
                     .value
             }
 
-            guard !Task.isCancelled else { return }
-            processJobBoxRecords(jobBoxes)
+            guard !Task.isCancelled, generation == publishGeneration else { return }
+            processJobBoxRecords(jobBoxes, isNumberSearch: isNumberSearch, window: window, generation: generation)
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, generation == publishGeneration else { return }
             isLoading = false
             errorMessage = OfflineDataManager.shared.isOnline
                 ? "Error loading job boxes: \(error.localizedDescription)"
@@ -321,7 +404,12 @@ class ManagerJobBoxViewModel: ObservableObject {
 
     static let offlineMessage = "You're offline — job boxes can't load without a connection."
 
-    private func processJobBoxRecords(_ records: [JobBox]) {
+    private func processJobBoxRecords(_ records: [JobBox],
+                                      isNumberSearch: Bool,
+                                      window: Window,
+                                      generation: Int) {
+        guard generation == publishGeneration else { return }
+
         // This will hold all job boxes
         var allBoxes: [JobBoxWithEvent] = []
 
@@ -359,15 +447,16 @@ class ManagerJobBoxViewModel: ObservableObject {
         // The key is `box_number` plainly. It used to be
         // `cardNumber.isEmpty ? jobboxNumber : cardNumber` in two places, with
         // `cardNumber` hardcoded to "" — a branch that could never be taken.
-        let fullLogByKey = Dictionary(grouping: allBoxes, by: \.jobboxNumber)
-            .mapValues { $0.map(\.jobBox) }
+        let fullBoxesByKey = Dictionary(grouping: allBoxes, by: \.jobboxNumber)
+        let fullLogByKey = fullBoxesByKey.mapValues { $0.map(\.jobBox) }
 
         // First apply search filter to all boxes
-        let filteredBoxes = filterJobBoxesBySearch(allBoxes)
+        let filteredBoxes = filterJobBoxesBySearch(allBoxes, isNumberSearch: isNumberSearch)
 
         // If we're searching for a specific box number, show every scan row for it
         if isNumberSearch {
             allJobBoxes = sortJobBoxes(filteredBoxes)
+            self.window = window
             isLoading = false
             return
         }
@@ -379,10 +468,24 @@ class ManagerJobBoxViewModel: ObservableObject {
         var latestStatusBoxes: [JobBoxWithEvent] = []
 
         for (key, boxes) in groupedBoxes {
+            // THE SUMMARY ROW COMES FROM THE FULL LOG, not the filtered one
+            // (review round) — the same principle as the history above, extended
+            // to the row that REPRESENTS the box.
+            //
+            // The search decides which boxes are LISTED; it must never decide
+            // which row stands for one. When it did, a search that matched only
+            // an OLD scan of a box (a school it visited in June, a photographer
+            // who packed it and never saw it again) made that pre-trip row the
+            // summary — so the row showed a stale school, photographer and
+            // meter, and the flag written from it landed on a row outside the
+            // box's current trip: an invisible badge and an unclearable flag,
+            // because `flagState`/`unflagJobBox` both read the CURRENT trip cut
+            // from the full log.
+            let candidates = fullBoxesByKey[key] ?? boxes
             // Sort by timestamp (newest first) and take only the first one —
             // but CARRY THE GROUP on it, so the row can draw the box's real
             // progress instead of inferring it from this one status.
-            if let latestBox = boxes.sorted(by: { $0.jobBox.timestampDate > $1.jobBox.timestampDate }).first {
+            if let latestBox = candidates.sorted(by: { $0.jobBox.timestampDate > $1.jobBox.timestampDate }).first {
                 var withLog = latestBox
                 withLog.log = fullLogByKey[key] ?? boxes.map(\.jobBox)
                 latestStatusBoxes.append(withLog)
@@ -413,11 +516,12 @@ class ManagerJobBoxViewModel: ObservableObject {
 
         // Apply sort
         allJobBoxes = sortJobBoxes(latestStatusBoxes)
+        self.window = window
         isLoading = false
     }
 
     // Filter job boxes based on search text
-    func filterJobBoxesBySearch(_ jobBoxes: [JobBoxWithEvent]) -> [JobBoxWithEvent] {
+    func filterJobBoxesBySearch(_ jobBoxes: [JobBoxWithEvent], isNumberSearch: Bool) -> [JobBoxWithEvent] {
         if searchText.isEmpty {
             return jobBoxes
         }
@@ -546,7 +650,12 @@ class ManagerJobBoxViewModel: ObservableObject {
         // makes the correction the latest state everywhere — progression bar,
         // web modal, crew pushes — while the history stays true.
         let correctedBy = UserDefaults.standard.string(forKey: "userFirstName") ?? "Manager"
-        let userId = UserManager.shared.getCurrentUserIDUnified()?.lowercased() ?? ""
+        // VERBATIM, not lowercased (repo UUID-case rule): this is a COPIED
+        // `users.id`, not a minted id, and one live row's id is a mixed-case
+        // 28-character Firebase uid. The app's other job-box writer
+        // (`DatabaseManager.saveJobBoxRecord`) passes it through unchanged, so
+        // lowercasing here would write a user_id that matches no user.
+        let userId = UserManager.shared.getCurrentUserIDUnified() ?? ""
 
         // A NEW id is MINTED here, so lowercase is right (the repo rule is
         // "mint lowercase, but filter with the case the column actually
@@ -591,11 +700,12 @@ class ManagerJobBoxViewModel: ObservableObject {
 
     /// Flag a job box for attention — the box's LATEST row carries the flag.
     ///
-    /// Until `supabase/drafts/20260730_amb11_jobbox_flag_columns.sql` is applied
-    /// this fails with an unknown-column error, which the FLAG SHEET surfaces in
-    /// itself (audit round — see `recordScan` for why it is not `errorMessage`).
-    /// That is the correct behaviour: the alternative is a control that reports
-    /// success and does nothing, which is what this screen shipped for a year.
+    /// The flag columns landed live on 2026-07-31
+    /// (`supabase/drafts/20260730_amb11_jobbox_flag_columns.sql`). A failure here
+    /// is now an ordinary write failure, and the FLAG SHEET surfaces it in itself
+    /// (audit round — see `recordScan` for why it is not `errorMessage`). That is
+    /// the correct behaviour: the alternative is a control that reports success
+    /// and does nothing, which is what this screen shipped for a year.
     func flagJobBox(jobBox: JobBoxWithEvent, note: String) async throws {
         let updateData: [String: AnyJSON] = [
             "flagged": .bool(true),
@@ -675,7 +785,17 @@ struct ManagerJobBoxTrackerView: View {
     }
 
     @State private var sheet: TrackerSheet?
+
+    /// WHICH sheet was up, for `onDismiss` — `sheet(item:onDismiss:)` hands the
+    /// dismissal closure nothing and `sheet` is already nil by the time it runs.
+    @State private var lastPresented: TrackerSheet?
+
     @State private var showStatusRow = false
+
+    private func present(_ next: TrackerSheet) {
+        lastPresented = next
+        sheet = next
+    }
 
     private var tint: Color { FeatureTheme.color(for: "jobBoxTracker") }
 
@@ -705,11 +825,18 @@ struct ManagerJobBoxTrackerView: View {
         .navigationTitle("Job Box Tracker")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sheet, onDismiss: {
-            // Covers the settings sheet's thresholds (the stalled FILTER is applied
-            // during the load, so observing the manager is not enough on its own)
-            // and any write whose reload has already landed — the same reload the
-            // old "Done" button fired.
-            viewModel.loadJobBoxes()
+            // ONLY the settings sheet (review round). Its thresholds feed the
+            // stalled FILTER, which is applied during the load, so observing the
+            // manager is not enough on its own.
+            //
+            // The edit and flag sheets do NOT need this: every write path
+            // (`recordScan`, `flagJobBox`, `unflagJobBox`) fires its own reload
+            // the moment the server answers. Reloading again on dismissal
+            // refetched the whole window a second time after every write — and a
+            // whole extra time after merely LOOKING at a box and closing it.
+            if case .settings = lastPresented {
+                viewModel.loadJobBoxes()
+            }
         }) { sheet in
             switch sheet {
             case .edit(let box):
@@ -735,7 +862,7 @@ struct ManagerJobBoxTrackerView: View {
             AmbientSectionTitle("Job boxes", trailing: "\(viewModel.allJobBoxes.count) shown")
             Spacer(minLength: 8)
 
-            Button { sheet = .settings } label: {
+            Button { present(.settings) } label: {
                 Image(systemName: "gearshape")
                     .font(.footnote.weight(.semibold))
                     .frame(width: 30, height: 30)
@@ -816,12 +943,36 @@ struct ManagerJobBoxTrackerView: View {
         }
     }
 
+    /// The note NAMES THE WINDOW THE ROWS CAME FROM (review round). It always
+    /// said "the last 30 days" — false under the Today filter, which fetches one
+    /// day, and false during a box-number search, which is not bounded at all.
     private var windowNote: some View {
         AmbientNoteCard(
-            title: "Showing the last 30 days",
-            text: "Boxes last scanned more than 30 days ago are not fetched. A box you cannot find here may still exist — search its number to see every scan on it.",
+            title: windowTitle,
+            text: windowText,
             accent: tint,
             density: .compact)
+    }
+
+    private var windowTitle: String {
+        switch viewModel.window {
+        case .today: return "Showing today"
+        case .thirtyDays: return "Showing the last 30 days"
+        case .allTimeForBox: return "Showing every scan on this box"
+        }
+    }
+
+    private var windowText: String {
+        switch viewModel.window {
+        case .today:
+            return "Only boxes scanned today are fetched. Turn off the Today filter to see the last 30 days, or search a box number to see every scan on it."
+        case .thirtyDays:
+            // TRUE as of the review round: a box-number search really does drop
+            // the 30-day bound now. See `reload`.
+            return "Boxes last scanned more than 30 days ago are not fetched. A box you cannot find here may still exist — search its number to see every scan on it."
+        case .allTimeForBox:
+            return "A box-number search is not limited to 30 days — this is every scan recorded on it, one row each."
+        }
     }
 
     // MARK: - Content
@@ -834,9 +985,10 @@ struct ManagerJobBoxTrackerView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-        } else if !viewModel.errorMessage.isEmpty {
+        } else if !viewModel.errorMessage.isEmpty && viewModel.allJobBoxes.isEmpty {
             // AN ERROR AND AN EMPTY LIST ARE DIFFERENT CLAIMS, and they used to
             // render at once — a red string above the words "No job boxes found".
+            // With nothing to show, the failure owns the screen.
             VStack {
                 JobBoxFailureCard(message: viewModel.errorMessage) {
                     viewModel.loadJobBoxes()
@@ -847,8 +999,8 @@ struct ManagerJobBoxTrackerView: View {
         } else if viewModel.allJobBoxes.isEmpty {
             ScrollView {
                 AmbientEmptyState(
-                    title: "No job boxes in the last 30 days",
-                    message: "Nothing matches this filter inside the window. Search a box number to look further back.",
+                    title: emptyTitle,
+                    message: emptyMessage,
                     systemImage: "shippingbox",
                     actionTitle: "Show all statuses",
                     actionIcon: "line.3.horizontal.decrease.circle",
@@ -862,7 +1014,41 @@ struct ManagerJobBoxTrackerView: View {
             }
             .refreshable { await viewModel.reload(showingSpinner: false) }
         } else {
-            jobBoxList
+            // A FAILED REFRESH MUST NOT TAKE THE LIST AWAY (review round). The
+            // failure branch above REPLACED the rows, so a refresh that lost the
+            // network wiped a list the manager was reading and offered a retry
+            // in its place. With rows on screen the failure sits ABOVE them:
+            // both claims are true at once — these boxes are what we have, and
+            // the last refresh did not land.
+            VStack(spacing: 10) {
+                if !viewModel.errorMessage.isEmpty {
+                    JobBoxFailureCard(message: viewModel.errorMessage) {
+                        viewModel.loadJobBoxes()
+                    }
+                    .padding(.horizontal, 16)
+                }
+                jobBoxList
+            }
+        }
+    }
+
+    /// The empty state names the SAME window the note does.
+    private var emptyTitle: String {
+        switch viewModel.window {
+        case .today: return "No job boxes today"
+        case .thirtyDays: return "No job boxes in the last 30 days"
+        case .allTimeForBox: return "No scans on that box number"
+        }
+    }
+
+    private var emptyMessage: String {
+        switch viewModel.window {
+        case .today:
+            return "Nothing matching this filter was scanned today. Turn off the Today filter to look back 30 days."
+        case .thirtyDays:
+            return "Nothing matches this filter inside the window. Search a box number to look further back."
+        case .allTimeForBox:
+            return "No scan has ever been recorded on a box with that number in your organization."
         }
     }
 
@@ -870,7 +1056,7 @@ struct ManagerJobBoxTrackerView: View {
         List {
             ForEach(viewModel.allJobBoxes) { jobBox in
                 Button {
-                    sheet = .edit(jobBox)
+                    present(.edit(jobBox))
                 } label: {
                     JobBoxTrackerRow(box: jobBox)
                         .contentShape(Rectangle())
@@ -879,7 +1065,7 @@ struct ManagerJobBoxTrackerView: View {
                 .modifier(JobBoxTrackerListRow())
                 .swipeActions {
                     Button {
-                        sheet = .edit(jobBox)
+                        present(.edit(jobBox))
                     } label: {
                         Label("Edit", systemImage: "pencil")
                     }
@@ -893,7 +1079,7 @@ struct ManagerJobBoxTrackerView: View {
                     // `JobBoxWithEvent.isRawScanRow`.
                     if !jobBox.isRawScanRow {
                         Button {
-                            sheet = .flag(jobBox)
+                            present(.flag(jobBox))
                         } label: {
                             Label("Flag", systemImage: "flag")
                         }
@@ -902,14 +1088,14 @@ struct ManagerJobBoxTrackerView: View {
                 }
                 .contextMenu {
                     Button {
-                        sheet = .edit(jobBox)
+                        present(.edit(jobBox))
                     } label: {
                         Label("Edit Status", systemImage: "pencil")
                     }
 
                     if !jobBox.isRawScanRow {
                         Button {
-                            sheet = .flag(jobBox)
+                            present(.flag(jobBox))
                         } label: {
                             Label("Flag for Attention", systemImage: "flag")
                         }
@@ -1225,7 +1411,15 @@ private struct JobBoxFlagSheet: View {
     /// flag would be a one-way door.
     private var flagged: some View {
         VStack(alignment: .leading, spacing: 14) {
-            AmbientFormSection(title: "Flagged", status: JobBoxFormat.elapsed(since: flag.flaggedAt), statusTint: .red) {
+            // A MISSING `flagged_at` IS NOT "never scanned" (review round).
+            // `JobBoxFormat.elapsed` answers for a scan time, and handing it a
+            // nil flag time made a flagged box report the words of a box that
+            // has never been scanned at all. `JobBoxFlagBadge` simply omits the
+            // time when it is nil; a section status cannot be omitted, so it
+            // says what is actually true.
+            AmbientFormSection(title: "Flagged",
+                               status: flag.flaggedAt.map { JobBoxFormat.elapsed(since: $0) } ?? "time unknown",
+                               statusTint: .red) {
                 VStack(alignment: .leading, spacing: 6) {
                     JobBoxFlagBadge(note: flag.note, flaggedAt: flag.flaggedAt)
                 }
@@ -1253,8 +1447,17 @@ private struct JobBoxFlagSheet: View {
     }
 
     private var unflagged: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            AmbientFormSection(title: "Flag note", status: note.isEmpty ? "required" : "\(note.count)", statusTint: note.isEmpty ? .orange : nil) {
+        // ONE PREDICATE (review round). The section status and the button fill
+        // read `note.isEmpty` while the button's `disabled` read the TRIMMED
+        // note, so a note of only spaces rendered a live-looking red button
+        // over a count, and tapping it did nothing. All three now ask the same
+        // question.
+        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return VStack(alignment: .leading, spacing: 14) {
+            AmbientFormSection(title: "Flag note",
+                               status: trimmedNote.isEmpty ? "required" : "\(trimmedNote.count)",
+                               statusTint: trimmedNote.isEmpty ? .orange : nil) {
                 TextEditor(text: $note)
                     .font(.subheadline)
                     .frame(height: 100)
@@ -1274,10 +1477,10 @@ private struct JobBoxFlagSheet: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
                 // ambient-allow: a destructive control, not a container.
-                .background(Capsule().fill(note.isEmpty ? Color.red.opacity(0.35) : Color.red))
+                .background(Capsule().fill(trimmedNote.isEmpty ? Color.red.opacity(0.35) : Color.red))
             }
             .buttonStyle(.plain)
-            .disabled(isWriting || note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(isWriting || trimmedNote.isEmpty)
         }
     }
 

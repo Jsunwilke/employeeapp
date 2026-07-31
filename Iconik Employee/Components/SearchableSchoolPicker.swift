@@ -237,13 +237,17 @@ struct SearchableSchoolPickerString: View {
     /// Without it, an external string with no matching school would be erased to
     /// "" by the very sync that was meant to display it.
     ///
-    /// The forced value this repo actually sets — "Iconik", written by
-    /// `FormView`/`ManualEntryView` when a card is Cleared or a box is Turned In
-    /// — DOES match a real row (verified live 2026-07-30: `schools` holds an
-    /// ACTIVE row named "Iconik", id K8RYBzQxUFsrOIjlQ8eu), so that path
-    /// resolves to an item and displays it. This guard therefore covers only the
-    /// hypothetical no-match case; it is kept because losing a caller's value
-    /// silently is the worse failure of the two.
+    /// The forced value this repo actually sets is "Iconik", written by
+    /// `FormView`/`ManualEntryView` when a card is Cleared or a box is Turned
+    /// In — and whether it matches a row is ORGANIZATION-DEPENDENT (verified
+    /// live 2026-07-31): the ACTIVE school row named "Iconik"
+    /// (id K8RYBzQxUFsrOIjlQ8eu) exists in the main organization
+    /// T6XeeaUNoOp8VJqq36wi ONLY. In the other two organizations there is no
+    /// such row, so the sync finds no item and this guard is what stops the
+    /// forced value being erased to "": the binding keeps "Iconik" and the
+    /// control simply displays "Select School" until a school is picked. That
+    /// is pre-existing behaviour, not something this guard introduced — the
+    /// guard only keeps the value from being lost silently.
     @State private var syncingFromBinding = false
 
     init(selection: Binding<String>, schools: Binding<[SchoolItem]>, title: String = "School", disabled: Bool = false, organizationID: String) {
