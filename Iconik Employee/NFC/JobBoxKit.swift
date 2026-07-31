@@ -58,22 +58,34 @@ struct JobBoxTabPill: View {
     let tint: Color
     let action: () -> Void
 
+    /// ONE LINE, ALWAYS (operator, 2026-07-31: the wrapping row was "messy").
+    /// The selected tab spells its name; the others collapse to their icons, so
+    /// five tabs fit any phone without a second row. The name is not lost — the
+    /// nav bar title says it too, and VoiceOver always reads the full title.
     var body: some View {
         Button {
             withAnimation(AmbientMotion.snappy) { action() }
             AmbientHaptics.selection()
         } label: {
-            Label(title, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
-                .labelStyle(.titleAndIcon)
-                .foregroundStyle(on ? .white : .primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                // ambient-allow: a tab control, not a container.
-                .background(Capsule().fill(on
-                                           ? AnyShapeStyle(tint)
-                                           : AnyShapeStyle(.ultraThinMaterial)))
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.12)))
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+                if on {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .transition(.opacity)
+                }
+            }
+            .foregroundStyle(on ? .white : .primary)
+            .padding(.horizontal, on ? 12 : 11)
+            .padding(.vertical, 9)
+            // ambient-allow: a tab control, not a container.
+            .background(Capsule().fill(on
+                                       ? AnyShapeStyle(tint)
+                                       : AnyShapeStyle(.ultraThinMaterial)))
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.12)))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)

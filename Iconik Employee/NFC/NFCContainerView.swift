@@ -95,7 +95,9 @@ struct NFCContainerView: View {
     }
 
     private var tabRow: some View {
-        AmbientFlowLayout(spacing: 6, lineSpacing: 6) {
+        // ONE line, never a wrap (operator, 2026-07-31): the selected pill
+        // carries the name, the rest are icon-only, so five tabs fit any phone.
+        HStack(spacing: 6) {
             ForEach(NFCFeature.allCases) { feature in
                 JobBoxTabPill(title: feature.rawValue,
                               systemImage: feature.icon,
