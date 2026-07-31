@@ -177,7 +177,8 @@ struct DailyReportView: View {
     @FocusState private var fieldFocused: Bool
     @ObservedObject private var tabBarManager = TabBarManager.shared
 
-    /// The daily job report's own colour (D11) and the wash behind this screen.
+    /// The daily job report's own accent colour (D11). Not the background —
+    /// since D14 every screen takes the one app wash.
     private var feature: Color { FeatureTheme.color(for: "dailyJobReport") }
 
     // MARK: - Derived
@@ -298,7 +299,7 @@ struct DailyReportView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature, intensity: 0.3)
+            AmbientBackdrop()
             form
         }
         .modifier(PushedTabBarClearance(active: isPushed))

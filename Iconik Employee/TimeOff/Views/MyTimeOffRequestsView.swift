@@ -131,7 +131,7 @@ struct MyTimeOffRequestsView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.8)
+            AmbientBackdrop()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {

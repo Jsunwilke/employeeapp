@@ -387,6 +387,22 @@ D13 THE BOTTOM TAB BAR IS PART OF AMB.4, AND LANDS BEFORE ANY OTHER FEATURE.
     upward overflow, and the notch in the top hairline that NAV.1 shipped.
 
 
+D14 ONE WASH FOR THE WHOLE APP; RED MEANS FLAGGED. Operator decision
+    2026-07-30, at the batch-4 sitting (full card:
+    ~/Brain/decisions/"2026-07-30 one wash for the whole app, red means
+    flagged.md"). SUPERSEDES D11-as-applied-to-backdrops and the schedule's
+    job-tint wash: the operator does not want the app changing colors by
+    feature, and the WEB app is standardizing every page on its schedule-style
+    aura — so this app uses THAT color everywhere and the two apps read as one
+    product. The color is the web aura's hue-203 company blue
+    (hsl(203 100% 37%) ≈ #0074BD, defined in the web repo's
+    src/styles/variables.css). Feature ACCENTS (tiles, icons, bar pills,
+    badges) keep their D11 colors — the ruling is about backgrounds, not
+    feature identity. A FLAGGED user's aura turns RED, app-wide, through ONE
+    mechanism at the backdrop level (count stores, not call sites — the PUB.1
+    lesson); no feature may wash a screen red, while momentary reds
+    (destructive buttons, failures, overdue badges) stay.
+
 ## Phases
 
 Ordered by how often a photographer touches the surface, with one deliberate

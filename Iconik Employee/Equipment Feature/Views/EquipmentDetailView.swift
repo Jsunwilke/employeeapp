@@ -40,7 +40,7 @@ struct EquipmentDetailView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature)
+            AmbientBackdrop()
 
             if isLoading {
                 ProgressView()

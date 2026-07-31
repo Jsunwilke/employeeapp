@@ -150,7 +150,7 @@ struct TemplateReportView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature, intensity: 0.7)
+            AmbientBackdrop()
             content
         }
         // Always pushed, so it always insets itself past the floating bar.

@@ -28,7 +28,8 @@ struct ConversationListView: View {
     @State private var searchText = ""
     @State private var pushedConversation: Conversation?
 
-    /// Chat's own colour under D11, and the wash behind this screen.
+    /// Chat's own accent colour under D11. Not the background — since D14 every
+    /// screen takes the one app wash.
     private var feature: Color { FeatureTheme.color(for: "chat") }
 
     private var currentUserId: String {
@@ -44,7 +45,7 @@ struct ConversationListView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature)
+            AmbientBackdrop()
 
             content
         }

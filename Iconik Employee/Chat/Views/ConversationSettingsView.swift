@@ -58,12 +58,12 @@ struct ConversationSettingsView: View {
                 }
             }
             // RESTYLED, NOT REDESIGNED. This screen was mocked as an entry point
-            // only, and D10 is a hard gate — so it gets the wash and the feature
-            // tint, and every section, control, confirmation and binding is
-            // untouched. Real form design belongs to AMB.7, exactly as AMB.5
+            // only, and D10 is a hard gate — so it gets the app wash and the
+            // feature tint on controls, and every section, control, confirmation
+            // and binding is untouched. Real form design belongs to AMB.7, exactly as AMB.5
             // left CreateTaskView.
             .scrollContentBackground(.hidden)
-            .background(AmbientBackdrop(tint: feature))
+            .background(AmbientBackdrop())
             .navigationTitle("Conversation Settings")
             .navigationBarTitleDisplayMode(.inline)
             .tint(feature)

@@ -56,7 +56,8 @@ struct ReportsHomeView: View {
     @StateObject private var schedule = ReportSchedule()
     @State private var destination: ReportsDestination?
 
-    /// This feature's colour (D11) and the wash behind the screen.
+    /// This feature's accent colour (D11). Not the background — since D14 every
+    /// screen takes the one app wash.
     private var feature: Color { FeatureTheme.color(for: "myDailyJobReports") }
 
     /// ONE push target per view, with an enum when a screen needs several — the
@@ -127,7 +128,7 @@ struct ReportsHomeView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature, intensity: 0.75)
+            AmbientBackdrop()
             content
         }
         .navigationTitle("My Daily Job Reports")

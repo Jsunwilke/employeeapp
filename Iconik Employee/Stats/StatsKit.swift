@@ -25,9 +25,9 @@ import SwiftUI
 // MARK: - Identity
 
 enum StatsStyle {
-    /// D11: the wash takes the FEATURE's colour, read from `FeatureTheme` rather
-    /// than restated, so the tile you tap and the screen you land on agree. The
-    /// live screen applied no wash at all.
+    /// This feature's ACCENT (D11), read from `FeatureTheme` rather than restated,
+    /// so the tile you tap and the screen you land on agree. It no longer reaches
+    /// the background: D14 gives every screen the one app wash.
     static var tint: Color { FeatureTheme.color(for: "stats") }
 }
 

@@ -24,7 +24,7 @@ struct EquipmentCheckInView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature)
+            AmbientBackdrop()
             formBody.scrollContentBackground(.hidden)
         }
         .navigationTitle("Check In")

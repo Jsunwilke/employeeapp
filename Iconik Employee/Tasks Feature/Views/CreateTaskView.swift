@@ -9,7 +9,7 @@
 //      time — and D10 is a hard gate: nothing is redesigned before the operator
 //      has approved a running mockup of it. So the change here is the minimum that
 //      stops a plain grouped Form opening over a washed, glass screen and reading
-//      as a different app: the ambient wash behind it, a transparent Form scroll
+//      as a different app: the app wash behind it, a transparent Form scroll
 //      background so the wash shows, and the shared priority colours.
 //
 //      Every section, control, bound value, validation and label is untouched.
@@ -44,11 +44,11 @@ struct CreateTaskView: View {
 
     var body: some View {
         NavigationView {
-            // Same shape AMB.3 settled on for every Equipment form: the wash
+            // Same shape AMB.3 settled on for every Equipment form: the app wash
             // behind, the Form's own grouped background hidden, the feature colour
             // as the tint for controls.
             ZStack {
-                AmbientBackdrop(tint: feature, intensity: 0.7)
+                AmbientBackdrop()
                 form.scrollContentBackground(.hidden)
             }
             .navigationTitle("New Task")

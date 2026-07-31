@@ -23,10 +23,11 @@ import SwiftUI
 // MARK: - Identity
 
 enum TimeOffStyle {
-    /// D11: the wash takes the FEATURE's colour. Time off, approvals and time
-    /// tracking are adjacent teals in the palette, so they read as a family
-    /// without reading as identical. Read from FeatureTheme rather than restated,
-    /// so the tile you tap and the screen you land on cannot disagree.
+    /// These features' ACCENTS (D11). Time off, approvals and time tracking are
+    /// adjacent teals in the palette, so they read as a family without reading as
+    /// identical. Read from FeatureTheme rather than restated, so the tile you tap
+    /// and the screen you land on cannot disagree. They no longer reach the
+    /// background: D14 gives every screen the one app wash.
     static var requests: Color { FeatureTheme.color(for: "timeOffRequests") }
     static var approvals: Color { FeatureTheme.color(for: "timeOffApprovals") }
 }

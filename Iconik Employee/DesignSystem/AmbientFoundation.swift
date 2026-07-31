@@ -139,6 +139,23 @@ enum AmbientStyle {
     /// to feel like THIS app rather than like one of its features.
     static let brand = Color(hex: "#009AE2")
 
+    /// THE wash — the one background colour the whole app is washed in (D14,
+    /// operator 2026-07-30). It is the WEB app's aura blue, hsl(203 100% 37%)
+    /// ≈ #0074BD, written down in the web repo's `src/styles/variables.css`;
+    /// the web is standardising every page on that aura, so using the same
+    /// value here makes the two apps read as one product.
+    ///
+    /// It is deliberately NOT `brand` (the logo blue, #009AE2): brand is what
+    /// marks a control as belonging to this app, and the two live at different
+    /// jobs. D14 supersedes D11 for BACKGROUNDS only — feature accents (tiles,
+    /// icons, bar pills, badges) keep their own colours.
+    static let wash = Color(hex: "#0074BD")
+
+    /// What the wash turns when the signed-in photographer is flagged (D14).
+    /// The system red, so it stays legible in both light and dark. This is the
+    /// ONE red wash in the app; no feature may wash a screen red.
+    static let flagged = Color.red
+
     static func initials(_ name: String) -> String {
         let parts = name.split(separator: " ").prefix(2)
         let letters = parts.compactMap { $0.first.map(String.init) }
@@ -166,11 +183,22 @@ enum AmbientStyle {
 
 // MARK: - Surfaces
 
-/// The ambient wash: two soft blooms of a tint behind the page. The tint comes
-/// from whatever the screen is about — the job in front of you on the schedule —
-/// so the background agrees with the content instead of being decoration.
+/// The ambient wash: two soft blooms of a tint behind the page.
+///
+/// D14 (operator, 2026-07-30) settled what that tint is: ONE colour for the
+/// whole app — `AmbientStyle.wash`, the web app's aura blue — so the app stops
+/// changing colour by feature and reads as the same product as the web. Every
+/// production screen therefore calls this with no arguments at all.
+///
+/// The `tint` parameter survives for the design lab, whose specimen and palette
+/// sheets exist precisely to show colours side by side.
+///
+/// RED MEANS FLAGGED. When the signed-in photographer is flagged, the wash turns
+/// red app-wide, whatever tint was passed. That happens HERE, once, because this
+/// is the one view every washed screen already goes through — count stores, not
+/// call sites (the PUB.1 lesson). `UserFlagState.shared` is that one store.
 struct AmbientBackdrop: View {
-    let tint: Color
+    var tint: Color = AmbientStyle.wash
     /// How loud the wash is. 1.0 is the schedule's — appropriate when the tint
     /// MEANS something and the page has few things on it.
     ///
@@ -180,16 +208,32 @@ struct AmbientBackdrop: View {
     /// leaves the cards the same colour as the page they sit on.
     var intensity: Double = 1
 
+    @ObservedObject private var flagState = UserFlagState.shared
+
+    /// Explicit, because the `@ObservedObject` above would otherwise drag the
+    /// store into the memberwise initialiser and make it private.
+    init(tint: Color = AmbientStyle.wash, intensity: Double = 1) {
+        self.tint = tint
+        self.intensity = intensity
+    }
+
+    private var effectiveTint: Color { flagState.isFlagged ? AmbientStyle.flagged : tint }
+
+    /// Flagged runs at full strength no matter what the screen asked for — a
+    /// 0.3 red is a smudge, and this is the one state that has to be visible
+    /// from across a room.
+    private var effectiveIntensity: Double { flagState.isFlagged ? 1 : intensity }
+
     var body: some View {
         ZStack {
             Color(.systemBackground)
-            Circle().fill(tint.opacity(0.55 * intensity)).frame(width: 420, height: 420)
+            Circle().fill(effectiveTint.opacity(0.55 * effectiveIntensity)).frame(width: 420, height: 420)
                 .blur(radius: 120).offset(x: -110, y: -260)
-            Circle().fill(tint.opacity(0.28 * intensity)).frame(width: 360, height: 360)
+            Circle().fill(effectiveTint.opacity(0.28 * effectiveIntensity)).frame(width: 360, height: 360)
                 .blur(radius: 140).offset(x: 140, y: 120)
         }
         .ignoresSafeArea()
-        .animation(.easeInOut(duration: 0.6), value: tint)
+        .animation(.easeInOut(duration: 0.6), value: effectiveTint)
     }
 }
 

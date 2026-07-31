@@ -216,7 +216,13 @@ struct DesignLabView: View {
             Section {
                 EmptyView()
             } footer: {
-                Text("Nothing here reads or writes your data — every screen runs on fixed sample data chosen to contain the cases that break layouts. Once you are inside, the switcher at the bottom right swaps between mockups without coming back here.")
+                // D14 (2026-07-30) took the per-feature wash off every PRODUCTION
+                // screen. The mockups keep theirs on purpose — they are the design
+                // references the decisions were made against, and the palette sheet
+                // exists to show colours side by side — so the lab now shows a
+                // background the app no longer does. Said out loud rather than
+                // silently rebuilt.
+                Text("Nothing here reads or writes your data — every screen runs on fixed sample data chosen to contain the cases that break layouts. Once you are inside, the switcher at the bottom right swaps between mockups without coming back here.\n\nD14: these mockups still show a background in each feature's own colour. The real app no longer does — every production screen is washed in the one company blue the web app uses, and turns red when you are flagged. Feature colours live on in the tiles, icons and badges.")
             }
 
             Section {

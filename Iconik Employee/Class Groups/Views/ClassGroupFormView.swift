@@ -101,7 +101,7 @@ struct ClassGroupFormView: View {
         // them could render split on iPad and the other could not.
         NavigationView {
             ZStack {
-                AmbientBackdrop(tint: tint, intensity: 0.6)
+                AmbientBackdrop()
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {

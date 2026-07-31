@@ -79,8 +79,8 @@ struct ScheduleView: View {
     @State private var hasStarted = false
     /// A one-minute clock. The countdown card ticks per second inside its own
     /// TimelineView, but that never re-renders this screen — so without this the
-    /// wash and the NOW badges would stay on whatever they were when the view
-    /// last happened to redraw. One re-render a minute is cheap now that day
+    /// countdown, the focus accent and the NOW badges would stay on whatever they
+    /// were when the view last happened to redraw. One re-render a minute is cheap now that day
     /// queries are index lookups.
     @State private var clockTick = Date()
     @State private var index = ScheduleIndex()
@@ -100,7 +100,7 @@ struct ScheduleView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: ambientTint)
+            AmbientBackdrop()
 
             if isLoading && sessions.isEmpty {
                 loadingState
@@ -175,7 +175,7 @@ struct ScheduleView: View {
         } message: {
             Text(errorMessage)
         }
-        .tint(ambientTint)
+        .tint(focusAccent)
     }
 
     @ViewBuilder
@@ -232,16 +232,16 @@ struct ScheduleView: View {
         }
     }
 
-    // MARK: - Ambient tint
+    // MARK: - Focus
 
     /// The shift the screen is "about" on a given day: the one in progress, else
     /// the next one to start that day, else that day's first shift.
     ///
-    /// The wash used to take whichever shift started EARLIEST on the selected
-    /// day, which mis-states a day carrying three different jobs — it would read
-    /// as the 8am job all the way through the evening one. Following the live or
-    /// next shift instead means the colour answers "what am I on, or what's
-    /// next", which stays true as the day moves.
+    /// It used to pick whichever shift started EARLIEST on the selected day,
+    /// which mis-states a day carrying three different jobs — it would read as
+    /// the 8am job all the way through the evening one. Following the live or
+    /// next shift instead means the answer is "what am I on, or what's next",
+    /// which stays true as the day moves.
     private func focusShift(on day: Date, now: Date) -> Session? {
         let dayShifts = shifts(on: day)
         if let live = dayShifts.first(where: { session in
@@ -252,15 +252,22 @@ struct ScheduleView: View {
         return dayShifts.first
     }
 
-    /// What the countdown card is about — and, deliberately, what the background
-    /// is tinted by, so the two never disagree.
+    /// What the countdown card is about, and what the screen's accents follow.
+    ///
+    /// It used to tint the BACKGROUND too. D14 (2026-07-30) retired that: the
+    /// operator does not want the app changing colour by job, so the schedule
+    /// takes the same single wash as every other screen. The job colour survives
+    /// on the session cards, the countdown and the chrome below — identity, not
+    /// page colour.
     private var focusSession: Session? {
         let now = clockTick
         let day = layout == .day ? selectedDay : Calendar.current.startOfDay(for: now)
         return focusShift(on: day, now: now) ?? nextShift(after: now)
     }
 
-    private var ambientTint: Color {
+    /// The focus shift's colour, used for this screen's controls and its
+    /// manager Publish button. Not the background — see `focusSession`.
+    private var focusAccent: Color {
         guard let focus = focusSession else { return .indigo }
         return ScheduleStyle.accent(for: focus)
     }
@@ -503,7 +510,7 @@ struct ScheduleView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
-                    .background(ambientTint, in: Capsule())
+                    .background(focusAccent, in: Capsule())
                     .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)

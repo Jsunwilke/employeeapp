@@ -29,9 +29,10 @@ import SwiftUI
 // MARK: - Identity
 
 enum YearbookStyle {
-    /// D11: the wash takes the FEATURE's colour, read from `FeatureTheme` rather
-    /// than restated — `#2E9B4F`, the deeper green of the "Groups & delivery"
-    /// family, which before AMB.10 never reached these screens at all.
+    /// This feature's ACCENT (D11), read from `FeatureTheme` rather than restated
+    /// — `#2E9B4F`, the deeper green of the "Groups & delivery" family, which
+    /// before AMB.10 never reached these screens at all. It no longer reaches the
+    /// background: D14 gives every screen the one app wash.
     static var tint: Color { FeatureTheme.color(for: "yearbookChecklists") }
 
     /// ONE formatter, created once.

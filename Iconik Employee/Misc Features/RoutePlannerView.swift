@@ -190,7 +190,7 @@ struct RoutePlannerView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.8)
+            AmbientBackdrop()
 
             VStack(spacing: 0) {
                 ScrollView {
@@ -574,7 +574,7 @@ private struct RoutePreviewScreen: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.6)
+            AmbientBackdrop()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {

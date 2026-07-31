@@ -30,10 +30,10 @@ import SwiftUI
 // MARK: - Identity
 
 enum MileageStyle {
-    /// D11: the wash takes the FEATURE's colour. Read from `FeatureTheme` rather
-    /// than restated, so the tile you tap and the screen you land on cannot
-    /// disagree. `#E8830C`, the "On the road" family it shares with the Route
-    /// Planner.
+    /// This feature's ACCENT (D11) — `#E8830C`, the "On the road" family it shares
+    /// with the Route Planner. Read from `FeatureTheme` rather than restated, so
+    /// the tile you tap and the screen you land on cannot disagree. It no longer
+    /// reaches the background: D14 gives every screen the one app wash.
     static var tint: Color { FeatureTheme.color(for: "mileageReports") }
 }
 

@@ -71,7 +71,7 @@ struct YearbookChecklistView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.75)
+            AmbientBackdrop()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {

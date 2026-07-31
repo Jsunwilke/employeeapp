@@ -154,7 +154,7 @@ struct ShiftDetailView: View {
     
     var body: some View {
         ZStack(alignment: .bottom) {
-            AmbientBackdrop(tint: accent)
+            AmbientBackdrop()
 
             if isInitializing {
                 VStack(spacing: 16) {

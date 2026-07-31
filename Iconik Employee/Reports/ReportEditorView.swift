@@ -79,7 +79,7 @@ struct ReportEditorView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature, intensity: 0.3)
+            AmbientBackdrop()
             content
         }
         // Always pushed from the reports list, so it insets itself past the

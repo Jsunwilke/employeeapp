@@ -10,10 +10,10 @@
 //      my bubble    the company blue, not chat's pink
 //      body font    15pt, against the 17pt default the app rode on
 //
-//  The bubble colour has a recorded reason: chat's feature colour is #D6409F and
-//  under D11 that is also the wash behind this screen, so a pink bubble on a
-//  pink wash risks mush. The company blue says "you" without competing with the
-//  screen's own colour.
+//  The bubble colour has a recorded reason: chat's feature colour is #D6409F,
+//  which under D11 runs through this screen's accents — and it was the wash
+//  behind it too until D14 gave every screen one blue. A pink bubble against
+//  chat's own pink risked mush; the company blue says "you" without competing.
 
 import SwiftUI
 import WebKit  // For WKWebView in AnimatedGifView
@@ -48,7 +48,7 @@ struct MessageThreadView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature)
+            AmbientBackdrop()
 
             VStack(spacing: 0) {
                 scrollback

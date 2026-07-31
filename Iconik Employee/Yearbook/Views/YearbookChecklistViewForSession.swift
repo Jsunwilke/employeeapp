@@ -82,7 +82,7 @@ struct YearbookChecklistViewForSession: View {
 
     private var loadingScreen: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.6)
+            AmbientBackdrop()
             YearbookLoadingRow(message: "Loading yearbook checklist…")
                 .padding(.horizontal, 16)
         }
@@ -90,7 +90,7 @@ struct YearbookChecklistViewForSession: View {
 
     private var noListScreen: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.6)
+            AmbientBackdrop()
             AmbientEmptyState(
                 title: "No Yearbook List Found",
                 message: "No yearbook checklist exists for \(schoolName).",
@@ -102,7 +102,7 @@ struct YearbookChecklistViewForSession: View {
     /// Claim 4, drawn: what failed, what is still unknown, and a way to try again.
     private func failureScreen(_ message: String) -> some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.6)
+            AmbientBackdrop()
             ScrollView {
                 YearbookFailureCard(
                     systemImage: "wifi.exclamationmark",
@@ -120,7 +120,7 @@ struct YearbookChecklistViewForSession: View {
     /// SCROLLABLE. Six years of books are reachable now.
     private var yearPicker: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.6)
+            AmbientBackdrop()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {

@@ -67,7 +67,7 @@ struct EquipmentKitDetailView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature)
+            AmbientBackdrop()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {

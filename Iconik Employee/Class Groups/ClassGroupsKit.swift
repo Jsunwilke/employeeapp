@@ -30,9 +30,10 @@ import SwiftUI
 // MARK: - Identity
 
 enum ClassGroupsStyle {
-    /// D11: the wash takes the FEATURE's colour. Read from `FeatureTheme` rather
-    /// than restated, so the tile you tap and the screen you land on cannot
-    /// disagree. `#46A758`, the "Groups & delivery" family.
+    /// This feature's ACCENT (D11) — `#46A758`, the "Groups & delivery" family.
+    /// Read from `FeatureTheme` rather than restated, so the tile you tap and the
+    /// screen you land on cannot disagree. It no longer reaches the background:
+    /// D14 gives every screen the one app wash.
     static var tint: Color { FeatureTheme.color(for: "classGroups") }
 
     /// A pill's tone, coloured. The tone itself is decided in ClassGroupsRules,

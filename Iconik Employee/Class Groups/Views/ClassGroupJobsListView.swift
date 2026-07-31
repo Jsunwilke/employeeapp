@@ -90,7 +90,7 @@ struct ClassGroupJobsListView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.8)
+            AmbientBackdrop()
 
             VStack(spacing: 12) {
                 ClassGroupTypeSwitcher(jobType: $selectedTab, tint: tint)

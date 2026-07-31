@@ -74,7 +74,7 @@ struct LocationPhotosView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature, intensity: 0.75)
+            AmbientBackdrop()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {

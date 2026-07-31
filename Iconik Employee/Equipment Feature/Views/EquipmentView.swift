@@ -92,7 +92,7 @@ struct EquipmentView: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottomTrailing) {
-                AmbientBackdrop(tint: feature)
+                AmbientBackdrop()
 
                 VStack(spacing: 10) {
                     searchField

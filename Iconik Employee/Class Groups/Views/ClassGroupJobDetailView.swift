@@ -73,7 +73,7 @@ struct ClassGroupJobDetailView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.7)
+            AmbientBackdrop()
 
             content
         }

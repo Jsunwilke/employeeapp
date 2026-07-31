@@ -110,7 +110,7 @@ struct TimeOffApprovalView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: tint, intensity: 0.75)
+            AmbientBackdrop()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -346,7 +346,7 @@ struct TimeOffApprovalView: View {
         let trimmed = denialReason.trimmingCharacters(in: .whitespacesAndNewlines)
         return NavigationView {
             ZStack {
-                AmbientBackdrop(tint: .red, intensity: 0.5)
+                AmbientBackdrop()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         VStack(alignment: .leading, spacing: 4) {

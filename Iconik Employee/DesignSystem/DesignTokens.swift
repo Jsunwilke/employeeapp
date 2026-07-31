@@ -17,19 +17,20 @@ import UIKit
 /// delegate here so a feature has exactly one color app-wide.
 /// RE-CUT IN AMB.2 (operator approved 2026-07-25) so that all 27 features are
 /// distinct. The previous map had 27 features sharing 11 colours — five of them
-/// blue — which was survivable while this only tinted a tile, and is not
-/// survivable now: under D11 a feature's colour becomes the WASH behind its
-/// whole screen, so two features sharing a colour are two screens you cannot
-/// tell apart.
+/// blue — which was survivable while this only tinted a tile, and stopped being
+/// survivable when D11 made a feature's colour the accent running through its
+/// whole screen: two features sharing a colour are two screens you cannot tell
+/// apart.
 ///
 /// Arranged as ten families: hues adjacent inside a family so a group reads as
-/// a group, families far apart so a wash is unmistakable. Manager tools are
-/// deliberately desaturated — they are not daily photographer work, and the
-/// palette can say so without a label.
+/// a group, families far apart. Manager tools are deliberately desaturated —
+/// they are not daily photographer work, and the palette can say so without a
+/// label.
 ///
-/// The schedule keeps its own data-driven wash (the colour of the job in front
-/// of you) — the schedule entry here still tints its TILE and its bottom-bar
-/// item, which is what this map is for.
+/// BACKGROUNDS ARE NOT IN HERE ANY MORE. D14 (2026-07-30) gives every screen in
+/// the app one wash — `AmbientStyle.wash` — including the schedule, which until
+/// then washed itself with the colour of the job in front of you. This map is
+/// for tiles, icons, bar items and badges: feature identity, not page colour.
 enum FeatureTheme {
     static func color(for id: String) -> Color {
         switch id {

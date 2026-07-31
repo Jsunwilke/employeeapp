@@ -25,7 +25,7 @@ struct EquipmentRequestView: View {
 
     var body: some View {
         ZStack {
-            AmbientBackdrop(tint: feature)
+            AmbientBackdrop()
             formBody.scrollContentBackground(.hidden)
         }
         .navigationTitle("Request Equipment")

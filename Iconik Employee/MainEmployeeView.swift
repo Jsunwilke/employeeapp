@@ -589,8 +589,14 @@ struct MainEmployeeView: View {
     // The one thing home is currently pushing to (see HomeDestination).
     @State private var homeDestination: HomeDestination? = nil
     
-    // Flag status
-    @State private var isFlagged: Bool = false
+    // Flag status.
+    //
+    // The BOOL lives in `UserFlagState.shared` rather than in this view: since
+    // D14 a flagged user's wash turns red app-wide, and every AmbientBackdrop
+    // reads that one store. This view is still the only thing that LOADS it
+    // (see loadFlagStatusFromSupabase) — the store neither queries nor listens.
+    @ObservedObject private var flagState = UserFlagState.shared
+    private var isFlagged: Bool { flagState.isFlagged }
     @State private var flagNote: String = ""
     @State private var flaggedByName: String = ""
     
@@ -780,19 +786,14 @@ struct MainEmployeeView: View {
     
     // MARK: - Home View (Dashboard)
     
-    /// The ambient wash behind home.
+    /// The ambient wash behind home — the same one every other screen gets.
     ///
-    /// D11 gives every converted screen its feature's colour, but home is not a
-    /// feature — it is the container — so it takes the COMPANY blue, at 90%
-    /// (operator, 2026-07-25). The blue came from Logo.svg, the only place it
-    /// was ever written down; the app's AccentColor asset is empty, so before
-    /// AMB.2 the app had been running on Apple's default blue.
-    ///
-    /// Being flagged still turns the page red, because that is the one state on
-    /// this screen that has to be visible from across a room.
+    /// D14 (2026-07-30) retired the per-screen tint: there is ONE wash now,
+    /// `AmbientStyle.wash`, so this passes nothing. Being flagged still turns
+    /// the page red, but that no longer happens here — AmbientBackdrop does it
+    /// for the whole app from `UserFlagState.shared`.
     private var homeBackground: some View {
-        AmbientBackdrop(tint: isFlagged ? .red : AmbientStyle.brand,
-                        intensity: isFlagged ? 1 : 0.9)
+        AmbientBackdrop()
     }
 
     @ViewBuilder
@@ -1329,7 +1330,9 @@ struct MainEmployeeView: View {
                 .execute()
                 .value
 
-            self.isFlagged = response.is_flagged ?? false
+            // Into the shared store, so the app-wide red wash and this screen's
+            // banner are the same answer (D14).
+            self.flagState.isFlagged = response.is_flagged ?? false
             self.flagNote = response.flag_note ?? ""
 
             if let flaggedByID = response.flagged_by, !flaggedByID.isEmpty {

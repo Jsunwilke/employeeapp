@@ -151,7 +151,7 @@ struct TasksView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                AmbientBackdrop(tint: feature)
+                AmbientBackdrop()
 
                 // ONE filter pass per body render, reused by the empty check, the
                 // group list and nothing else. The old screen called
