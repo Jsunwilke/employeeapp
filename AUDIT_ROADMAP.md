@@ -1367,9 +1367,11 @@ other rebases onto it.
   (publish generation token); the whitespace-note dead-but-live flag CTA; the
   settings-only dismissal reload; nil flagged_at copy. Cleanups: the copied users.id no
   longer lowercased on the tracker insert (the UUID-case rule), the org-blind "Iconik"
-  comment corrected, stale columns-don't-exist comments updated. Review also surfaced
-  two OPERATOR rulings parked for AMB.12: the flag is carried to Search/Stats/Scan reads
-  but rendered only on the tracker (should photographers see it?), and flag/unflag has
+  comment corrected, stale columns-don't-exist comments updated. Review surfaced two operator questions;
+  ONE IS NOW RULED AND BUILT (2026-07-31, 8434aa8): flags are visible to EVERYONE —
+  red warning card + badge on the job-box scan sheet, Manual Entry and Search rows,
+  same current-trip read as the tracker via a shared helper; full lifecycle verified
+  live (flag → warning → unflag → 0 flagged rows). Still parked for AMB.12: flag/unflag has
   no server-side permission gate (org-RLS only — the same posture as the whole surface,
   TOF.1's class). Deferred consolidations recorded for AMB.12: primary-button/list-row/
   session-section/pickup-orchestration duplication, jobBoxStatusRing deriving from
