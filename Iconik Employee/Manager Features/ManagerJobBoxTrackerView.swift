@@ -77,14 +77,16 @@ struct JobBoxWithEvent: Identifiable {
     /// October's would merge and report stages complete that belong to another job.
     ///
     /// THE CUT ITSELF IS `JobBoxProgressRules`', not a second copy of the rule: the
-    /// reading performs it and this maps the boundary back onto the DATABASE ROWS,
-    /// which is what the flag columns live on (`JobBoxScanPoint` deliberately does
-    /// not carry them). A reading with no readable scan at all leaves every row in
-    /// — there is no seam to cut on.
+    /// reading performs it and `JobBoxCurrentTrip` maps the boundary back onto the
+    /// DATABASE ROWS, which is what the flag columns live on (`JobBoxScanPoint`
+    /// deliberately does not carry them). A reading with no readable scan at all
+    /// leaves every row in — there is no seam to cut on.
+    ///
+    /// The mapping moved into `NFC/JobBoxKit.swift` (2026-07-31) so the
+    /// photographer's scan sheet reads the flag through the SAME implementation
+    /// this screen does. Behaviour here is unchanged.
     var currentTripRows: [JobBox] {
-        let rows = log.isEmpty ? [jobBox] : log
-        guard let start = reading.scans.first?.at else { return rows }
-        return rows.filter { $0.timestampDate >= start }
+        JobBoxCurrentTrip.rows(from: log.isEmpty ? [jobBox] : log)
     }
 
     /// The progress reading for this box's CURRENT trip.

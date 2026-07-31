@@ -65,6 +65,15 @@ struct JobBoxBubbleView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                // A FLAG IS FOR EVERYONE (operator ruling 2026-07-31), so Search
+                // shows it too. ROW-LEVEL is the honest read HERE and only here:
+                // each bubble IS one scan row, not a box, so it reports whether
+                // THIS row is flagged. The box-level (current-trip) reading is the
+                // manager tracker's and the scan sheet's.
+                if record.flagged {
+                    JobBoxFlagBadge(note: record.flag_note, flaggedAt: record.flagged_at)
+                }
+
                 if isOverdueAtJob {
                     // "Left 5mo ago", not "Left for 5mo ago": `JobBoxFormat.elapsed`
                     // returns a relative phrase that already ends in "ago", and

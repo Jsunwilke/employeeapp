@@ -195,6 +195,33 @@ struct JobBoxFlagBadge: View {
     }
 }
 
+// MARK: - Reading a box's current trip off its rows
+
+/// The CURRENT-TRIP CUT, applied to DATABASE ROWS rather than scan points.
+///
+/// `JobBoxProgressRules` owns the cut itself and this does not re-implement it:
+/// it builds the reading, takes the boundary the reading already decided, and
+/// maps it back onto the `JobBox` rows — which is what the FLAG columns live on
+/// (`JobBoxScanPoint` deliberately does not carry them, so the rules file can
+/// compile with nothing but Foundation).
+///
+/// It lives here rather than in `JobBoxFlagRules.swift` because that file is
+/// compiled STANDALONE by `scripts/test_jobbox_flag_rules.sh`, and `JobBox`
+/// imports Supabase.
+///
+/// Two screens need this: the manager tracker (`JobBoxWithEvent.currentTripRows`)
+/// and the photographer's scan sheet (`JobBoxFormView`). One implementation, so
+/// the flag a manager sees and the flag a photographer sees are the same reading.
+enum JobBoxCurrentTrip {
+    /// The rows of the box's current trip — everything from the last Packed scan
+    /// onward. A log with no readable scan at all has no seam to cut on, so every
+    /// row stays in.
+    static func rows(from rows: [JobBox]) -> [JobBox] {
+        guard let start = JobBoxProgressReading(rows: rows).scans.first?.at else { return rows }
+        return rows.filter { $0.timestampDate >= start }
+    }
+}
+
 // MARK: - States
 
 /// The loading state. From `JobBoxLabLoading`.

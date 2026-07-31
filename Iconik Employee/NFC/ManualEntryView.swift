@@ -114,6 +114,8 @@ struct ManualEntryView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                flagSection
+
                 actionRow
             }
             .padding(.horizontal, 16)
@@ -415,6 +417,44 @@ struct ManualEntryView: View {
                 }
             }
         }
+    }
+
+    /// The flag on the box whose number was just typed — a flag is for EVERYONE
+    /// (operator ruling 2026-07-31), not just the manager who raised it.
+    ///
+    /// ROW-LEVEL READ, deliberately: `fetchLastJobBoxRecord` keeps only the latest
+    /// row, so this reports whether THAT row is flagged. The manager tracker's
+    /// current-trip reading (`JobBoxCurrentTrip` + `JobBoxFlagRules`) is the
+    /// AUTHORITY — the scan sheet, which already has the whole log, uses it.
+    ///
+    /// RED IS CORRECT (operator D-ruling: red means flagged).
+    @ViewBuilder
+    private var flagSection: some View {
+        // The record must be THIS number's. `fetchLastJobBoxRecord` is async and
+        // `lastJobBoxRecord` still holds the PREVIOUS box's row until it returns,
+        // so without this the flag from box 3028 could flash against box 3031.
+        if isJobBoxMode, numberIsValid,
+           lastJobBoxRecord?.boxNumber == cardNumber,
+           lastJobBoxRecord?.flagged == true {
+            VStack(alignment: .leading, spacing: 8) {
+                AmbientNoteCard(title: "This box is flagged",
+                                text: flagText,
+                                accent: .red,
+                                density: .compact)
+                // `note: nil` — the note is the card's body text already.
+                JobBoxFlagBadge(note: nil, flaggedAt: lastJobBoxRecord?.flagged_at)
+            }
+        }
+    }
+
+    /// The manager's words when they left any; `flag_note` is nullable and a flag
+    /// with no note still means the box should not be used.
+    private var flagText: String {
+        let note = (lastJobBoxRecord?.flag_note ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return note.isEmpty
+            ? "A manager flagged this box. Check with them before you use it."
+            : note
     }
 
     private var actionRow: some View {

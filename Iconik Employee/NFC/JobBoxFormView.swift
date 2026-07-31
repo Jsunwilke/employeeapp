@@ -93,6 +93,16 @@ struct JobBoxFormView: View {
     @State private var progressReading: JobBoxProgressReading? = nil
     @State private var progressLoading = true
 
+    /// A FLAG IS FOR EVERYONE (operator ruling 2026-07-31), not just the manager
+    /// who raised it — the point of flagging a box is that nobody uses it. So the
+    /// photographer sees it here, at the moment they scan, read from the SAME rows
+    /// the progress card is built from and through the SAME two rules the manager
+    /// tracker uses: `JobBoxCurrentTrip.rows` for the trip cut, then
+    /// `JobBoxFlagRules.flagReading`. If the rows have not arrived, nothing shows.
+    @State private var isFlagged = false
+    @State private var flagNote: String? = nil
+    @State private var flaggedAt: Date? = nil
+
     let jobBoxStatuses = NFCRoutingRules.jobBoxStatusRing
 
     private var tint: Color { FeatureTheme.color(for: "scan") }
@@ -104,6 +114,7 @@ struct JobBoxFormView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        flagSection
                         if historyUnavailable {
                             AmbientNoteCard(
                                 title: "Couldn't load this box's history",
@@ -207,6 +218,37 @@ struct JobBoxFormView: View {
     }
 
     // MARK: - Sections
+
+    /// The flag, ABOVE everything else on the sheet — it is the one thing that
+    /// changes what the photographer should do with the box. Rendered as soon as
+    /// the rows land, independently of the session and school fetches.
+    ///
+    /// RED IS CORRECT (operator D-ruling: red means flagged).
+    @ViewBuilder
+    private var flagSection: some View {
+        if isFlagged {
+            VStack(alignment: .leading, spacing: 8) {
+                AmbientNoteCard(title: "This box is flagged",
+                                text: flagText,
+                                accent: .red,
+                                density: .compact)
+                // `note: nil` — the note is the card's body text already, and the
+                // badge is here for the "Flagged" mark and how long ago it was
+                // raised.
+                JobBoxFlagBadge(note: nil, flaggedAt: flaggedAt)
+            }
+        }
+    }
+
+    /// The manager's words when they left any, and a plain instruction when they
+    /// did not — `flag_note` is nullable and a flag with no note still means the
+    /// box should not be used.
+    private var flagText: String {
+        let note = (flagNote ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return note.isEmpty
+            ? "A manager flagged this box. Check with them before you use it."
+            : note
+    }
 
     private var boxSection: some View {
         AmbientFormSection(title: "Job box information",
@@ -490,8 +532,21 @@ struct JobBoxFormView: View {
                     // cuts the log to the current trip itself.
                     let reading = JobBoxProgressReading(rows: rows)
                     self.progressReading = reading.isEmpty ? nil : reading
+
+                    // The flag, off the SAME rows — trip cut first (the tracker's
+                    // implementation, `JobBoxCurrentTrip`), then the flag rule.
+                    // Reading the latest row alone would clear a manager's flag the
+                    // moment a photographer scanned the box.
+                    let flag = JobBoxFlagRules.flagReading(
+                        currentTripRows: JobBoxCurrentTrip.rows(from: rows))
+                    self.isFlagged = flag.flagged
+                    self.flagNote = flag.note
+                    self.flaggedAt = flag.flaggedAt
                 case .failure:
                     self.progressReading = nil
+                    self.isFlagged = false
+                    self.flagNote = nil
+                    self.flaggedAt = nil
                 }
             }
         }
