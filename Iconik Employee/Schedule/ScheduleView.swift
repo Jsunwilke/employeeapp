@@ -76,6 +76,10 @@ struct ScheduleView: View {
     @State private var showCreateSession = false
     /// The timeline anchors on today once, not every time this screen re-appears.
     @State private var hasAnchored = false
+    /// Timeline history starts folded into one "Earlier" row, so the screen
+    /// opens at today and the past is a tap away instead of a scroll above it.
+    /// Deliberately not persisted: each arrival at the timeline starts folded.
+    @State private var showPastDays = false
     @State private var hasStarted = false
     /// A one-minute clock. The countdown card ticks per second inside its own
     /// TimelineView, but that never re-renders this screen — so without this the
@@ -201,6 +205,7 @@ struct ScheduleView: View {
                     case .timeline:
                         ScheduleTimeline(
                             days: timelineDays,
+                            showPast: $showPastDays,
                             items: { items(on: $0) },
                             drafts: { drafts(on: $0) },
                             hours: { hours(on: $0) },
@@ -223,6 +228,9 @@ struct ScheduleView: View {
             .onChange(of: timelineDays.count) { _ in anchorOnToday(proxy, animated: false) }
             .onChange(of: layoutRaw) { _ in
                 hasAnchored = false
+                // Fold history back down: arriving at the timeline always
+                // starts at today, however it was left.
+                showPastDays = false
                 anchorOnToday(proxy, animated: true)
                 // The two layouts read different date ranges: switching to
                 // Timeline without this showed six weeks of shifts against one

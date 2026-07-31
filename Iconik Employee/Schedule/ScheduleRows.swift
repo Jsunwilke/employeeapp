@@ -265,6 +265,11 @@ struct ScheduleTimeOffRow: View {
 /// region rather than something you read off each row.
 struct ScheduleTimeline: View {
     let days: [Date]
+    /// Whether the finished days above today are unfolded. The timeline OPENS
+    /// with them collapsed into one "Earlier" row so today is the first thing on
+    /// screen and scrolling up never traverses history uninvited. Owned by the
+    /// screen, not here, so switching layouts can fold it back down.
+    @Binding var showPast: Bool
     let items: (Date) -> [ScheduleItem]
     /// A day's unpublished work, asked for separately because it is drawn as its
     /// own group under the day's announced shifts rather than mixed into them.
@@ -286,18 +291,22 @@ struct ScheduleTimeline: View {
 
             LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
                 if !past.isEmpty {
-                    VStack(alignment: .leading, spacing: 16) {
-                        ForEach(past, id: \.self) { day in
-                            VStack(alignment: .leading, spacing: 10) {
-                                header(day, now: now)
-                                body(for: day, now: now)
+                    earlierToggle(count: past.count)
+
+                    if showPast {
+                        VStack(alignment: .leading, spacing: 16) {
+                            ForEach(past, id: \.self) { day in
+                                VStack(alignment: .leading, spacing: 10) {
+                                    header(day, now: now)
+                                    body(for: day, now: now)
+                                }
                             }
                         }
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(pastBand)
+                        .padding(.bottom, 2)
                     }
-                    .padding(.vertical, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(pastBand)
-                    .padding(.bottom, 2)
 
                     nowDivider
                 }
@@ -320,6 +329,36 @@ struct ScheduleTimeline: View {
     }
 
     // MARK: pieces
+
+    /// The collapsed stand-in for the days already worked. Tapping it unfolds
+    /// the past in place, rendered exactly as it always was — this is
+    /// presentation state, not a data filter, so nothing is refetched and the
+    /// grey band underneath is untouched.
+    private func earlierToggle(count: Int) -> some View {
+        Button {
+            withAnimation(AmbientMotion.gentle) { showPast.toggle() }
+            AmbientHaptics.selection()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: showPast ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                Text(showPast ? "Hide earlier days" : "Earlier · \(count) day\(count == 1 ? "" : "s")")
+                    .font(.footnote.weight(.semibold))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            // ambient-allow: the earlier-days collapse toggle is a control, not
+            // a content card — same class as the layout switch and day headers.
+            .background(Capsule().fill(.ultraThinMaterial))
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+            .contentShape(Capsule())
+            .padding(.horizontal, 18)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(showPast ? "Hide earlier days" : "Show \(count) earlier days"))
+    }
 
     private var pastBand: some View {
         Rectangle()
