@@ -1,21 +1,56 @@
+//  NFCContainerView.swift
+//  Iconik Employee — the job box / NFC sub-shell
+//
+//  ONE FEATURE, ONE CHROME (AMB.11, claim 1 of the approved `JobBoxMockup`).
+//
+//  What this file used to be: an `HStack` of content plus a fixed 60pt vertical
+//  rail, inside which THREE of the five tabs wrapped themselves in a SECOND
+//  `NavigationView` — so "Write NFC" drew its title in an inner bar below the
+//  Home button while "Scan" drew its in the shell's. The shell
+//  (`MainEmployeeView.featureContainer`) already supplies a `NavigationView` for
+//  this feature, so every one of those was a nested container.
+//
+//  DELETED IN THE SAME CHANGE (delete-first migration):
+//    - all three nested `NavigationView`s;
+//    - the 60pt rail, which was 60pt on a 4.7" SE and 60pt on a 12.9" iPad, and
+//      whose 50pt label frame wrapped exactly two of the five labels;
+//    - `ToolbarButton` and `PressedButtonStyle`, the rail's own controls;
+//    - the five hardcoded tab colours (.orange/.blue/.green/.purple/.teal),
+//      which bypassed `FeatureTheme` entirely — one feature is one colour, and
+//      that colour is the REGISTERED `scan` #2AA7D8;
+//    - `ComingSoonView` (finding N3): zero call sites, and it shipped the
+//      internal note "This feature is being integrated from the NFC SD Tracker
+//      app" to whatever photographer ever reached it;
+//    - the `initialFeature` init parameter (finding N2): no caller ever supplied
+//      it. The sole construction site is `MainEmployeeView.swift:963`,
+//      `NFCContainerView()`, which needs no change.
+//
+//  The five tabs are now `JobBoxTabPill`s (`NFC/JobBoxKit.swift`) laid out in an
+//  `AmbientFlowLayout` INSIDE the content, under the shell's one bar, and the bar
+//  finally gets a title on every tab — Scan and Search rendered an EMPTY shell
+//  title before this.
+
 import SwiftUI
 
 struct NFCContainerView: View {
     @State private var selectedFeature: NFCFeature = .scan
-    @Namespace private var animation
-    
-    // For navigation from statistics with filter
-    var initialFeature: NFCFeature? = nil
+
+    /// Cross-tab deep link, kept exactly: Statistics' distribution rows and (new
+    /// in AMB.11) the Scan screen's Job Box Alert banner both route into Search
+    /// pre-filtered. These are `SearchView`'s existing init parameters, so they
+    /// land when the tab is re-created.
     @State private var initialSearchStatus: String? = nil
     @State private var initialIsJobBoxMode: Bool = false
-    
-    enum NFCFeature: String, CaseIterable {
+
+    enum NFCFeature: String, CaseIterable, Identifiable {
         case scan = "Scan"
         case search = "Search"
         case stats = "Stats"
         case writeNFC = "Write NFC"
         case manualEntry = "Manual Entry"
-        
+
+        var id: String { rawValue }
+
         var icon: String {
             switch self {
             case .scan: return "wave.3.right.circle.fill"
@@ -25,179 +60,90 @@ struct NFCContainerView: View {
             case .manualEntry: return "square.and.pencil"
             }
         }
-        
-        var color: Color {
+
+        /// What the ONE nav bar says. The tab pill stays short ("Stats"); the bar
+        /// spells it out, and Scan and Search get a title at all for the first
+        /// time.
+        var navigationTitle: String {
             switch self {
-            case .scan: return .orange
-            case .search: return .blue
-            case .stats: return .green
-            case .writeNFC: return .purple
-            case .manualEntry: return .teal
+            case .scan: return "Scan"
+            case .search: return "Search"
+            case .stats: return "Statistics"
+            case .writeNFC: return "Write NFC"
+            case .manualEntry: return "Manual Entry"
             }
         }
     }
-    
+
+    private var tint: Color { FeatureTheme.color(for: "scan") }
+
     var body: some View {
-        HStack(spacing: 0) {
-            // Main content area
-            ZStack {
-                switch selectedFeature {
-                case .scan:
-                    ScanView()
-                case .search:
-                    SearchView(
-                        initialStatus: initialSearchStatus,
-                        initialIsJobBoxMode: initialIsJobBoxMode
-                    )
-                case .stats:
-                    NavigationView {
-                        StatisticsView(onNavigateToSearch: { status, isJobBox in
-                            // Switch to search view with the selected status
-                            selectedFeature = .search
-                            // Update the search view parameters
-                            initialSearchStatus = status
-                            initialIsJobBoxMode = isJobBox
-                        })
-                    }
-                case .writeNFC:
-                    NavigationView {
-                        WriteNFCView()
-                    }
-                case .manualEntry:
-                    NavigationView {
-                        ManualEntryView(onCancel: {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                selectedFeature = .scan
-                            }
-                        })
-                    }
-                }
+        ZStack {
+            AmbientBackdrop()
+
+            VStack(spacing: 12) {
+                tabRow
+                content
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            
-            // Vertical toolbar on the right
-            VStack(spacing: 0) {
-                ForEach(NFCFeature.allCases, id: \.self) { feature in
-                    ToolbarButton(
-                        feature: feature,
-                        isSelected: selectedFeature == feature,
-                        namespace: animation
-                    ) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedFeature = feature
-                        }
-                    }
-                    
-                    if feature != NFCFeature.allCases.last {
-                        Divider()
-                            .background(Color.gray.opacity(0.3))
-                    }
-                }
-                
-                Spacer()
-            }
-            .frame(width: 60)
-            .background(
-                Color(UIColor.secondarySystemBackground)
-                    .overlay(
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.2))
-                            .frame(width: 1),
-                        alignment: .leading
-                    )
-            )
         }
+        .navigationTitle(selectedFeature.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            if let initial = initialFeature {
-                selectedFeature = initial
-            }
-        }
     }
-}
 
-// MARK: - Toolbar Button
-struct ToolbarButton: View {
-    let feature: NFCContainerView.NFCFeature
-    let isSelected: Bool
-    let namespace: Namespace.ID
-    let action: () -> Void
-    
-    @State private var isPressed = false
-    
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                ZStack {
-                    // Selection indicator
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(feature.color.opacity(0.2))
-                            .matchedGeometryEffect(id: "selection", in: namespace)
+    private var tabRow: some View {
+        AmbientFlowLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(NFCFeature.allCases) { feature in
+                JobBoxTabPill(title: feature.rawValue,
+                              systemImage: feature.icon,
+                              on: selectedFeature == feature,
+                              tint: tint) {
+                    // A MANUAL tap on Search is a fresh Search (audit round).
+                    // `showSearch` sets these and nothing ever cleared them, so
+                    // after one banner or statistics tap every later tap on the
+                    // Search pill silently re-applied that stale filter — the
+                    // screen opened pre-filtered with no way to see why.
+                    if feature == .search {
+                        initialSearchStatus = nil
+                        initialIsJobBoxMode = false
                     }
-                    
-                    Image(systemName: feature.icon)
-                        .font(.system(size: 24))
-                        .foregroundColor(isSelected ? feature.color : .gray)
-                        .scaleEffect(isPressed ? 0.85 : 1.0)
-                        .animation(.spring(response: 0.1, dampingFraction: 0.6), value: isPressed)
+                    selectedFeature = feature
                 }
-                .frame(width: 44, height: 44)
-                
-                Text(feature.rawValue)
-                    .font(.caption2)
-                    .foregroundColor(isSelected ? feature.color : .gray)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .frame(width: 50)
             }
-            .padding(.vertical, 12)
         }
-        .buttonStyle(PressedButtonStyle(isPressed: $isPressed))
-        .accessibilityLabel(feature.rawValue)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
     }
-}
 
-// MARK: - Button Style
-struct PressedButtonStyle: ButtonStyle {
-    @Binding var isPressed: Bool
-    
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .contentShape(Rectangle())
-            .onChange(of: configuration.isPressed) { pressed in
-                isPressed = pressed
-            }
-    }
-}
-
-// MARK: - Coming Soon View
-struct ComingSoonView: View {
-    let feature: String
-    
-    var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "hammer.circle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
-            
-            Text("\(feature) Coming Soon")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
-            
-            Text("This feature is being integrated from the NFC SD Tracker app")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+    @ViewBuilder
+    private var content: some View {
+        switch selectedFeature {
+        case .scan:
+            ScanView(onNavigateToSearch: { status, isJobBox in
+                showSearch(status: status, isJobBox: isJobBox)
+            })
+        case .search:
+            SearchView(initialStatus: initialSearchStatus,
+                       initialIsJobBoxMode: initialIsJobBoxMode)
+        case .stats:
+            StatisticsView(onNavigateToSearch: { status, isJobBox in
+                showSearch(status: status, isJobBox: isJobBox)
+            })
+        case .writeNFC:
+            WriteNFCView()
+        case .manualEntry:
+            ManualEntryView(onCancel: {
+                withAnimation(AmbientMotion.snappy) { selectedFeature = .scan }
+            })
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(UIColor.systemBackground))
+    }
+
+    private func showSearch(status: String, isJobBox: Bool) {
+        initialSearchStatus = status
+        initialIsJobBoxMode = isJobBox
+        withAnimation(AmbientMotion.snappy) { selectedFeature = .search }
     }
 }
 
-// MARK: - Preview
 struct NFCContainerView_Previews: PreviewProvider {
     static var previews: some View {
         NavigationView {

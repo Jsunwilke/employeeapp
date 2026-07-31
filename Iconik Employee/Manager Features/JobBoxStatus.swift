@@ -42,6 +42,31 @@ struct JobBox: Identifiable, Codable {
     let school_id: String?
     let user_id: String?
 
+    /// "Flag for Attention", AMB.11 2026-07-30.
+    ///
+    /// These three columns are added by
+    /// `supabase/drafts/20260730_amb11_jobbox_flag_columns.sql`. The manager
+    /// tracker's flag swipe, context-menu item and sheet have ALWAYS written them
+    /// and they never existed — PostgREST rejected the statement as a unit, so no
+    /// job box has ever been flagged (the FLG.1 defect class).
+    ///
+    /// Decoded with `decodeIfPresent` like every other field here, so a build
+    /// running against a database where the migration has not landed yet reads
+    /// `flagged == false` rather than throwing — and a thrown decode empties the
+    /// WHOLE fetch, which would present as "no job boxes".
+    ///
+    /// A box READS as flagged when any row of its CURRENT TRIP is flagged; that
+    /// rule lives in `JobBox/JobBoxFlagRules.swift`, not here.
+    /// `var` with a default, unlike every other field here, ON PURPOSE: two call
+    /// sites build a `JobBox` by hand through the synthesized memberwise
+    /// initializer (`Schedule/ShiftDetailView.swift:1033`,
+    /// `Services/DatabaseManager+NFC.swift:368`), and only a `var` with an
+    /// initial value gives that initializer a DEFAULT argument. Declared `let`,
+    /// these three would break both call sites for no gain.
+    var flagged: Bool = false
+    var flag_note: String? = nil
+    var flagged_at: Date? = nil
+
     // Computed properties for backward compatibility
     var shiftUid: String { shift_uid }
     var scannedBy: String { photographer }
@@ -71,8 +96,16 @@ struct JobBox: Identifiable, Codable {
         case school
         case school_id
         case user_id
+        case flagged
+        case flag_note
+        case flagged_at
     }
 }
+
+/// The three flag columns, read as one flag state by `JobBoxFlagRules`. The
+/// protocol lives in that file so it can compile — and therefore be tested —
+/// without Supabase.
+extension JobBox: JobBoxFlagRow {}
 
 // Decodable lives in an extension so the memberwise initializer survives (the manager
 // tracker constructs JobBox by hand).
@@ -111,12 +144,26 @@ extension JobBox {
         school_id = try c.decodeIfPresent(String.self, forKey: .school_id)
         user_id = try c.decodeIfPresent(String.self, forKey: .user_id)
 
+        // The flag columns may not exist yet on the database this build talks to.
+        flagged = try c.decodeIfPresent(Bool.self, forKey: .flagged) ?? false
+        flag_note = try c.decodeIfPresent(String.self, forKey: .flag_note)
+
         if let date = try? c.decode(Date.self, forKey: .timestamp) {
             timestamp = date
         } else if let string = try? c.decode(String.self, forKey: .timestamp) {
             timestamp = Self.isoFractional.date(from: string) ?? Self.isoPlain.date(from: string)
         } else {
             timestamp = nil
+        }
+
+        // Same tolerant two-form parse as `timestamp`: timestamptz arrives as an
+        // ISO8601 string that may or may not carry fractional seconds.
+        if let date = try? c.decode(Date.self, forKey: .flagged_at) {
+            flagged_at = date
+        } else if let string = try? c.decode(String.self, forKey: .flagged_at) {
+            flagged_at = Self.isoFractional.date(from: string) ?? Self.isoPlain.date(from: string)
+        } else {
+            flagged_at = nil
         }
     }
 }

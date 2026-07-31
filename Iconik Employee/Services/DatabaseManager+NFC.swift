@@ -23,6 +23,24 @@ class DatabaseManager: ObservableObject {
     // Store realtime channels for cleanup
     private var photographersChannel: RealtimeChannelV2?
     private var schoolsChannel: RealtimeChannelV2?
+
+    /// Which subscription the two dropdown channels currently belong to.
+    ///
+    /// The channels are SINGLETONS shared by every NFC screen that offers a
+    /// school or photographer picker, and each of those screens re-subscribes on
+    /// every `onAppear` (finding N24). Adding a bare `stopListening()` to one
+    /// screen's `onDisappear` would therefore be a new defect rather than a fix:
+    /// SwiftUI runs the ARRIVING view's `onAppear` before the departing view's
+    /// `onDisappear` when a container swaps branches, so leaving Search would
+    /// silently kill the realtime feed the screen after it had just started.
+    ///
+    /// So a screen records the generation it left behind and hands it back when
+    /// it goes; a teardown for a generation that is no longer current is a no-op.
+    private var nfcListenerGeneration = 0
+
+    /// The token to hand back to `stopListening(ifGeneration:)`. Read it AFTER
+    /// calling the listen methods.
+    var currentNFCListenerGeneration: Int { nfcListenerGeneration }
     
     // MARK: - Save Record (SD Card)
     func saveRecord(timestamp: Date,
@@ -349,6 +367,18 @@ class DatabaseManager: ObservableObject {
                         let organization_id: String?
                         let timestamp: Date?
                         let shift_uid: String?
+                        /// The three flag columns (AMB.11). Carried through so a
+                        /// read that does NOT go via the manager tracker still
+                        /// holds the real flag state instead of silently
+                        /// defaulting to "not flagged" — this fetch feeds Search,
+                        /// Statistics, the scan history and the job box form.
+                        /// Optional, so a database where
+                        /// `supabase/drafts/20260730_amb11_jobbox_flag_columns.sql`
+                        /// has not landed yet decodes them as absent rather than
+                        /// throwing and emptying the whole fetch.
+                        let flagged: Bool?
+                        let flag_note: String?
+                        let flagged_at: Date?
                     }
 
                     var query = supabase
@@ -375,7 +405,10 @@ class DatabaseManager: ObservableObject {
                             organization_id: dto.organization_id ?? "",
                             school: dto.school,
                             school_id: dto.school_id,
-                            user_id: dto.user_id
+                            user_id: dto.user_id,
+                            flagged: dto.flagged ?? false,
+                            flag_note: dto.flag_note,
+                            flagged_at: dto.flagged_at
                         )
                     }
 
@@ -399,6 +432,7 @@ class DatabaseManager: ObservableObject {
     
     // MARK: - Listen for Photographers
     func listenForPhotographers(inOrgID orgID: String, completion: @escaping ([String]) -> Void) {
+        nfcListenerGeneration += 1
         Task {
             // First, fetch initial data
             await fetchAndNotifyPhotographers(orgID: orgID, completion: completion)
@@ -479,6 +513,7 @@ class DatabaseManager: ObservableObject {
     }
 
     func listenForSchoolsData(forOrgID orgID: String, completion: @escaping ([SchoolItem]) -> Void) {
+        nfcListenerGeneration += 1
         Task {
             // First, fetch initial data
             await fetchAndProcessSchools(orgID: orgID, completion: completion)
@@ -802,6 +837,13 @@ class DatabaseManager: ObservableObject {
     }
 
     // MARK: - Cleanup
+
+    /// Tear the dropdown channels down ONLY if they are still the ones the
+    /// caller started. See `nfcListenerGeneration`.
+    func stopListening(ifGeneration generation: Int) {
+        guard generation == nfcListenerGeneration else { return }
+        stopListening()
+    }
 
     func stopListening() {
         Task {

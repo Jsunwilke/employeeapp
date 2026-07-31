@@ -1,7 +1,26 @@
-import SwiftUI
+//  StatusColors.swift
+//  Iconik Employee — SD-card status colour, and nothing else
+//
+//  JOB-BOX COLOURS ARE NOT HERE ANY MORE. They live SOLELY in
+//  `JobBoxTripStage.meterTint` (`JobBox/JobBoxProgressMeter.swift`), which is the
+//  single iOS↔web contract per the operator's ruling of 2026-07-30 (no grey for
+//  any status; green reserved for Turned In; the rest unique calming colours).
+//
+//  This file used to carry a SECOND job-box map that disagreed with the shipped
+//  meter on three of the four statuses — including a green Picked Up, which the
+//  ruling forbids — so the same box could be two colours on two screens of the
+//  same app. That map is deleted rather than reconciled: a second source of truth
+//  is the defect, not the values in it.
+//
+//  Deleted in the same change and for the same reason: `jobBoxHexColors`,
+//  `sdCardHexColors` and `hexColor(for:isJobBox:)` (zero call sites — the web
+//  contract is documented in `STATUS_COLORS_DOCUMENTATION.md`, not read out of
+//  Swift), and an `rgbComponents` extension on `Color` that returned (0, 0, 0)
+//  and was never called.
+//
+//  The SD-card map below is UNCHANGED and remains the iOS↔web standard for cards.
 
-// MARK: - Unified Status Color Scheme
-// These colors should be used consistently across iOS and web apps
+import SwiftUI
 
 struct StatusColors {
     // MARK: - SD Card Status Colors
@@ -14,101 +33,11 @@ struct StatusColors {
         "camera bag": Color(red: 175/255, green: 82/255, blue: 222/255),  // Purple
         "personal": Color(red: 88/255, green: 86/255, blue: 214/255)      // Indigo
     ]
-    
-    // MARK: - Job Box Status Colors
-    static let jobBoxColors: [String: Color] = [
-        "packed": Color(red: 0/255, green: 122/255, blue: 255/255),       // Blue
-        "picked up": Color(red: 52/255, green: 199/255, blue: 89/255),    // Green
-        "left job": Color(red: 255/255, green: 149/255, blue: 0/255),     // Orange
-        "turned in": Color(red: 142/255, green: 142/255, blue: 147/255)   // Gray
-    ]
-    
-    // MARK: - Get color for any status
-    static func color(for status: String, isJobBox: Bool = false) -> Color {
-        let lowercasedStatus = status.lowercased()
-        
-        if isJobBox {
-            return jobBoxColors[lowercasedStatus] ?? Color.gray
-        } else {
-            return sdCardColors[lowercasedStatus] ?? Color.gray
-        }
-    }
-    
-    // MARK: - Hex values for web compatibility
-    static let sdCardHexColors: [String: String] = [
-        "job box": "#FF9500",     // Orange
-        "camera": "#34C759",      // Green
-        "envelope": "#FFCC00",    // Yellow
-        "uploaded": "#007AFF",    // Blue
-        "cleared": "#8E8E93",     // Gray
-        "camera bag": "#AF52DE",  // Purple
-        "personal": "#5856D6"     // Indigo
-    ]
-    
-    static let jobBoxHexColors: [String: String] = [
-        "packed": "#007AFF",      // Blue
-        "picked up": "#34C759",   // Green
-        "left job": "#FF9500",    // Orange
-        "turned in": "#8E8E93"    // Gray
-    ]
-    
-    // MARK: - Get hex color for web
-    static func hexColor(for status: String, isJobBox: Bool = false) -> String {
-        let lowercasedStatus = status.lowercased()
-        
-        if isJobBox {
-            return jobBoxHexColors[lowercasedStatus] ?? "#8E8E93"
-        } else {
-            return sdCardHexColors[lowercasedStatus] ?? "#8E8E93"
-        }
+
+    /// The colour for an SD-card status. Job boxes go through
+    /// `JobBoxTripStage(stored:)?.meterTint` — there is no `isJobBox` flag any
+    /// more, because there is no second map for it to select.
+    static func color(forSDStatus status: String) -> Color {
+        sdCardColors[status.lowercased()] ?? Color.gray
     }
 }
-
-// MARK: - Color Extension for RGB values
-extension Color {
-    var rgbComponents: (red: Double, green: Double, blue: Double) {
-        // This is a placeholder - actual implementation would extract RGB values
-        // For now, returning dummy values
-        return (red: 0, green: 0, blue: 0)
-    }
-}
-
-// MARK: - Usage Examples
-/*
- 
- iOS Usage:
- -----------
- // In your views:
- Circle()
-     .fill(StatusColors.color(for: "job box"))
- 
- // For job boxes:
- Circle()
-     .fill(StatusColors.color(for: "packed", isJobBox: true))
- 
- 
- Web Usage (JavaScript/CSS):
- ---------------------------
- // Create a matching object in your web app:
- const StatusColors = {
-     sdCard: {
-         "job box": "#FF9500",
-         "camera": "#34C759",
-         "envelope": "#FFCC00",
-         "uploaded": "#007AFF",
-         "cleared": "#8E8E93",
-         "camera bag": "#AF52DE",
-         "personal": "#5856D6"
-     },
-     jobBox: {
-         "packed": "#007AFF",
-         "picked up": "#34C759",
-         "left job": "#FF9500",
-         "turned in": "#8E8E93"
-     }
- };
- 
- // Usage in React/Vue/etc:
- style={{ backgroundColor: StatusColors.sdCard["job box"] }}
- 
- */

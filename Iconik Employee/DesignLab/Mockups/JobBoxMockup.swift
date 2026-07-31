@@ -692,7 +692,7 @@ private struct JobBoxLabStatsSurface: View {
                             label: entry.status,
                             count: entry.count,
                             total: DesignLabSampleData.sdStatusCounts.reduce(0) { $0 + $1.count },
-                            tint: StatusColors.color(for: entry.status, isJobBox: false))
+                            tint: StatusColors.color(forSDStatus: entry.status))
                     }
                 }
             }
@@ -1162,8 +1162,12 @@ private struct JobBoxLabTrackerSurface: View {
                         Text(stage.label).font(.footnote.weight(.semibold))
                         Spacer(minLength: 8)
                         JobBoxLabSwatch(tint: stage.meterTint, caption: "meter")
-                        JobBoxLabSwatch(tint: StatusColors.color(for: stage.stored, isJobBox: true),
-                                        caption: "StatusColors")
+                        // SETTLED 2026-07-30: the second swatch used to draw the
+                        // `StatusColors` job-box map so the disagreement could be
+                        // seen. That map is deleted and this one is the contract,
+                        // so both swatches are now the same colour by
+                        // construction — which is the point.
+                        JobBoxLabSwatch(tint: stage.meterTint, caption: "contract")
                     }
                 }
             }
@@ -1490,13 +1494,13 @@ private struct JobBoxLabCardBubble: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Circle()
-                .fill(StatusColors.color(for: record.status, isJobBox: false))
+                .fill(StatusColors.color(forSDStatus: record.status))
                 .frame(width: 10, height: 10)
                 .padding(.top, 5)
             VStack(alignment: .leading, spacing: 3) {
                 Text(record.status)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(StatusColors.color(for: record.status, isJobBox: false))
+                    .foregroundStyle(StatusColors.color(forSDStatus: record.status))
                 Text("Card #\(record.cardNumber) · \(record.school)").font(.caption)
                 Text(Formatters.mediumDateTime.string(from: record.at))
                     .font(.caption).foregroundStyle(.secondary)

@@ -46,14 +46,27 @@ extension JobBoxTripStage {
     /// Each stage owns a colour, so a box's position is legible from the hue
     /// before any label is read.
     ///
-    /// The bar this replaces coloured the WHOLE track from one status and its
-    /// `.packed` case fell through to a default grey — so a packed box, the single
-    /// most common state in the table (199 of 351), was drawn inert. Packed is
-    /// still the calmest colour here, but it is a deliberate slate rather than a
-    /// fallthrough.
+    /// THIS MAP IS THE SINGLE iOS↔WEB CONTRACT for job-box status colour
+    /// (operator ruling, batch-4 sitting 2026-07-30). It replaced a second,
+    /// disagreeing map in `NFC/StatusColors.swift`, which was deleted in the same
+    /// change — two maps meant two clients could colour the same box differently,
+    /// and three of the four statuses did.
+    ///
+    /// The ruling, in its own terms:
+    ///   - NO GREY for any status. The bar this replaces coloured the whole track
+    ///     from one status and let `.packed` fall through to grey, so a packed box
+    ///     — the single most common state in the table (199 of 351) — was drawn
+    ///     inert. An earlier draft of this file kept a deliberate slate for the
+    ///     same stage; the ruling bans that too.
+    ///   - GREEN IS RESERVED FOR TURNED IN. It is the one stage that means
+    ///     "finished", so nothing else may borrow the colour that says so.
+    ///   - The other three stages take unique CALMING colours chosen to sit well
+    ///     with that green.
+    ///
+    /// The web app follows this map; a change here is a cross-client change.
     var meterTint: Color {
         switch self {
-        case .packed: return Color(hex: "#7A8794")
+        case .packed: return Color(hex: "#6B7FD7")
         case .pickedUp: return Color(hex: "#0B8BA8")
         case .leftJob: return Color(hex: "#F09A2B")
         case .turnedIn: return Color(hex: "#31A15D")
@@ -72,6 +85,10 @@ extension JobBoxTripStage {
 
 extension JobBoxProgressReading {
 
+    /// The fallback is the ABSENCE of a status, not a status: a box with no
+    /// readable scan on this trip. It is deliberately outside the four-colour
+    /// contract above — the no-grey ruling governs the four STAGES, and
+    /// "never scanned" must not be dressed as one of them.
     var meterTint: Color { furthest?.meterTint ?? Color(hex: "#7A8794") }
 
     /// The supporting line: who and when, with the name omitted when the log has

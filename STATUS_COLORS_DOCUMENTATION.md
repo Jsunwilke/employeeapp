@@ -1,95 +1,54 @@
-# Iconik Status Colors Documentation
+# Iconik status colours — the iOS↔web contract
 
-## Overview
-This document defines the standardized color scheme for SD Card and Job Box statuses across all Iconik platforms (iOS and Web).
+Last settled: **2026-07-30** (operator ruling, AMB.11 batch-4 sitting).
 
-## SD Card Status Colors
+Two vocabularies, one contract each. Both are shared with the web app: a change
+on either side is a cross-client change, not a style choice.
 
-| Status | Hex Code | RGB | SwiftUI Color | Description |
-|--------|----------|-----|---------------|-------------|
-| **Job Box** | `#FF9500` | rgb(255, 149, 0) | Orange | Card is in a job box |
-| **Camera** | `#34C759` | rgb(52, 199, 89) | Green | Card is in camera |
-| **Envelope** | `#FFCC00` | rgb(255, 204, 0) | Yellow | Card is in envelope |
-| **Uploaded** | `#007AFF` | rgb(0, 122, 255) | Blue | Card data has been uploaded |
-| **Cleared** | `#8E8E93` | rgb(142, 142, 147) | Gray | Card has been cleared |
-| **Camera Bag** | `#AF52DE` | rgb(175, 82, 222) | Purple | Card is in camera bag |
-| **Personal** | `#5856D6` | rgb(88, 86, 214) | Indigo | Personal use |
+## Job box statuses
 
-## Job Box Status Colors
+| Status | Hex | Note |
+|---|---|---|
+| **Packed** | `#6B7FD7` | calm periwinkle |
+| **Picked Up** | `#0B8BA8` | teal |
+| **Left Job** | `#F09A2B` | amber |
+| **Turned In** | `#31A15D` | green |
 
-| Status | Hex Code | RGB | SwiftUI Color | Description |
-|--------|----------|-----|---------------|-------------|
-| **Packed** | `#007AFF` | rgb(0, 122, 255) | Blue | Job box is packed |
-| **Picked Up** | `#34C759` | rgb(52, 199, 89) | Green | Job box has been picked up |
-| **Left Job** | `#FF9500` | rgb(255, 149, 0) | Orange | Job box has left the job |
-| **Turned In** | `#8E8E93` | rgb(142, 142, 147) | Gray | Job box has been turned in |
+The ruling that fixed these:
 
-## Implementation Examples
+- **No grey for any status.** Grey read as "inert" on Packed, which is the most
+  common state in the table (674 of 1,059 live rows).
+- **Green is reserved for Turned In.** It is the one stage that means finished.
+  Nothing else may take it — the retired map's green Picked Up is exactly what
+  the reservation exists to prevent.
+- The other three stages take **unique calming colours** chosen to sit with that
+  green.
 
-### iOS (SwiftUI)
-```swift
-// Using the StatusColors struct
-Circle()
-    .fill(StatusColors.color(for: "job box"))
+**Authoritative Swift source: `JobBoxTripStage.meterTint` in
+`Iconik Employee/JobBox/JobBoxProgressMeter.swift`.** There is no second job-box
+map any more. `StatusColors.jobBoxColors` / `jobBoxHexColors` — which disagreed
+with the shipped meter on three of these four statuses — were **deleted**
+2026-07-30, along with the unused hex accessors.
 
-// For job boxes
-Circle()
-    .fill(StatusColors.color(for: "packed", isJobBox: true))
-```
+`#7A8794` is **not a status colour**: it is the never-scanned / unreadable-status
+fallback, used when a box has no readable scan on its current trip.
 
-### Web (CSS)
-```css
-/* SD Card Status Colors */
-.status-job-box { background-color: #FF9500; }
-.status-camera { background-color: #34C759; }
-.status-envelope { background-color: #FFCC00; }
-.status-uploaded { background-color: #007AFF; }
-.status-cleared { background-color: #8E8E93; }
-.status-camera-bag { background-color: #AF52DE; }
-.status-personal { background-color: #5856D6; }
+**The web app must follow in a follow-on change** so the two clients cannot
+disagree about the same box again.
 
-/* Job Box Status Colors */
-.status-packed { background-color: #007AFF; }
-.status-picked-up { background-color: #34C759; }
-.status-left-job { background-color: #FF9500; }
-.status-turned-in { background-color: #8E8E93; }
-```
+## SD card statuses (unchanged)
 
-### Web (JavaScript/React)
-```javascript
-const StatusColors = {
-    sdCard: {
-        "job box": "#FF9500",
-        "camera": "#34C759",
-        "envelope": "#FFCC00",
-        "uploaded": "#007AFF",
-        "cleared": "#8E8E93",
-        "camera bag": "#AF52DE",
-        "personal": "#5856D6"
-    },
-    jobBox: {
-        "packed": "#007AFF",
-        "picked up": "#34C759",
-        "left job": "#FF9500",
-        "turned in": "#8E8E93"
-    }
-};
+| Status | Hex |
+|---|---|
+| Job Box | `#FF9500` |
+| Camera | `#34C759` |
+| Envelope | `#FFCC00` |
+| Uploaded | `#007AFF` |
+| Cleared | `#8E8E93` |
+| Camera Bag | `#AF52DE` |
+| Personal | `#5856D6` |
 
-// Usage
-const getStatusColor = (status, isJobBox = false) => {
-    const colors = isJobBox ? StatusColors.jobBox : StatusColors.sdCard;
-    return colors[status.toLowerCase()] || "#8E8E93";
-};
-```
-
-## Design Rationale
-
-1. **Consistency**: Same colors used across all platforms and views
-2. **Accessibility**: Colors chosen for good contrast and visibility
-3. **Meaningful**: Colors relate to status meaning (e.g., green for completed/picked up)
-4. **System Colors**: Based on Apple's system colors for better iOS integration
-
-## Notes
-- Always use lowercase status names when looking up colors
-- Default to gray (#8E8E93) if status is not found
-- These colors should be used in all statistics, charts, and status indicators
+Authoritative Swift source: `StatusColors.sdCardColors`
+(`Iconik Employee/NFC/StatusColors.swift`), read through
+`StatusColors.color(forSDStatus:)`. Unknown status → grey `#8E8E93`. Lookup keys
+are lowercase.
