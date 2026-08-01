@@ -598,11 +598,23 @@ remain. The designs live on as production code: `TimeClockKit`, `TimeOffKit`,
 `SettingsKit`, `AuthKit`, `ManagerKit`, `TrainingKit`, `ClassGroupsKit`,
 `YearbookKit`, `MileageKit`, `RoutePlannerKit` and the design system itself.
 
-OPEN, and honestly stated: the iPad simulator signed itself out when its build
-was reinstalled, and the password is the operator's to type, so this phase's own
-device pass covered the DESIGN on both devices (in the lab, before conversion)
-but the CONVERTED screens on live data only on iPhone. D7's both-device
-requirement is met by the operator smoke, which is the real gate.
+OPERATOR SMOKE PASSED 2026-08-01 ("smoke passes") AND PUSHED — origin/main
+`e27a8c0..b9f323e`. D7's both-device requirement is met by that pass, which was
+the real gate: this phase's own device work covered the DESIGN on both devices
+(in the lab, before conversion) but the CONVERTED screens on live data only on
+iPhone, because the iPad simulator signed itself out when its build was
+reinstalled and the password is the operator's to type.
+
+**THE ARC IS COMPLETE.** Thirteen phases, from the schedule to payroll, covering
+every surface in the app except Sports Shoot Feature — excluded deliberately and
+permanently by D1 on the first day. What the arc leaves behind is not a coat of
+paint: a design system with a build gate that fails on a newly hand-rolled card,
+ten feature Kits that the screens draw from directly, six SwiftUI-free rule files
+compiled and RUN by their own test scripts, and a habit of inventorying a
+surface's capabilities from source before redrawing it. The lesson AMB.2 opened
+with — that a design system with no enforcement is decoration — is the one thing
+this arc was built to disprove, and the gate reaching zero on its last phase is
+the evidence.
 
 STILL OUT OF SCOPE, recorded so nothing is assumed handled: the 100-row fetch
 ceiling (now SAID rather than hidden), the range-blind offline cache (now SAID),
