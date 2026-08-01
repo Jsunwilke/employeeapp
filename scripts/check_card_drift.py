@@ -147,10 +147,19 @@ ALLOW_MARKER = re.compile(r"^\s*(?://|\*|/\*)\s*ambient-allow:\s*\S+")
 # files at all — SessionSelectionView, TimeEntryListView, TimeTrackingButton and
 # TimeTrackingMainView are the TIME CLOCK, which the generator swept into AMB.12
 # because that was the last phase and the tail absorbs whatever is left. The
-# operator gave the clock its own phase on 2026-08-01 (plan D15), so they now say
-# AMB.13 and must reach zero there. Two of TimeTrackingButton's cards are on a
-# screen with ZERO call sites, so this gate is currently guarding dead pixels —
-# worth knowing before someone "converts" them.
+# operator gave the clock its own phase on 2026-08-01 (plan D15), so they said
+# AMB.13 and had to reach zero there.
+#
+# AMB.13 (2026-08-01) — THEY REACHED ZERO AND THE ROWS ARE GONE, so those four
+# files are now fully guarded rather than ratcheted. `TimeTrackingButton.swift`
+# was never converted: it had ZERO call sites, so this gate had been guarding
+# dead pixels, and the phase deleted the file instead. `TimeEntryDetailView.swift`
+# went the same way, and `NotesInputView.swift` was folded into `ClockOutView`.
+#
+# THE ARC IS OVER AND THIS LIST IS NOW ONLY: one AMB.1 residual, and Sports Shoot
+# Feature, which is permanently out of scope by D1. Every remaining row is
+# therefore a DELIBERATE exclusion rather than a phase's outstanding work — which
+# means the next unexplained row to appear here is drift, not backlog.
 #
 # And the recurring lesson, now in its FIFTH consecutive phase: an empty
 # allowlist row still means nothing about whether a surface is converted. The
@@ -163,10 +172,6 @@ ALLOWLIST = {}  # populated below by _load_allowlist()
 
 _ALLOWLIST_SOURCE = """
 Iconik Employee/Schedule/RealTimeSyncIndicator.swift|AMB.1 residual|1
-Iconik Employee/SessionSelectionView.swift|AMB.13|1
-Iconik Employee/TimeEntryListView.swift|AMB.13|2
-Iconik Employee/TimeTrackingButton.swift|AMB.13|2
-Iconik Employee/TimeTrackingMainView.swift|AMB.13|2
 Iconik Employee/Sports Shoot Feature/CaptureGalleryListView.swift|out of scope (D1)|1
 Iconik Employee/Sports Shoot Feature/CapturaSportsRosterView_iPhone.swift|out of scope (D1)|2
 Iconik Employee/Sports Shoot Feature/CapturaSportsView.swift|out of scope (D1)|2

@@ -249,7 +249,7 @@ class TimeTrackingService: ObservableObject {
         }
 
         // Check for active entry
-        if let activeEntry = try await getCurrentTimeEntry(userId: userId, organizationID: orgId) {
+        if try await getCurrentTimeEntry(userId: userId, organizationID: orgId) != nil {
             throw TimeTrackingError.alreadyClockedIn
         }
 

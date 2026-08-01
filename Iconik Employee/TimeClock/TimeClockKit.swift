@@ -282,40 +282,61 @@ struct TimeClockTotalsCard: View {
 
 // MARK: - An entry, in a list
 
-/// The three kinds of entry the list distinguishes, which it has always
-/// distinguished — by a bare glyph nobody could decode.
+/// What kind of entry a row is — and this enum is DELIBERATELY SHORTER than the
+/// one the app used to imply.
 ///
-/// The words come from `TimeEntryDetailView`, the dead screen: it named these
-/// "Active Clock Entry", "Manual Time Entry" and "Clock-based Entry". Shortened
-/// to fit a badge; the meanings are unchanged.
+/// THE OLD THREE-WAY SPLIT WAS NOT REAL, and the mockup carried it before this
+/// was checked against the schema. `TimeEntryDetailView` (the dead screen) named
+/// three kinds — "Active Clock Entry", "Manual Time Entry", "Clock-based Entry"
+/// — and `TimeEntryRow` drew three glyphs for them. The test both used was
+/// `clockInTime != nil && clockOutTime != nil && status != "clocked-in"`, which
+/// is TRUE OF EVERY COMPLETED ENTRY. So the "manual" pencil showed on every
+/// finished shift, and the "clock-based" glyph was reachable only by an entry
+/// MISSING A TIME — the exact opposite of what its label claimed.
+///
+/// `time_entries` has no column that records how a row was created
+/// (`DATABASE_SCHEMA.md`), and `createManualTimeEntry` writes the same
+/// `status: "clocked-out"` a real clock-out does. The app cannot tell the two
+/// apart, so it must not claim to. Shipping a badge reading "Manual" on a shift
+/// somebody actually clocked would be a confident wrong answer about payroll.
+///
+/// What IS knowable from the row is kept, including the case the old test
+/// mislabelled: an entry that is not running and has no end time is a shift
+/// whose clock-out never landed — which the service can genuinely produce, since
+/// a queued offline clock-out whose row has gone is logged and dropped
+/// (`TimeTrackingService.swift:212-218`). That is worth surfacing, not hiding.
 enum TimeClockEntryKind: Equatable {
+    /// Clocked in right now.
     case running
-    /// Typed in by hand after the fact.
-    case manual
-    /// Recorded by clocking in and out.
-    case clocked
+    /// A finished shift. How it came to exist is not recorded anywhere.
+    case recorded
+    /// Not running, but missing a start or an end — the clock-out never landed.
+    case incomplete
 
-    var label: String {
+    /// Nil for `.recorded`: a badge on every single row is noise, and there is
+    /// nothing to say about an ordinary finished shift that the times do not
+    /// already say.
+    var label: String? {
         switch self {
         case .running: return "Active"
-        case .manual: return "Manual"
-        case .clocked: return "Clocked"
+        case .recorded: return nil
+        case .incomplete: return "Incomplete"
         }
     }
 
-    var symbol: String {
+    var symbol: String? {
         switch self {
         case .running: return "record.circle"
-        case .manual: return "pencil"
-        case .clocked: return "clock"
+        case .recorded: return nil
+        case .incomplete: return "exclamationmark.triangle.fill"
         }
     }
 
     var tint: Color {
         switch self {
         case .running: return TimeClockStyle.running
-        case .manual: return TimeClockStyle.accent
-        case .clocked: return .secondary
+        case .recorded: return .secondary
+        case .incomplete: return TimeClockStyle.overrun
         }
     }
 }
@@ -386,9 +407,11 @@ struct TimeClockEntryRow: View {
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    AmbientBadge(text: entry.kind.label,
-                                 systemImage: entry.kind.symbol,
-                                 tint: entry.kind.tint)
+                    if let label = entry.kind.label {
+                        AmbientBadge(text: label,
+                                     systemImage: entry.kind.symbol,
+                                     tint: entry.kind.tint)
+                    }
                     if !entry.isEditable {
                         AmbientBadge(text: "Locked", systemImage: "lock.fill", tint: .secondary)
                     }
@@ -422,7 +445,8 @@ struct TimeClockEntryRow: View {
     }
 
     private var accessibilityLabel: String {
-        var parts = [entry.dayLabel, entry.durationText, entry.timeRange, entry.kind.label]
+        var parts = [entry.dayLabel, entry.durationText, entry.timeRange]
+        if let label = entry.kind.label { parts.append(label) }
         if !entry.isEditable { parts.append("locked, outside the edit window") }
         return parts.joined(separator: ", ")
     }

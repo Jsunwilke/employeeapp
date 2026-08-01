@@ -76,39 +76,22 @@ struct HoursWidget: View {
             timer?.invalidate()
             timer = nil
         }
+        // AMB.13 MOVED THE WRITES INTO THE SHEETS. This widget used to own two
+        // copies of the clock-in and clock-out calls — and both swallowed their
+        // failure into a bare comment, on the path this file's own source calls
+        // "the app's primary way in and out of a shift". A payroll write that
+        // fails silently is the worst shape on this surface, and it was here.
+        //
+        // Each sheet now performs its own write and reports its own failure in
+        // place, which is also why `SessionSelectionView` no longer takes a
+        // completion closure: it had three callers, each with their own copy of
+        // this Task-and-catch, and one of those callers was dead code.
         .sheet(isPresented: $showingSessionSelection) {
-            SessionSelectionView(
-                timeTrackingService: timeTrackingService,
-                onClockIn: { sessionId, notes in
-                    Task {
-                        do {
-                            try await timeTrackingService.clockIn(sessionId: sessionId, notes: notes)
-                            await MainActor.run {
-                                showingSessionSelection = false
-                            }
-                        } catch {
-                            // Clock in error
-                        }
-                    }
-                }
-            )
+            SessionSelectionView(timeTrackingService: timeTrackingService)
         }
         .sheet(isPresented: $showingNotesInput) {
-            NotesInputView(
-                isClockOut: true,
-                onComplete: { notes in
-                    Task {
-                        do {
-                            try await timeTrackingService.clockOut(notes: notes)
-                            await MainActor.run {
-                                showingNotesInput = false
-                            }
-                        } catch {
-                            // Clock out error
-                        }
-                    }
-                }
-            )
+            ClockOutView(timeTrackingService: timeTrackingService,
+                         clockInTime: timeTrackingService.currentTimeEntry?.clockInTime)
         }
     }
 
@@ -286,10 +269,11 @@ struct HoursWidget: View {
     }
     
     private func updateActiveHours() {
-        if timeTrackingService.isClockIn,
-           let activeEntry = timeTrackingService.currentTimeEntry {
-            // currentTimeEntry doesn't have startTime directly, use elapsedTime instead
-            activeHours = timeTrackingService.elapsedTime / 3600.0 // Convert to hours
+        // The entry itself is not read — the running total comes from the
+        // service's published ticker — but it still has to EXIST, or a stale
+        // `elapsedTime` from a shift that has ended would keep being counted.
+        if timeTrackingService.isClockIn, timeTrackingService.currentTimeEntry != nil {
+            activeHours = timeTrackingService.elapsedTime / 3600.0
         } else {
             activeHours = 0
         }
@@ -331,8 +315,7 @@ struct HoursWidget: View {
     private func checkAndClearCacheIfNewPeriod() {
         var calendar = Calendar.current
         calendar.timeZone = TimeZone.current
-        let now = Date()
-        
+
         // Get the last cached period start date
         let lastCachedPeriodStart = UserDefaults.standard.object(forKey: "cached_period_start") as? Date
         

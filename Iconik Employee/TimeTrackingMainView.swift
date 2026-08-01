@@ -1,318 +1,180 @@
+//  TimeTrackingMainView.swift
+//  Iconik Employee — the time clock, converted to Ambient in AMB.13
+//
+//  The old presentation is GONE from this file, not left beside the new one.
+//
+//  WHAT CHANGED, and why each is in scope for a design phase (D12):
+//
+//    - THE CLOCK LEADS. It used to be a subheadline in a grey box above a
+//      segmented date picker, and the picker was the loudest thing on screen.
+//      A photographer opens this to answer one question — am I on the clock,
+//      and since when. That is now the hero card.
+//
+//    - THE 24-HOUR WARNING IS LEGIBLE AND LIVE. It was a caption-sized ⚠️ inside
+//      the Clock Out button: the least visible place on the screen, only seen
+//      after you had decided to leave, and it never updated on its own because
+//      it read `Date()` in a computed body with nothing driving a redraw. It is
+//      now a sentence on the card, driven by the service's published clock.
+//
+//    - THE SHEETS CANNOT RENDER EMPTY. Two of them were `if let` with no `else`,
+//      so a nil entry at presentation time opened a blank sheet. They are now
+//      `.sheet(item:)`, which cannot present without a value.
+//
+//    - NOTHING WRITES TWICE. Clock-out is guarded in flight and the button says
+//      so, rather than staying live during its own network call.
+//
+//  WHAT IT DELIBERATELY DID NOT GAIN:
+//
+//    - A CONFIRMATION ON ORDINARY CLOCK IN / CLOCK OUT. Operator decision
+//      2026-08-01: people do this several times a day and a prompt they tap
+//      through without reading is worse than none. The two writes that CHANGE a
+//      shift already recorded — the live start-time edit and the late custom
+//      clock-out — do confirm; see `ActiveClockInEditView` and
+//      `CustomClockOutView`.
+//
+//    - PAGINATION. `getTimeEntries` caps at 100 rows with no indication
+//      (AMB13_CLOCK_PARITY.md §7). The list now SAYS when it is truncated, which
+//      is presentation; making it fetch more is a data change and belongs to its
+//      own phase.
+
 import SwiftUI
 
 struct TimeTrackingMainView: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
-    
+
     @State private var showingSessionSelection = false
-    @State private var showingNotesInput = false
-    @State private var showingCustomClockOut = false
+    @State private var showingClockOut = false
     @State private var showingLongShiftAlert = false
-    @State private var showingAlert = false
-    @State private var alertMessage = ""
-    @State private var pendingClockOutNotes: String? = nil
-    @State private var showingActiveClockInEdit = false
-    
+    /// `.sheet(item:)` rather than a boolean plus an `if let`, so a sheet can
+    /// never be presented without the entry it is about to edit.
+    @State private var entryBeingAdjusted: TimeEntry?
+    @State private var entryBeingClosedOut: TimeEntry?
+    @State private var alertMessage: String?
+
+    private var status: TimeClockStatus {
+        guard timeTrackingService.isClockIn,
+              let start = timeTrackingService.currentTimeEntry?.clockInTime else {
+            return .stopped
+        }
+        // The elapsed figure comes from the service's published ticker, not from
+        // `Date()` in this body — the distinction that keeps it moving.
+        return .running(since: start, elapsed: timeTrackingService.elapsedTime)
+    }
+
+    private var isLongShift: Bool {
+        guard let start = timeTrackingService.currentTimeEntry?.clockInTime else { return false }
+        return TimeClockRules.isLongShift(clockIn: start,
+                                          now: start.addingTimeInterval(timeTrackingService.elapsedTime))
+    }
+
+    private var attachment: TimeClockAttachment {
+        guard let entry = timeTrackingService.currentTimeEntry, timeTrackingService.isClockIn else {
+            return TimeClockAttachment()
+        }
+        var name: String?
+        if let sessionId = entry.sessionId, !sessionId.isEmpty {
+            name = (entry.sessionName?.isEmpty == false && entry.sessionName != sessionId)
+                ? entry.sessionName
+                : "Session"
+        }
+        return TimeClockAttachment(sessionName: name, notes: entry.notes)
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
-            // Header with current status
-            statusHeaderView
-            
-            // Main clock in/out interface
-            clockStatusView
-            
-            // Time entries list - expanded to show more entries
-            TimeEntryListView(timeTrackingService: timeTrackingService)
-            
-            Spacer()
+        ZStack {
+            AmbientBackdrop()
+
+            ScrollView {
+                VStack(spacing: 16) {
+                    TimeClockHeroCard(status: status,
+                                      attachment: attachment,
+                                      isLongShift: isLongShift,
+                                      isOffline: timeTrackingService.isUsingOfflineData)
+
+                    actions
+
+                    TimeEntryListView(timeTrackingService: timeTrackingService)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 28)
+            }
+            .ambientNoBounceWhenShort()
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
         .navigationTitle("Time Tracking")
-        .navigationBarTitleDisplayMode(.inline) // Make title more compact
-            .sheet(isPresented: $showingSessionSelection) {
-                SessionSelectionView(
-                    timeTrackingService: timeTrackingService,
-                    onClockIn: { sessionId, notes in
-                        clockIn(sessionId: sessionId, notes: notes)
-                    }
-                )
-            }
-            .sheet(isPresented: $showingNotesInput) {
-                NotesInputView(
-                    isClockOut: true,
-                    onComplete: { notes in
-                        clockOut(notes: notes)
-                    }
-                )
-            }
-            .sheet(isPresented: $showingCustomClockOut) {
-                if let entry = timeTrackingService.currentTimeEntry,
-                   let clockInTime = entry.clockInTime {
-                    CustomClockOutView(
-                        timeTrackingService: timeTrackingService,
-                        clockInTime: clockInTime,
-                        onComplete: { _, _ in
-                            // Completion handled in CustomClockOutView
-                        }
-                    )
-                }
-            }
-            .sheet(isPresented: $showingActiveClockInEdit) {
-                if let entry = timeTrackingService.currentTimeEntry {
-                    ActiveClockInEditView(
-                        timeEntry: entry,
-                        timeTrackingService: timeTrackingService
-                    )
-                }
-            }
-            .alert("Long Shift Detected", isPresented: $showingLongShiftAlert) {
-                Button("Clock Out Now") {
-                    showingNotesInput = true
-                }
-                Button("Set Custom Time") {
-                    showingCustomClockOut = true
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("You've been clocked in for over 24 hours. Would you like to set a custom clock out time?")
-            }
-            .alert(isPresented: $showingAlert) {
-                Alert(
-                    title: Text("Time Tracking"),
-                    message: Text(alertMessage),
-                    dismissButton: .default(Text("OK"))
-                )
-            }
-    }
-    
-    // MARK: - UI Components
-    
-    private var statusHeaderView: some View {
-        VStack(spacing: 4) {
-            if timeTrackingService.isClockIn {
-                Text("Currently Clocked In")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.green)
-                
-                Text(timeTrackingService.formatElapsedTime())
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.primary)
-                
-                if let entry = timeTrackingService.currentTimeEntry,
-                   let clockInTime = entry.clockInTime {
-                    Text("Since \(formatTime(clockInTime))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            } else {
-                Text("Currently Clocked Out")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.gray)
-                
-                Text("Ready to start")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        .navigationBarTitleDisplayMode(.inline)
+        .tabBarClearance()
+        .sheet(isPresented: $showingSessionSelection) {
+            SessionSelectionView(timeTrackingService: timeTrackingService)
+        }
+        .sheet(isPresented: $showingClockOut) {
+            ClockOutView(timeTrackingService: timeTrackingService,
+                         clockInTime: timeTrackingService.currentTimeEntry?.clockInTime,
+                         onFailure: { alertMessage = $0 })
+        }
+        .sheet(item: $entryBeingClosedOut) { entry in
+            if let clockInTime = entry.clockInTime {
+                CustomClockOutView(timeTrackingService: timeTrackingService,
+                                   clockInTime: clockInTime)
             }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(.systemGray6))
-        )
-    }
-    
-    private var clockStatusView: some View {
-        VStack(spacing: 8) {
-            if timeTrackingService.isClockIn {
-                // Clock Out Button
-                Button(action: {
-                    checkForLongShift()
-                }) {
-                    HStack {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.body)
-                        Text("Clock Out")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                        
-                        // Add indicator for long shifts
-                        if let entry = timeTrackingService.currentTimeEntry,
-                           let clockInTime = entry.clockInTime {
-                            let elapsed = Date().timeIntervalSince(clockInTime)
-                            if elapsed > 24 * 60 * 60 {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.caption)
-                                    .foregroundColor(.yellow)
-                            }
-                        }
-                    }
-                    .foregroundColor(.white)
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 16)
-                    .frame(maxWidth: .infinity)
-                    .background(Color.red)
-                    .cornerRadius(8)
-                }
-                
-                // Edit Clock-In Time Button
-                Button(action: {
-                    showingActiveClockInEdit = true
-                }) {
-                    HStack {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.body)
-                        Text("Edit Clock-In Time")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                    }
-                    .foregroundColor(.blue)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 16)
-                    .frame(maxWidth: .infinity)
-                    .background(Color.blue.opacity(0.1))
-                    .cornerRadius(8)
-                }
-                
-                // Current session info if available - more compact
-                if let entry = timeTrackingService.currentTimeEntry {
-                    currentSessionInfoView(entry: entry)
-                }
-            } else {
-                // Clock In Button
-                Button(action: {
-                    showingSessionSelection = true
-                }) {
-                    HStack {
-                        Image(systemName: "play.circle.fill")
-                            .font(.body)
-                        Text("Clock In")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                    }
-                    .foregroundColor(.white)
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 16)
-                    .frame(maxWidth: .infinity)
-                    .background(Color.blue)
-                    .cornerRadius(8)
-                }
-            }
+        .sheet(item: $entryBeingAdjusted) { entry in
+            ActiveClockInEditView(timeEntry: entry, timeTrackingService: timeTrackingService)
+        }
+        .alert("Long shift detected", isPresented: $showingLongShiftAlert) {
+            Button("Clock out now") { showingClockOut = true }
+            Button("Set the time I stopped") { entryBeingClosedOut = timeTrackingService.currentTimeEntry }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("You've been clocked in for more than 24 hours. Would you like to set the time you actually stopped?")
+        }
+        .alert("Time tracking",
+               isPresented: Binding(get: { alertMessage != nil },
+                                    set: { if !$0 { alertMessage = nil } })) {
+            Button("OK") { alertMessage = nil }
+        } message: {
+            Text(alertMessage ?? "")
         }
     }
-    
-    private func currentSessionInfoView(entry: TimeEntry) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Current Session")
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundColor(.secondary)
-            
-            if let sessionId = entry.sessionId {
-                HStack {
-                    Image(systemName: "calendar")
-                        .foregroundColor(.blue)
-                        .font(.caption)
-                    if let sessionName = entry.sessionName, sessionName != sessionId {
-                        // Show the session name if it's different from the ID
-                        Text(sessionName)
-                            .font(.caption)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    } else {
-                        // Show just "Session" if we couldn't find the session details
-                        Text("Session")
-                            .font(.caption)
-                    }
-                }
-            }
-            
-            if let notes = entry.notes, !notes.isEmpty {
-                HStack(alignment: .top) {
-                    Image(systemName: "note.text")
-                        .foregroundColor(.orange)
-                        .font(.caption)
-                    Text(notes)
-                        .font(.caption)
-                        .lineLimit(2)
-                }
-            }
-        }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color(.systemGray6))
-        )
-    }
-    
+
     // MARK: - Actions
-    
-    private func checkForLongShift() {
-        // Check if user has been clocked in for over 24 hours
-        if let entry = timeTrackingService.currentTimeEntry,
-           let clockInTime = entry.clockInTime {
-            let elapsed = Date().timeIntervalSince(clockInTime)
-            
-            if elapsed > 24 * 60 * 60 { // Over 24 hours
-                showingLongShiftAlert = true
-            } else {
-                // Normal clock out flow
-                showingNotesInput = true
+
+    @ViewBuilder
+    private var actions: some View {
+        if timeTrackingService.isClockIn {
+            VStack(spacing: 10) {
+                AmbientActionButton(title: "Clock Out",
+                                    systemImage: "stop.circle.fill",
+                                    role: .primary,
+                                    tint: isLongShift ? TimeClockStyle.overrun : TimeClockStyle.accent) {
+                    // The 24-hour check that used to live in `checkForLongShift`,
+                    // now asking TimeClockRules instead of restating `24 * 60 * 60`.
+                    if isLongShift {
+                        showingLongShiftAlert = true
+                    } else {
+                        showingClockOut = true
+                    }
+                }
+
+                AmbientActionButton(title: "Edit start time",
+                                    systemImage: "clock.arrow.circlepath",
+                                    role: .secondary) {
+                    entryBeingAdjusted = timeTrackingService.currentTimeEntry
+                }
             }
         } else {
-            // No active entry, shouldn't happen but handle gracefully
-            showingNotesInput = true
-        }
-    }
-    
-    private func clockIn(sessionId: String?, notes: String?) {
-        Task {
-            do {
-                try await timeTrackingService.clockIn(sessionId: sessionId, notes: notes)
-
-                await MainActor.run {
-                    showingSessionSelection = false
-                }
-            } catch {
-                await MainActor.run {
-                    alertMessage = error.localizedDescription
-                    showingAlert = true
-                }
+            AmbientActionButton(title: "Clock In",
+                                systemImage: "play.circle.fill",
+                                role: .primary,
+                                tint: TimeClockStyle.accent) {
+                showingSessionSelection = true
             }
         }
-    }
-
-    private func clockOut(notes: String?) {
-        Task {
-            do {
-                try await timeTrackingService.clockOut(notes: notes)
-
-                await MainActor.run {
-                    showingNotesInput = false
-                }
-            } catch {
-                await MainActor.run {
-                    alertMessage = error.localizedDescription
-                    showingAlert = true
-                }
-            }
-        }
-    }
-    
-    // MARK: - Helper Functions
-    
-    private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
     }
 }
 
 #Preview {
-    TimeTrackingMainView(timeTrackingService: TimeTrackingService())
+    NavigationView {
+        TimeTrackingMainView(timeTrackingService: TimeTrackingService())
+    }
 }

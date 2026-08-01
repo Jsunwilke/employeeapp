@@ -47,8 +47,8 @@ import SwiftUI
 // MARK: - Sample data
 
 /// Fixed sample data covering the cases that break this surface: a running
-/// shift, an overrun, a manual entry, a locked entry past the 30-day window, an
-/// entry with no session, and a long enough list to scroll.
+/// shift, an overrun, a shift whose clock-out never landed, a locked entry past
+/// the 30-day window, an entry with no session, and enough rows to scroll.
 private enum ClockSample {
 
     static let sessions: [TimeClockSessionDisplay] = [
@@ -66,31 +66,37 @@ private enum ClockSample {
               sessionName: "Roosevelt High School", notes: "Gym floor still wet, started in the library",
               editDaysRemaining: nil),
         .init(id: "e2", dayLabel: "Yesterday", timeRange: "8:00 AM – 4:30 PM",
-              durationText: "8h 30m", kind: .clocked,
+              durationText: "8h 30m", kind: .recorded,
               sessionName: "St. Mary's Academy", notes: nil, editDaysRemaining: 29),
         .init(id: "e3", dayLabel: "Jul 30", timeRange: "6:15 AM – 2:45 PM",
-              durationText: "8h 30m", kind: .clocked,
+              durationText: "8h 30m", kind: .recorded,
               sessionName: "Lincoln Elementary — Fall Retakes", notes: nil, editDaysRemaining: 28),
-        // Typed in by hand — and typed in for a shift months earlier, which is
-        // why the window runs from CREATION rather than from the shift's date.
-        .init(id: "e4", dayLabel: "Jul 29", timeRange: "9:00 AM – 12:00 PM",
-              durationText: "3h", kind: .manual,
-              sessionName: nil, notes: "Forgot to clock in — equipment inventory",
+        // The case the old three-way test mislabelled as "clock-based": a shift
+        // that is not running and has no end time, because its clock-out never
+        // landed. This is the only kind distinction the data can actually make.
+        .init(id: "e4", dayLabel: "Jul 29", timeRange: "9:00 AM – no clock-out",
+              durationText: "—", kind: .incomplete,
+              sessionName: nil, notes: "Phone died before I clocked out",
               editDaysRemaining: 2),
         .init(id: "e5", dayLabel: "Jul 28", timeRange: "7:00 AM – 5:20 PM",
-              durationText: "10h 20m", kind: .clocked,
+              durationText: "10h 20m", kind: .recorded,
               sessionName: "Roosevelt High School", notes: "Homecoming — ran long", editDaysRemaining: 1),
         // Past the 30-day window. The row is receded, badged Locked, and its
         // form explains why instead of just refusing to save.
         .init(id: "e6", dayLabel: "Jun 24", timeRange: "8:00 AM – 3:30 PM",
-              durationText: "7h 30m", kind: .clocked,
+              durationText: "7h 30m", kind: .recorded,
               sessionName: "Westside Middle School", notes: nil, editDaysRemaining: nil),
     ]
 
+    /// The incomplete entry contributes NOTHING, which is the honest sum: a
+    /// shift with no clock-out has no duration to add. The shipped screen fed
+    /// such a row through `durationInSeconds`, which substitutes `Date()` for a
+    /// missing end — so an entry whose clock-out never landed silently grew by
+    /// an hour every hour and inflated the pay-period total.
     static var totalSeconds: TimeInterval {
-        // 4h18 + 8h30 + 8h30 + 3h + 10h20 + 7h30
+        // 4h18 + 8h30 + 8h30 + 10h20 + 7h30
         (4 * 3600 + 18 * 60) + (8 * 3600 + 30 * 60) + (8 * 3600 + 30 * 60)
-            + (3 * 3600) + (10 * 3600 + 20 * 60) + (7 * 3600 + 30 * 60)
+            + (10 * 3600 + 20 * 60) + (7 * 3600 + 30 * 60)
     }
 
     static var clockedInSince: Date { DesignLabSampleData.at(7, 42) }

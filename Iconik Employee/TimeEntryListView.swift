@@ -1,479 +1,160 @@
+//  TimeEntryListView.swift
+//  Iconik Employee — your recorded hours, converted to Ambient in AMB.13
+//
+//  The old presentation and its 200-line hand-rolled `TimeEntryRow` are GONE
+//  from this file. The row now lives in `TimeClock/TimeClockKit.swift`, which the
+//  design lab's mockup also draws with, so the two cannot diverge.
+//
+//  THE ONE THAT MATTERS: A FAILED LOAD IS NO LONGER DRAWN AS ZERO HOURS.
+//  The catch block used to set `isLoading = false` and nothing else, so a
+//  request that timed out produced "No time entries for pay period" above a
+//  total of 0h. That is payroll appearing to be zero because the wifi dropped.
+//  Failure is now its own state with its own words and a Retry, using
+//  `AmbientFailureCard` — which AMB.12 added to the design system naming THIS
+//  screen as one of the two reasons it was needed.
+//
+//  ALSO CHANGED:
+//    - The 100-row fetch ceiling is SAID rather than hidden. `getTimeEntries`
+//      caps at 100 with no pagination, and the total under it is then not the
+//      range's total. Raising the cap is a data change (AMB13_CLOCK_PARITY §7);
+//      admitting to it is presentation.
+//    - No scrolling view inside a scrolling view. This was a `ScrollView` nested
+//      in its parent's `VStack` with a `Spacer()` fighting it.
+//    - The pay-period arithmetic moved to `TimeClockRules`, where it is compiled
+//      and tested, instead of being an 45-line private function with three
+//      `print`-and-fallback branches on a payroll date range.
+//    - The half-second `DispatchQueue.main.asyncAfter` that the first load was
+//      gated on — a race papered over with a delay — is gone; the load runs in
+//      a `.task`, which also cancels when the view goes away.
+//    - Debug `print`s on a payroll path are gone, and with them the call to
+//      `debugTimeEntryQuery()`, a function with an empty body that was awaited
+//      on every empty result.
+
 import SwiftUI
 
 struct TimeEntryListView: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
-    @State private var timeEntries: [TimeEntry] = []
-    @State private var selectedDateRange = DateRange.payPeriod
-    @State private var isLoading = false
+
+    @State private var entries: [TimeEntry] = []
+    @State private var range: TimeClockRange = .payPeriod
+    @State private var phase: LoadPhase = .loading
     @State private var showingManualEntry = false
-    @State private var selectedTimeEntry: TimeEntry?
-    
-    enum DateRange: String, CaseIterable {
-        case today = "Today"
-        case week = "This Week"
-        case payPeriod = "Pay Period"
-        
-        var dateRange: (start: String, end: String) {
-            let calendar = Calendar.current
-            let now = Date()
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            
-            switch self {
-            case .today:
-                let today = formatter.string(from: now)
-                return (today, today)
-            case .week:
-                let startOfWeek = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
-                let endOfWeek = calendar.dateInterval(of: .weekOfYear, for: now)?.end ?? now
-                return (formatter.string(from: startOfWeek), formatter.string(from: endOfWeek))
-            case .payPeriod:
-                let (payPeriodStart, payPeriodEnd) = calculateCurrentPayPeriod()
-                return (formatter.string(from: payPeriodStart), formatter.string(from: payPeriodEnd))
-            }
-        }
-        
-        // Calculate current pay period using same logic as mileage system
-        private func calculateCurrentPayPeriod() -> (start: Date, end: Date) {
-            let calendar = Calendar.current
-            
-            // Reference date: February 25, 2024 (same as mileage system)
-            let payPeriodFormatter = DateFormatter()
-            payPeriodFormatter.dateFormat = "M/d/yyyy"
-            payPeriodFormatter.locale = Locale(identifier: "en_US_POSIX")
-            guard let referenceDate = payPeriodFormatter.date(from: "2/25/2024") else {
-                print("❌ Invalid reference date format - using fallback to 2 weeks ago")
-                let fallbackEnd = Date()
-                let fallbackStart = calendar.date(byAdding: .day, value: -14, to: fallbackEnd) ?? fallbackEnd
-                return (fallbackStart, fallbackEnd)
-            }
+    @State private var entryBeingEdited: TimeEntry?
 
-            // Make sure reference date is start of day
-            let referenceStartOfDay = calendar.startOfDay(for: referenceDate)
+    /// Loading, loaded and FAILED are three states, not two. Conflating the last
+    /// two is the defect this screen is named for.
+    private enum LoadPhase: Equatable {
+        case loading
+        case loaded
+        case failed(String)
+    }
 
-            let today = Date()
-            let daysSinceReference = calendar.dateComponents([.day], from: referenceStartOfDay, to: today).day ?? 0
-            let periodLength = 14
-            let periodsElapsed = daysSinceReference / periodLength
+    /// The service's hard `.limit(100)` (`TimeTrackingService.swift:591`). When
+    /// the fetch comes back exactly full we cannot tell "100 entries" from "the
+    /// first 100 of more", so the total is flagged as possibly short rather than
+    /// presented as fact.
+    private let fetchCeiling = 100
 
-            guard let currentStart = calendar.date(byAdding: .day, value: periodsElapsed * periodLength, to: referenceStartOfDay) else {
-                print("❌ Error calculating current pay period start date - using fallback")
-                let fallbackEnd = Date()
-                let fallbackStart = calendar.date(byAdding: .day, value: -14, to: fallbackEnd) ?? fallbackEnd
-                return (fallbackStart, fallbackEnd)
-            }
+    private var totalSeconds: TimeInterval {
+        entries.reduce(0) { $0 + $1.payrollSeconds }
+    }
 
-            // Calculate end date and set it to end of day (23:59:59)
-            guard let tempEnd = calendar.date(byAdding: .day, value: periodLength - 1, to: currentStart),
-                  let currentEnd = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: tempEnd) else {
-                print("❌ Error calculating current pay period end date - using fallback")
-                let fallbackEnd = Date()
-                return (currentStart, fallbackEnd)
-            }
-            
-            // Log for debugging and verification with mileage system
-            let debugFormatter = DateFormatter()
-            debugFormatter.dateStyle = .medium
-            print("Time Tracking Pay Period: \(debugFormatter.string(from: currentStart)) to \(debugFormatter.string(from: currentEnd))")
-            
-            return (start: currentStart, end: currentEnd)
-        }
-    }
-    
-    // MARK: - Computed Properties
-    
-    private var totalHours: Double {
-        return timeEntries.reduce(0.0) { total, entry in
-            total + entry.durationInHours
-        }
-    }
-    
-    private var totalHoursView: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text("Total Hours")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.secondary)
-                    
-                    if selectedDateRange == .payPeriod {
-                        Text("(Pay Period)")
-                            .font(.caption2)
-                            .foregroundColor(.blue)
-                    }
-                }
-                
-                Text(formatTotalHours(totalHours))
-                    .font(.title3)
-                    .fontWeight(.bold)
-                    .foregroundColor(.primary)
-            }
-            
-            Spacer()
-            
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("Entries")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
-                
-                Text("\(timeEntries.count)")
-                    .font(.title3)
-                    .fontWeight(.bold)
-                    .foregroundColor(.blue)
-            }
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(.systemGray6))
-        )
-    }
-    
-    private func formatTotalHours(_ hours: Double) -> String {
-        let wholeHours = Int(hours)
-        let minutes = Int((hours - Double(wholeHours)) * 60)
-        
-        if minutes == 0 {
-            return "\(wholeHours)h"
-        } else {
-            return "\(wholeHours)h \(minutes)m"
-        }
-    }
-    
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Recent Time Entries")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                Spacer()
-                
-                Button(action: {
-                    showingManualEntry = true
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.caption)
-                        Text("Add")
-                            .font(.caption)
-                    }
-                    .foregroundColor(.blue)
-                }
-            }
-            
-            // Date range picker - more compact
-            Picker("Date Range", selection: $selectedDateRange) {
-                ForEach(DateRange.allCases, id: \.self) { range in
-                    Text(range.rawValue).tag(range)
-                }
-            }
-            .pickerStyle(.segmented)
-            .scaleEffect(0.9) // Make segmented control slightly smaller
-            
-            // Total hours display
-            totalHoursView
-            
-            // Time entries list - expanded to fill available space
-            if isLoading {
-                HStack {
-                    Spacer()
-                    ProgressView("Loading entries...")
-                        .font(.caption)
-                    Spacer()
-                }
-                .padding(.vertical, 8)
-            } else if timeEntries.isEmpty {
-                Text("No time entries for \(selectedDateRange.rawValue.lowercased())")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(timeEntries) { entry in
-                            TimeEntryRow(entry: entry)
-                                .onTapGesture {
-                                    selectedTimeEntry = entry
-                                }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                // Remove the maxHeight constraint to allow it to expand
-            }
-        }
-        .onAppear {
-            // Small delay to ensure authentication is set up
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                loadTimeEntries()
-            }
-        }
-        .onChange(of: selectedDateRange) { _ in
-            loadTimeEntries()
-        }
-        .sheet(isPresented: $showingManualEntry) {
-            ManualTimeEntryView(timeTrackingService: timeTrackingService)
-                .onDisappear {
-                    // Refresh the list when manual entry view is dismissed
-                    loadTimeEntries()
-                }
-        }
-        .sheet(item: $selectedTimeEntry) { entry in
-            EditTimeEntryView(timeEntry: entry, timeTrackingService: timeTrackingService)
-                .onDisappear {
-                    // Refresh the list when edit view is dismissed
-                    loadTimeEntries()
-                }
-        }
-    }
-    
-    private func loadTimeEntries() {
-        print("🔍 [TimeEntryListView] loadTimeEntries() called")
-        isLoading = true
-        let dateRange = selectedDateRange.dateRange
-        print("🔍 [TimeEntryListView]   - Date range: '\(dateRange.start)' to '\(dateRange.end)'")
+        VStack(alignment: .leading, spacing: 12) {
+            header
 
-        Task {
-            do {
-                let entries = try await timeTrackingService.getTimeEntries(
-                    startDate: dateRange.start,
-                    endDate: dateRange.end
-                )
+            TimeClockRangePicker(selection: $range)
 
-                print("🔍 [TimeEntryListView] ✅ Loaded \(entries.count) time entries")
+            switch phase {
+            case .loading:
+                AmbientLoadingRow(message: "Loading your hours…")
+
+            case .failed(let message):
+                AmbientFailureCard(message: message) { load() }
+
+            case .loaded:
+                TimeClockTotalsCard(totalSeconds: totalSeconds,
+                                    entryCount: entries.count,
+                                    rangeLabel: range.rawValue,
+                                    isTruncated: entries.count >= fetchCeiling)
+
                 if entries.isEmpty {
-                    print("🔍 [TimeEntryListView] ⚠️ No entries found for date range - running diagnostic...")
-                    await timeTrackingService.debugTimeEntryQuery()
-                }
-
-                await MainActor.run {
-                    self.timeEntries = entries
-                    self.isLoading = false
-                }
-            } catch {
-                print("❌ [TimeEntryListView] Failed to load time entries: \(error)")
-                print("❌ [TimeEntryListView] Error details: \(error)")
-                await MainActor.run {
-                    self.isLoading = false
-                }
-            }
-        }
-    }
-}
-
-struct TimeEntryRow: View {
-    let entry: TimeEntry
-    
-    private var dateFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        return formatter
-    }
-    
-    private var timeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter
-    }
-    
-    private var isEditable: Bool {
-        TimeEntryValidator.canEditEntry(entry)
-    }
-    
-    private var isManualEntry: Bool {
-        // Manual entries have both clockInTime and clockOutTime and are not clocked-in
-        entry.clockInTime != nil && entry.clockOutTime != nil && entry.status != "clocked-in"
-    }
-    
-    private var entryTypeIcon: String {
-        if entry.status == "clocked-in" {
-            return "play.circle.fill"
-        } else if isManualEntry {
-            return "pencil.circle"
-        } else {
-            return "clock.circle"
-        }
-    }
-    
-    private var entryTypeColor: Color {
-        if entry.status == "clocked-in" {
-            return .green
-        } else if isManualEntry && isEditable {
-            return .blue
-        } else if isManualEntry {
-            return .orange
-        } else {
-            return .gray
-        }
-    }
-    
-    private var backgroundColorForEntry: Color {
-        if entry.status == "clocked-in" {
-            return Color.green.opacity(0.1)
-        } else if isEditable {
-            return Color(.systemGray6)
-        } else {
-            return Color(.systemGray5)
-        }
-    }
-    
-    private var borderColorForEntry: Color {
-        if entry.status == "clocked-in" {
-            return Color.green
-        } else if isEditable {
-            return Color.blue.opacity(0.3)
-        } else {
-            return Color.clear
-        }
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            // Header row with date and duration
-            HStack {
-                Text(formatDate(entry.date))
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.primary)
-                
-                Spacer()
-                
-                Text(entry.formattedDuration)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.blue)
-            }
-            
-            // Status and time info - more compact
-            HStack {
-                // Entry type and status indicator
-                Image(systemName: entryTypeIcon)
-                    .foregroundColor(entryTypeColor)
-                    .font(.caption)
-                
-                // Time range
-                Text(formatTimeRange())
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                
-                Spacer()
-                
-                // Status indicators - more compact
-                HStack(spacing: 4) {
-                    // Active indicator for current entry
-                    if entry.status == "clocked-in" {
-                        Text("• ACTIVE")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.green)
-                    }
-                    
-                    // Edit status indicator
-                    if entry.status != "clocked-in" {
-                        if isEditable {
-                            Image(systemName: "pencil")
-                                .font(.caption2)
-                                .foregroundColor(.blue)
-                        } else {
-                            Image(systemName: "lock")
-                                .font(.caption2)
-                                .foregroundColor(.gray)
+                    AmbientEmptyState(
+                        title: "No hours yet",
+                        message: "Nothing recorded for this \(range.rawValue.lowercased()). Clock in, or add an entry by hand.",
+                        systemImage: "clock.badge.questionmark",
+                        actionTitle: "Add entry",
+                        actionIcon: "plus",
+                        action: { showingManualEntry = true },
+                        actionTint: TimeClockStyle.accent
+                    )
+                } else {
+                    LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
+                        ForEach(entries) { entry in
+                            TimeClockEntryRow(entry: entry.clockDisplay()) {
+                                entryBeingEdited = entry
+                            }
+                            .ambientScrollFade()
                         }
                     }
                 }
             }
-            
-            // Session info if available - only show if not too crowded
-            if let sessionId = entry.sessionId {
-                HStack {
-                    Image(systemName: "calendar")
-                        .foregroundColor(.blue)
-                        .font(.caption2)
-                    if let sessionName = entry.sessionName, sessionName != sessionId {
-                        // Show the session name if it's different from the ID
-                        Text(sessionName)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    } else {
-                        // Show just "Session" if we couldn't find the session details
-                        Text("Session")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-            
-            // Notes if available - more compact
-            if let notes = entry.notes, !notes.isEmpty {
-                HStack(alignment: .top) {
-                    Image(systemName: "note.text")
-                        .foregroundColor(.orange)
-                        .font(.caption2)
-                    Text(notes)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
+        }
+        .task(id: range) { await loadAsync() }
+        .sheet(isPresented: $showingManualEntry, onDismiss: load) {
+            ManualTimeEntryView(timeTrackingService: timeTrackingService)
+        }
+        .sheet(item: $entryBeingEdited, onDismiss: load) { entry in
+            EditTimeEntryView(timeEntry: entry, timeTrackingService: timeTrackingService)
+        }
+        // A clock-in or clock-out anywhere else in the app changes what belongs
+        // in this list. The shipped screen only reloaded on its own sheets.
+        .onChange(of: timeTrackingService.isClockIn) { _ in load() }
+    }
+
+    private var header: some View {
+        HStack {
+            AmbientSectionTitle("Your hours")
+            Spacer(minLength: 8)
+            AmbientActionButton(title: "Add entry",
+                                systemImage: "plus",
+                                role: .secondary,
+                                size: .small,
+                                fillWidth: false) {
+                showingManualEntry = true
             }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(backgroundColorForEntry)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(borderColorForEntry, lineWidth: 1)
-        )
     }
-    
-    // MARK: - Helper Functions
-    
-    private func formatDate(_ dateString: String?) -> String {
-        guard let dateString = dateString else { return "N/A" }
 
-        let inputFormatter = DateFormatter()
-        inputFormatter.dateFormat = "yyyy-MM-dd"
+    // MARK: - Loading
 
-        if let date = inputFormatter.date(from: dateString) {
-            let calendar = Calendar.current
-            if calendar.isDateInToday(date) {
-                return "Today"
-            } else if calendar.isDateInYesterday(date) {
-                return "Yesterday"
-            } else {
-                let outputFormatter = DateFormatter()
-                outputFormatter.dateFormat = "MMM d"
-                return outputFormatter.string(from: date)
-            }
-        }
-
-        return dateString
+    private func load() {
+        Task { await loadAsync() }
     }
-    
-    private func formatTimeRange() -> String {
-        guard let clockIn = entry.clockInTime else { return "" }
-        
-        if let clockOut = entry.clockOutTime {
-            return "\(timeFormatter.string(from: clockIn)) - \(timeFormatter.string(from: clockOut))"
-        } else {
-            return "\(timeFormatter.string(from: clockIn)) - Present"
+
+    private func loadAsync() async {
+        phase = .loading
+        let period = range.period()
+        do {
+            let loaded = try await timeTrackingService.getTimeEntries(
+                startDate: Formatters.isoDate.string(from: period.start),
+                endDate: Formatters.isoDate.string(from: period.end)
+            )
+            guard !Task.isCancelled else { return }
+            entries = loaded
+            phase = .loaded
+        } catch {
+            guard !Task.isCancelled else { return }
+            // The entries already on screen are left alone deliberately: wiping
+            // them to zero on a failed refresh is the same lie in a smaller form.
+            phase = .failed("Couldn't load your hours. \(error.userFacingMessage)")
         }
     }
 }
 
 #Preview {
-    VStack {
+    ScrollView {
         TimeEntryListView(timeTrackingService: TimeTrackingService())
-        Spacer()
+            .padding()
     }
-    .padding()
 }

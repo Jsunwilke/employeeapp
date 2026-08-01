@@ -1,179 +1,153 @@
+//  ActiveClockInEditView.swift
+//  Iconik Employee — moving a running shift's start, converted in AMB.13
+//
+//  The old `Form` presentation is GONE from this file.
+//
+//  THIS SCREEN CONFIRMS NOW. Operator decision 2026-08-01: the two writes that
+//  change a shift ALREADY RECORDED get a confirmation, and this is one of them.
+//  Its own copy always admitted that "adjusting clock-in time will update your
+//  total hours" — and then wrote it with no confirmation at all. The alert
+//  states the consequence in numbers rather than in the abstract.
+//
+//  ALSO CHANGED:
+//    - THE PREVIEW MOVES. "Time Elapsed" read `Date()` inside a computed body
+//      with nothing driving a redraw, so it was frozen at whatever it happened
+//      to be when the sheet opened. It is now derived from the picker, so it
+//      follows your thumb.
+//    - THE REFUSAL COMES FROM `TimeClockRules`, compiled and tested, rather than
+//      from a second copy of the 48-hour rule written into this file.
+//    - The Save button cannot be double-fired.
+
 import SwiftUI
 
 struct ActiveClockInEditView: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
-    @Environment(\.presentationMode) var presentationMode
-    
+    @Environment(\.presentationMode) private var presentationMode
+
     let currentEntry: TimeEntry
-    
-    @State private var clockInDate: Date
-    @State private var clockInTime: Date
-    @State private var isLoading = false
-    @State private var showingAlert = false
-    @State private var alertMessage = ""
-    
+
+    @State private var newStart: Date
+    @State private var isSaving = false
+    @State private var showingConfirmation = false
+    @State private var failureMessage: String?
+
     init(timeEntry: TimeEntry, timeTrackingService: TimeTrackingService) {
         self.currentEntry = timeEntry
         self.timeTrackingService = timeTrackingService
-        
-        // Initialize with current clock-in time
-        let clockIn = timeEntry.clockInTime ?? Date()
-        _clockInDate = State(initialValue: clockIn)
-        _clockInTime = State(initialValue: clockIn)
+        _newStart = State(initialValue: timeEntry.clockInTime ?? Date())
     }
-    
-    private var combinedClockIn: Date {
-        combineDateAndTime(date: clockInDate, time: clockInTime)
+
+    private var refusal: TimeClockRefusal? {
+        TimeClockRules.refusalForActiveClockIn(newStart: newStart)
     }
-    
-    private func combineDateAndTime(date: Date, time: Date) -> Date {
-        let calendar = Calendar.current
-        let dateComponents = calendar.dateComponents([.year, .month, .day], from: date)
-        let timeComponents = calendar.dateComponents([.hour, .minute], from: time)
-        
-        var combined = DateComponents()
-        combined.year = dateComponents.year
-        combined.month = dateComponents.month
-        combined.day = dateComponents.day
-        combined.hour = timeComponents.hour
-        combined.minute = timeComponents.minute
-        
-        return calendar.date(from: combined) ?? Date()
+
+    private var newTotal: String {
+        TimeClockFormat.hoursAndMinutes(Date().timeIntervalSince(newStart))
     }
-    
-    private var isValidTime: Bool {
-        let validation = TimeEntryValidator.canEditActiveClockIn(currentEntry, newClockInTime: combinedClockIn)
-        return validation.isValid
+
+    private var hasChanged: Bool {
+        guard let original = currentEntry.clockInTime else { return true }
+        // To the minute — the picker cannot express seconds, so a second-level
+        // comparison would call every open-and-close a change.
+        return abs(original.timeIntervalSince(newStart)) >= 60
     }
-    
-    private var elapsedTime: String {
-        let duration = Date().timeIntervalSince(combinedClockIn)
-        return formatDuration(duration)
-    }
-    
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let hours = Int(duration) / 3600
-        let minutes = (Int(duration) % 3600) / 60
-        return String(format: "%dh %dm", hours, minutes)
-    }
-    
+
     var body: some View {
         NavigationView {
-            Form {
-                // Current status section
-                Section(header: Text("Current Status")) {
-                    HStack {
-                        Image(systemName: "play.circle.fill")
-                            .foregroundColor(.green)
-                        VStack(alignment: .leading) {
-                            Text("Currently Clocked In")
-                                .font(.headline)
-                                .foregroundColor(.green)
-                            Text("Adjusting clock-in time will update your total hours")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+            ZStack {
+                AmbientBackdrop()
+
+                ScrollView {
+                    VStack(spacing: 16) {
+                        TimeClockEditWindowNote(daysRemaining: nil, isRunning: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .ambientCard(density: .compact,
+                                         fill: .surface,
+                                         border: .hairline(Color.primary.opacity(0.10)),
+                                         fillWidth: true)
+
+                        AmbientFormSection(title: "Started at", status: "") {
+                            DatePicker("Start", selection: $newStart, in: earliest...Date())
+                                .font(.subheadline)
+                                .labelsHidden()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        TimeClockSummaryCard(title: "This shift becomes",
+                                             start: newStart,
+                                             end: Date(),
+                                             refusal: refusal)
+
+                        // Only once there is something to compare against.
+                        // Unchanged, it repeats the line directly above it.
+                        if hasChanged, let original = currentEntry.clockInTime {
+                            AmbientStatLine(label: "Was",
+                                            value: Formatters.mediumDateTime.string(from: original))
+                                .padding(.horizontal, 4)
+                        }
+
+                        if let failureMessage {
+                            AmbientFailureCard(message: failureMessage,
+                                               tint: .red,
+                                               actionTitle: "Try again") {
+                                self.failureMessage = nil
+                                save()
+                            }
+                        }
+
+                        AmbientActionButton(title: "Save start time",
+                                            systemImage: "checkmark",
+                                            tint: TimeClockStyle.accent,
+                                            isLoading: isSaving,
+                                            isEnabled: refusal == nil && hasChanged) {
+                            showingConfirmation = true
                         }
                     }
+                    .padding(16)
                 }
-                
-                // Clock-in time adjustment
-                Section(header: Text("Adjust Clock-In Time")) {
-                    DatePicker("Date", selection: $clockInDate,
-                              in: ...Date(), // Cannot be in the future
-                              displayedComponents: .date)
-                    
-                    DatePicker("Time", selection: $clockInTime,
-                              displayedComponents: .hourAndMinute)
-                    
-                    // Show validation message
-                    if !isValidTime {
-                        let validation = TimeEntryValidator.canEditActiveClockIn(currentEntry, newClockInTime: combinedClockIn)
-                        if let error = validation.error {
-                            Label(error, systemImage: "exclamationmark.triangle")
-                                .foregroundColor(.red)
-                                .font(.caption)
-                        }
-                    }
-                }
-                
-                // Preview section
-                Section(header: Text("Preview")) {
-                    HStack {
-                        Text("New Clock-In")
-                        Spacer()
-                        Text(formatDateTime(combinedClockIn))
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    HStack {
-                        Text("Time Elapsed")
-                        Spacer()
-                        Text(elapsedTime)
-                            .foregroundColor(.blue)
-                            .fontWeight(.semibold)
-                    }
-                    
-                    if let originalClockIn = currentEntry.clockInTime {
-                        HStack {
-                            Text("Original Clock-In")
-                            Spacer()
-                            Text(formatDateTime(originalClockIn))
-                                .foregroundColor(.gray)
-                                .font(.caption)
-                        }
-                    }
-                }
-                
-                // Info section
-                Section {
-                    Label("Clock-in time can only be adjusted within the last 48 hours", systemImage: "info.circle")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                .ambientNoBounceWhenShort()
+            }
+            .navigationTitle("Edit Start Time")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { presentationMode.wrappedValue.dismiss() }
+                        .disabled(isSaving)
                 }
             }
-            .navigationTitle("Edit Clock-In Time")
-            .navigationBarItems(
-                leading: Button("Cancel") {
-                    presentationMode.wrappedValue.dismiss()
-                },
-                trailing: Button("Save") {
-                    updateClockInTime()
-                }
-                .disabled(!isValidTime || isLoading)
-            )
-        }
-        .alert(isPresented: $showingAlert) {
-            Alert(
-                title: Text("Update Failed"),
-                message: Text(alertMessage),
-                dismissButton: .default(Text("OK"))
-            )
+            .alert("Change your start time?", isPresented: $showingConfirmation) {
+                Button("Change it") { save() }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This shift will start at \(Formatters.shortTime.string(from: newStart)), and today's total becomes \(newTotal).")
+            }
         }
     }
-    
-    private func formatDateTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+
+    /// The picker cannot offer a time the rules will refuse. 48 hours back is the
+    /// window `TimeEntryValidator.canEditActiveClockIn` enforces, so the control
+    /// and the write agree rather than the control offering and the write
+    /// rejecting.
+    private var earliest: Date {
+        Calendar.current.date(byAdding: .hour,
+                              value: -TimeClockLimits.activeClockInWindowHours,
+                              to: Date()) ?? Date()
     }
-    
-    private func updateClockInTime() {
-        isLoading = true
+
+    private func save() {
+        guard !isSaving else { return }
+        isSaving = true
+        failureMessage = nil
 
         Task {
             do {
-                try await timeTrackingService.updateActiveClockInTime(newClockInTime: combinedClockIn)
-                await MainActor.run {
-                    isLoading = false
-                    presentationMode.wrappedValue.dismiss()
-                }
+                try await timeTrackingService.updateActiveClockInTime(newClockInTime: newStart)
+                isSaving = false
+                presentationMode.wrappedValue.dismiss()
             } catch {
-                await MainActor.run {
-                    isLoading = false
-                    alertMessage = error.localizedDescription
-                    showingAlert = true
-                }
+                isSaving = false
+                failureMessage = "Couldn't change the start time. \(error.userFacingMessage)"
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }
     }

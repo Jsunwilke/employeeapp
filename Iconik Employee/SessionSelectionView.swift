@@ -1,228 +1,178 @@
+//  SessionSelectionView.swift
+//  Iconik Employee — clocking in, converted to Ambient in AMB.13
+//
+//  The old presentation and its hand-rolled `SessionRow` are GONE from this
+//  file. The row is `TimeClockSessionRow` in `TimeClock/TimeClockKit.swift`,
+//  which the design lab's mockup also draws with.
+//
+//  THE ONE THAT MATTERS: A FAILED SESSION FETCH NO LONGER INVITES AN
+//  UNATTRIBUTED CLOCK-IN. The catch block set `isLoading = false` and nothing
+//  else, so a request that failed drew the EMPTY state — "No sessions assigned
+//  for today" plus "You can still clock in without selecting a session" — on a
+//  day that very likely had sessions. Failure is now its own state.
+//
+//  ALSO CHANGED:
+//    - SELECTION IS A TOGGLE. The shipped row could only ever set a selection.
+//      On a screen whose whole point is that attaching a session is optional, a
+//      mis-tap could be undone only by cancelling the sheet and reopening it.
+//    - THE BUTTON CANNOT BE DOUBLE-FIRED. It never disabled and showed no
+//      spinner; a second tap was stopped only by a server round trip. It now
+//      goes through `AmbientActionButton(isLoading:)`, which disables and spins
+//      in one place.
+//    - THE WRITE LIVES HERE. It used to hand `onClockIn` back to three different
+//      callers, two of which duplicated the same Task-and-catch and one of which
+//      (`TimeTrackingButton`) was dead. The home dashboard's copy swallowed its
+//      error into a bare `// Clock in error` comment. One screen, one write, one
+//      error path.
+//    - Debug `print`s carrying session ids off a payroll path are gone.
+
 import SwiftUI
 
 struct SessionSelectionView: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
-    @Environment(\.presentationMode) var presentationMode
-    
-    let onClockIn: (String?, String?) -> Void
-    
-    @State private var selectedSession: Session?
+    @Environment(\.presentationMode) private var presentationMode
+
+    @State private var sessions: [Session] = []
+    @State private var selectedSessionId: String?
     @State private var notes = ""
-    @State private var availableSessions: [Session] = []
-    @State private var isLoading = true
-    
-    private var timeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter
+    @State private var phase: LoadPhase = .loading
+    @State private var isClockingIn = false
+    @State private var failureMessage: String?
+
+    private enum LoadPhase: Equatable {
+        case loading
+        case loaded
+        case failed(String)
     }
-    
+
     var body: some View {
         NavigationView {
-            VStack(spacing: 16) {
-                if isLoading {
-                    ProgressView("Loading today's sessions...")
-                        .padding()
-                } else {
-                    if availableSessions.isEmpty {
-                        emptySessionsView
-                    } else {
-                        sessionListView
+            ZStack {
+                AmbientBackdrop()
+
+                ScrollView {
+                    VStack(spacing: 16) {
+                        sessionSection
+
+                        TimeClockNotesField(title: "Notes",
+                                            placeholder: "Anything worth recording about this shift…",
+                                            text: $notes,
+                                            minHeight: 70)
+
+                        if let failureMessage {
+                            AmbientFailureCard(message: failureMessage,
+                                               tint: .red,
+                                               actionTitle: "Try again") {
+                                self.failureMessage = nil
+                                clockIn()
+                            }
+                        }
+
+                        AmbientActionButton(title: selectedSessionId == nil ? "Clock In" : "Clock In to session",
+                                            systemImage: "play.circle.fill",
+                                            tint: TimeClockStyle.accent,
+                                            isLoading: isClockingIn) {
+                            clockIn()
+                        }
                     }
-                    
-                    Spacer()
-                    
-                    notesSection
-                    
-                    clockInButton
+                    .padding(16)
+                }
+                .ambientNoBounceWhenShort()
+            }
+            .navigationTitle("Clock In")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { presentationMode.wrappedValue.dismiss() }
+                        .disabled(isClockingIn)
                 }
             }
-            .padding()
-            .navigationTitle("Clock In")
-            .navigationBarItems(
-                leading: Button("Cancel") {
-                    presentationMode.wrappedValue.dismiss()
-                }
-            )
         }
-        .onAppear {
-            loadTodaysSessions()
-        }
+        .task { await loadSessions() }
     }
-    
-    // MARK: - UI Components
-    
-    private var emptySessionsView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "calendar.badge.exclamationmark")
-                .font(.system(size: 48))
-                .foregroundColor(.gray)
-            
-            Text("No sessions assigned for today")
-                .font(.headline)
-                .foregroundColor(.gray)
-            
-            Text("You can still clock in without selecting a session")
-                .font(.caption)
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
-        }
-        .padding()
-    }
-    
-    private var sessionListView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Today's Sessions")
-                .font(.headline)
-            
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(availableSessions, id: \.id) { session in
-                        SessionRow(
-                            session: session,
-                            isSelected: selectedSession?.id == session.id,
-                            timeFormatter: timeFormatter
-                        )
-                        .onTapGesture {
-                            selectedSession = session
+
+    // MARK: - Sessions
+
+    @ViewBuilder
+    private var sessionSection: some View {
+        switch phase {
+        case .loading:
+            AmbientLoadingRow(message: "Loading today's sessions…")
+
+        case .failed(let message):
+            // NOT the empty state. The empty state says "nothing is assigned to
+            // you"; this says "we could not find out" — and still lets you clock
+            // in, because being unable to reach the server is not a reason to
+            // stop somebody starting work.
+            AmbientFailureCard(message: message) {
+                Task { await loadSessions() }
+            }
+
+        case .loaded:
+            if sessions.isEmpty {
+                AmbientEmptyState(
+                    title: "No sessions today",
+                    message: "Nothing is assigned to you today. You can still clock in without a session.",
+                    systemImage: "calendar.badge.exclamationmark"
+                )
+            } else {
+                VStack(alignment: .leading, spacing: AmbientDensity.compact.stackSpacing) {
+                    AmbientSectionTitle("Today's sessions", trailing: "Optional")
+                    ForEach(sessions, id: \.id) { session in
+                        TimeClockSessionRow(session: TimeClockSessionDisplay(session),
+                                            isSelected: selectedSessionId == session.id) {
+                            // Toggle, not set.
+                            selectedSessionId = selectedSessionId == session.id ? nil : session.id
                         }
                     }
                 }
             }
-            .frame(maxHeight: 300)
         }
     }
-    
-    private var notesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Notes (optional)")
-                .font(.headline)
-            
-            TextField("Add notes for this time entry...", text: $notes, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(3...6)
-        }
-    }
-    
-    private var clockInButton: some View {
-        Button(action: {
-            print("🟢 [SessionSelectionView] Clock In button tapped!")
-            print("🟢 [SessionSelectionView] selectedSession: \(selectedSession?.id ?? "nil")")
-            onClockIn(selectedSession?.id, notes.isEmpty ? nil : notes)
-        }) {
-            HStack {
-                Image(systemName: "play.circle.fill")
-                    .font(.title2)
-                Text("Clock In")
-                    .font(.headline)
-                    .fontWeight(.semibold)
+
+    private func loadSessions() async {
+        phase = .loading
+        do {
+            let loaded = try await timeTrackingService.getTodayAssignedSessions()
+            guard !Task.isCancelled else { return }
+            sessions = loaded.sorted { lhs, rhs in
+                guard let a = lhs.startDate, let b = rhs.startDate else { return false }
+                return a < b
             }
-            .foregroundColor(.white)
-            .padding()
-            .frame(maxWidth: .infinity)
-            .background(Color.blue)
-            .cornerRadius(12)
+            phase = .loaded
+        } catch {
+            guard !Task.isCancelled else { return }
+            phase = .failed("Couldn't load today's sessions. \(error.userFacingMessage)")
         }
     }
-    
-    // MARK: - Functions
-    
-    private func loadTodaysSessions() {
+
+    // MARK: - The write
+
+    private func clockIn() {
+        guard !isClockingIn else { return }
+        isClockingIn = true
+        failureMessage = nil
+
         Task {
             do {
-                let sessions = try await timeTrackingService.getTodayAssignedSessions()
-
-                await MainActor.run {
-                    self.availableSessions = sessions.sorted { session1, session2 in
-                        guard let start1 = session1.startDate,
-                              let start2 = session2.startDate else {
-                            return false
-                        }
-                        return start1 < start2
-                    }
-                    self.isLoading = false
-                }
+                try await timeTrackingService.clockIn(
+                    sessionId: selectedSessionId,
+                    notes: notes.isEmpty ? nil : notes
+                )
+                isClockingIn = false
+                presentationMode.wrappedValue.dismiss()
             } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                }
+                // Reported IN the sheet, and the flag is reset. The shipped
+                // clock-out sheet set its equivalent flag and never cleared it,
+                // wedging the button at "Processing…" with nothing shown.
+                isClockingIn = false
+                failureMessage = "Couldn't clock you in. \(error.userFacingMessage)"
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }
-    }
-}
-
-struct SessionRow: View {
-    let session: Session
-    let isSelected: Bool
-    let timeFormatter: DateFormatter
-    
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(session.schoolName)
-                    .font(.headline)
-                    .lineLimit(1)
-                
-                Text(session.position)
-                    .font(.subheadline)
-                    .foregroundColor(.blue)
-                
-                if let start = session.startDate, let end = session.endDate {
-                    Text("\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                if let dayLabel = session.multiDayLabel {
-                    Text(dayLabel)
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.55))
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                }
-
-                if let location = session.location, !location.isEmpty {
-                    HStack {
-                        Image(systemName: "location")
-                            .font(.caption)
-                        Text(location)
-                            .font(.caption)
-                            .lineLimit(1)
-                    }
-                    .foregroundColor(.secondary)
-                }
-            }
-            
-            Spacer()
-            
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.blue)
-                    .font(.title2)
-            } else {
-                Image(systemName: "circle")
-                    .foregroundColor(.gray)
-                    .font(.title2)
-            }
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.blue.opacity(0.1) : Color(.systemGray6))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
-        )
     }
 }
 
 #Preview {
-    SessionSelectionView(
-        timeTrackingService: TimeTrackingService(),
-        onClockIn: { _, _ in }
-    )
+    SessionSelectionView(timeTrackingService: TimeTrackingService())
 }

@@ -1,485 +1,285 @@
+//  EditTimeEntryView.swift
+//  Iconik Employee — editing a recorded shift, converted to Ambient in AMB.13
+//
+//  The old `Form` presentation is GONE from this file.
+//
+//  THE CEILING NO LONGER LIES. This form accepted an entry up to 24 hours long,
+//  enabled Save, and then threw — because `updateTimeEntry` routes a completed
+//  entry through `validateManualEntry`, whose ceiling is 16. A 17-hour edit
+//  passed every check the user could see and failed the one they could not. Both
+//  numbers now come from `TimeClockRules`, which is compiled and run by
+//  `scripts/test_timeclock_rules.sh` with a regression check on exactly this
+//  case.
+//
+//  THE 30-DAY WINDOW IS EXPLAINED. Until now the only sentence in the app that
+//  told a photographer why an entry had gone read-only lived on
+//  `TimeEntryDetailView` — a screen with zero call sites, deleted by this phase.
+//  It says so here, where the question gets asked, and it counts down: "editable
+//  for 3 more days" while the window is closing.
+//
+//  ALSO CHANGED:
+//    - A USER-VISIBLE TYPO IS GONE: "you can only edit the clock-in time and
+//      notes while clocked-inly clocked in".
+//    - Delete keeps its confirmation — it was the only one on the whole surface
+//      — and the confirmation now names what is being destroyed.
+//    - Save cannot be double-fired.
+//    - A dead `onAppear` that read `availableSessions` before it was ever
+//      loaded, and a dead auto-correct that rewrote the clock-out date behind
+//      the user's back, are both gone.
+//
+//  WHAT DID NOT CHANGE: overlap detection still happens on Save. It is a server
+//  round trip against the user's other entries, and running it on every picker
+//  drag would be a data change rather than a restyle.
+
 import SwiftUI
 
 struct EditTimeEntryView: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
-    @Environment(\.presentationMode) var presentationMode
-    
+    @Environment(\.presentationMode) private var presentationMode
+
     let timeEntry: TimeEntry
-    
-    @State private var clockInDate: Date
-    @State private var clockInTime: Date
-    @State private var clockOutDate: Date
-    @State private var clockOutTime: Date
-    @State private var selectedSession: Session?
+
+    @State private var start: Date
+    @State private var end: Date
+    @State private var sessions: [Session] = []
+    @State private var selectedSessionId: String?
+    @State private var sessionLoadFailed = false
     @State private var notes: String
-    @State private var availableSessions: [Session] = []
-    
-    @State private var isLoading = false
-    @State private var showingAlert = false
-    @State private var alertMessage = ""
-    @State private var characterCount = 0
+    @State private var isSaving = false
     @State private var showingDeleteConfirmation = false
-    
-    private let maxCharacters = 500
-    
+    @State private var failureMessage: String?
+
     init(timeEntry: TimeEntry, timeTrackingService: TimeTrackingService) {
         self.timeEntry = timeEntry
         self.timeTrackingService = timeTrackingService
-        
-        // Initialize state with current values
-        let clockIn = timeEntry.clockInTime ?? Date()
-        let clockOut = timeEntry.clockOutTime ?? Date()
-        
-        _clockInDate = State(initialValue: clockIn)
-        _clockInTime = State(initialValue: clockIn)
-        _clockOutDate = State(initialValue: clockOut)
-        _clockOutTime = State(initialValue: clockOut)
+        _start = State(initialValue: timeEntry.clockInTime ?? Date())
+        _end = State(initialValue: timeEntry.clockOutTime ?? timeEntry.clockInTime ?? Date())
         _notes = State(initialValue: timeEntry.notes ?? "")
+        _selectedSessionId = State(initialValue: timeEntry.sessionId)
     }
-    
-    // Computed properties for combined date/time
-    private var combinedClockIn: Date {
-        combineDateAndTime(date: clockInDate, time: clockInTime)
+
+    private var isRunning: Bool { timeEntry.status == "clocked-in" }
+
+    private var isEditable: Bool {
+        TimeClockRules.isEditable(createdAt: timeEntry.createdAt, isRunning: isRunning)
     }
-    
-    private var combinedClockOut: Date {
-        combineDateAndTime(date: clockOutDate, time: clockOutTime)
+
+    private var daysRemaining: Int? {
+        TimeClockRules.editWindowDaysRemaining(createdAt: timeEntry.createdAt, isRunning: isRunning)
     }
-    
-    private func combineDateAndTime(date: Date, time: Date) -> Date {
-        let calendar = Calendar.current
-        let dateComponents = calendar.dateComponents([.year, .month, .day], from: date)
-        let timeComponents = calendar.dateComponents([.hour, .minute], from: time)
-        
-        var combined = DateComponents()
-        combined.year = dateComponents.year
-        combined.month = dateComponents.month
-        combined.day = dateComponents.day
-        combined.hour = timeComponents.hour
-        combined.minute = timeComponents.minute
-        
-        return calendar.date(from: combined) ?? Date()
+
+    /// A RUNNING entry is governed by the 48-hour start-time rule; a completed
+    /// one by the recorded-shift rules. Two different writes inside
+    /// `updateTimeEntry`, so two different refusals.
+    private var refusal: TimeClockRefusal? {
+        if isRunning {
+            return TimeClockRules.refusalForActiveClockIn(newStart: start)
+                ?? TimeClockRules.refusalForNotes(notes)
+        }
+        return TimeClockRules.refusalForRecordedShift(start: start, end: end)
+            ?? TimeClockRules.refusalForNotes(notes)
     }
-    
+
     var body: some View {
         NavigationView {
-            Form {
-                // Entry info section
-                Section(header: Text("Time Entry Information")) {
-                    HStack {
-                        Text("Date")
-                        Spacer()
-                        Text(formatDate(timeEntry.date ?? ""))
-                            .foregroundColor(.secondary)
+            ZStack {
+                AmbientBackdrop()
+
+                ScrollView {
+                    VStack(spacing: 16) {
+                        TimeClockEditWindowNote(daysRemaining: daysRemaining, isRunning: isRunning)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .ambientCard(density: .compact,
+                                         fill: .surface,
+                                         border: .hairline(Color.primary.opacity(0.10)),
+                                         fillWidth: true)
+
+                        if isEditable {
+                            editableBody
+                        } else {
+                            readOnlyBody
+                        }
                     }
-                    
-                    if !TimeEntryValidator.canEditEntry(timeEntry) {
-                        Label("This entry cannot be edited", systemImage: "lock")
-                            .foregroundColor(.orange)
-                    }
+                    .padding(16)
                 }
-                
-                if TimeEntryValidator.canEditEntry(timeEntry) {
-                    Section(header: Text("Clock In")) {
-                        DatePicker("Date", selection: $clockInDate, 
-                                  in: ...Date(), // Cannot be in the future
-                                  displayedComponents: .date)
-                            .disabled(timeEntry.status == "clocked-in") // Don't allow date change for clocked-in entries
-                        
-                        DatePicker("Time", selection: $clockInTime, 
-                                  displayedComponents: .hourAndMinute)
+                .ambientNoBounceWhenShort()
+            }
+            .navigationTitle(isEditable ? "Edit Entry" : "Time Entry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(isEditable ? "Cancel" : "Done") {
+                        presentationMode.wrappedValue.dismiss()
                     }
-                    
-                    // Only show Clock Out section for completed entries
-                    if timeEntry.status != "clocked-in" {
-                        Section(header: Text("Clock Out")) {
-                        DatePicker("Date", selection: $clockOutDate,
-                                  in: clockInDate...Date(), // Must be after clock in, not in future
-                                  displayedComponents: .date)
-                            .onChange(of: clockOutDate) { _ in
-                                validateDuration()
-                            }
-                        
-                        DatePicker("Time", selection: $clockOutTime,
-                                  displayedComponents: .hourAndMinute)
-                            .onChange(of: clockOutTime) { _ in
-                                validateDuration()
-                            }
-                        
-                        // Duration display with validation
-                        HStack {
-                            Text("Duration")
-                            Spacer()
-                            VStack(alignment: .trailing) {
-                                Text(formattedDuration)
-                                    .foregroundColor(isDurationValid ? .blue : .red)
-                                    .fontWeight(.semibold)
-                                
-                                if combinedClockOut > combinedClockIn && 
-                                   !Calendar.current.isDate(clockInDate, inSameDayAs: clockOutDate) {
-                                    Label("Crosses midnight", systemImage: "moon.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.orange)
-                                }
-                                
-                                if !isDurationValid {
-                                    Text(durationError)
-                                        .font(.caption)
-                                        .foregroundColor(.red)
-                                }
-                            }
-                        }
-                    }
-                    }
-                    
-                    // Session selection (if available) - disabled for clocked-in entries
-                    if !availableSessions.isEmpty && timeEntry.status != "clocked-in" {
-                        Section(header: Text("Associated Session")) {
-                            Picker("Session", selection: $selectedSession) {
-                                Text("No Session").tag(nil as Session?)
-                                
-                                ForEach(availableSessions, id: \.id) { session in
-                                    VStack(alignment: .leading) {
-                                        Text(session.schoolName)
-                                            .font(.headline)
-                                        Text(session.position)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .tag(session as Session?)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                        }
-                    }
-                    
-                    // Notes section - always editable
-                    Section(header: Text("Notes")) {
-                        TextEditor(text: $notes)
-                            .frame(minHeight: 80)
-                            .onChange(of: notes) { value in
-                                // Limit character count
-                                if value.count > maxCharacters {
-                                    notes = String(value.prefix(maxCharacters))
-                                }
-                                characterCount = notes.count
-                            }
-                        
-                        HStack {
-                            Spacer()
-                            Text("\(characterCount)/\(maxCharacters)")
-                                .font(.caption)
-                                .foregroundColor(characterCount > maxCharacters * 9/10 ? .red : .secondary)
-                        }
-                    }
-                    
-                    // Validation warnings - only for completed entries
-                    if !isValidEntry && timeEntry.status != "clocked-in" {
-                        Section {
-                            Label(validationMessage, systemImage: "exclamationmark.triangle")
-                                .foregroundColor(.orange)
-                        }
-                    }
-                    
-                    // Show info for clocked-in entries
-                    if timeEntry.status == "clocked-in" {
-                        Section {
-                            Label("You can only edit the clock-in time and notes while clocked-inly clocked in", systemImage: "info.circle")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
-                    }
-                    
-                    // Delete section
-                    Section {
-                        Button(action: {
-                            showingDeleteConfirmation = true
-                        }) {
-                            HStack {
-                                Image(systemName: "trash")
-                                Text("Delete Time Entry")
-                            }
-                            .foregroundColor(.red)
-                        }
-                    }
-                } else {
-                    // Read-only display for non-editable entries
-                    Section(header: Text("Time Details")) {
-                        HStack {
-                            Text("Start Time")
-                            Spacer()
-                            Text(formatTime(timeEntry.clockInTime))
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        HStack {
-                            Text("End Time")
-                            Spacer()
-                            Text(formatTime(timeEntry.clockOutTime))
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        HStack {
-                            Text("Duration")
-                            Spacer()
-                            Text(timeEntry.formattedDuration)
-                                .foregroundColor(.blue)
-                                .fontWeight(.semibold)
-                        }
-                    }
-                    
-                    if let sessionId = timeEntry.sessionId {
-                        Section(header: Text("Associated Session")) {
-                            Text("Session: \(sessionId)")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    if let entryNotes = timeEntry.notes, !entryNotes.isEmpty {
-                        Section(header: Text("Notes")) {
-                            Text(entryNotes)
-                                .foregroundColor(.secondary)
-                        }
+                    .disabled(isSaving)
+                }
+            }
+            .alert("Delete this entry?", isPresented: $showingDeleteConfirmation) {
+                Button("Delete", role: .destructive) { delete() }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This removes \(TimeClockFormat.hoursAndMinutes(timeEntry.payrollSeconds)) from \(TimeEntry.dayLabel(for: timeEntry.date, now: Date(), calendar: .current)). It cannot be undone.")
+            }
+        }
+        .task(id: timeEntry.date) { await loadSessions() }
+    }
+
+    // MARK: - Editable
+
+    @ViewBuilder
+    private var editableBody: some View {
+        AmbientFormSection(title: "When", status: "") {
+            VStack(spacing: 8) {
+                DatePicker("Started", selection: $start, in: ...Date())
+                // A running shift has no end to edit — that is what clocking out
+                // is for. The shipped form hid the whole section; saying why is
+                // better than a section that silently is not there.
+                if !isRunning {
+                    Divider()
+                    DatePicker("Stopped", selection: $end, in: ...Date())
+                }
+            }
+            .font(.subheadline)
+        }
+
+        TimeClockSummaryCard(title: isRunning ? "This shift becomes" : "You're about to record",
+                             start: start,
+                             end: isRunning ? Date() : end,
+                             refusal: refusal,
+                             crossesMidnight: !isRunning && !Calendar.current.isDate(start, inSameDayAs: end))
+
+        sessionSection
+
+        TimeClockNotesField(title: "Notes",
+                            placeholder: "Notes for this entry…",
+                            text: $notes)
+
+        if let failureMessage {
+            AmbientFailureCard(message: failureMessage, tint: .red, actionTitle: "Try again") {
+                self.failureMessage = nil
+                save()
+            }
+        }
+
+        AmbientActionButton(title: "Save changes",
+                            systemImage: "checkmark",
+                            tint: TimeClockStyle.accent,
+                            isLoading: isSaving,
+                            isEnabled: refusal == nil) {
+            save()
+        }
+
+        AmbientActionButton(title: "Delete entry",
+                            systemImage: "trash",
+                            role: .destructive,
+                            isEnabled: !isSaving) {
+            showingDeleteConfirmation = true
+        }
+    }
+
+    // MARK: - Read-only
+
+    @ViewBuilder
+    private var readOnlyBody: some View {
+        TimeClockSummaryCard(title: "Recorded",
+                             start: timeEntry.clockInTime ?? Date(),
+                             end: timeEntry.clockOutTime)
+
+        if let name = timeEntry.sessionName, !name.isEmpty {
+            AmbientNoteCard(title: "Session", text: name, accent: TimeClockStyle.accent)
+        }
+
+        if let entryNotes = timeEntry.notes, !entryNotes.isEmpty {
+            AmbientNoteCard(title: "Notes", text: entryNotes, accent: .secondary)
+        }
+    }
+
+    // MARK: - Session
+
+    @ViewBuilder
+    private var sessionSection: some View {
+        if isRunning {
+            // `updateTimeEntry` writes only start_time and notes for a running
+            // entry, so offering a session picker here would be an affordance
+            // whose value is discarded.
+            EmptyView()
+        } else if sessionLoadFailed {
+            AmbientFailureCard(message: "Couldn't load that day's sessions. Your existing one is unchanged.") {
+                Task { await loadSessions() }
+            }
+        } else if !sessions.isEmpty {
+            VStack(alignment: .leading, spacing: AmbientDensity.compact.stackSpacing) {
+                AmbientSectionTitle("Session", trailing: "Optional")
+                ForEach(sessions, id: \.id) { session in
+                    TimeClockSessionRow(session: TimeClockSessionDisplay(session),
+                                        isSelected: selectedSessionId == session.id) {
+                        selectedSessionId = selectedSessionId == session.id ? nil : session.id
                     }
                 }
             }
-            .navigationTitle("Edit Time Entry")
-            .navigationBarItems(
-                leading: Button("Cancel") {
-                    presentationMode.wrappedValue.dismiss()
-                },
-                trailing: saveButton
-            )
-        }
-        .onAppear {
-            loadSessionsForDate()
-            characterCount = notes.count
-            
-            // Find and set the current session if it exists
-            if let sessionId = timeEntry.sessionId {
-                selectedSession = availableSessions.first { $0.id == sessionId }
-            }
-        }
-        .alert("Delete Time Entry", isPresented: $showingDeleteConfirmation) {
-            Button("Delete", role: .destructive) {
-                deleteTimeEntry()
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Are you sure you want to delete this time entry? This action cannot be undone.")
-        }
-        .alert(isPresented: $showingAlert) {
-            Alert(
-                title: Text("Time Entry"),
-                message: Text(alertMessage),
-                dismissButton: .default(Text("OK"))
-            )
         }
     }
-    
-    // MARK: - Computed Properties
-    
-    private var formattedDuration: String {
-        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
-        return duration.formatAsHoursMinutes()
-    }
-    
-    private var isDurationValid: Bool {
-        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
-        return duration > 0 && duration <= 24 * 60 * 60
-    }
-    
-    private var durationError: String {
-        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
-        if duration <= 0 {
-            return "End must be after start"
-        } else if duration > 24 * 60 * 60 {
-            return "Exceeds 24 hour limit"
-        }
-        return ""
-    }
-    
-    private var isValidEntry: Bool {
-        // For clocked-in entries, only validate clock-in time
-        if timeEntry.status == "clocked-in" {
-            // Validate clock-in time is not in future and within 48 hours
-            let validation = TimeEntryValidator.canEditActiveClockIn(timeEntry, newClockInTime: combinedClockIn)
-            return validation.isValid
-        }
-        
-        // Clock out must be after clock in
-        guard combinedClockOut > combinedClockIn else { return false }
-        
-        // Duration must be at least 1 minute
-        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
-        guard duration >= 60 else { return false }
-        
-        // Duration must not exceed 24 hours (for cross-midnight support)
-        guard duration <= 24 * 3600 else { return false }
-        
-        // Cannot create future entries
-        guard combinedClockOut <= Date() else { return false }
-        
-        return true
-    }
-    
-    private func validateDuration() {
-        // Auto-adjust if needed
-        if combinedClockOut <= combinedClockIn {
-            // Move clock out to next day if times suggest crossing midnight
-            let calendar = Calendar.current
-            if let nextDay = calendar.date(byAdding: .day, value: 1, to: clockInDate) {
-                clockOutDate = nextDay
-            }
-        }
-    }
-    
-    private var validationMessage: String {
-        if combinedClockOut <= combinedClockIn {
-            return "Clock out time must be after clock in time"
-        }
-        
-        let duration = combinedClockOut.timeIntervalSince(combinedClockIn)
-        if duration < 60 {
-            return "Duration must be at least 1 minute"
-        }
-        
-        if duration > 24 * 3600 {
-            return "Duration cannot exceed 24 hours"
-        }
-        
-        if combinedClockOut > Date() {
-            return "Cannot create entries for future times"
-        }
-        
-        return ""
-    }
-    
-    private var saveButton: some View {
-        Button("Save") {
-            updateTimeEntry()
-        }
-        .disabled(!isValidEntry || isLoading || !TimeEntryValidator.canEditEntry(timeEntry))
-    }
-    
-    // MARK: - Functions
-    
-    private func loadSessionsForDate() {
-        // Parse the date from the entry's date string
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
+
+    private func loadSessions() async {
+        guard !isRunning else { return }
+        sessionLoadFailed = false
         guard let dateString = timeEntry.date,
-              let entryDate = formatter.date(from: dateString) else { return }
-
-        Task {
-            do {
-                let sessions = try await timeTrackingService.getSessionsForDate(entryDate)
-                await MainActor.run {
-                    self.availableSessions = sessions.sorted { session1, session2 in
-                        guard let start1 = session1.startDate,
-                              let start2 = session2.startDate else {
-                            return false
-                        }
-                        return start1 < start2
-                    }
-
-                    // Set selected session if it exists
-                    if let sessionId = self.timeEntry.sessionId {
-                        self.selectedSession = self.availableSessions.first { $0.id == sessionId }
-                    }
-                }
-            } catch {
-                print("Error loading sessions for date: \(error)")
+              let day = Formatters.isoDate.date(from: dateString) else { return }
+        do {
+            let loaded = try await timeTrackingService.getSessionsForDate(day)
+            guard !Task.isCancelled else { return }
+            sessions = loaded.sorted { lhs, rhs in
+                guard let a = lhs.startDate, let b = rhs.startDate else { return false }
+                return a < b
             }
+        } catch {
+            guard !Task.isCancelled else { return }
+            sessions = []
+            sessionLoadFailed = true
         }
     }
-    
-    private func updateTimeEntry() {
-        isLoading = true
+
+    // MARK: - Writes
+
+    private func save() {
+        guard !isSaving else { return }
+        isSaving = true
+        failureMessage = nil
 
         Task {
             do {
-                // Use combined date/time values for cross-midnight support
                 try await timeTrackingService.updateTimeEntry(
                     entryId: timeEntry.id,
-                    startTime: combinedClockIn,
-                    endTime: combinedClockOut,
-                    sessionId: selectedSession?.id,
+                    startTime: start,
+                    endTime: isRunning ? (timeEntry.clockOutTime ?? end) : end,
+                    sessionId: selectedSessionId,
                     notes: notes.isEmpty ? nil : notes
                 )
-
-                await MainActor.run {
-                    self.isLoading = false
-                    self.presentationMode.wrappedValue.dismiss()
-                }
+                isSaving = false
+                presentationMode.wrappedValue.dismiss()
             } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                    self.alertMessage = error.localizedDescription
-                    self.showingAlert = true
-                }
+                isSaving = false
+                failureMessage = error.userFacingMessage
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }
     }
-    
-    private func deleteTimeEntry() {
-        isLoading = true
+
+    private func delete() {
+        guard !isSaving else { return }
+        isSaving = true
+        failureMessage = nil
 
         Task {
             do {
                 try await timeTrackingService.deleteTimeEntry(entryId: timeEntry.id)
-
-                await MainActor.run {
-                    self.isLoading = false
-                    self.presentationMode.wrappedValue.dismiss()
-                }
+                isSaving = false
+                presentationMode.wrappedValue.dismiss()
             } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                    self.alertMessage = error.localizedDescription
-                    self.showingAlert = true
-                }
+                isSaving = false
+                failureMessage = "Couldn't delete the entry. \(error.userFacingMessage)"
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }
     }
-    
-    private func formatDate(_ dateString: String) -> String {
-        let inputFormatter = DateFormatter()
-        inputFormatter.dateFormat = "yyyy-MM-dd"
-        
-        if let date = inputFormatter.date(from: dateString) {
-            let outputFormatter = DateFormatter()
-            outputFormatter.dateStyle = .full
-            return outputFormatter.string(from: date)
-        }
-        
-        return dateString
-    }
-    
-    private func formatTime(_ date: Date?) -> String {
-        guard let date = date else { return "—" }
-        
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-}
-
-#Preview {
-    // Create a sample TimeEntry directly for preview
-    let sampleEntry = TimeEntry(
-        id: "sample-entry-id",
-        userId: "sample-user-id",
-        organizationID: "sample-org-id",
-        clockInTime: Calendar.current.date(byAdding: .hour, value: -8, to: Date()),
-        clockOutTime: Calendar.current.date(byAdding: .hour, value: -2, to: Date()),
-        date: "2024-07-12",
-        status: "clocked-out",
-        sessionId: "sample-session-id",
-        notes: "Sample time entry for preview",
-        createdAt: Calendar.current.date(byAdding: .day, value: -1, to: Date()),
-        updatedAt: Date()
-    )
-    
-    EditTimeEntryView(timeEntry: sampleEntry, timeTrackingService: TimeTrackingService())
 }

@@ -1,205 +1,176 @@
+//  CustomClockOutView.swift
+//  Iconik Employee — closing a long shift at the time you actually stopped,
+//  converted to Ambient in AMB.13
+//
+//  The old `Form` presentation is GONE from this file.
+//
+//  Reached only from the long-shift alert on `TimeTrackingMainView`, which is
+//  unchanged: past 24 hours the app offers to set a real clock-out time rather
+//  than stamping "now" on a shift that ended yesterday.
+//
+//  THIS SCREEN CONFIRMS NOW. Operator decision 2026-08-01 — it is the second of
+//  the two writes that change a shift already recorded, and it writes an
+//  operator-chosen timestamp onto payroll with, until now, no confirmation and
+//  no in-flight guard: the button stayed live for the whole network call.
+//
+//  ALSO CHANGED:
+//    - THE NOTES FIELD HAS ITS 500-CHARACTER CAP DRAWN. This was the one field
+//      of five without a counter, so the same rule was invisible here and
+//      enforced only by a rejection after Save.
+//    - THE PICKERS START FROM THE SHIFT, not from `Date()`. They defaulted to
+//      now regardless of when the shift began.
+//    - THE 24-HOUR CEILING comes from `TimeClockRules`, which is the same value
+//      `clockOutManual` enforces — and deliberately NOT the 16-hour ceiling that
+//      governs a shift typed in from nothing. Two different acts, two numbers,
+//      both written down once.
+
 import SwiftUI
 
 struct CustomClockOutView: View {
     @ObservedObject var timeTrackingService: TimeTrackingService
     let clockInTime: Date
-    let onComplete: (Date, String?) -> Void
-    @Environment(\.dismiss) var dismiss
-    
-    @State private var selectedDate = Date()
-    @State private var selectedTime = Date()
+
+    @Environment(\.presentationMode) private var presentationMode
+
+    @State private var end: Date
     @State private var notes = ""
-    @State private var showingError = false
-    @State private var errorMessage = ""
-    
-    // Computed property for combined date and time
-    private var combinedDateTime: Date {
-        let calendar = Calendar.current
-        let dateComponents = calendar.dateComponents([.year, .month, .day], from: selectedDate)
-        let timeComponents = calendar.dateComponents([.hour, .minute], from: selectedTime)
-        
-        var combined = DateComponents()
-        combined.year = dateComponents.year
-        combined.month = dateComponents.month
-        combined.day = dateComponents.day
-        combined.hour = timeComponents.hour
-        combined.minute = timeComponents.minute
-        
-        return calendar.date(from: combined) ?? Date()
+    @State private var isSaving = false
+    @State private var showingConfirmation = false
+    @State private var failureMessage: String?
+
+    init(timeTrackingService: TimeTrackingService, clockInTime: Date) {
+        self.timeTrackingService = timeTrackingService
+        self.clockInTime = clockInTime
+        // Derived from the shift rather than from now, which is what the shipped
+        // pickers did. The ceiling is the earlier of "24 hours after you started"
+        // and "now" — so the control cannot offer a time the write refuses.
+        let ceiling = min(clockInTime.addingTimeInterval(TimeClockLimits.liveClockOutMaximum), Date())
+        _end = State(initialValue: ceiling)
     }
-    
-    // Calculate duration
-    private var duration: TimeInterval {
-        combinedDateTime.timeIntervalSince(clockInTime)
+
+    private var refusal: TimeClockRefusal? {
+        TimeClockRules.refusalForLiveClockOut(clockIn: clockInTime, clockOut: end)
     }
-    
-    private var durationString: String {
-        let hours = Int(duration) / 3600
-        let minutes = Int(duration) % 3600 / 60
-        
-        if hours > 24 {
-            return "\(hours)h \(minutes)m ⚠️ Exceeds 24 hours"
-        } else if hours > 12 {
-            return "\(hours)h \(minutes)m"
-        } else {
-            return "\(hours)h \(minutes)m"
-        }
+
+    private var latest: Date {
+        min(clockInTime.addingTimeInterval(TimeClockLimits.liveClockOutMaximum), Date())
     }
-    
-    private var isValidDuration: Bool {
-        duration > 0 && duration <= 24 * 60 * 60
-    }
-    
+
     var body: some View {
         NavigationView {
-            Form {
-                Section(header: Text("Clock In Time")) {
-                    HStack {
-                        Image(systemName: "clock.badge.checkmark")
-                            .foregroundColor(.green)
-                        Text(formatDateTime(clockInTime))
-                            .font(.system(.body, design: .monospaced))
-                    }
-                }
-                
-                Section(header: Text("Clock Out Date & Time")) {
-                    DatePicker("Date", selection: $selectedDate, 
-                              in: Calendar.current.startOfDay(for: clockInTime)...Date(),
-                              displayedComponents: .date)
-                    
-                    DatePicker("Time", selection: $selectedTime,
-                              displayedComponents: .hourAndMinute)
-                    
-                    // Quick presets
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack {
-                            quickPresetButton("End of Yesterday", date: endOfYesterday())
-                            quickPresetButton("Start of Today", date: startOfToday())
-                            quickPresetButton("Now", date: Date())
+            ZStack {
+                AmbientBackdrop()
+
+                ScrollView {
+                    VStack(spacing: 16) {
+                        AmbientFailureCard(
+                            message: "This shift has been running for more than 24 hours. Set the time you actually stopped.",
+                            systemImage: "exclamationmark.triangle.fill",
+                            tint: TimeClockStyle.overrun
+                        )
+
+                        AmbientFormSection(title: "Stopped at", status: "") {
+                            DatePicker("End", selection: $end, in: clockInTime...latest)
+                                .font(.subheadline)
+                                .labelsHidden()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        presets
+
+                        TimeClockSummaryCard(title: "You're about to record",
+                                             start: clockInTime,
+                                             end: end,
+                                             refusal: refusal,
+                                             crossesMidnight: !Calendar.current.isDate(
+                                                clockInTime, inSameDayAs: end))
+
+                        TimeClockNotesField(title: "Notes",
+                                            placeholder: "What happened?",
+                                            text: $notes,
+                                            minHeight: 70)
+
+                        if let failureMessage {
+                            AmbientFailureCard(message: failureMessage,
+                                               tint: .red,
+                                               actionTitle: "Try again") {
+                                self.failureMessage = nil
+                                save()
+                            }
+                        }
+
+                        AmbientActionButton(title: "Clock Out",
+                                            systemImage: "stop.circle.fill",
+                                            tint: TimeClockStyle.overrun,
+                                            isLoading: isSaving,
+                                            isEnabled: refusal == nil) {
+                            showingConfirmation = true
                         }
                     }
+                    .padding(16)
                 }
-                
-                Section(header: Text("Duration")) {
-                    HStack {
-                        Image(systemName: duration > 24 * 60 * 60 ? "exclamationmark.triangle.fill" : 
-                                        duration > 12 * 60 * 60 ? "moon.fill" : "clock.fill")
-                            .foregroundColor(duration > 24 * 60 * 60 ? .red : 
-                                           duration > 12 * 60 * 60 ? .orange : .blue)
-                        Text(durationString)
-                            .foregroundColor(duration > 24 * 60 * 60 ? .red : .primary)
-                            .font(.system(.body, design: .monospaced))
-                    }
-                    
-                    if duration > 12 * 60 * 60 && duration <= 24 * 60 * 60 {
-                        Label("Long shift - crosses midnight", systemImage: "moon")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                    }
-                }
-                
-                Section(header: Text("Notes (Optional)")) {
-                    TextEditor(text: $notes)
-                        .frame(minHeight: 60)
-                }
+                .ambientNoBounceWhenShort()
             }
-            .navigationTitle("Set Clock Out Time")
+            .navigationTitle("Set Clock-Out Time")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Clock Out") {
-                        performClockOut()
-                    }
-                    .disabled(!isValidDuration)
+                    Button("Cancel") { presentationMode.wrappedValue.dismiss() }
+                        .disabled(isSaving)
                 }
             }
-            .alert("Error", isPresented: $showingError) {
-                Button("OK") { }
+            .alert("Clock out at this time?", isPresented: $showingConfirmation) {
+                Button("Clock out") { save() }
+                Button("Cancel", role: .cancel) { }
             } message: {
-                Text(errorMessage)
+                Text("This records \(TimeClockFormat.hoursAndMinutes(end.timeIntervalSince(clockInTime))), ending \(Formatters.mediumDateTime.string(from: end)).")
             }
         }
     }
-    
-    private func quickPresetButton(_ title: String, date: Date) -> some View {
-        Button(action: {
-            let calendar = Calendar.current
-            selectedDate = calendar.startOfDay(for: date)
-            selectedTime = date
-        }) {
-            Text(title)
-                .font(.caption)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(15)
+
+    /// The three shipped presets, as chips instead of a horizontally scrolling
+    /// row of tinted rectangles. Each is clamped into the picker's own range, so
+    /// a preset can never set a value the write would refuse — "End of
+    /// yesterday" on a shift that started this morning would have done exactly
+    /// that.
+    private var presets: some View {
+        HStack(spacing: 8) {
+            ForEach(presetOptions, id: \.0) { label, date in
+                AmbientChip(text: label, isOn: abs(end.timeIntervalSince(date)) < 60,
+                            tint: TimeClockStyle.overrun) {
+                    end = min(max(date, clockInTime), latest)
+                }
+            }
+            Spacer(minLength: 0)
         }
     }
-    
-    private func endOfYesterday() -> Date {
+
+    private var presetOptions: [(String, Date)] {
         let calendar = Calendar.current
-        let yesterday = calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date()
-        var components = calendar.dateComponents([.year, .month, .day], from: yesterday)
-        components.hour = 23
-        components.minute = 59
-        return calendar.date(from: components) ?? Date()
+        let startOfToday = calendar.startOfDay(for: Date())
+        let endOfYesterday = startOfToday.addingTimeInterval(-60)
+        return [("End of yesterday", endOfYesterday),
+                ("Start of today", startOfToday),
+                ("Now", Date())]
     }
-    
-    private func startOfToday() -> Date {
-        Calendar.current.startOfDay(for: Date())
-    }
-    
-    private func formatDateTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d, yyyy 'at' h:mm a"
-        return formatter.string(from: date)
-    }
-    
-    private func performClockOut() {
-        let finalDateTime = combinedDateTime
-        
-        // Validate again before submitting
-        if finalDateTime <= clockInTime {
-            errorMessage = "Clock out time must be after clock in time"
-            showingError = true
-            return
-        }
-        
-        if finalDateTime > Date() {
-            errorMessage = "Clock out time cannot be in the future"
-            showingError = true
-            return
-        }
-        
-        let duration = finalDateTime.timeIntervalSince(clockInTime)
-        if duration > 24 * 60 * 60 {
-            errorMessage = "Shift duration cannot exceed 24 hours"
-            showingError = true
-            return
-        }
-        
-        // Call the manual clock out function
+
+    private func save() {
+        guard !isSaving else { return }
+        isSaving = true
+        failureMessage = nil
+
         Task {
             do {
                 try await timeTrackingService.clockOutManual(
-                    clockOutDateTime: finalDateTime,
+                    clockOutDateTime: end,
                     notes: notes.isEmpty ? nil : notes
                 )
-                await MainActor.run {
-                    dismiss()
-                    onComplete(finalDateTime, notes.isEmpty ? nil : notes)
-                }
+                isSaving = false
+                presentationMode.wrappedValue.dismiss()
             } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    showingError = true
-                }
+                isSaving = false
+                failureMessage = "Couldn't clock you out. \(error.userFacingMessage)"
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }
     }
