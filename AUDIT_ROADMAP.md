@@ -1540,10 +1540,30 @@ other rebases onto it.
   engines agree is a data-layer change (AMB.13's, with the clock).
 
   **`NSPhotoLibraryAddUsageDescription` was missing from `Iconik-Employee-Info.plist`**, so the
-  add-only Photos request presented the full-library prompt with the wrong description. Added
-  — **but that file is gitignored (it carries API keys) and has no committed template, so the
-  key exists only on this machine.** It must be re-added on any fresh clone. Flagged rather
-  than quietly left.
+  add-only Photos request presented the full-library prompt with the full-library description.
+  Added — and at first this closeout recorded that the fix could not travel, because the file
+  was gitignored with no template.
+
+  **THE OPERATOR ASKED WHETHER THE KEYS SHOULD BE THERE AT ALL, AND THE ANSWER WAS NO — THE
+  IGNORE RULE WAS WRONG (2026-08-01).** The plist has never held an API key. Every sensitive
+  entry in it is a BUILD VARIABLE — `$(SUPABASE_ANON_KEY)`, `$(GOOGLE_PLACES_API_KEY)`,
+  `$(CLAUDE_API_KEY)` — resolved at build time from `Config.xcconfig`, which is the file that
+  holds the real values, is correctly ignored, and has a committed template beside it. **Every
+  version of the plist in the repo's history was checked: none ever contained a literal secret**,
+  so nothing leaked and nothing needed purging. It had been tracked until a cleanup commit swept
+  it up alongside `Config.xcconfig`, and the ignore rule was written from the file's NAME rather
+  than its contents ("Info.plist with API keys" — the keys are labels).
+
+  **It is tracked again.** What ignoring it cost is the general point: that file is not
+  configuration, it is app BEHAVIOUR — every permission prompt a photographer reads, the
+  `iconik://` scheme the password-reset deep link depends on, background modes, orientations,
+  ATS exceptions. Unlike `Config.xcconfig` it had no template, so a fresh clone could not
+  reconstruct it and no change to it ever appeared in review. `GoogleService-Info.plist` stays
+  ignored — that one was checked too and DOES hold literal values.
+
+  **Generalisable: an ignore rule is a claim about a file's CONTENTS, and it decays.** This one
+  was true of a sibling file and was never true of this one; it went unquestioned for months
+  because nothing forces an ignore rule to be re-read. Verify the claim, not the filename.
 
   **DESIGN-SYSTEM SHARP EDGE FOUND ON A DEVICE, documented at the source:** `AmbientFlowLayout`
   bare inside an `HStack` is measured with an unspecified width, reports a single long line,

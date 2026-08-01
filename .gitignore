@@ -99,8 +99,23 @@ Config.xcconfig
 # Google Services configuration (contains API keys)
 GoogleService-Info.plist
 
-# Info.plist with API keys
-Iconik-Employee-Info.plist
+# Iconik-Employee-Info.plist is TRACKED (un-ignored 2026-08-01).
+#
+# It was ignored under the heading "Info.plist with API keys". It has never held
+# an API key. Every sensitive entry in it is a BUILD VARIABLE — $(SUPABASE_ANON_KEY),
+# $(GOOGLE_PLACES_API_KEY), $(CLAUDE_API_KEY) — resolved at build time from
+# Config.xcconfig, which is the file that holds the real values and is ignored
+# above with a committed template beside it. Every version of the plist in the
+# repo's history was checked: none contained a literal secret, so nothing leaked
+# and nothing needed purging.
+#
+# WHAT IGNORING IT COST, which is why it is back: the file is not configuration,
+# it is app BEHAVIOUR — every permission prompt a photographer reads, the
+# iconik:// URL scheme the password-reset deep link depends on, background modes,
+# orientations, ATS exceptions. Unlike Config.xcconfig it had no template, so a
+# fresh clone could not reconstruct it, changes to it never appeared in review,
+# and a fix made on one machine could not travel (AMB.12 hit exactly that with a
+# missing NSPhotoLibraryAddUsageDescription).
 
 # Certificates
 *.p12
