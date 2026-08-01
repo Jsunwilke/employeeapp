@@ -34,14 +34,13 @@ enum DashboardWidget: String, CaseIterable, Identifiable, Transferable, Codable 
 ///
 /// One destination type behind ONE `ambientPush`, rather than the three separate
 /// `NavigationLink(isActive:)` this screen used to keep live at once (Settings,
-/// the design lab, and a tapped shift). Two live `isActive` links competing for
+/// the design lab, and a tapped shift — the lab is gone, the rule is not). Two
+/// live `isActive` links competing for
 /// one container is the exact shape of the dead tap AMB.1 shipped, and AMB.3's
 /// review gate turned it into a standing rule for the rest of the arc: one push
 /// per view; more than one target means an enum.
 enum HomeDestination: Identifiable {
     case settings
-    /// TEMPORARY — the AMB arc's design lab. Removed at AMB.12 with the lab.
-    case designLab
     case shift(Session)
 
     /// Required by `ambientPush(item:)`, which constrains its item to
@@ -51,7 +50,6 @@ enum HomeDestination: Identifiable {
     var id: String {
         switch self {
         case .settings: return "settings"
-        case .designLab: return "designLab"
         case .shift(let session): return "shift-\(session.dayOccurrenceKey)"
         }
     }
@@ -930,12 +928,6 @@ struct MainEmployeeView: View {
             switch destination {
             case .settings:
                 SettingsView()
-            case .designLab:
-                // Pushed into the Home screen's real NavigationView on purpose:
-                // a mockup has to run inside the same navigation container its
-                // real screen will get, or it is testing a frame that does not
-                // exist. See DesignLabView.swift.
-                DesignLabView()
             case .shift(let session):
                 ShiftDetailView(
                     session: session,
@@ -1087,14 +1079,6 @@ struct MainEmployeeView: View {
                     // approved design: it is a settings screen, and it sat in
                     // this menu beside "Settings" itself — two entries for one
                     // destination's worth of thing.
-                    //
-                    // TEMPORARY — removed at AMB.13 with the lab itself. It said
-                    // AMB.12 until 2026-08-01, when the operator gave the time
-                    // clock its own phase and AMB.12 stopped being the last one
-                    // (plan D15). AMB.13 needs the lab to design against.
-                    Button(action: { homeDestination = .designLab }) {
-                        Label("Design Lab", systemImage: "paintpalette")
-                    }
                     // AMB.12: a confirmation, a destructive role, and an error
                     // the user can see. This was a plain Button whose failure
                     // was swallowed to a `print` — so a sign-out that did NOT
