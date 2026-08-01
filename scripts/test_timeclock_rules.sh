@@ -19,5 +19,6 @@ trap 'rm -rf "$BUILD"' EXIT
 cp scripts/test_timeclock_rules.swift "$BUILD/main.swift"
 swiftc -O -o "$BUILD/run" \
   "Iconik Employee/TimeClock/TimeClockRules.swift" \
+  "Iconik Employee/Services/PayPeriodSequence.swift" \
   "$BUILD/main.swift"
 "$BUILD/run"

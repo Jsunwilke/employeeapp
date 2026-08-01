@@ -19,7 +19,7 @@
 //    1. THE MONEY LEADS               — `MileageHeroCard`
 //    2. THE SPLIT IS ALWAYS VISIBLE   — `MileageFigures.splitLine`, drawn
 //                                       unconditionally by that card
-//    3. A CARD IS TITLED BY WHAT IT SHOWS — `MileagePeriod.headerLabel`, passed in
+//    3. A CARD IS TITLED BY WHAT IT SHOWS — `PayPeriod.headerLabel`, passed in
 //                                       rather than typed above the values
 //    4. THE MISSING STATES ARE DRAWN  — `MileageFailureCard`,
 //                                       `MileageStaleFiguresBanner`,
@@ -48,7 +48,7 @@ enum MileageStyle {
 /// DELETED — both figures survive on every card, because a past phase of this arc
 /// lost a money figure by dropping a label.
 struct MileageHeroCard: View {
-    /// Derived from the selection — `MileagePeriod.headerLabel`. Never a constant:
+    /// Derived from the selection — `PayPeriod.headerLabel`. Never a constant:
     /// the old card was titled "Current Period" while showing a past period.
     let header: String
     let figures: MileageFigures
@@ -114,43 +114,6 @@ struct MileageHeroCard: View {
 
 /// One pay period in the carousel. A control, not a container — see the
 /// `ambient-allow` marker.
-struct MileagePeriodChip: View {
-    let label: String
-    let isCurrent: Bool
-    let isSelected: Bool
-    var tint: Color = MileageStyle.tint
-    let action: () -> Void
-
-    var body: some View {
-        Button {
-            withAnimation(AmbientMotion.snappy) { action() }
-            AmbientHaptics.selection()
-        } label: {
-            HStack(spacing: 5) {
-                if isCurrent {
-                    Circle()
-                        .fill(isSelected ? Color.white : tint)
-                        .frame(width: 5, height: 5)
-                }
-                Text(label).font(.caption.weight(.semibold))
-                if isCurrent {
-                    Text("Now")
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(isSelected ? .white : .secondary)
-                }
-            }
-            .foregroundStyle(isSelected ? .white : .primary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            // ambient-allow: a selection chip is a control, not a container.
-            .background(Capsule().fill(isSelected
-                                       ? AnyShapeStyle(tint)
-                                       : AnyShapeStyle(.ultraThinMaterial)))
-            .overlay(Capsule().strokeBorder(Color.primary.opacity(isSelected ? 0 : 0.08)))
-        }
-        .buttonStyle(.plain)
-    }
-}
 
 // MARK: - 3. The month and year tiles
 

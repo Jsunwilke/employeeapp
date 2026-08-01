@@ -27,10 +27,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 RULES="Iconik Employee/Misc Features/MileageRules.swift"
 RATES="Iconik Employee/Misc Features/VehicleRates.swift"
+# PROMOTED OUT OF MileageRules.swift when the time clock became the second
+# surface to need pay periods. Both harnesses compile this same file.
+PERIODS="Iconik Employee/Services/PayPeriodSequence.swift"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-for file in "$RULES" "$RATES"; do
+for file in "$RULES" "$RATES" "$PERIODS"; do
   if [[ ! -f "$file" ]]; then
     echo "FATAL: cannot find $file"
     exit 1
@@ -81,23 +84,23 @@ func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
 //    described different spans. The caption must describe the boundaries actually
 //    drawn, which means mirroring the service's fallbacks and not just its cases.
 print("the org's cycle")
-check("weekly",            MileagePeriodCycle.from(type: "weekly", isActive: true).rawValue, "weekly")
-check("bi-weekly",         MileagePeriodCycle.from(type: "bi-weekly", isActive: true).rawValue, "biweekly")
-check("biweekly no dash",  MileagePeriodCycle.from(type: "biweekly", isActive: true).rawValue, "biweekly")
-check("mixed case",        MileagePeriodCycle.from(type: "Bi-Weekly", isActive: true).rawValue, "biweekly")
-check("padded",            MileagePeriodCycle.from(type: "  monthly \n", isActive: true).rawValue, "monthly")
-check("monthly",           MileagePeriodCycle.from(type: "monthly", isActive: true).rawValue, "monthly")
+check("weekly",            PayPeriodCycle.from(type: "weekly", isActive: true).rawValue, "weekly")
+check("bi-weekly",         PayPeriodCycle.from(type: "bi-weekly", isActive: true).rawValue, "biweekly")
+check("biweekly no dash",  PayPeriodCycle.from(type: "biweekly", isActive: true).rawValue, "biweekly")
+check("mixed case",        PayPeriodCycle.from(type: "Bi-Weekly", isActive: true).rawValue, "biweekly")
+check("padded",            PayPeriodCycle.from(type: "  monthly \n", isActive: true).rawValue, "monthly")
+check("monthly",           PayPeriodCycle.from(type: "monthly", isActive: true).rawValue, "monthly")
 // PayPeriodService falls to bi-weekly for an unknown type and for inactive or
 // missing settings. A caption that said "Monthly" over 14-day boundaries would be
 // the same lie the old title told.
-check("unknown type",      MileagePeriodCycle.from(type: "fortnightly", isActive: true).rawValue, "biweekly")
-check("nil type",          MileagePeriodCycle.from(type: nil, isActive: true).rawValue, "biweekly")
-check("empty type",        MileagePeriodCycle.from(type: "", isActive: true).rawValue, "biweekly")
-check("inactive settings", MileagePeriodCycle.from(type: "monthly", isActive: false).rawValue, "biweekly")
+check("unknown type",      PayPeriodCycle.from(type: "fortnightly", isActive: true).rawValue, "biweekly")
+check("nil type",          PayPeriodCycle.from(type: nil, isActive: true).rawValue, "biweekly")
+check("empty type",        PayPeriodCycle.from(type: "", isActive: true).rawValue, "biweekly")
+check("inactive settings", PayPeriodCycle.from(type: "monthly", isActive: false).rawValue, "biweekly")
 
-check("weekly caption",   MileagePeriodCycle.weekly.caption, "Weekly pay periods")
-check("biweekly caption", MileagePeriodCycle.biweekly.caption, "Bi-weekly pay periods")
-check("monthly caption",  MileagePeriodCycle.monthly.caption, "Monthly pay periods")
+check("weekly caption",   PayPeriodCycle.weekly.caption, "Weekly pay periods")
+check("biweekly caption", PayPeriodCycle.biweekly.caption, "Bi-weekly pay periods")
+check("monthly caption",  PayPeriodCycle.monthly.caption, "Monthly pay periods")
 
 // ── The six chips, built by walking backwards through the REAL resolver.
 print("the period carousel")
@@ -112,7 +115,7 @@ func biweekly(_ probe: Date) -> (start: Date, end: Date)? {
     return (start, calendar.date(byAdding: .day, value: 13, to: start)!)
 }
 
-let fortnights = MileagePeriodSequence.build(now: anchor, calendar: calendar, resolve: biweekly)
+let fortnights = PayPeriodSequence.build(now: anchor, calendar: calendar, resolve: biweekly)
 check("six chips",      fortnights.count, 6)
 check("index 0 first",  fortnights.first?.index ?? -1, 0)
 check("0 is current",   fortnights.first?.isCurrent ?? false, true)
@@ -163,7 +166,7 @@ func day31Anchored(_ probe: Date) -> (start: Date, end: Date)? {
     if probe >= date(2026, 7, 1) { return (date(2026, 7, 1), date(2026, 7, 31)) }
     return (date(2026, 5, 31), date(2026, 6, 29))
 }
-let day31 = MileagePeriodSequence.build(now: date(2026, 7, 15), calendar: calendar, resolve: day31Anchored)
+let day31 = PayPeriodSequence.build(now: date(2026, 7, 15), calendar: calendar, resolve: day31Anchored)
 check("gap-leaving resolver stops", day31.count, 1)
 check("the honest chip is kept",    day31.first?.rangeLabel(monthDay: monthDay) ?? "none", "Jul 1 – Jul 31")
 // The walk did probe again — it stopped on the ANSWER, not by refusing to ask.
@@ -182,11 +185,11 @@ func day29Anchored(_ probe: Date) -> (start: Date, end: Date)? {
     // The rolled-forward Feb 29 → Mar 1 answer.
     return (date(2026, 3, 1), date(2026, 3, 31))
 }
-let day29 = MileagePeriodSequence.build(now: date(2026, 7, 15), calendar: calendar, resolve: day29Anchored)
+let day29 = PayPeriodSequence.build(now: date(2026, 7, 15), calendar: calendar, resolve: day29Anchored)
 check("overlapping resolver stops", day29.count, 4)
 check("last honest chip",  day29[3].rangeLabel(monthDay: monthDay), "Mar 29 – Apr 28")
 // TRUNCATED BUT CONSISTENT: whatever the walk kept is still contiguous and ordered.
-func isConsistent(_ chips: [MileagePeriod]) -> Bool {
+func isConsistent(_ chips: [PayPeriod]) -> Bool {
     for index in 0..<max(0, chips.count - 1) {
         if chips[index].start <= chips[index + 1].start { return false }
         let expectedEnd = calendar.date(byAdding: .day, value: -1,
@@ -207,7 +210,7 @@ func monthlyFromFirst(_ probe: Date) -> (start: Date, end: Date)? {
     let end = calendar.date(byAdding: DateComponents(month: 1, day: -1), to: start)!
     return (start, end)
 }
-let months = MileagePeriodSequence.build(now: date(2026, 7, 15), calendar: calendar, resolve: monthlyFromFirst)
+let months = PayPeriodSequence.build(now: date(2026, 7, 15), calendar: calendar, resolve: monthlyFromFirst)
 check("six months",     months.count, 6)
 check("july",           months[0].rangeLabel(monthDay: monthDay), "Jul 1 – Jul 31")
 check("june",           months[1].rangeLabel(monthDay: monthDay), "Jun 1 – Jun 30")
@@ -221,14 +224,14 @@ func weekly(_ probe: Date) -> (start: Date, end: Date)? {
     let start = calendar.date(byAdding: .day, value: 7 * elapsed, to: anchor)!
     return (start, calendar.date(byAdding: .day, value: 6, to: start)!)
 }
-let weeks = MileagePeriodSequence.build(now: anchor, calendar: calendar, resolve: weekly)
+let weeks = PayPeriodSequence.build(now: anchor, calendar: calendar, resolve: weekly)
 check("weekly chip 0", weeks[0].rangeLabel(monthDay: monthDay), "Jul 20 – Jul 26")
 check("weekly chip 1", weeks[1].rangeLabel(monthDay: monthDay), "Jul 13 – Jul 19")
 
 // A resolver that keeps answering with the same period — a misconfigured start
 // date — must produce ONE chip, not six identical ones that all select the same
 // range.
-let stuck = MileagePeriodSequence.build(now: anchor, calendar: calendar) { _ in
+let stuck = PayPeriodSequence.build(now: anchor, calendar: calendar) { _ in
     (start: anchor, end: calendar.date(byAdding: .day, value: 13, to: anchor)!)
 }
 check("stuck resolver yields one", stuck.count, 1)
@@ -238,7 +241,7 @@ check("stuck resolver yields one", stuck.count, 1)
 // that chip's start — i.e. an inverted period, start after end, the shape a resolver
 // with mis-ordered boundaries returns. Contiguity is satisfied and the walk is
 // nevertheless going forwards, so the chips would stop describing time in order.
-let inverted = MileagePeriodSequence.build(now: anchor, calendar: calendar) { probe in
+let inverted = PayPeriodSequence.build(now: anchor, calendar: calendar) { probe in
     if probe >= anchor {
         return (anchor, calendar.date(byAdding: .day, value: 13, to: anchor)!)
     }
@@ -249,9 +252,9 @@ check("a forwards answer stops the walk", inverted.count, 1)
 
 // No settings at all, and no fallback: no chips rather than invented ones.
 check("silent resolver yields none",
-      MileagePeriodSequence.build(now: anchor, calendar: calendar) { _ in nil }.count, 0)
+      PayPeriodSequence.build(now: anchor, calendar: calendar) { _ in nil }.count, 0)
 check("count is honoured",
-      MileagePeriodSequence.build(count: 3, now: anchor, calendar: calendar, resolve: biweekly).count, 3)
+      PayPeriodSequence.build(count: 3, now: anchor, calendar: calendar, resolve: biweekly).count, 3)
 
 // ── The money. Every figure goes through VehicleRates.Split.add — the per-report
 //    accumulator that existed in the app with ZERO callers while three screens
@@ -499,7 +502,7 @@ SWIFT
 run_suite() {
   local rules_file="$1"
   local out="$WORK/run"
-  if ! swiftc -O -o "$out" "$rules_file" "$RATES" "$WORK/main.swift" 2>"$WORK/compile.log"; then
+  if ! swiftc -O -o "$out" "$rules_file" "$RATES" "$PERIODS" "$WORK/main.swift" 2>"$WORK/compile.log"; then
     echo "COMPILE FAILED"
     cat "$WORK/compile.log"
     return 2

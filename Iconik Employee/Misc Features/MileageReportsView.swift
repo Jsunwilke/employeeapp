@@ -138,7 +138,7 @@ struct MileageReportsView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(viewModel.periods) { period in
-                        MileagePeriodChip(
+                        AmbientPeriodChip(
                             label: period.rangeLabel(monthDay: { Formatters.monthDay.string(from: $0) }),
                             isCurrent: period.isCurrent,
                             isSelected: period.index == viewModel.selectedPeriodIndex,

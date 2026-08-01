@@ -173,48 +173,51 @@ check(!TimeClockRules.isLongShift(clockIn: at(-24), now: now),
 
 // MARK: - Pay periods
 
-section("Pay periods are 14 days from the 2024-02-25 anchor")
+section("Pay periods are the ORGANISATION's, resolved once for the whole app")
 
-let anchorDay = cal.date(from: DateComponents(year: 2024, month: 2, day: 25))!
-let anchorPeriod = TimeClockRules.payPeriod(containing: anchorDay, calendar: cal)
-equal(anchorPeriod.start, cal.startOfDay(for: anchorDay),
-      "the anchor day opens its own period")
-equal(anchorPeriod.end,
-      cal.date(bySettingHour: 23, minute: 59, second: 59,
-               of: cal.date(byAdding: .day, value: 13, to: cal.startOfDay(for: anchorDay))!)!,
-      "a period ends at 23:59:59 on its fourteenth day")
+// The clock no longer defines a pay period. `PayPeriodSequence` does, walking
+// back through whatever `PayPeriodService` answers — so a weekly or monthly org
+// gets its real boundaries instead of a hardcoded fortnight. Those rules have
+// their own coverage in scripts/test_mileage_rules.sh, which compiles the SAME
+// file; what belongs here is that the clock asks rather than guesses.
 
-// Day 14 must open the NEXT period, not extend this one — the off-by-one that
-// would put a whole day's pay in the wrong period.
-let dayFourteen = cal.date(byAdding: .day, value: 14, to: anchorDay)!
-equal(TimeClockRules.payPeriod(containing: dayFourteen, calendar: cal).start,
-      cal.startOfDay(for: dayFourteen),
-      "day 14 opens the next period")
+equal(TimeClockRange.payPeriod.fixedPeriod(now: now, calendar: cal), nil,
+      "the clock cannot answer for a pay period on its own — the caller supplies it")
 
-let dayThirteen = cal.date(byAdding: .day, value: 13, to: anchorDay)!
-equal(TimeClockRules.payPeriod(containing: dayThirteen, calendar: cal).start,
-      cal.startOfDay(for: anchorDay),
-      "day 13 is still in the first period")
-
-// Every period start must land on the anchor's 14-day grid.
-for weeks in stride(from: 0, through: 60, by: 3) {
-    let probe = cal.date(byAdding: .day, value: weeks * 7, to: anchorDay)!
-    let period = TimeClockRules.payPeriod(containing: probe, calendar: cal)
-    let offset = cal.dateComponents([.day], from: cal.startOfDay(for: anchorDay), to: period.start).day ?? -1
-    check(offset >= 0 && offset % 14 == 0,
-          "period start for +\(weeks * 7)d sits on the 14-day grid (offset \(offset))")
-    check(period.start <= probe && probe <= period.end,
-          "+\(weeks * 7)d falls inside the period it was asked for")
+// A resolver standing in for PayPeriodService: bi-weekly from a Monday.
+let orgAnchor = cal.date(from: DateComponents(year: 2024, month: 12, day: 29))!
+func orgPeriod(containing date: Date) -> (start: Date, end: Date)? {
+    let days = cal.dateComponents([.day], from: orgAnchor, to: date).day ?? 0
+    let elapsed = days >= 0 ? days / 14 : ((days - 13) / 14)
+    let start = cal.date(byAdding: .day, value: elapsed * 14, to: orgAnchor)!
+    let end = cal.date(byAdding: .day, value: 13, to: start)!
+    return (start, end)
 }
+
+let walked = PayPeriodSequence.build(now: now, calendar: cal, resolve: orgPeriod)
+equal(walked.count, PayPeriodSequence.chipCount, "six periods to walk back through")
+check(walked[0].isCurrent, "the first is the current one")
+check(walked[0].contains(now), "and it contains today")
+check(!walked[1].isCurrent, "the second is not")
+check(walked[1].end < walked[0].start, "and it ends before the current one starts")
+
+// THE POINT OF THE WHOLE CHANGE: the org's grid and the literal the clock used
+// to carry agree TODAY, which is why nobody noticed there were two of them.
+let oldAnchor = cal.date(from: DateComponents(year: 2024, month: 2, day: 25))!
+let daysApart = cal.dateComponents([.day], from: oldAnchor, to: orgAnchor).day ?? -1
+check(daysApart % 14 == 0,
+      "the clock's old 2024-02-25 literal sits on the org's own grid — by luck, not by design (\(daysApart) days)")
 
 section("The three ranges")
 
 equal(TimeClockRange.allCases.map(\.rawValue), ["Today", "This Week", "Pay Period"],
       "the ranges keep their shipped order and labels")
 
-let todayRange = TimeClockRange.today.period(now: now, calendar: cal)
-equal(todayRange.start, now, "Today starts at now — the caller formats it to a day key")
-equal(todayRange.end, now, "Today ends at now")
+let todayRange = TimeClockRange.today.fixedPeriod(now: now, calendar: cal)
+equal(todayRange?.start, now, "Today starts at now — the caller formats it to a day key")
+equal(todayRange?.end, now, "Today ends at now")
+check(TimeClockRange.week.fixedPeriod(now: now, calendar: cal) != nil,
+      "This Week is a calendar fact, so this file can answer it")
 
 // MARK: - Formatting
 

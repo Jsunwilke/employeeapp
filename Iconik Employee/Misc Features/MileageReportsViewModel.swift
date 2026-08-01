@@ -11,7 +11,7 @@
 //    · THE CAROUSEL'S BOUNDARIES ARE THE ORG'S REAL ONES. The view stepped its
 //      labels back by a hardcoded 14 days while the data came from
 //      `PayPeriodService`. Now both come from the same resolver, walked backwards a
-//      day at a time (`MileagePeriodSequence`), so a weekly or monthly org gets its
+//      day at a time (`PayPeriodSequence`), so a weekly or monthly org gets its
 //      own cycle and the caption says which.
 //    · FAILURES ARE PUBLISHED. Both fetch paths swallowed their error to a `print`,
 //      so a failed load rendered "0.0 miles / $0.00" — indistinguishable from a
@@ -98,11 +98,11 @@ class MileageReportsViewModel: ObservableObject {
     // MARK: - Published screen state
 
     /// The six chips, newest first. Empty until the pay-period service answers.
-    @Published var periods: [MileagePeriod] = []
+    @Published var periods: [PayPeriod] = []
     /// Which chip is selected, by index. 0 is the current period.
     @Published var selectedPeriodIndex: Int = 0
     /// Which cycle the org is on, for the caption under the carousel.
-    @Published var cycle: MileagePeriodCycle = .biweekly
+    @Published var cycle: PayPeriodCycle = .biweekly
     @Published var state: MileageScreenState = .loading
     /// True while a CHIP fetch is in flight. The header is derived from the
     /// selection, so between the tap and the answer the figures under it belong to
@@ -121,7 +121,7 @@ class MileageReportsViewModel: ObservableObject {
     /// re-reads `TimeZone.current` on every call, so a calendar frozen at init
     /// starts disagreeing with it the moment the device changes zone — and the two
     /// then mint boundaries an hour apart, which the carousel's contiguity guard
-    /// (`MileagePeriodSequence.build`) reads as a gap and collapses the six chips to
+    /// (`PayPeriodSequence.build`) reads as a gap and collapses the six chips to
     /// one. `.shared` outlives many appearances, so "at init" can be days ago.
     var calendar: Calendar { Calendar.current }
 
@@ -193,7 +193,7 @@ class MileageReportsViewModel: ObservableObject {
     var yearFigures: MileageFigures { MileageFigures(split: yearSplit) }
 
     /// The selected period, or nil while the pay-period service has not answered.
-    var selectedPeriod: MileagePeriod? {
+    var selectedPeriod: PayPeriod? {
         guard periods.indices.contains(selectedPeriodIndex) else { return periods.first }
         return periods[selectedPeriodIndex]
     }
@@ -597,11 +597,11 @@ class MileageReportsViewModel: ObservableObject {
         }
 
         let service = payPeriodService
-        let built = MileagePeriodSequence.build(now: Date(), calendar: calendar) { date in
+        let built = PayPeriodSequence.build(now: Date(), calendar: calendar) { date in
             service.getPayPeriod(for: date)
         }
         periods = built
-        cycle = MileagePeriodCycle.from(type: service.payPeriodSettings?.type,
+        cycle = PayPeriodCycle.from(type: service.payPeriodSettings?.type,
                                        isActive: service.payPeriodSettings?.isActive ?? false)
         if !periods.indices.contains(selectedPeriodIndex) { selectedPeriodIndex = 0 }
         return true

@@ -90,17 +90,15 @@ public enum TimeClockLimits {
     /// `Models.swift:745-746`.
     public static let activeClockInWindowHours = 48
 
-    /// Pay periods are 14 days, counted from a fixed anchor.
-    public static let payPeriodLengthDays = 14
-
-    /// The anchor: 25 February 2024, start of day, device calendar.
-    ///
-    /// The same anchor the mileage system uses — `TimeEntryListView.swift:44`
-    /// parsed it from the literal string "2/25/2024" with a POSIX locale, and
-    /// `ManagerMileageView` states it separately. Reconciling the TWO COPIES is
-    /// named in AMB.9's closeout as work this arc owes; this file is where the
-    /// clock's copy now lives so there is one fewer.
-    public static let payPeriodAnchor = DateComponents(year: 2024, month: 2, day: 25)
+    // PAY PERIODS ARE NOT DEFINED HERE ANY MORE, and that is the point.
+    //
+    // This file used to carry a 14-day grid anchored on 2024-02-25, lifted from
+    // the literal the entry list parsed. Mileage meanwhile asked
+    // `PayPeriodService`, which honours the ORGANISATION's real
+    // `pay_period_settings` — weekly, bi-weekly or monthly. Two definitions of
+    // the same payroll concept, agreeing only by luck of the current
+    // configuration. The clock now asks the same resolver, through the shared
+    // `PayPeriodSequence` in Services/. See that file's header.
 }
 
 // MARK: - Why a write was refused
@@ -281,12 +279,14 @@ public enum TimeClockRange: String, CaseIterable {
     case week = "This Week"
     case payPeriod = "Pay Period"
 
-    /// Mirrors `TimeEntryListView.DateRange.dateRange` (`:16-34`).
+    /// The span this range covers, for the two ranges this file can answer.
     ///
-    /// The list queries with `yyyy-MM-dd` strings; formatting is left to the
-    /// caller so this file stays free of a formatter whose locale would then
-    /// matter.
-    public func period(now: Date = Date(), calendar: Calendar = .current) -> TimeClockPeriod {
+    /// NIL FOR `.payPeriod`, deliberately. A pay period is the ORGANISATION's,
+    /// not a calendar fact, so it comes from `PayPeriodService` through
+    /// `PayPeriodSequence` — and the caller supplies WHICH one, because the list
+    /// can now walk back through previous periods. A function that guessed here
+    /// is exactly the second definition this file just deleted.
+    public func fixedPeriod(now: Date = Date(), calendar: Calendar = .current) -> TimeClockPeriod? {
         switch self {
         case .today:
             return TimeClockPeriod(start: now, end: now)
@@ -294,47 +294,8 @@ public enum TimeClockRange: String, CaseIterable {
             let interval = calendar.dateInterval(of: .weekOfYear, for: now)
             return TimeClockPeriod(start: interval?.start ?? now, end: interval?.end ?? now)
         case .payPeriod:
-            return TimeClockRules.payPeriod(containing: now, calendar: calendar)
+            return nil
         }
-    }
-}
-
-public extension TimeClockRules {
-
-    /// The 14-day pay period containing `date`, counted from the 2024-02-25
-    /// anchor.
-    ///
-    /// FAITHFUL TO THE SHIPPED ARITHMETIC, including its integer division
-    /// (`TimeEntryListView.swift:57`). Swift's `/` truncates toward zero, so a
-    /// date BEFORE the anchor would land in the period after it rather than the
-    /// one before — unreachable for any real date, since the anchor is in 2024
-    /// and no time entry predates it, but stated rather than silently "improved"
-    /// while the shipped screen kept the old behaviour.
-    ///
-    /// The one thing that IS different: the anchor is built from
-    /// `DateComponents` instead of parsed from the string "2/25/2024". A parse
-    /// can fail and the shipped code carried a fallback to "two weeks ago" for
-    /// when it did — a fallback that would have silently shown the wrong pay
-    /// period. With a POSIX locale that parse could not fail, so the fallback
-    /// was unreachable; building the date directly removes the branch instead of
-    /// keeping dead cover.
-    static func payPeriod(containing date: Date,
-                          calendar: Calendar = .current) -> TimeClockPeriod {
-        guard let anchorDay = calendar.date(from: TimeClockLimits.payPeriodAnchor) else {
-            return TimeClockPeriod(start: date, end: date)
-        }
-        let anchor = calendar.startOfDay(for: anchorDay)
-        let length = TimeClockLimits.payPeriodLengthDays
-
-        let daysSince = calendar.dateComponents([.day], from: anchor, to: date).day ?? 0
-        let periodsElapsed = daysSince / length
-
-        guard let start = calendar.date(byAdding: .day, value: periodsElapsed * length, to: anchor),
-              let lastDay = calendar.date(byAdding: .day, value: length - 1, to: start),
-              let end = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: lastDay) else {
-            return TimeClockPeriod(start: date, end: date)
-        }
-        return TimeClockPeriod(start: start, end: end)
     }
 }
 

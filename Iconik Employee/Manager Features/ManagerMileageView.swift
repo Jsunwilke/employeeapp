@@ -5,8 +5,8 @@
 //  own header that it deliberately does NOT redraw this screen. So this conversion
 //  invents nothing: it is the SAME content AMB.9 already designed and the operator
 //  already approved for the photographer-facing mileage screen, seen from the
-//  manager's side. The period carousel is `MileageKit`'s `MileagePeriodChip`, the
-//  chips step `MileagePeriod`s, and the per-employee row — the one thing the
+//  manager's side. The period carousel is `MileageKit`'s `AmbientPeriodChip`, the
+//  chips step `PayPeriod`s, and the per-employee row — the one thing the
 //  employee screen has no equivalent for — is drawn with the shared primitives in
 //  `Manager Features/ManagerKit.swift`.
 //
@@ -331,12 +331,12 @@ class ManagerMileageViewModel: ObservableObject {
     }
 
     /// Returns up to 6 pay period starts (current + 5 previous), newest first.
-    func availablePeriods() -> [MileagePeriod] {
-        var results: [MileagePeriod] = []
+    func availablePeriods() -> [PayPeriod] {
+        var results: [PayPeriod] = []
         var current = currentPeriodStart
         for index in 0..<6 {
             let end = calendar.date(byAdding: .day, value: periodLength - 1, to: current) ?? current
-            results.append(MileagePeriod(index: index, start: current, end: end))
+            results.append(PayPeriod(index: index, start: current, end: end))
             if let prev = calendar.date(byAdding: .day, value: -periodLength, to: current) {
                 current = prev
             }
@@ -429,7 +429,7 @@ struct ManagerMileageView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(viewModel.availablePeriods()) { period in
-                        MileagePeriodChip(
+                        AmbientPeriodChip(
                             label: period.rangeLabel(monthDay: { Formatters.monthDay.string(from: $0) }),
                             isCurrent: period.isCurrent,
                             isSelected: Calendar.current.isDate(period.start,

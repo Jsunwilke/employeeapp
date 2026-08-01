@@ -193,6 +193,55 @@ struct AmbientChip: View {
     }
 }
 
+/// A chip that selects one pay period out of several, and marks which one is NOW.
+///
+/// PROMOTED OUT OF `Misc Features/MileageKit.swift` when the time clock became the
+/// second surface to carry a period carousel. It is `AmbientChip`'s sibling rather
+/// than a variant of it: `AmbientChip` is an on/off filter, and this one has a
+/// third piece of state — "this is the current period" — which is the whole reason
+/// the carousel is legible when you have scrolled three periods back.
+///
+/// Its default tint is the app brand rather than any one feature's colour, so a
+/// caller that forgets to pass one gets something that belongs to the app instead
+/// of to mileage.
+struct AmbientPeriodChip: View {
+    let label: String
+    let isCurrent: Bool
+    let isSelected: Bool
+    var tint: Color = AmbientStyle.brand
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            withAnimation(AmbientMotion.snappy) { action() }
+            AmbientHaptics.selection()
+        } label: {
+            HStack(spacing: 5) {
+                if isCurrent {
+                    Circle()
+                        .fill(isSelected ? Color.white : tint)
+                        .frame(width: 5, height: 5)
+                }
+                Text(label).font(.caption.weight(.semibold))
+                if isCurrent {
+                    Text("Now")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(isSelected ? .white : .secondary)
+                }
+            }
+            .foregroundStyle(isSelected ? .white : .primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            // ambient-allow: a selection chip is a control, not a container.
+            .background(Capsule().fill(isSelected
+                                       ? AnyShapeStyle(tint)
+                                       : AnyShapeStyle(.ultraThinMaterial)))
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(isSelected ? 0 : 0.08)))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Status views
 
 /// A load in progress, as a card rather than a bare spinner.
