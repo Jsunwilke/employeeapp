@@ -289,10 +289,18 @@ D10 NOTHING IS CONVERTED BEFORE THE OPERATOR HAS SEEN A MOCKUP, AND THE
         operator has confirmed the converted screens — never before, per the
         rule that a validation reference outlives the port it validated.
       - THE HARNESS ITSELF (menu entry, sample data, gallery shell) lives for
-        the arc and is deleted at the close of AMB.12, along with its menu
-        entry. It is arc-level scaffolding, and the arc is what it serves.
-        If the arc is abandoned early, the harness goes with the last phase
-        that ran.
+        the arc and is deleted at the close of THE ARC'S LAST PHASE, along with
+        its menu entry. It is arc-level scaffolding, and the arc is what it
+        serves. If the arc is abandoned early, the harness goes with the last
+        phase that ran.
+
+        CORRECTED 2026-08-01 (D15). This bullet said "at the close of AMB.12"
+        for eleven phases, because AMB.12 was the last phase when it was
+        written. It stopped being the last phase the moment the time clock was
+        given its own, and the shorthand is what got carried — the harness now
+        dies at the close of AMB.13. A lifetime pinned to a phase NUMBER
+        rather than to the thing it serves goes stale the first time the phase
+        list moves.
 
     Cost, stated honestly: the harness is most of a session ONCE, inside AMB.2;
     each phase's mockup views are then a fraction of a session because the data,
@@ -469,10 +477,25 @@ nothing is built on primitives that are still moving (D5).
             Both device smokes PASSED. Mockup deleted at the close.
             Closeout detail in AUDIT_ROADMAP.md.
 
-    AMB.12  Settings, Manager, Training  (about 6,600 lines)        BATCH 4
+    AMB.12  Settings, Manager, Training + the shell   (~7,700 lines)  BATCH 4
             The tail (D9). Lowest traffic, converted last, and by this point
             mostly inherits from the primitives with little bespoke work.
-            Closes the arc: the lab harness and its menu entry are deleted here.
+            PLUS the five shell surfaces that belonged to no phase, folded in
+            here by operator ruling 2026-08-01 (D15): the sign-in surface, the
+            launch state, the toast, the home profile toolbar and the
+            appearance picker. Also carries the arc's consolidations — the
+            chips, failure cards, loading rows, search field and primary button
+            that AMB.9 and AMB.10 both deferred here.
+            Does NOT close the arc and does NOT delete the lab (D15).
+
+    AMB.13  The time clock                (10 screens, 2,662 lines)
+            Added 2026-08-01 by operator ruling (D15). The clock-in and
+            clock-out surface, which was named in no phase from AMB.2 onward.
+            Runs LAST rather than folded into the tail because it is payroll —
+            seven write paths with one confirmation between them — and payroll
+            deserves its own design sitting and its own smoke rather than
+            sharing the tail's. CLOSES THE ARC: the lab harness and its menu
+            entry are deleted here.
 
 Roughly ten sessions after AMB.2, plus AMB.2 itself — which is now the design
 system, the build gate, the lab harness AND batch 1's four surfaces' mockups,
@@ -676,10 +699,11 @@ L6  RUN THE REVIEW BEFORE PUSHING. Post-push there is no branch delta left to
     NOT adding features to converted surfaces
 
 
-## Open, raised 2026-07-25 during AMB.2
+## RESOLVED 2026-08-01 — raised 2026-07-25 during AMB.2, answered at AMB.12's
+## kickoff, which was the last phase in which it could be
 
-TIME TRACKING IS NOT IN ANY PHASE. Building the gate's allowlist meant walking
-every surface in the app, and the clock-in and clock-out screens are named
+TIME TRACKING WAS NOT IN ANY PHASE. Building the gate's allowlist meant walking
+every surface in the app, and the clock-in and clock-out screens were named
 nowhere in the phase list above:
 
     TimeTrackingMainView, TimeTrackingButton, TimeEntryListView,
@@ -690,16 +714,53 @@ That is about 2,540 lines across nine screens, and photographers touch the clock
 every working day — so it is not tail traffic. It is also payroll-adjacent,
 which raises the bar on any change to it.
 
-Three ways to resolve, for the operator to pick, not for a phase to decide
-quietly mid-build:
+Three ways to resolve were offered, for the operator to pick, not for a phase to
+decide quietly mid-build:
 
   fold it into AMB.12, which is already the tail and would simply grow;
   give it its own phase between AMB.8 and AMB.9, near the other number-heavy
     screens;
   leave it unconverted on purpose and record that as a deliberate seam.
 
-Recorded here rather than resolved, because silently adding a tenth surface to
+Recorded rather than resolved, because silently adding a tenth surface to
 someone else's phase is how a plan stops being the thing that governs the work.
+
+**HE TOOK THE SECOND, moved to the end: its OWN phase, AMB.13, running after the
+tail.** His reason was the one recommended — it is payroll, and it deserves its
+own design sitting and its own careful smoke rather than sharing the tail's. See
+D15 below and the decision card
+`~/Brain/decisions/2026-08-01 the time clock gets its own phase, the furniture
+ships with the tail.md`.
+
+That answer had a consequence nobody had written down, which is D15's real
+lesson: **moving work out of the last phase moves the last phase**, and the lab
+harness was scheduled to die "at AMB.12" purely because AMB.12 used to be last.
+
+
+D15 THE TIME CLOCK GETS ITS OWN PHASE; THE FURNITURE SHIPS WITH THE TAIL; THE
+    LAB OUTLIVES AMB.12. Operator decision 2026-08-01, at AMB.12's kickoff.
+
+    THE CLOCK. Ten screens, 2,662 lines, seven payroll write paths with exactly
+    ONE confirmation between them, touched every working day. It becomes AMB.13
+    rather than folding into the tail — payroll gets its own sitting and its own
+    smoke.
+
+    THE FURNITURE. The five shell surfaces `AMB_SHELL_INVENTORY.md` named at
+    AMB.5 — the sign-in surface, the launch state, the toast, the home profile
+    toolbar and the appearance picker — fold into AMB.12. They inherit most of
+    their look from the primitives, and leaving them out would have left THE
+    FIRST SCREEN EVERY USER SEES as the only unconverted one in the app.
+
+    THE LAB. It does not die at AMB.12. AMB.13 needs the harness to design the
+    clock screens against, and deleting scaffolding in the phase BEFORE the one
+    that needs it would leave that phase with nothing to design in. The harness,
+    its menu entry, its sample data and every surviving mockup die together at
+    the close of AMB.13.
+
+    GENERALISABLE, and it is the part worth keeping: anything scheduled to die
+    "at the end" is pinned to a phase NUMBER somewhere, and a deferral moves the
+    end. Re-check every such lifetime in the SAME change as the deferral, rather
+    than letting the next phase discover it by needing the deleted thing.
 
 
 ## Answered, 2026-07-24

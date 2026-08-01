@@ -1,3 +1,21 @@
+//  AddressAutocompleteField.swift
+//  Iconik Employee — the shared address field
+//
+//  CONVERTED IN AMB.12. A shell orphan: it carried TWO drift-allowlist rows and
+//  belonged to no phase, while being the address field on the account screen.
+//
+//  WHAT WAS ABSENT, and every one of these is a state a user can reach:
+//    - NO EMPTY STATE. A query with zero predictions drew nothing at all, so
+//      "no matches for what you typed" and "still typing" were the same picture.
+//    - NO ERROR STATE. Both failure paths were `print` only, so a bad API key,
+//      an exhausted quota and no network were indistinguishable from a slow
+//      response — the field simply never produced a suggestion.
+//    - NO OFFLINE HANDLING, which is the specific case that matters here: the
+//      autocomplete is a network call and this app is used in school car parks.
+//
+//  The suggestion list and the "Searching…" row were hand-rolled cards; they go
+//  through the design system now.
+
 import SwiftUI
 import MapKit
 import Combine
@@ -78,13 +96,33 @@ struct AddressAutocompleteField: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.systemBackground))
-                    .cornerRadius(8)
-                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+                    .padding(.vertical, 4)
+                    .ambientCard(density: .compact, fill: .surface,
+                                 border: .hairline(Color.primary.opacity(0.10)),
+                                 fillWidth: true)
                     .padding(.top, 2)
+                } else if let failure = placesService.lastErrorMessage, address.count >= 3 {
+                    // Previously a `print`. A field that silently produces nothing
+                    // is indistinguishable from one that is still thinking.
+                    Label(failure, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 4)
+                        .ambientCard(density: .compact, fill: .surface,
+                                     border: .hairline(Color.primary.opacity(0.10)),
+                                     fillWidth: true)
+                        .padding(.top, 2)
+                } else if placesService.predictions.isEmpty && address.count >= 3 {
+                    Text("No matching addresses. Keep typing, or enter the address by hand.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 4)
+                        .ambientCard(density: .compact, fill: .surface,
+                                     border: .hairline(Color.primary.opacity(0.10)),
+                                     fillWidth: true)
+                        .padding(.top, 2)
                 } else if !placesService.predictions.isEmpty {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
@@ -116,9 +154,9 @@ struct AddressAutocompleteField: View {
                         }
                     }
                     .frame(maxHeight: 200)
-                    .background(Color(.systemBackground))
-                    .cornerRadius(8)
-                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+                    .ambientCard(density: .compact, fill: .surface,
+                                 border: .hairline(Color.primary.opacity(0.10)),
+                                 fillWidth: true)
                     .padding(.top, 2)
                 }
             }
@@ -138,17 +176,7 @@ struct AddressAutocompleteField: View {
     }
     
     private func isValidCoordinates(_ coordString: String) -> Bool {
-        let parts = coordString.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
-        
-        if parts.count == 2,
-           let lat = Double(parts[0]),
-           let lng = Double(parts[1]),
-           lat.isFinite && lng.isFinite,
-           lat >= -90 && lat <= 90,
-           lng >= -180 && lng <= 180 {
-            return true
-        }
-        return false
+        CoordinateString.isValid(coordString)
     }
     
     private func selectPlace(_ prediction: GooglePlacesService.PlacePrediction) {
@@ -198,6 +226,7 @@ struct AddressAutocompleteField: View {
                 
             case .failure(let error):
                 print("Failed to get place details: \(error.localizedDescription)")
+                placesService.reportFailure("Couldn't look that address up. Check your connection and try again.")
             }
         }
     }
@@ -221,6 +250,9 @@ struct AddressAutocompleteField: View {
                 }
             case .failure(let error):
                 print("❌ Geocoding failed: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    placesService.reportFailure("Couldn't find that address on the map. You can still save it and add coordinates later.")
+                }
             }
         }
     }

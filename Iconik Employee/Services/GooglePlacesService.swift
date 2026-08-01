@@ -22,6 +22,8 @@ class GooglePlacesService: ObservableObject {
     
     @Published var predictions: [PlacePrediction] = []
     @Published var isLoading = false
+    /// Nil unless the last lookup failed. See `reportFailure(_:)`.
+    @Published var lastErrorMessage: String?
     
     private var cancellables = Set<AnyCancellable>()
     private var searchWorkItem: DispatchWorkItem?
@@ -334,6 +336,18 @@ class GooglePlacesService: ObservableObject {
     // Clear predictions
     func clearPredictions() {
         predictions = []
+        lastErrorMessage = nil
+    }
+
+    /// AMB.12: the address field's failures were `print`-only, so a bad API key,
+    /// an exhausted quota and no network all looked identical to "still typing".
+    /// This is what the field reads to say so.
+    ///
+    /// Callers must be on the main actor — this is `@Published` state on an
+    /// `ObservableObject` that is not itself actor-isolated.
+    func reportFailure(_ message: String) {
+        lastErrorMessage = message
+        isLoading = false
     }
 }
 

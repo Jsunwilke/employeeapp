@@ -265,6 +265,28 @@ struct AmbientFlowLayout: Layout {
     var spacing: CGFloat = 6
     var lineSpacing: CGFloat = 6
 
+    // GIVE THIS A DEFINITE WIDTH. Put it in a VStack, or pin it with
+    // `.frame(maxWidth: .infinity, alignment: .leading)` — never bare inside an
+    // HStack.
+    //
+    // WHY, found on a device at AMB.12 and worth the warning because it fails
+    // SILENTLY and it fails as a DEAD TAP rather than as a wrong picture. An
+    // HStack measures its children with an unspecified width. `proposal.width`
+    // is then nil, this reports the size of ONE long line, and the HStack hands
+    // back a share based on that — after which `placeSubviews` gets the real,
+    // narrower bounds and wraps onto two lines that extend BELOW the frame the
+    // parent reserved. The chips still draw. The control sitting next to them
+    // still draws. But the overflowing row is outside its own frame, so it eats
+    // the taps meant for its neighbour: on the Training screen the layout
+    // toggle beside the filter chips opened a critique instead of switching to
+    // the list.
+    //
+    // Every production call site was checked when this was found — all the
+    // others sit in a VStack, which proposes a definite width, so this is a note
+    // rather than a fix. Fixing it inside the layout would mean changing what it
+    // reports for an unspecified proposal, which moves pixels on eight already
+    // shipped surfaces to protect against a call shape nothing currently uses.
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let maxWidth = proposal.width ?? .infinity
         var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, widest: CGFloat = 0

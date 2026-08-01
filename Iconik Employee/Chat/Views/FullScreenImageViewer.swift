@@ -182,7 +182,7 @@ struct FullScreenImageViewer: View {
         }
         .sheet(isPresented: $showShareSheet) {
             if let image = loadedImage {
-                ImageShareSheet(items: [image])
+                ActivityShareSheet(items: [image])
             }
         }
     }
@@ -220,12 +220,3 @@ struct FullScreenImageViewer: View {
 }
 
 // Share Sheet for sharing images
-struct ImageShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-    
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-    
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}

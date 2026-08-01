@@ -19,9 +19,16 @@ struct HomeToolbarButton: View {
     var body: some View {
         if isPhone {
             Button {
+                AmbientHaptics.selection()
                 TabBarManager.shared.selectedTab = "home"
             } label: {
+                // AMB.12: the glyph had no size, weight or tint at all, so it
+                // took the bar's default and read lighter than the converted
+                // chrome around it. Tinted to the app's own colour rather than a
+                // feature's, because Home is not a feature.
                 Image(systemName: "house.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(AmbientStyle.brand)
             }
             .accessibilityLabel("Home")
         }

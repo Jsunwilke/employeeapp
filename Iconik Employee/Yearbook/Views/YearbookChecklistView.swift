@@ -119,7 +119,7 @@ struct YearbookChecklistView: View {
             case .item(let itemId):
                 YearbookItemDetailView(itemId: itemId, viewModel: viewModel)
             case .export(let text):
-                ShareSheet(activityItems: [text])
+                ActivityShareSheet(items: [text])
             }
         }
     }
@@ -260,16 +260,6 @@ private struct YearbookPushedClearance: ViewModifier {
 /// presents this same type, so it is a cross-feature declaration rather than a
 /// yearbook detail. Moving or renaming it would push churn into a screen AMB.10
 /// has no business touching.
-struct ShareSheet: UIViewControllerRepresentable {
-    let activityItems: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
 // MARK: - Preview
 struct YearbookChecklistView_Previews: PreviewProvider {
     static var previews: some View {

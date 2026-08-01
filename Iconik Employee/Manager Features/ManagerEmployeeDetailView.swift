@@ -1,11 +1,32 @@
-//
 //  ManagerEmployeeDetailView.swift
-//  Iconik_EmployeeApp
+//  Iconik Employee — one photographer's period, converted to Ambient in AMB.12
 //
-//  Shows the employee's name in a large font within the content area,
-//  leaving the navigation bar title empty. The system back button remains
-//  in the nav bar, but no text is shown in the nav bar itself.
+//  THE DESIGN was `ManagerLabEmployeeDetail` in
+//  `DesignLab/Mockups/ManagerMockup.swift`, approved at the batch-4 sitting
+//  (2026-07-30). The shared pieces live in `Manager Features/ManagerKit.swift`.
 //
+//  WHAT THE CONVERSION CHANGED, and why each is in scope:
+//    · THE SCREEN HAS CONTROLS. It had ZERO: the thumbnails, the "+N" overflow tile
+//      and the photo-count chip were all inert, so any photo past the FIFTH was
+//      unreachable and the only interactive thing on screen was the system Back
+//      button. The count is now a tap that opens the day's report, which is where
+//      those photos already live — and the report screen shows all of them.
+//    · LOADING, EMPTY AND FAILURE ARE THREE THINGS. A blank list under a 0.0 total
+//      was all three at once, on a screen a manager uses to check what someone is
+//      owed. A failure was an alert titled "Error" over that same zero, which
+//      stayed on screen behind it.
+//    · THE WINDOW IS LABELLED. It always was a fixed 14 days; now it says so, and
+//      says which fourteen. See `ManagerPeriodText` for why that matters on a
+//      manager screen.
+//
+//  UNCHANGED ON PURPOSE: the fixed 14-day window, the date-descending order, the
+//  personal/company split shown only once company miles exist, the "Unknown" /
+//  "personal" fallbacks, and the deliberately empty nav bar with the name as large
+//  text in the CONTENT.
+//
+//  CLEARANCE: this screen is PUSHED, and it applied no clearance at all — a pushed
+//  screen does not inherit the container's inset, so its last row sat under the
+//  floating tab bar. It insets itself now, the way every other pushed screen does.
 
 import SwiftUI
 
@@ -43,7 +64,9 @@ class ManagerEmployeeDetailViewModel: ObservableObject {
     @Published var totalPeriodMileage: Double = 0.0
     @Published var personalPeriodMileage: Double = 0.0
     @Published var companyPeriodMileage: Double = 0.0
-    @Published var errorMessage: String? = nil
+    /// Loading, loaded and failed as three separate things — see `ManagerLoadState`.
+    /// The old screen had one: whatever the fetch did, the list rendered.
+    @Published var state: ManagerLoadState = .loading
 
     let employeeName: String
     let periodStart: Date
@@ -62,9 +85,11 @@ class ManagerEmployeeDetailViewModel: ObservableObject {
 
     func loadRecords() {
         guard !organizationID.isEmpty else {
-            self.errorMessage = "User organization not found"
+            self.state = .failed("User organization not found")
             return
         }
+
+        state = .loading
 
         Task {
             do {
@@ -90,24 +115,43 @@ class ManagerEmployeeDetailViewModel: ObservableObject {
                     self.totalPeriodMileage = totalMiles
                     self.companyPeriodMileage = companyMiles
                     self.personalPeriodMileage = totalMiles - companyMiles
+                    self.state = .loaded
                 }
             } catch {
                 await MainActor.run {
-                    self.errorMessage = "Error loading records: \(error.localizedDescription)"
+                    self.state = .failed("Error loading records: \(error.localizedDescription)")
                 }
             }
         }
     }
-    
+
+    /// "Last 14 days · Jul 20, 2026 – Aug 2, 2026" — the window said out loud
+    /// rather than implied.
     var periodRangeText: String {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        return "\(f.string(from: periodStart)) - \(f.string(from: periodEnd))"
+        ManagerPeriodText.fixedWindow(periodStart, periodEnd)
+    }
+
+    /// The exact totals, which the rounded stat tiles cannot carry. The split half
+    /// is appended only once company miles exist, which is how this screen has
+    /// always read.
+    var totalsLine: String {
+        let total = "\(MileageFigures.oneDecimal(totalPeriodMileage)) miles filed"
+        guard companyPeriodMileage > 0 else { return total }
+        return total
+            + " · Personal \(MileageFigures.oneDecimal(personalPeriodMileage))"
+            + " · Company \(MileageFigures.oneDecimal(companyPeriodMileage)) mi"
     }
 }
 
 struct ManagerEmployeeDetailView: View {
     @StateObject private var viewModel: ManagerEmployeeDetailViewModel
+
+    /// One enum, one `.ambientPush` — the AMB.3 rule. There is one destination
+    /// today and it still goes through the enum, because the second one is what
+    /// turns two `NavigationLink`s into a broken back stack.
+    @State private var destination: ManagerEmployeeDestination?
+
+    private var tint: Color { ManagerStyle.mileageTint }
 
     init(employeeName: String, periodStart: Date) {
         // Get organization ID from UserDefaults (same as @AppStorage)
@@ -119,140 +163,151 @@ struct ManagerEmployeeDetailView: View {
         )
         _viewModel = StateObject(wrappedValue: vm)
     }
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            // 1) Big name text at the top
-            Text(viewModel.employeeName)
-                .font(.system(size: 40, weight: .bold))
-                .padding(.top, 16)
-                .padding(.horizontal)
-            
-            // 2) Period date range
-            Text("Period: \(viewModel.periodRangeText)")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .padding(.top, 4)
-                .padding(.horizontal)
-            
-            // 3) Total miles in this period
-            HStack {
-                Text("Total Miles This Period:")
-                    .font(.subheadline)
-                Spacer()
-                Text(String(format: "%.1f", viewModel.totalPeriodMileage))
-                    .font(.headline)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
 
-            // Personal/company split — only shown once company miles exist.
-            if viewModel.companyPeriodMileage > 0 {
-                HStack {
-                    Text(String(format: "Personal %.1f · Company %.1f mi", viewModel.personalPeriodMileage, viewModel.companyPeriodMileage))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
+    var body: some View {
+        ZStack {
+            AmbientBackdrop()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    header
+                    content
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
             }
-            
-            // 4) List of daily records
-            List(viewModel.records) { record in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(dateFormatter.string(from: record.date))
-                                .font(.headline)
-                            Text(record.schoolName)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            HStack(spacing: 6) {
-                                Text(String(format: "%.1f miles", record.totalMileage))
-                                    .font(.footnote)
-                                if VehicleRates.isCompany(record.vehicleType) {
-                                    Text("Company")
-                                        .font(.caption2)
-                                        .fontWeight(.medium)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.orange.opacity(0.15))
-                                        .foregroundColor(.orange)
-                                        .cornerRadius(4)
-                                }
-                            }
-                        }
-                        
-                        Spacer()
-                        
-                        if !record.photoURLs.isEmpty {
-                            HStack(spacing: 4) {
-                                Image(systemName: "photo.fill")
-                                    .font(.caption)
-                                Text("\(record.photoURLs.count)")
-                                    .font(.caption)
-                            }
-                            .foregroundColor(.blue)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.blue.opacity(0.1))
-                            .cornerRadius(10)
-                        }
-                    }
-                    
-                    // Show photo thumbnails if available
-                    if !record.photoURLs.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(record.photoURLs.prefix(5), id: \.self) { photoURL in
-                                    StorageImageThumbnail(imageURL: photoURL, size: 60)
-                                }
-                                if record.photoURLs.count > 5 {
-                                    ZStack {
-                                        Rectangle()
-                                            .fill(Color.gray.opacity(0.3))
-                                            .frame(width: 60, height: 60)
-                                            .cornerRadius(8)
-                                        Text("+\(record.photoURLs.count - 5)")
-                                            .font(.caption)
-                                            .foregroundColor(.gray)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.top, 8)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
+            .ambientNoBounceWhenShort()
         }
-        // 5) Remove any text from the nav bar title
+        // Remove any text from the nav bar title — the name is large text in the
+        // CONTENT, and the system back button stays.
         .navigationBarTitle("", displayMode: .inline)
-        // Let the system show the single back button (arrow + default text)
         .navigationBarBackButtonHidden(false)
-        // If you want only the arrow, you can do the custom approach:
-        // .navigationBarBackButtonHidden(true)
-        // .toolbar { ... custom arrow ... }
-        .alert(item: Binding(
-            get: { viewModel.errorMessage.map { ManagerDetailError(message: $0) } },
-            set: { _ in viewModel.errorMessage = nil }
-        )) { err in
-            Alert(title: Text("Error"), message: Text(err.message), dismissButton: .default(Text("OK")))
+        // A pushed screen does not inherit the container's inset; without this the
+        // last row sits under the floating tab bar.
+        .tabBarClearance()
+        .ambientPush(item: $destination) { destination in
+            switch destination {
+            case .report(let reportID):
+                // THE DAY'S REPORT, READ-ONLY, which is where these photos already
+                // live — all of them, not the first five.
+                //
+                // IT MUST BE THIS SCREEN AND NOT `ReportEditorView`. The first cut
+                // of this conversion routed here to the editor, because that is
+                // the screen a photographer opens for their OWN report and it does
+                // show the photos. But this screen belongs to a MANAGER looking at
+                // SOMEBODY ELSE'S filed report, and it had zero controls before
+                // this phase — the approved drawing turns a dead photo count into
+                // a way to SEE the photos, not into edit and delete rights over
+                // another person's payroll-adjacent record. A restyle that hands
+                // out a destructive action nobody asked for is not a restyle.
+                //
+                // `DailyReportDetailView` is read-only by construction (no edit, no
+                // delete, no share, no toolbar) and renders every attached photo.
+                DailyReportDetailView(docID: reportID)
+            }
         }
         .onAppear {
             viewModel.loadRecords()
         }
     }
-    
-    private var dateFormatter: DateFormatter {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        return f
+
+    // MARK: - Header
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                AmbientAvatar(name: viewModel.employeeName, size: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(viewModel.employeeName)
+                        .font(.system(size: 20, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(viewModel.periodRangeText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 10) {
+                AmbientStatTile(value: Int(viewModel.totalPeriodMileage.rounded()),
+                                label: "miles this period",
+                                systemImage: "car.fill",
+                                tint: tint)
+                AmbientStatTile(value: Int(viewModel.companyPeriodMileage.rounded()),
+                                label: "company miles",
+                                systemImage: "building.2.fill",
+                                tint: .orange)
+                AmbientStatTile(value: viewModel.records.count,
+                                label: "days filed",
+                                systemImage: "calendar",
+                                tint: .secondary)
+            }
+
+            // The tiles round; payroll does not. The exact figures stay on screen.
+            Text(viewModel.totalsLine)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .ambientCard(density: .roomy, fillWidth: true)
+        // A HEADER OF ZEROES IS A CLAIM. While the fetch is running or after it
+        // failed, nothing has been counted — the numbers are placeholders, not
+        // totals, and they are drawn as such.
+        .redacted(reason: viewModel.state == .loaded ? [] : .placeholder)
+    }
+
+    // MARK: - Content
+
+    @ViewBuilder
+    private var content: some View {
+        switch viewModel.state {
+        case .loading:
+            AmbientLoadingRow(message: "Loading mileage…")
+
+        case .failed(let message):
+            AmbientFailureCard(message: message) { viewModel.loadRecords() }
+
+        case .loaded:
+            if viewModel.records.isEmpty {
+                AmbientEmptyState(
+                    title: "No mileage in this period",
+                    message: "Nothing was filed in the last 14 days.",
+                    systemImage: "car")
+            } else {
+                rows
+            }
+        }
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            AmbientSectionTitle("Days", trailing: "newest first")
+            LazyVStack(spacing: AmbientDensity.compact.stackSpacing) {
+                ForEach(viewModel.records) { record in
+                    ManagerMileageDayRow(
+                        date: record.date,
+                        school: record.schoolName,
+                        miles: record.totalMileage,
+                        isCompany: VehicleRates.isCompany(record.vehicleType),
+                        photoCount: record.photoURLs.count,
+                        tint: tint,
+                        openReport: record.photoURLs.isEmpty
+                            ? nil
+                            : { destination = .report(record.id) })
+                }
+            }
+        }
     }
 }
 
-fileprivate struct ManagerDetailError: Identifiable {
-    let id = UUID()
-    let message: String
-}
+/// The one place this screen goes.
+enum ManagerEmployeeDestination: Identifiable {
+    case report(String)
 
+    var id: String {
+        switch self {
+        case .report(let reportID): return reportID
+        }
+    }
+}

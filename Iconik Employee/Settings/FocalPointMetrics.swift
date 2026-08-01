@@ -180,13 +180,21 @@ public final class FocalPointMetrics: ObservableObject {
         return metricsDir.appendingPathComponent("metrics-\(today).jsonl")
     }
 
-    /// Returns a single combined export bundle URL (today's jsonl) for
-    /// share-sheet handoff. The combined-multi-day case is handled by
-    /// listFiles() returning every day; SettingsView lets the operator
-    /// pick. For the simple case (today only), this URL is what the
-    /// email-export passes to UIActivityViewController.
-    public func exportURL() -> URL {
-        return todayFileURL()
+    /// Today's jsonl for share-sheet handoff, **or nil when there is nothing to
+    /// share**.
+    ///
+    /// AMB.12 (G13): this returned today's path whether or not the file existed, so
+    /// Export on a quiet day — a device that has emitted no metrics at all today —
+    /// handed `UIActivityViewController` a URL pointing at nothing, and the share
+    /// sheet failed silently with no message. The caller can now say so.
+    ///
+    /// The old doc comment also promised a multi-day picker driven by `listFiles()`
+    /// that SettingsView "lets the operator pick" from. That picker has never
+    /// existed and `listFiles()` has zero call sites (G14); the promise is removed
+    /// rather than carried forward as a description of code that is not there.
+    public func exportURL() -> URL? {
+        let url = todayFileURL()
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     // MARK: - Reducers (used by the SettingsView dashboard)

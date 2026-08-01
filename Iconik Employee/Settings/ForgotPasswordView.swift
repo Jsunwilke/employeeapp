@@ -2,7 +2,18 @@
 //  ForgotPasswordView.swift
 //  Iconik Employee
 //
-//  View for requesting a password reset email
+//  View for requesting a password reset email. Converted to Ambient in AMB.12.
+//
+//  CONTAINMENT: a sheet presented by `SignInView`, which hands it the
+//  `NavigationView` — so this file adds none (NAV.1: one bar per screen).
+//
+//  NAMED, NOT FIXED, and deliberately: `requestPasswordReset()` sets
+//  `emailSent = true` on BOTH branches, so the confirmation below replaces the
+//  form whether the request succeeded or not, and the error it sets on the
+//  failing branch is rendered by a view that is no longer on screen. That is
+//  the enumeration-safety posture — it is what stops this screen telling a
+//  stranger which email addresses have accounts — and changing it is a security
+//  decision, not a design one. The error branch is kept exactly as it is.
 //
 
 import SwiftUI
@@ -11,8 +22,10 @@ struct ForgotPasswordView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var viewModel: PasswordResetViewModel
 
+    @FocusState private var focusedField: AuthFormField?
+
     var body: some View {
-        VStack(spacing: 20) {
+        AuthScreen {
             if viewModel.emailSent {
                 // Success state
                 successView
@@ -20,10 +33,7 @@ struct ForgotPasswordView: View {
                 // Email entry form
                 emailFormView
             }
-
-            Spacer()
         }
-        .padding()
         .navigationTitle("Reset Password")
         .navigationBarTitleDisplayMode(.large)
         .onDisappear {
@@ -33,83 +43,69 @@ struct ForgotPasswordView: View {
 
     // MARK: - Email Form View
 
+    @ViewBuilder
     private var emailFormView: some View {
-        VStack(spacing: 20) {
-            Text("Enter your email address and we'll send you a link to reset your password.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 10)
+        AmbientFormSection(title: "Reset password", status: "", statusTint: nil) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Enter your email address and we'll send you a link to reset your password.")
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            TextField("Email", text: $viewModel.email)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .keyboardType(.emailAddress)
-                .autocapitalization(.none)
-                .disabled(viewModel.isLoading)
+                Divider()
 
-            if let error = viewModel.error {
-                Text(error)
-                    .foregroundColor(.red)
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-            }
-
-            Button(action: {
-                Task {
-                    await viewModel.requestPasswordReset()
-                }
-            }) {
-                if viewModel.isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                } else {
-                    Text("Send Reset Link")
+                AuthTextField(placeholder: "Email",
+                              text: $viewModel.email,
+                              keyboard: .emailAddress,
+                              contentType: .username,
+                              submitLabel: .go,
+                              isEnabled: !viewModel.isLoading,
+                              focus: $focusedField,
+                              field: .email) {
+                    submit()
                 }
             }
-            .padding()
-            .frame(maxWidth: .infinity)
-            .background(viewModel.canSubmitEmail ? Color.blue : Color.gray)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            .disabled(!viewModel.canSubmitEmail)
         }
+
+        if let error = viewModel.error {
+            AuthErrorText(error)
+        }
+
+        AmbientActionButton(title: "Send Reset Link",
+                            tint: AuthStyle.tint,
+                            isLoading: viewModel.isLoading,
+                            isEnabled: viewModel.canSubmitEmail,
+                            action: submit)
     }
 
     // MARK: - Success View
 
+    @ViewBuilder
     private var successView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "envelope.circle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.green)
-                .padding(.top, 30)
-
-            Text("Check Your Email")
-                .font(.title2)
-                .fontWeight(.semibold)
-
-            Text("If an account exists with \(viewModel.email), you will receive a password reset link shortly.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-
-            Text("Click the link in the email to reset your password.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 10)
-
-            Button(action: {
-                dismiss()
-            }) {
-                Text("Back to Sign In")
-            }
-            .padding()
+        Image(systemName: "envelope.circle.fill")
+            .font(.system(size: 60))
+            .foregroundStyle(.green)
             .frame(maxWidth: .infinity)
-            .background(Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(8)
             .padding(.top, 20)
+
+        AmbientNoteCard(
+            title: "Check Your Email",
+            text: "If an account exists with \(viewModel.email), you will receive a password reset link shortly. Click the link in the email to reset your password.",
+            accent: .green,
+            density: .compact)
+
+        AmbientActionButton(title: "Back to Sign In",
+                            tint: AuthStyle.tint) {
+            dismiss()
+        }
+    }
+
+    // MARK: - Actions
+
+    private func submit() {
+        guard viewModel.canSubmitEmail else { return }
+        focusedField = nil
+        Task {
+            await viewModel.requestPasswordReset()
         }
     }
 }

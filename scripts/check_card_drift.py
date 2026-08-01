@@ -137,23 +137,36 @@ ALLOW_MARKER = re.compile(r"^\s*(?://|\*|/\*)\s*ambient-allow:\s*\S+")
 # converted in the same phase and never appeared here at all — a full-width bar is
 # not a rounded, filled container, so this gate was blind to it by construction.
 # Worth remembering when judging whether the allowlist means a surface is done.
+# AMB.12 (2026-08-01) — THE TAIL, AND A RETAG THAT MATTERS MORE THAN THE
+# DELETIONS. Settings, Manager Features, Training and the five shell surfaces are
+# converted, so their rows are gone: AllFeaturesView, AddressAutocompleteField,
+# LoadingOverlay, EmployeeInfoView, SchoolDetailView and Training's three
+# component cards.
+#
+# THE RETAG: four rows that said AMB.12 were never Settings, Manager or Training
+# files at all — SessionSelectionView, TimeEntryListView, TimeTrackingButton and
+# TimeTrackingMainView are the TIME CLOCK, which the generator swept into AMB.12
+# because that was the last phase and the tail absorbs whatever is left. The
+# operator gave the clock its own phase on 2026-08-01 (plan D15), so they now say
+# AMB.13 and must reach zero there. Two of TimeTrackingButton's cards are on a
+# screen with ZERO call sites, so this gate is currently guarding dead pixels —
+# worth knowing before someone "converts" them.
+#
+# And the recurring lesson, now in its FIFTH consecutive phase: an empty
+# allowlist row still means nothing about whether a surface is converted. The
+# whole Settings tree carried TWO rows between fourteen files, because this gate
+# matches a rounded FILL and those files used .background(Color…) +
+# .cornerRadius(…). The toast was invisible to it for a different reason again —
+# it draws a Capsule.
 # ---------------------------------------------------------------------------
 ALLOWLIST = {}  # populated below by _load_allowlist()
 
 _ALLOWLIST_SOURCE = """
-Iconik Employee/AllFeaturesView.swift|AMB.12|1
-Iconik Employee/Components/AddressAutocompleteField.swift|AMB.12|2
-Iconik Employee/Components/LoadingOverlay.swift|AMB.12|1
 Iconik Employee/Schedule/RealTimeSyncIndicator.swift|AMB.1 residual|1
-Iconik Employee/SessionSelectionView.swift|AMB.12|1
-Iconik Employee/Settings/EmployeeInfoView.swift|AMB.12|1
-Iconik Employee/Settings/SchoolDetailView.swift|AMB.12|3
-Iconik Employee/TimeEntryListView.swift|AMB.12|2
-Iconik Employee/TimeTrackingButton.swift|AMB.12|2
-Iconik Employee/TimeTrackingMainView.swift|AMB.12|2
-Iconik Employee/Training/Components/CritiqueGridCard.swift|AMB.12|1
-Iconik Employee/Training/Components/CritiqueListCard.swift|AMB.12|1
-Iconik Employee/Training/Components/StatsCard.swift|AMB.12|1
+Iconik Employee/SessionSelectionView.swift|AMB.13|1
+Iconik Employee/TimeEntryListView.swift|AMB.13|2
+Iconik Employee/TimeTrackingButton.swift|AMB.13|2
+Iconik Employee/TimeTrackingMainView.swift|AMB.13|2
 Iconik Employee/Sports Shoot Feature/CaptureGalleryListView.swift|out of scope (D1)|1
 Iconik Employee/Sports Shoot Feature/CapturaSportsRosterView_iPhone.swift|out of scope (D1)|2
 Iconik Employee/Sports Shoot Feature/CapturaSportsView.swift|out of scope (D1)|2

@@ -2,7 +2,20 @@
 //  ResetPasswordView.swift
 //  Iconik Employee
 //
-//  View for setting a new password after clicking reset link
+//  View for setting a new password after clicking reset link. Converted to
+//  Ambient in AMB.12.
+//
+//  CONTAINMENT: presented as a sheet by `RootView` itself — deliberately, so a
+//  reset link can open over the launch spinner, over Sign In, or over the signed-in
+//  app — and it therefore owns its own `NavigationView` (D3: `NavigationView` +
+//  Stack style, iOS 16.6 floor).
+//
+//  THE STATE THIS SCREEN GAINED, and the reason it is in scope at all: a bad or
+//  expired link used to produce NO UI WHATSOEVER. The verification failed, the
+//  view model set an error, and nothing ever presented a view to render it — the
+//  user tapped a link from their email and watched the app do absolutely nothing
+//  (G3). The sheet is now presented on that path too, showing what happened and
+//  what to do about it.
 //
 
 import SwiftUI
@@ -11,20 +24,23 @@ struct ResetPasswordView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var viewModel: PasswordResetViewModel
 
+    @FocusState private var focusedField: AuthFormField?
+
     var body: some View {
         NavigationView {
-            VStack(spacing: 20) {
+            AuthScreen {
                 if viewModel.passwordUpdated {
                     // Success state
                     successView
+                } else if viewModel.linkExpired {
+                    // G3 — the link could not be verified. Before AMB.12 this
+                    // state existed only in the documentation.
+                    expiredView
                 } else {
                     // Password entry form
                     passwordFormView
                 }
-
-                Spacer()
             }
-            .padding()
             .navigationTitle("Set New Password")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -36,107 +52,110 @@ struct ResetPasswordView: View {
                 }
             }
         }
+        .navigationViewStyle(StackNavigationViewStyle())
         .interactiveDismissDisabled(viewModel.isLoading)
     }
 
     // MARK: - Password Form View
 
+    @ViewBuilder
     private var passwordFormView: some View {
-        VStack(spacing: 20) {
-            Text("Enter your new password below.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 10)
+        AmbientFormSection(title: "Set a new password", status: "", statusTint: nil) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Enter your new password below.")
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            SecureField("New Password", text: $viewModel.newPassword)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .disabled(viewModel.isLoading)
+                Divider()
 
-            SecureField("Confirm Password", text: $viewModel.confirmPassword)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .disabled(viewModel.isLoading)
+                AuthTextField(placeholder: "New Password",
+                              text: $viewModel.newPassword,
+                              isSecure: true,
+                              contentType: .newPassword,
+                              isEnabled: !viewModel.isLoading,
+                              focus: $focusedField,
+                              field: .password) {
+                    focusedField = .confirmPassword
+                }
 
-            if let error = viewModel.error {
-                Text(error)
-                    .foregroundColor(.red)
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
+                AuthTextField(placeholder: "Confirm Password",
+                              text: $viewModel.confirmPassword,
+                              isSecure: true,
+                              contentType: .newPassword,
+                              submitLabel: .done,
+                              isEnabled: !viewModel.isLoading,
+                              focus: $focusedField,
+                              field: .confirmPassword) {
+                    submit()
+                }
+
+                Divider()
+
+                // The rule checklist Create Account now draws too, from the one
+                // definition of what this app considers a password (G36).
+                AuthPasswordChecklist(password: viewModel.newPassword,
+                                      confirmation: viewModel.confirmPassword)
             }
-
-            // Password requirements hint
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Image(systemName: viewModel.newPassword.count >= 6 ? "checkmark.circle.fill" : "circle")
-                        .foregroundColor(viewModel.newPassword.count >= 6 ? .green : .gray)
-                        .font(.caption)
-                    Text("At least 6 characters")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                HStack {
-                    Image(systemName: !viewModel.confirmPassword.isEmpty && viewModel.newPassword == viewModel.confirmPassword ? "checkmark.circle.fill" : "circle")
-                        .foregroundColor(!viewModel.confirmPassword.isEmpty && viewModel.newPassword == viewModel.confirmPassword ? .green : .gray)
-                        .font(.caption)
-                    Text("Passwords match")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 4)
-
-            Button(action: {
-                Task {
-                    await viewModel.updatePassword()
-                }
-            }) {
-                if viewModel.isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                } else {
-                    Text("Update Password")
-                }
-            }
-            .padding()
-            .frame(maxWidth: .infinity)
-            .background(viewModel.canSubmitPassword ? Color.blue : Color.gray)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            .disabled(!viewModel.canSubmitPassword)
         }
+
+        if let error = viewModel.error {
+            AuthErrorText(error)
+        }
+
+        AmbientActionButton(title: "Update Password",
+                            tint: AuthStyle.tint,
+                            isLoading: viewModel.isLoading,
+                            isEnabled: viewModel.canSubmitPassword,
+                            action: submit)
+    }
+
+    // MARK: - Invalid / expired link
+
+    @ViewBuilder
+    private var expiredView: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 60))
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 20)
+
+        AmbientNoteCard(
+            title: "This link has expired",
+            text: "Password reset links can only be used once, and they expire. Request a new one from the sign-in screen.",
+            accent: .orange,
+            density: .compact)
     }
 
     // MARK: - Success View
 
+    @ViewBuilder
     private var successView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.green)
-                .padding(.top, 30)
-
-            Text("Password Updated")
-                .font(.title2)
-                .fontWeight(.semibold)
-
-            Text("Your password has been successfully updated. You can now sign in with your new password.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-
-            Button(action: {
-                viewModel.reset()
-                dismiss()
-            }) {
-                Text("Sign In")
-            }
-            .padding()
+        Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: 60))
+            .foregroundStyle(.green)
             .frame(maxWidth: .infinity)
-            .background(Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(8)
             .padding(.top, 20)
+
+        AmbientNoteCard(
+            title: "Password Updated",
+            text: "Your password has been successfully updated. You can now sign in with your new password.",
+            accent: .green,
+            density: .compact)
+
+        AmbientActionButton(title: "Sign In",
+                            tint: AuthStyle.tint) {
+            viewModel.reset()
+            dismiss()
+        }
+    }
+
+    // MARK: - Actions
+
+    private func submit() {
+        guard viewModel.canSubmitPassword else { return }
+        focusedField = nil
+        Task {
+            await viewModel.updatePassword()
         }
     }
 }

@@ -571,7 +571,13 @@ private struct BaseGlass: ViewModifier {
 // MARK: - Tab Bar Configuration View
 struct TabBarConfigurationView: View {
     @ObservedObject var tabBarManager: TabBarManager
-    @ObservedObject var mainViewModel: MainEmployeeViewModel
+    /// AMB.12: this used to take an `@ObservedObject MainEmployeeViewModel` and
+    /// read exactly ONE thing from it — the default feature list, a constant. The
+    /// cost of that dependency was hidden and real: Settings had no main view
+    /// model to hand over, so it built a second one, and `MainEmployeeViewModel`'s
+    /// init registers a foreground observer that re-subscribes the session
+    /// listener. Opening the settings screen started a second realtime
+    /// subscription. The list is `static` now and nothing is injected.
     @Environment(\.dismiss) private var dismiss
     
     @State private var availableFeatures: [FeatureItem] = []
@@ -701,7 +707,7 @@ struct TabBarConfigurationView: View {
     
     private func loadFeatures() {
         // Combine all features but exclude scan since it's always present
-        availableFeatures = (mainViewModel.defaultEmployeeFeatures + [
+        availableFeatures = (MainEmployeeViewModel.defaultEmployeeFeatures + [
             FeatureItem(id: "chat", title: "Chat", systemImage: "bubble.left.and.bubble.right.fill", description: "Message your team"),
             FeatureItem(id: "timeOffRequests", title: "Time Off", systemImage: "calendar.badge.plus", description: "Request time off")
         ]).filter { $0.id != "scan" } // Exclude scan from available features

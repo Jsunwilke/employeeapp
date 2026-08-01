@@ -63,7 +63,17 @@ struct FeatureItem: Identifiable, Equatable {
     let title: String
     let systemImage: String
     let description: String
-    
+
+    /// The three feature ids an organization on photoshoot-notes-only hides.
+    ///
+    /// CONSOLIDATED IN AMB.12. This list existed as a hardcoded triple in THREE
+    /// places — twice in this file and once in `AllFeaturesView` — so an
+    /// organization flag that decides which screens exist was three chances to
+    /// disagree with itself. One home, and every filter reads it.
+    static let dailyReportIDs: Set<String> = [
+        "dailyJobReport", "customDailyReports", "myDailyJobReports"
+    ]
+
     static func == (lhs: FeatureItem, rhs: FeatureItem) -> Bool {
         lhs.id == rhs.id
     }
@@ -108,8 +118,16 @@ class MainEmployeeViewModel: ObservableObject {
     private let organizationService = OrganizationService.shared
     private var organizationCancellable: AnyCancellable?
 
-    // Default employee features – re-orderable by the user.
-    let defaultEmployeeFeatures: [FeatureItem] = [
+    /// The default employee features, re-orderable by the user.
+    ///
+    /// STATIC AS OF AMB.12, and that one keyword is the whole of the fix. The
+    /// tab-bar customise screen read this ONE constant off an
+    /// `@ObservedObject MainEmployeeViewModel`, so opening Settings had to
+    /// CONSTRUCT A SECOND COPY of the app's main view model — and that init
+    /// registers an `.appDidBecomeActive` observer which re-subscribes the
+    /// session listener. A second realtime subscription, spun up from the
+    /// settings screen, to read an array of literals.
+    static let defaultEmployeeFeatures: [FeatureItem] = [
         FeatureItem(id: "timeTracking", title: "Time Tracking", systemImage: "clock.fill", description: "Clock in/out and track your hours"),
         FeatureItem(id: "scan", title: "Scan", systemImage: "wave.3.right.circle.fill", description: "Scan SD cards and job boxes"),
         FeatureItem(id: "timeOffRequests", title: "Time Off Requests", systemImage: "calendar.badge.plus", description: "Request time off and view your requests"),
@@ -231,13 +249,10 @@ class MainEmployeeViewModel: ObservableObject {
         let usePhotoshootNotesOnly = organizationService.usePhotoshootNotesOnly
         print("🔍 getAvailableFeatures: usePhotoshootNotesOnly = \(usePhotoshootNotesOnly)")
 
-        let filtered = defaultEmployeeFeatures.filter { feature in
+        let filtered = Self.defaultEmployeeFeatures.filter { feature in
             // If organization uses photoshoot notes only, hide daily report features
             if usePhotoshootNotesOnly {
-                // Hide daily report, custom daily reports, and my daily job reports
-                let shouldShow = feature.id != "dailyJobReport" &&
-                       feature.id != "customDailyReports" &&
-                       feature.id != "myDailyJobReports"
+                let shouldShow = !FeatureItem.dailyReportIDs.contains(feature.id)
                 if !shouldShow {
                     print("🚫 Filtering out feature: \(feature.id)")
                 }
@@ -248,7 +263,7 @@ class MainEmployeeViewModel: ObservableObject {
             return true
         }
 
-        print("✅ Returning \(filtered.count) features (filtered from \(defaultEmployeeFeatures.count))")
+        print("✅ Returning \(filtered.count) features (filtered from \(Self.defaultEmployeeFeatures.count))")
         return filtered
     }
 
@@ -259,8 +274,7 @@ class MainEmployeeViewModel: ObservableObject {
 
         // If using photoshoot notes only, block daily report features
         if usePhotoshootNotesOnly {
-            let disabledFeatures = ["dailyJobReport", "customDailyReports", "myDailyJobReports"]
-            return !disabledFeatures.contains(featureId)
+            return !FeatureItem.dailyReportIDs.contains(featureId)
         }
 
         return true
@@ -571,18 +585,10 @@ struct MainEmployeeView: View {
     /// the NEW value, so the outgoing tab has to be tracked here.
     @State private var previousTab: String = TabBarManager.shared.selectedTab
 
-    // Fixed manager features
-    let managerFeatures: [FeatureItem] = [
-        FeatureItem(id: "timeOffApprovals", title: "Time Off Approvals", systemImage: "checkmark.circle.fill", description: "Approve or deny time off requests"),
-        FeatureItem(id: "flagUser", title: "Flag User", systemImage: "flag.fill", description: "Flag a user in your organization"),
-        FeatureItem(id: "unflagUser", title: "Unflag User", systemImage: "flag.slash.fill", description: "Unflag a previously flagged user"),
-        FeatureItem(id: "managerMileage", title: "Manager Mileage", systemImage: "car.2.fill", description: "View mileage reports for all employees"),
-        FeatureItem(id: "stats", title: "Statistics", systemImage: "chart.bar.fill", description: "View business analytics and statistics"),
-        FeatureItem(id: "galleryCreator", title: "Gallery Creator", systemImage: "photo.on.rectangle.angled", description: "Create galleries in Captura and Google Sheets"),
-        FeatureItem(id: "jobBoxTracker", title: "Job Box Tracker", systemImage: "cube.box.fill", description: "Track and manage job box status")
-    ]
-    
-    
+    // The manager feature list lives in AllFeaturesView, which is the only thing
+    // that renders it. An identical copy sat here and was read by nothing — a
+    // second source of truth for who can see what. Deleted at AMB.12.
+
     // State for Sports Shoots feature
     @State private var selectedSportsShootID: String? = nil
     
@@ -607,7 +613,11 @@ struct MainEmployeeView: View {
     @State private var isBannerDismissed: Bool = false
     @State private var currentListeningUserID: String? = nil
     
-    @State private var showThemePicker = false
+    /// AMB.12: log out asks first, and says when it failed. Replaces
+    /// `showThemePicker`, whose sheet moved into Settings as a real screen.
+    @State private var confirmingLogout = false
+    @State private var logoutErrorMessage: String?
+    @State private var showLogoutError = false
     @State private var showToast = false
     @State private var toastMessage = ""
     
@@ -893,8 +903,27 @@ struct MainEmployeeView: View {
                 await viewModel.refreshUpcomingEvents()
             }
         }
-        .sheet(isPresented: $showThemePicker) {
-            themePickerSheet
+        // AMB.12: log out asks, and says when it failed.
+        //
+        // It used to be a bare menu Button whose error was swallowed to a
+        // `print`, so a sign-out that did NOT happen was indistinguishable from
+        // one that did — and `signOut` is what purges the local PII, so a silent
+        // failure leaves a shared iPad holding the last photographer's data
+        // while showing them signed out.
+        .confirmationDialog("Log out of Iconik?",
+                            isPresented: $confirmingLogout,
+                            titleVisibility: .visible) {
+            Button("Log out", role: .destructive) {
+                Task { await performSignOut() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("You'll need your email and password to sign back in. Anything waiting to sync from this device should finish first.")
+        }
+        .alert("Couldn't log out", isPresented: $showLogoutError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(logoutErrorMessage ?? "Something went wrong. You are still signed in — please try again.")
         }
         // The screen's ONE push. See HomeDestination.
         .ambientPush(item: $homeDestination) { destination in
@@ -931,8 +960,7 @@ struct MainEmployeeView: View {
     private var allFeaturesRow: some View {
         NavigationLink(destination: AllFeaturesView(
             viewModel: viewModel,
-            tabBarManager: tabBarManager,
-            userRole: storedUserRole
+            tabBarManager: tabBarManager
         )) {
             HStack(spacing: 12) {
                 Image(systemName: "square.grid.2x2")
@@ -1025,11 +1053,21 @@ struct MainEmployeeView: View {
         // Right toolbar: profile info
         ToolbarItem(placement: .navigationBarTrailing) {
             HStack(spacing: 10) {
+                // AMB.12: only drawn when there is a name. `userFirstName`
+                // defaults to "", and an empty Text still occupies the slot and
+                // is still reachable by VoiceOver as an unlabelled element — so
+                // a profile that has not loaded rendered a silent blank.
+                if !storedUserFirstName.isEmpty {
                     Text(storedUserFirstName)
                         .font(.headline)
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
+                }
+                // Decorative: it is not a control, and the name beside it already
+                // says who this is. Hiding it stops VoiceOver announcing an image
+                // that does nothing.
+                Group {
                     if !storedUserPhotoURL.isEmpty {
                         SupabaseAvatarView(storageURL: storedUserPhotoURL, size: 28)
                     } else {
@@ -1038,35 +1076,44 @@ struct MainEmployeeView: View {
                             .frame(width: 28, height: 28)
                             .foregroundColor(.gray)
                     }
-                    Menu {
-                        Button(action: { homeDestination = .settings }) {
-                            Label("Settings", systemImage: "gear")
-                        }
-                        Button(action: { showThemePicker = true }) {
-                            Label("Appearance", systemImage: "paintbrush")
-                        }
-                        // TEMPORARY — removed at AMB.12 with the lab itself.
-                        Button(action: { homeDestination = .designLab }) {
-                            Label("Design Lab", systemImage: "paintpalette")
-                        }
-                        Button("Logout") {
-                            Task {
-                                do {
-                                    try await authService.signOut()
-                                    await MainActor.run {
-                                        isSignedIn = false
-                                    }
-                                } catch {
-                                    print("Logout error: \(error.localizedDescription)")
-                                }
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "line.3.horizontal")
-                    }
                 }
+                .accessibilityHidden(true)
+
+                Menu {
+                    Button(action: { homeDestination = .settings }) {
+                        Label("Settings", systemImage: "gear")
+                    }
+                    // "Appearance" MOVED INTO SETTINGS at AMB.12, per the
+                    // approved design: it is a settings screen, and it sat in
+                    // this menu beside "Settings" itself — two entries for one
+                    // destination's worth of thing.
+                    //
+                    // TEMPORARY — removed at AMB.13 with the lab itself. It said
+                    // AMB.12 until 2026-08-01, when the operator gave the time
+                    // clock its own phase and AMB.12 stopped being the last one
+                    // (plan D15). AMB.13 needs the lab to design against.
+                    Button(action: { homeDestination = .designLab }) {
+                        Label("Design Lab", systemImage: "paintpalette")
+                    }
+                    // AMB.12: a confirmation, a destructive role, and an error
+                    // the user can see. This was a plain Button whose failure
+                    // was swallowed to a `print` — so a sign-out that did NOT
+                    // happen looked exactly like one that did, and the local PII
+                    // purge that goes with it never ran. On a shared iPad that
+                    // is a PII-retention failure, and it is why the less
+                    // destructive Resync had a confirmation while this had none.
+                    Button(role: .destructive) {
+                        confirmingLogout = true
+                    } label: {
+                        Label("Log out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal")
+                }
+                .accessibilityLabel("Profile menu")
             }
         }
+    }
 
     // MARK: - On Appear Actions
     
@@ -1124,7 +1171,7 @@ struct MainEmployeeView: View {
         // where it actually happens, on the tab change.
         
         // Apply the saved theme when the app starts or the view appears
-        applyAppTheme()
+        AppTheme.apply(storedValue: appTheme)
     }
     
     // MARK: - Computed Properties & UI Components
@@ -1174,96 +1221,25 @@ struct MainEmployeeView: View {
         .animation(.easeInOut, value: isFlagged)
     }
     
-    private var themePickerSheet: some View {
-        NavigationView {
-            List {
-                Button(action: { setTheme("system") }) {
-                    HStack {
-                        Label("System", systemImage: "gear")
-                        Spacer()
-                        if appTheme == "system" {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-                
-                Button(action: { setTheme("light") }) {
-                    HStack {
-                        Label("Light", systemImage: "sun.max")
-                        Spacer()
-                        if appTheme == "light" {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-                
-                Button(action: { setTheme("dark") }) {
-                    HStack {
-                        Label("Dark", systemImage: "moon")
-                        Spacer()
-                        if appTheme == "dark" {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Appearance")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        showThemePicker = false
-                    }
-                }
-            }
-        }
-    }
-    
-    // MARK: - Helper Methods
-    
-    // Modified setTheme function to properly save and apply theme
-    private func setTheme(_ theme: String) {
-        self.appTheme = theme
-        showThemePicker = false
-        
-        // Apply the theme
-        applyAppTheme()
-    }
-    
-    // New function to apply the theme based on the appTheme value
-    private func applyAppTheme() {
-        // Set the app's appearance mode
-        DispatchQueue.main.async {
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                for window in windowScene.windows {
-                    switch appTheme {
-                    case "light":
-                        window.overrideUserInterfaceStyle = .light
-                    case "dark":
-                        window.overrideUserInterfaceStyle = .dark
-                    default:
-                        window.overrideUserInterfaceStyle = .unspecified
-                    }
-                }
-            }
-        }
-        
-        // Also set the app-wide appearance through UIApplication
-        let userDefaultsKey = "AppleInterfaceStyle"
-        switch appTheme {
-        case "light":
-            UserDefaults.standard.set("Light", forKey: userDefaultsKey)
-        case "dark":
-            UserDefaults.standard.set("Dark", forKey: userDefaultsKey)
-        default:
-            UserDefaults.standard.removeObject(forKey: userDefaultsKey)
-        }
-        
-        // Update the app's interface style through notification
-        NotificationCenter.default.post(name: NSNotification.Name("AppleInterfaceThemeChangedNotification"), object: nil)
-    }
-    
     private func featureColorFor(_ id: String) -> Color {
         FeatureTheme.color(for: id)  // single source of truth — see DesignTokens.swift
+    }
+
+    /// Sign out, and REPORT the outcome rather than assuming it.
+    ///
+    /// `isSignedIn` is only cleared once `signOut()` has actually returned — the
+    /// old code's failure path left the user signed in with no feedback at all.
+    private func performSignOut() async {
+        do {
+            try await authService.signOut()
+            await MainActor.run { isSignedIn = false }
+        } catch {
+            await MainActor.run {
+                logoutErrorMessage = error.userFacingMessage
+                showLogoutError = true
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
     }
 
     private func loadSchedule() {

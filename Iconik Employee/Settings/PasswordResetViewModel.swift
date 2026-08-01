@@ -17,15 +17,23 @@ class PasswordResetViewModel: ObservableObject {
     @Published var confirmPassword = ""
     @Published var isLoading = false
     @Published var error: String?
-    @Published var showingForgotPassword = false
     @Published var showingResetPassword = false
     @Published var emailSent = false
     @Published var passwordUpdated = false
 
+    /// G3 — the reset link could not be verified. The sheet is presented on this
+    /// path too, so a bad link produces a screen rather than silence.
+    @Published var linkExpired = false
+
     // MARK: - Private Properties
 
     private let authService = SupabaseAuthService.shared
-    private let redirectURL = URL(string: "iconik://reset-password")!
+
+    /// Safely unwrapped (G50 — this was a force-unwrap). A nil here would mean
+    /// the literal below stopped parsing as a URL, in which case Supabase is
+    /// asked to send the email with no redirect rather than the app crashing on
+    /// the way to the password-reset screen.
+    private let redirectURL = URL(string: "iconik://reset-password")
 
     // MARK: - Validation
 
@@ -36,8 +44,10 @@ class PasswordResetViewModel: ObservableObject {
     }
 
     var passwordValidationError: String? {
-        if newPassword.count < 6 {
-            return "Password must be at least 6 characters long"
+        // The rules come from `AuthPasswordRules`, which Create Account uses too
+        // — one definition of what this app considers a password (G36).
+        if !AuthPasswordRules.isLongEnough(newPassword) {
+            return AuthPasswordRules.tooShortMessage
         }
         if newPassword != confirmPassword {
             return "Passwords do not match"
@@ -81,6 +91,7 @@ class PasswordResetViewModel: ObservableObject {
 
         isLoading = true
         error = nil
+        linkExpired = false
 
         do {
             // This sets up the session from the recovery token in the URL
@@ -88,6 +99,12 @@ class PasswordResetViewModel: ObservableObject {
             showingResetPassword = true
         } catch {
             self.error = "Invalid or expired password reset link. Please request a new one."
+            // G3 — BOTH flags. Setting the error alone is what made this failure
+            // silent: `showingResetPassword` was never set, so RootView's sheet
+            // never appeared and the message had no view to be rendered by. The
+            // user tapped a link and saw nothing happen at all.
+            linkExpired = true
+            showingResetPassword = true
         }
 
         isLoading = false
@@ -123,7 +140,7 @@ class PasswordResetViewModel: ObservableObject {
         error = nil
         emailSent = false
         passwordUpdated = false
-        showingForgotPassword = false
+        linkExpired = false
         showingResetPassword = false
     }
 
@@ -134,11 +151,8 @@ class PasswordResetViewModel: ObservableObject {
         emailSent = false
     }
 
-    /// Reset just the reset password flow
-    func resetResetPasswordFlow() {
-        newPassword = ""
-        confirmPassword = ""
-        error = nil
-        passwordUpdated = false
-    }
+    // `resetResetPasswordFlow()` was deleted here in AMB.12 (G50) — zero call
+    // sites; `reset()` is what both dismissal paths actually call. The
+    // `showingForgotPassword` @Published went with it: nothing ever read it,
+    // because Sign In owns that sheet's flag itself.
 }

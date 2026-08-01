@@ -106,22 +106,14 @@ struct EmployeeAppApp: App {
         }
     }
     
-    // Apply the theme based on the AppStorage value
+    /// Apply the stored theme. One applier, in `Utilities/AppTheme.swift`.
+    ///
+    /// There were TWO copies of this with different bodies — this one and
+    /// `MainEmployeeView`'s, which additionally wrote an "AppleInterfaceStyle"
+    /// string into UserDefaults and posted a system-looking notification that
+    /// nothing in the repo reads or observes. Merged at AMB.12; the two dead
+    /// statements went with the merge.
     private func applyAppTheme() {
-        DispatchQueue.main.async {
-            let scenes = UIApplication.shared.connectedScenes
-            guard let windowScene = scenes.first as? UIWindowScene else { return }
-            
-            for window in windowScene.windows {
-                switch appTheme {
-                case "light":
-                    window.overrideUserInterfaceStyle = .light
-                case "dark":
-                    window.overrideUserInterfaceStyle = .dark
-                default:
-                    window.overrideUserInterfaceStyle = .unspecified
-                }
-            }
-        }
+        AppTheme.apply(storedValue: appTheme)
     }
 }

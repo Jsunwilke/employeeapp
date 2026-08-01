@@ -1439,6 +1439,151 @@ other rebases onto it.
   tappable is a FEATURE (a detail screen, and write methods against the shared DB if
   editing is wanted) and belongs to its own phase, not to a restyle.
 
+  **SCOPE SETTLED 2026-08-01 BY OPERATOR RULING (plan D15), at this phase's kickoff.** The
+  two surfaces that had belonged to no phase since AMB.2 were both put in front of him,
+  because AMB.12 was the last phase in which they could be answered:
+
+  - **THE FIVE SHELL SURFACES FOLD IN HERE.** `ToastView`, the home profile toolbar, the
+    appearance picker, the whole sign-in surface and the launch state are AMB.12's. His
+    reason was the recommended one: they inherit most of their look from the primitives, and
+    leaving them out would have left THE FIRST SCREEN EVERY USER SEES as the only unconverted
+    screen in the app.
+  - **THE TIME CLOCK DOES NOT.** Ten screens, 2,662 lines, seven payroll write paths with one
+    confirmation between them — it becomes **AMB.13**, running after this phase, so payroll
+    gets its own design sitting and its own smoke instead of sharing the tail's.
+  - **THEREFORE THE LAB DOES NOT DIE HERE.** D10 had the harness deleted "at the close of
+    AMB.12" — written when AMB.12 was the last phase. AMB.13 needs the harness to design the
+    clock screens against. The lab, its menu entry, its sample data and every surviving mockup
+    die at the close of AMB.13 instead. **The generalisable part: a deferral moves the end, so
+    anything scheduled to die "at the end" has to be re-checked in the SAME change as the
+    deferral** — not discovered later by the phase that needs the deleted thing.
+
+  Full card: `~/Brain/decisions/2026-08-01 the time clock gets its own phase, the furniture
+  ships with the tail.md`.
+
+  **BUILT 2026-08-01, committed to main, NOT pushed — pending operator smoke (iPhone + iPad)
+  and /code-review.** Settings (13 screens incl. the four auth screens), Manager Features
+  (flag, unflag, employee detail, ManagerMileageView), Training (2 screens + its components),
+  and the five shell surfaces. Build clean, zero new warnings; drift sweep clean and every
+  AMB.12 allowlist row deleted. Both simulators driven on live data.
+
+  **THE DESIGN.** Built to the batch-4 mockups the operator approved 2026-07-30. Design lives
+  in production kits — `SettingsKit`, `AuthKit`, `ManagerKit`, `TrainingKit` — plus the arc's
+  consolidations, which is the half AMB.9 and AMB.10 both deferred here: `AmbientControls.swift`
+  now owns the loading row, failure card, chip, button, stat line, search field and nav row.
+  All three approved mockups had privately redeclared the SAME four of those, which was the
+  third independent signal after two review rounds asked for it.
+
+  **WHAT WAS BROKEN AND IS NOW FIXED** (the tail's headline is that almost none of this was
+  cosmetic):
+  - **Sign-in proceeded when the profile fetch failed** (G1) — empty org id, role defaulted,
+    no permissions loaded, every org-scoped screen then guarding out to blank, which reads as
+    an app with no data rather than a failed sign-in. It now refuses, says so, and signs the
+    half-session back out. The LAUNCH path had the same hole and is fixed the same way.
+  - **ENTRY HAD TWO DECIDERS, and that is the lesson.** `RootView` entered the app whenever a
+    Supabase session appeared, so the sign-in fix could be overruled by the shell mid-flight:
+    the user would land in the dashboard for an instant and be bounced back to a BLANK sign-in
+    screen with the explanation destroyed. Entry now has exactly one owner per path. It also
+    fixed a copy lie nobody had connected to it — `signUp` flips the same flag, so "Account
+    created successfully. Please sign in." described something that never happened.
+  - **A bad password-reset link produced no UI at all** (G3) — the error was set and the sheet
+    was never presented, so tapping a dead link did nothing. Verified live on the simulator
+    via `simctl openurl`.
+  - **Opening Settings started a second realtime subscription** (G16). `TabBarConfigurationView`
+    took an `@ObservedObject MainEmployeeViewModel` to read ONE constant array, so Settings
+    constructed a second copy of the app's main view model — whose init registers a foreground
+    observer that re-subscribes the session listener. The list is `static` now and nothing is
+    injected.
+  - **The toast sat ON the floating tab bar** at one of its two call sites, swallowing taps for
+    three seconds — and the bare site is the one that fires on every successful daily report.
+    Its padding was measured from the host's bottom edge and the two hosts do not have the same
+    one. It no longer depends on its host. Also: the first toast's timer used to dismiss the
+    second toast's message.
+  - **Log out had no confirmation, no destructive role and no error path** — the failure was
+    swallowed to a `print`, so a sign-out that did NOT happen looked exactly like one that did,
+    while `signOut()` is what purges local PII. On a shared iPad that is a retention failure.
+  - **Training was blank on iPad** — a bare `NavigationView` splits at regular width and the
+    whole screen collapsed into a hidden sidebar. Pre-existing; found by driving the iPad.
+  - **A failed fetch rendered as an empty state** on six screens, three of them manager- or
+    payroll-critical. `AmbientFailureCard` exists because of that, and every converted screen
+    now distinguishes "nothing here" from "we could not ask".
+  - Training's Save/Share **crashed on legacy rows** with an empty image list; the counter and
+    thumbnail strip read a column that defaults to 0, so genuinely multi-image critiques drew
+    as single photos; "Image saved to Photos" reported the DOWNLOAD finishing, not the save.
+  - `SchoolDetailView` re-queried the **half-typed school name** on every keystroke (G7), and
+    renaming a school still silently orphans its history — now warned, in the words the join
+    actually implies.
+  - Photo delete **removed the row from the UI before the write** — a failed delete lost the
+    photo from screen and kept it in the database.
+  - The 1Hz timer leak in `AllFeaturesView` (K5), four hoisted reducers over a 5,000-entry
+    buffer running per body pass (G19), and Metrics' Export handing the share sheet a path
+    whether or not the file existed (G13).
+
+  **CONSOLIDATIONS DONE:** three identical `UIActivityViewController` wrappers under three
+  names became `Components/ActivityShareSheet.swift` — the important one was `ShareSheet`,
+  declared in YEARBOOK and consumed by TRAINING, a cross-feature dependency that a rename in
+  someone else's phase would have broken at compile time. Two copies of `applyAppTheme()` with
+  different bodies became `Utilities/AppTheme.swift`, and the two dead statements one of them
+  carried (an "AppleInterfaceStyle" UserDefaults write and a system-looking notification that
+  nothing reads or observes) went with the merge. Three verbatim copies of the coordinate
+  validator became `Utilities/CoordinateString.swift`. The photoshoot-notes org flag's
+  three-id list had three hardcoded homes and now has one.
+
+  **NAMED, NOT FIXED, and deliberately:** three `parseCoordinateString` copies in
+  `TemplateService`, `ShiftDetailView` and `RouteOptimizerService` are LOOSER than the shared
+  validator (no finite or range check), so repointing them would change behaviour on shipped
+  travel and route code — that needs its own change, not a consolidation sweep. `CreateAccount`
+  still inserts the users row with a user-typed `organization_id` and a client-supplied role
+  (G2/G4) — server-side concerns. `ForgotPassword` still sets "sent" on both branches, which
+  is an enumeration-safety posture, not a layout. `ManagerMileageView` keeps its own 2/25/2024
+  fortnight anchor; the window is now LABELLED rather than reconciled, because making the two
+  engines agree is a data-layer change (AMB.13's, with the clock).
+
+  **`NSPhotoLibraryAddUsageDescription` was missing from `Iconik-Employee-Info.plist`**, so the
+  add-only Photos request presented the full-library prompt with the wrong description. Added
+  — **but that file is gitignored (it carries API keys) and has no committed template, so the
+  key exists only on this machine.** It must be re-added on any fresh clone. Flagged rather
+  than quietly left.
+
+  **DESIGN-SYSTEM SHARP EDGE FOUND ON A DEVICE, documented at the source:** `AmbientFlowLayout`
+  bare inside an `HStack` is measured with an unspecified width, reports a single long line,
+  then wraps below the frame its parent reserved — so it EATS ITS NEIGHBOUR'S TAPS. On Training
+  the layout toggle beside the filter chips opened a critique instead of switching to a list.
+  Every production call site was checked; all the others sit in a VStack. The warning is at the
+  layout because the failure is silent and presents as a dead tap, not as a wrong picture.
+
+  **THE SECTION-HEADER MISS, worth recording because only the simulator caught it:**
+  `.listStyle(.plain)` PINS a `Section` header, so the converted heading in All Features floated
+  over the cards scrolling under it. The build was clean, the sweep was clean, the code read
+  fine. Titles are rows now.
+
+- [ ] **AMB.13 The time clock** (10 screens, 2,662 lines) — added 2026-08-01 by the ruling
+  above. Closes the AMB arc and deletes the lab harness.
+
+  `TimeTrackingMainView`, `TimeEntryListView`, `SessionSelectionView`, `NotesInputView`,
+  `CustomClockOutView`, `ActiveClockInEditView`, `ManualTimeEntryView`, `EditTimeEntryView`,
+  plus the two DEAD ones (`TimeEntryDetailView`, `TimeTrackingButton` — zero call sites,
+  and `TimeTrackingButton` nonetheless holds 2 drift-allowlist rows, so the gate is guarding
+  dead pixels). Inventory, states, literals and the K1-K22 defect list are already written:
+  `AMB_BATCH4_PARITY.md` §2.4. **Needs a lab mockup and an operator design sitting first** —
+  it is the one surface in the arc that never got one.
+
+  **Why it is not a restyle.** The seven payroll write paths have exactly ONE confirmation
+  between them (Delete). `AllFeaturesView`'s toolbar capsule creates or closes a payroll
+  record in one nav-bar tap with no session, no notes and no confirmation. `HoursWidget`
+  swallows both its clock-in and clock-out errors to a bare comment, on the path the source
+  itself calls the app's primary way in and out of a shift. A fetch failure renders as "No
+  time entries for pay period" — payroll appearing to be zero. And there is a real ceiling
+  conflict: manual creation caps at 16h, editing at 24h, and the server enforces 16h, so an
+  edit the form accepts is rejected on Save.
+
+  **Carried in from AMB.12:** the four AMB.12 drift-allowlist rows that are actually
+  time-tracking files (`SessionSelectionView` 1, `TimeEntryListView` 2, `TimeTrackingButton` 2,
+  `TimeTrackingMainView` 2) stay allowlisted through AMB.12 and must reach zero here. The
+  hardcoded `2/25/2024` 14-day pay-period anchor is shared with `ManagerMileageView`; AMB.12
+  labels the window rather than changing the arithmetic, and reconciling the two engines is a
+  data-layer change that needs its own ruling.
+
 ### FLG.1 — FLAGGING A USER HAS NEVER WORKED (FIXED 2026-07-28 — OPERATOR SMOKE PASSED
 2026-07-28, "it all worked": manager flag delivered end to end on device)
 
