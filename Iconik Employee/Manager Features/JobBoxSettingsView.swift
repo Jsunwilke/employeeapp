@@ -1,8 +1,9 @@
 //  JobBoxSettingsView.swift
 //  Iconik Employee — the tracker's stalled-time thresholds, converted in AMB.11
 //
-//  THE DESIGN IS `JobBoxLabSettingsSheet` in `DesignLab/Mockups/JobBoxMockup.swift`,
-//  approved at the batch-4 sitting (2026-07-30).
+//  THE DESIGN was `JobBoxLabSettingsSheet`, approved at the batch-4 sitting
+//  (2026-07-30). That mockup was DELETED at AMB.11's close once the operator's
+//  device smokes passed — the design lives here now, which is the point.
 //
 //  WHAT THE CONVERSION CHANGED:
 //    · IT SAYS THESE SETTINGS ARE DEVICE-LOCAL. They live in `UserDefaults` and are

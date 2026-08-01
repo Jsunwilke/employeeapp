@@ -61,7 +61,12 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     case yearbook
     /// Batch 4 — AMB.11's remaining surface and AMB.12's tail, mocked together so
     /// the whole rest of the arc is judged in one sitting.
-    case jobBox
+    /// AMB.11's Job Box & Scan mockup was DELETED at its close (2026-08-01), by the
+    /// same rule as AMB.7/9/10's: the operator smoked the converted screens on a
+    /// device, so the validation reference had outlived the port it validated. Its
+    /// rules live on executably in `scripts/test_nfc_routing_rules.sh`,
+    /// `test_jobbox_flag_rules.sh`, `test_jobbox_progress_rules.sh` and
+    /// `test_jobbox_pickup_rules.sh`, and its drawing in production's `JobBoxKit`.
     case settings
     case manager
     case training
@@ -75,7 +80,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: return "Time Off"
         case .classGroups: return "Class Groups"
         case .yearbook: return "Yearbook"
-        case .jobBox: return "Job Box & Scan"
         case .settings: return "Settings"
         case .manager: return "Manager Tools"
         case .training: return "Training"
@@ -88,7 +92,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens, .palette: return "Foundations"
         case .timeOff, .classGroups, .yearbook: return "Batch 3"
-        case .jobBox, .settings, .manager, .training: return "Batch 4"
+        case .settings, .manager, .training: return "Batch 4"
         }
     }
 
@@ -101,7 +105,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: return "AMB.8"
         case .classGroups: return "AMB.10"
         case .yearbook: return "AMB.10"
-        case .jobBox: return "AMB.11"
         case .settings: return "AMB.12"
         case .manager: return "AMB.12"
         case .training: return "AMB.12"
@@ -120,8 +123,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "Job cards say when — with the year — and how much is done. The detail finally shows the date and the note bodies, and the whole row takes the tap. The slate stays a plain whiteboard on purpose."
         case .yearbook:
             return "0% stops reading as an error, filters compose with search instead of wiping it, OPTIONAL marks the few items that really are, and a network failure stops claiming the checklist doesn't exist."
-        case .jobBox:
-            return "One chrome instead of two, the screen finally the colour the tab bar says it is, an empty state on Search and a loading state on Stats — and the tracker says it is only showing 30 days. The shipped meter is embedded, not redesigned."
         case .settings:
             return "The rows people actually touch lead, the iPad sync block says who it is for, log out looks destructive while resync stops being the scary one, and every screen that can fail says so."
         case .manager:
@@ -138,7 +139,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: return "calendar.badge.clock"
         case .classGroups: return "person.3.fill"
         case .yearbook: return "list.clipboard.fill"
-        case .jobBox: return "wave.3.right.circle.fill"
         case .settings: return "gearshape.fill"
         case .manager: return "flag.fill"
         case .training: return "graduationcap.fill"
@@ -156,7 +156,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: return TimeOffMockup.featureTint
         case .classGroups: return ClassGroupsMockup.featureTint
         case .yearbook: return YearbookMockup.featureTint
-        case .jobBox: return JobBoxMockup.featureTint
         case .settings: return SettingsMockup.featureTint
         case .manager: return ManagerMockup.featureTint
         case .training: return TrainingMockup.featureTint
@@ -171,7 +170,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         case .timeOff: TimeOffMockup()
         case .classGroups: ClassGroupsMockup()
         case .yearbook: YearbookMockup()
-        case .jobBox: JobBoxMockup()
         case .settings: SettingsMockup()
         case .manager: ManagerMockup()
         case .training: TrainingMockup()

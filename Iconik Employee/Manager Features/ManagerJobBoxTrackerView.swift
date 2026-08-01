@@ -1,9 +1,10 @@
 //  ManagerJobBoxTrackerView.swift
 //  Iconik Employee — the manager's job box tracker, converted in AMB.11
 //
-//  THE DESIGN IS `JobBoxLabTrackerSurface` / `JobBoxLabTrackerRow` /
-//  `JobBoxLabEditSheet` in `DesignLab/Mockups/JobBoxMockup.swift`, approved at the
-//  batch-4 sitting (2026-07-30). The vocabulary comes from `NFC/JobBoxKit.swift`
+//  THE DESIGN was `JobBoxLabTrackerSurface` / `JobBoxLabTrackerRow` /
+//  `JobBoxLabEditSheet`, approved at the batch-4 sitting (2026-07-30). That
+//  mockup was DELETED at AMB.11's close once the operator's device smokes
+//  passed — the design lives here now, which is the point. The vocabulary comes from `NFC/JobBoxKit.swift`
 //  and the Ambient primitives; the meter is the SHIPPED `JobBoxProgressMeter`,
 //  embedded rather than redrawn.
 //
