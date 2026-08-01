@@ -1410,7 +1410,7 @@ other rebases onto it.
   (org RLS is the only boundary today, the whole surface's posture — TOF.1's class),
   the web app rendering job-box flags + adopting the colour contract (and the stale
   root `status-colors.json`), and the consolidation list above.
-- [ ] **AMB.12 Settings, Manager, Training** (~6,600 lines) — the tail, converted per D9.
+- [x] **AMB.12 Settings, Manager, Training + the shell** (~7,700 lines) — the tail, converted per D9.
   Closes the arc and deletes the lab harness + its menu entry.
 
   **THE SHELL, enumerated at the start of AMB.5 as D13 required: `AMB_SHELL_INVENTORY.md`.**
@@ -1461,8 +1461,9 @@ other rebases onto it.
   Full card: `~/Brain/decisions/2026-08-01 the time clock gets its own phase, the furniture
   ships with the tail.md`.
 
-  **BUILT 2026-08-01, committed to main, NOT pushed — pending operator smoke (iPhone + iPad)
-  and /code-review.** Settings (13 screens incl. the four auth screens), Manager Features
+  **SHIPPED + PUSHED 2026-08-01 (origin/main 52ee152..2fd4cf8). OPEN: the operator's
+  both-device smoke — start with sign-out/sign-in, the one path that could not be tested here.**
+  /code-review RUN and closed before the push (see the review round at the end of this entry). Settings (13 screens incl. the four auth screens), Manager Features
   (flag, unflag, employee detail, ManagerMileageView), Training (2 screens + its components),
   and the five shell surfaces. Build clean, zero new warnings; drift sweep clean and every
   AMB.12 allowlist row deleted. Both simulators driven on live data.
@@ -2193,3 +2194,38 @@ phase. Sequenced against AMB.3 because both touch `ScheduleView`'s per-day index
 - Zero `try!`/`as!`/`fatalError`; keep it that way
 - Core services have correct weak-self/timer/channel hygiene
 - Newer features (Tasks, Yearbook, Equipment, TimeOff, Chat) follow clean Models/Services/Views — use them as the template
+
+  **/CODE-REVIEW ROUND, 2026-08-01, before the push — 6 findings, ALL FIXED (`2fd4cf8`).
+  TWO OF THEM ONLY SURFACED BY DRIVING THE APP**, which is the round's real finding: this
+  phase had been reported "verified on both devices" on the strength of screens RENDERING.
+  Both had a clean build, a clean drift sweep, and code that read correctly.
+
+  - **All Features drag-to-reorder, broken by this phase's own section-title row.** `onMove`
+    reports offsets into the **ForEach**, not into the enclosing `Section`, so the `-1` added
+    to "account for the title" moved the row ABOVE the one being dragged and swallowed any
+    drag of the FIRST row entirely (index 0 filtered out, then an early return). Reproduced
+    by dragging "Time Off Requests" to the top and watching "Scan" move instead; fixed and
+    re-verified, with the persisted `employeeFeatureOrder` matching the screen. The fix also
+    closed a PRE-EXISTING divergence: the ForEach is over the FILTERED list while the view
+    model mutates the unfiltered one, so on an org with `usePhotoshootNotesOnly` a drag could
+    reorder hidden features.
+  - **Every disabled button drew white text on `Color.secondary.opacity(0.4)`** — near-white
+    on near-white in light mode, across Flag User's submit, Training's Save, Add School's Save
+    and Sign In. Invisible in review, obvious in a screenshot.
+  - **`schools` UPDATEs had no zero-row proof**, so "Photo deleted." and "School info updated!"
+    were reported for writes that may have matched nothing (PostgREST returns 200 on a no-op).
+    `SchoolService` now carries the same `requireRowsWritten` guard as `DailyJobReportService`
+    and `TimeTrackingService` — a service the earlier sweeps had skipped.
+  - A rationale comment in `SignInView` asserting that `RootView` enters the app whenever a
+    session appears — **made false by the RootView change in the SAME commit**, and
+    contradicted by a second comment twenty lines below it.
+  - The profile-failure card said "Try again" even when the cause was an account with no
+    resolvable organization, where retrying can never succeed. The two causes now get
+    different advice and the Retry button is hidden on the futile one.
+  - The toast's repositioning was unverified and absent from the smoke list; a check was added
+    rather than a claim.
+
+  **THE DURABLE LESSON: "it renders" is not "it works", and a clean build plus a clean gate
+  plus code that reads right still proves neither.** Every phase of this arc has a defect class
+  its automation cannot see; for the tail it was INTERACTIONS — drags, taps, disabled states.
+  Exercise the CONTROLS on a converted screen, not just its pixels.
