@@ -108,8 +108,15 @@ struct AmbientActionButton: View {
         .accessibilityAddTraits(.isButton)
     }
 
+    /// DISABLED IS DRAWN AS A DIMMED LABEL, NOT AS WHITE-ON-GREY.
+    ///
+    /// The first version kept the white foreground and only swapped the fill for
+    /// `Color.secondary.opacity(0.4)`. In light mode that is a near-white slab, so
+    /// "Flag photographer" and "Save to Photos" came out as white text on almost
+    /// white — legible only if you already knew what they said. A disabled button
+    /// still has a job: it tells you what you have not done yet.
     private var foreground: Color {
-        guard live else { return .white.opacity(0.9) }
+        guard live else { return .secondary }
         switch role {
         case .primary: return .white
         case .secondary: return .primary
@@ -118,7 +125,7 @@ struct AmbientActionButton: View {
     }
 
     private var background: AnyShapeStyle {
-        guard live else { return AnyShapeStyle(Color.secondary.opacity(0.4)) }
+        guard live else { return AnyShapeStyle(Color.secondary.opacity(0.16)) }
         switch role {
         case .primary: return AnyShapeStyle(tint)
         case .secondary: return AnyShapeStyle(.ultraThinMaterial)

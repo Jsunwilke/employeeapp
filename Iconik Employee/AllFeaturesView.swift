@@ -237,14 +237,40 @@ struct AllFeaturesView: View {
         }
     }
 
-    /// The title row sits at index 0 of the same section, so the indices `onMove`
-    /// hands back are one ahead of the feature array. Shifting them here keeps the
-    /// view model's mover unchanged — the alternative, a second section purely for
-    /// the heading, breaks the drag across the boundary.
+    /// Apply a drag to the FULL feature list.
+    ///
+    /// TWO THINGS ARE TRUE HERE AND THE FIRST CUT OF THIS GOT BOTH WRONG.
+    ///
+    /// 1. `onMove` reports offsets into the ForEach's OWN collection, not into the
+    ///    section's rows. The title row above the ForEach is not part of it, so
+    ///    there is nothing to shift for. The first version subtracted one, which
+    ///    moved the row ABOVE the one being dragged and silently dropped any drag
+    ///    of the first row (index 0 filtered out, then an early return). Caught by
+    ///    dragging a row on the simulator, not by reading it.
+    ///
+    /// 2. The ForEach is over the FILTERED list while the view model owns the
+    ///    UNFILTERED one. On an organization with `usePhotoshootNotesOnly` three
+    ///    features are hidden, so a filtered offset is not an unfiltered offset —
+    ///    a pre-existing divergence that a straight pass-through would keep.
+    ///    Reordering is therefore done on the visible list and then written back
+    ///    into the positions the visible items occupy, which leaves every hidden
+    ///    feature exactly where it was.
     private func moveEmployeeFeatures(from source: IndexSet, to destination: Int) {
-        let shifted = IndexSet(source.compactMap { $0 > 0 ? $0 - 1 : nil })
-        guard !shifted.isEmpty else { return }
-        viewModel.moveEmployeeFeatures(from: shifted, to: max(0, destination - 1))
+        var visible = filteredEmployeeFeatures
+        visible.move(fromOffsets: source, toOffset: destination)
+
+        let all = viewModel.employeeFeatures
+        let visibleIDs = Set(visible.map(\.id))
+        let slots = all.indices.filter { visibleIDs.contains(all[$0].id) }
+        guard slots.count == visible.count else { return }
+
+        var reordered = all
+        for (slot, feature) in zip(slots, visible) {
+            reordered[slot] = feature
+        }
+
+        viewModel.employeeFeatures = reordered
+        viewModel.saveEmployeeFeatureOrder()
     }
 
     // MARK: - Clock

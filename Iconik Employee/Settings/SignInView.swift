@@ -29,6 +29,14 @@ struct SignInView: View {
     /// read, so the session was torn down again and the user is still out.
     @State private var profileLoadFailed = false
 
+    /// WHICH KIND of profile failure, because the two need different advice.
+    /// A fetch that failed is worth retrying; an account with no resolvable
+    /// organization is not — retrying it is futile and telling someone to try
+    /// again forever is worse than saying who can fix it. Create Account still
+    /// accepts a typed organization id with no validation (G2), so this is a
+    /// state a real signup can reach.
+    @State private var profileFailureIsOrganization = false
+
     /// Handed back by Create Account when it pops (G38): that screen used to
     /// print its confirmation and sit there with the form — password and all —
     /// still filled in.
@@ -139,19 +147,26 @@ struct SignInView: View {
                 // session is signed back out, so by the time this card is on
                 // screen the sentence would be false. Approved copy that the
                 // implementation makes untrue is worse than an edited string, so
-                // the first clause states what actually happened. The rest is
-                // the approved wording, unchanged.
-                text: "Your password was accepted, but we couldn't read your organization or your permissions. Try again — signing in without them leaves every screen empty.",
+                // the first clause states what actually happened.
+                //
+                // The second variant was added after AMB.12's code review: the
+                // one-size message ended in "Try again", which can never succeed
+                // when the account simply has no organization to find.
+                text: profileFailureIsOrganization
+                    ? "Your password was accepted, but this account isn't attached to an organization we can find. Trying again won't change that — ask your manager to check the account before signing in."
+                    : "Your password was accepted, but we couldn't read your organization or your permissions. Try again — signing in without them leaves every screen empty.",
                 accent: .red,
                 density: .compact)
 
-            AmbientActionButton(title: "Retry",
-                                systemImage: "arrow.clockwise",
-                                size: .small,
-                                tint: AuthStyle.tint,
-                                fillWidth: false,
-                                isLoading: isLoading,
-                                action: signIn)
+            if !profileFailureIsOrganization {
+                AmbientActionButton(title: "Retry",
+                                    systemImage: "arrow.clockwise",
+                                    size: .small,
+                                    tint: AuthStyle.tint,
+                                    fillWidth: false,
+                                    isLoading: isLoading,
+                                    action: signIn)
+            }
         }
     }
 
@@ -160,6 +175,7 @@ struct SignInView: View {
     func signIn() {
         errorMessage = ""
         profileLoadFailed = false
+        profileFailureIsOrganization = false
         accountCreatedMessage = ""
         isLoading = true
         focusedField = nil
@@ -191,14 +207,20 @@ struct SignInView: View {
     /// Load the identity the app cannot run without, and only then open the app.
     ///
     /// G1 — WHY THE SESSION IS TORN DOWN RATHER THAN LEFT ALIVE BEHIND A RETRY.
-    /// It is not `isSignedIn` that admits a user to the app: `RootView` watches
-    /// `SupabaseAuthService.isAuthenticated` and pushes into `MainEmployeeView`
-    /// on its own the moment that flips true. So a screen that kept the session
-    /// and merely declined to set its own flag would be overruled — the user
-    /// would land in exactly the empty app this fix exists to prevent. Signing
-    /// back out puts the session in the one state the whole app already agrees
-    /// on (signed out, local PII purged), and the retry re-runs the full sign-in
-    /// from the credentials still in memory. Nothing is logged or persisted.
+    /// A half-signed-in session is a state no other screen in the app knows how
+    /// to render: the user holds a live Supabase session while this screen says
+    /// they are not in, and anything that later consults `isAuthenticated`
+    /// directly would disagree with what they can see. Signing back out puts the
+    /// session in the one state the whole app already agrees on (signed out,
+    /// local PII purged), and the retry re-runs the full sign-in from the
+    /// credentials still in memory. Nothing is logged or persisted.
+    ///
+    /// CORRECTED after AMB.12's code review: this comment used to justify the
+    /// tear-down by saying `RootView` would push into `MainEmployeeView` on its
+    /// own the moment `isAuthenticated` flipped true. That was true when it was
+    /// written and was made false by the RootView change in the SAME commit —
+    /// entry now has one owner per path (see the note below and RootView's
+    /// `onChange`). The tear-down is still right, for the reason above.
     func completeSignIn(userId: String) async {
         do {
             // Reuse the app's own fetch instead of the inline query and the
@@ -242,9 +264,11 @@ struct SignInView: View {
             // Do NOT proceed. See the note above for why the session goes with it.
             try? await authService.signOut()
 
+            let isOrganizationFailure = error is SignInAdmissionError
             await MainActor.run {
                 isLoading = false
                 profileLoadFailed = true
+                profileFailureIsOrganization = isOrganizationFailure
             }
         }
     }

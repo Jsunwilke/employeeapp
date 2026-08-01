@@ -176,11 +176,14 @@ class SchoolService: ObservableObject {
         guard !updateData.isEmpty else { return }
 
         do {
-            try await supabase
+            let written: [WrittenRowID] = try await supabase
                 .from("schools")
                 .update(updateData)
                 .eq("id", value: schoolId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: schoolId)
         } catch {
             errorMessage = error.localizedDescription
             throw error
@@ -202,14 +205,52 @@ class SchoolService: ObservableObject {
                 return .object(jsonDict)
             }
 
-            try await supabase
+            let written: [WrittenRowID] = try await supabase
                 .from("schools")
                 .update(["location_photos": AnyJSON.array(photosJSON)])
                 .eq("id", value: schoolId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: schoolId)
         } catch {
             errorMessage = error.localizedDescription
             throw error
         }
+    }
+
+    // MARK: - Proving a write landed
+
+    private struct WrittenRowID: Decodable { let id: String }
+
+    /// A PostgREST UPDATE that matches NO ROWS returns 200. Without this, a write
+    /// against a school that has been deleted elsewhere — or that this user cannot
+    /// see under RLS — resolves successfully, and the screen goes on to report
+    /// "Photo deleted." or "School info updated!" for a database that never
+    /// changed. AMB.9 shipped a critical of exactly this shape (a case-folded id
+    /// silently no-opped ~98% of mileage edits), and `DailyJobReportService` and
+    /// `TimeTrackingService` have carried the same guard since. AMB.12's own code
+    /// review found `schools` still without it.
+    enum WriteError: LocalizedError, CustomDebugStringConvertible {
+        case noRowsMatched(id: String)
+
+        var errorDescription: String? {
+            "Nothing was saved — this school may have been changed or removed elsewhere. Pull to refresh and try again."
+        }
+
+        var debugDescription: String {
+            switch self {
+            case .noRowsMatched(let id):
+                return "schools UPDATE matched no rows for id \(id)"
+            }
+        }
+    }
+
+    private func requireRowsWritten(_ rows: [WrittenRowID], id: String) throws {
+        guard rows.isEmpty else { return }
+        let error = WriteError.noRowsMatched(id: id)
+        print("⚠️ \(error.debugDescription)")
+        errorMessage = error.errorDescription
+        throw error
     }
 }
