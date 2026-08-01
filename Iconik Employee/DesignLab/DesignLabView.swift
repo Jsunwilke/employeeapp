@@ -2,7 +2,12 @@
 //  Iconik Employee — the design lab
 //
 //  ARC SCAFFOLDING. Built once in AMB.2, carried for the whole AMB arc, and
-//  DELETED WHOLE AT AMB.12 along with its entry in the profile menu.
+//  DELETED WHOLE AT AMB.13 along with its entry in the profile menu.
+//
+//  It said AMB.12 for eleven phases, because AMB.12 was the last phase when this
+//  header was written. The time clock being given its own phase moved the end
+//  (D15) — a lifetime pinned to a phase NUMBER rather than to the thing it
+//  serves goes stale the first time the phase list moves.
 //
 //  WHAT IT IS FOR
 //      No screen in this app gets restyled before the operator has seen the
@@ -36,10 +41,14 @@ import SwiftUI
 /// Every mockup the lab currently carries. Phases add cases as they mock their
 /// batch, and delete them once their screens are converted and confirmed.
 enum DesignLabMockup: String, CaseIterable, Identifiable {
+    /// AMB.13's, and THE LAST ONE THIS LAB WILL EVER CARRY. It is first in the
+    /// list because it is the only thing here that still needs a decision — the
+    /// two below it are references.
+    case timeClock
     case specimens
     case palette
 
-    // EVERY SURFACE MOCKUP IS NOW GONE, and that is the rule working rather than
+    // EVERY OTHER SURFACE MOCKUP IS NOW GONE, and that is the rule working rather than
     // the lab emptying out. A mockup is a VALIDATION REFERENCE: it outlives the
     // port it validated, not the phase. AMB.7, 9, 10, 11 and now 12 each deleted
     // theirs at their close, once the operator had smoked the converted screens
@@ -61,11 +70,16 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     // phase; the operator's 2026-08-01 ruling gave the time clock its own phase
     // (D15), so AMB.13 needs the lab to design against and the harness dies with
     // that phase instead.
+    //
+    // AND THIS IS THAT PHASE. `timeClock` above is the arc's final mockup; when
+    // its screens are converted and smoked, this file, its two survivors, the
+    // sample data and the profile-menu entry all go together.
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .timeClock: return "Time Clock"
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
         }
@@ -75,6 +89,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     /// rather than presenting nine peers.
     var batch: String {
         switch self {
+        case .timeClock: return "AMB.13 — the last one"
         case .specimens, .palette: return "Foundations"
         }
     }
@@ -83,6 +98,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     /// progress rather than a pile of screens.
     var phase: String {
         switch self {
+        case .timeClock: return "AMB.13"
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
         }
@@ -90,6 +106,8 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
 
     var premise: String {
         switch self {
+        case .timeClock:
+            return "Clock in, clock out, and the hours that become your paycheque. Seven ways to write a time entry, one confirmation between them. Flip the states at the top."
         case .specimens:
             return "Every Ambient primitive at every density, drawn against Equipment's real row content. This is where the density decision gets made."
         case .palette:
@@ -99,6 +117,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .timeClock: return "clock.badge.checkmark.fill"
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
         }
@@ -110,6 +129,9 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     /// different places.
     var tint: Color {
         switch self {
+        // Its real accent, read from FeatureTheme rather than picked here, so
+        // the gallery row and the screen it opens are the same colour.
+        case .timeClock: return TimeClockStyle.accent
         case .specimens: return .purple
         case .palette: return .pink
         }
@@ -118,6 +140,7 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     @ViewBuilder
     var view: some View {
         switch self {
+        case .timeClock: TimeClockMockup()
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
         }
@@ -167,7 +190,7 @@ struct DesignLabView: View {
                 // exists to show colours side by side — so the lab now shows a
                 // background the app no longer does. Said out loud rather than
                 // silently rebuilt.
-                Text("Nothing here reads or writes your data — every screen runs on fixed sample data chosen to contain the cases that break layouts. Once you are inside, the switcher at the bottom right swaps between mockups without coming back here.\n\nD14: these mockups still show a background in each feature's own colour. The real app no longer does — every production screen is washed in the one company blue the web app uses, and turns red when you are flagged. Feature colours live on in the tiles, icons and badges.")
+                Text("Nothing here reads or writes your data — every screen runs on fixed sample data chosen to contain the cases that break layouts. Once you are inside, the switcher at the bottom right swaps between mockups without coming back here.\n\nD14: the two Foundations sheets still show a background in each feature's own colour, because showing colours side by side is their whole job. The Time Clock does not — it is a surface mockup, so it uses the real app's background: the one company blue the web app uses, which turns red when you are flagged. Feature colours live on in the tiles, icons and badges.")
             }
 
             Section {
@@ -182,7 +205,7 @@ struct DesignLabView: View {
             }
 
             Section {
-                Label("This whole screen is temporary. It is deleted when the design rollout finishes (AMB.12), along with its entry in the profile menu.",
+                Label("This whole screen is temporary. It is deleted when the design rollout finishes — AMB.13, the time clock above — along with its entry in the profile menu.",
                       systemImage: "clock.arrow.circlepath")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
