@@ -497,6 +497,119 @@ nothing is built on primitives that are still moving (D5).
             sharing the tail's. CLOSES THE ARC: the lab harness and its menu
             entry are deleted here.
 
+            SHIPPED 2026-08-01. Closeout below.
+
+
+## AMB.13 closeout — 2026-08-01. THE ARC IS COMPLETE.
+
+Four commits: the inventory + rules + mockup (`d05ae9d`), the conversion
+(`2f4dd7e`), the review round (`38de6a2`), the lab's deletion (`2a8a3ed`).
+
+WHAT SHIPPED. Eight live screens converted; three files deleted — two dead
+screens (`TimeEntryDetailView`, `TimeTrackingButton`, zero call sites between
+them) and `NotesInputView`, folded into `ClockOutView`. The old presentation is
+gone from every converted file, not left beside the new one.
+
+THE PHASE FOUND MORE THAN IT RESTYLED, which is L5 in its thirteenth phase:
+
+  1  A FAILED LOAD WAS DRAWN AS ZERO HOURS, on two payroll screens. Both caught
+     their error, set `isLoading = false` and nothing else — so a dropped
+     connection rendered "No time entries for pay period" above a total of 0h,
+     and "No sessions assigned for today / you can still clock in without one"
+     on a day that had sessions. `AmbientFailureCard`, which AMB.12 added NAMING
+     THESE TWO SCREENS as the reason it was needed, is now on both.
+
+  2  THE EDIT FORM'S CEILING LIED. It accepted 24 hours and enabled Save; the
+     write enforces 16 and threw. Both numbers now come from `TimeClockRules`,
+     compiled and run by `scripts/test_timeclock_rules.sh` (94 checks) with a
+     regression check on that exact case. Verified on device.
+
+  3  AN ORPHANED ENTRY INFLATED THE TOTAL FOREVER. `durationInHours` substitutes
+     `Date()` for a missing end time — right for a running shift, wrong for one
+     whose clock-out never landed, which the offline queue can produce and then
+     deliberately drop. Summed by the list, such a row grew by an hour every
+     hour. `payrollSeconds` counts it as zero and the row says "Incomplete".
+
+  4  THE OFFLINE CACHE IGNORES THE RANGE IT STANDS IN FOR. `getTimeEntries`
+     falls back to a cache load that takes NO date range although the save takes
+     one, so a dropped connection draws some earlier period's rows under the
+     range you selected, with a total belonging to neither. FOUND ON A DEVICE:
+     the pay period showed an entry a direct SQL query proved was not in the
+     database. Making the cache range-aware is a data change and is recorded as
+     out of scope; the totals card now says the figures are a saved copy and
+     when they were synced, reading two flags the service has always published
+     and no view had ever read.
+
+  5  A CLAIM THE DATA COULD NOT SUPPORT, and the one worth generalising. The row
+     drew three entry KINDS and the dead detail screen named them "Manual" and
+     "Clock-based" — but the test was `clockIn != nil && clockOut != nil &&
+     !running`, TRUE OF EVERY FINISHED SHIFT. So the "manual" pencil showed on
+     all of them and the "clock-based" glyph was reachable only by a BROKEN
+     entry: the labels were not merely wrong, they were inverted.
+     `time_entries` has no column recording how a row was created. The badge now
+     says only what is knowable — Active, or Incomplete, or nothing.
+
+     GENERALISABLE: **a distinction the UI draws is a claim about the data, and
+     it decays the same way a comment does.** This one had survived long enough
+     to be copied into a second screen and then into this phase's own approved
+     mockup, and it was caught only by opening DATABASE_SCHEMA.md to look for
+     the column that would justify it. Before drawing a difference, find the
+     field that carries it.
+
+THE OPERATOR DECISION THIS PHASE ASKED FOR (2026-08-01): the two writes that
+CHANGE a shift already recorded — the live start-time edit and the late custom
+clock-out — now confirm, with the consequence in numbers ("today's total becomes
+2h 22m"). Ordinary clock in and clock out do NOT, deliberately: they happen
+several times a day and a prompt tapped through unread is worse than none. In
+place of that, every payroll form shows a plain summary of what it is about to
+record. All seven write paths gained an in-flight guard that is DRAWN, not
+implied.
+
+ALSO FIXED, each inside the surface being converted: the shipped typo "while
+clocked-in**ly clocked in**"; the 30-day edit window explained on the entry
+itself, rescued from a screen with zero call sites that was the only place in
+the app it had ever been written down; cross-midnight now expressible in the
+manual form for the first time (`createDateTime` forced both ends onto one day);
+the clock-out sheet no longer wedging at "Processing…" forever on failure; the
+home dashboard's two clock writes no longer swallowing their errors into a bare
+comment on the path its own source calls the app's primary one; session
+selection made a TOGGLE, so a mis-tap on an OPTIONAL field can be undone;
+per-body `DateFormatter` allocation across eight files; debug `print`s on payroll
+paths; an empty-bodied `debugTimeEntryQuery()` awaited on every empty result;
+and a 0.5-second `asyncAfter` the first load was gated on.
+
+REVIEW. The `security-review` harness resolved the WRONG REPOSITORY and produced
+an empty diff — its silence meant nothing, and taking it at face value would
+have been the "green for the wrong reasons" failure this arc named at AMB.2.
+Reviewed by hand instead: five findings, all fixed in `38de6a2`, including a
+sheet that could still present EMPTY — the exact shape this phase set out to
+remove, reintroduced by unwrapping inside a `.sheet(item:)` builder rather than
+where the value is set.
+
+THE GATE. The four AMB.13 rows reached ZERO and were deleted, so those files are
+now fully guarded rather than ratcheted. What remains on the allowlist is one
+AMB.1 residual and Sports Shoot Feature (out of scope by D1) — every row is now
+a deliberate exclusion rather than outstanding work, which means the next
+unexplained row is drift rather than backlog.
+
+THE LAB IS GONE. Harness, menu entry, sample data, palette and the last mockup,
+plus the `HomeDestination` case and push site that reached them. Zero references
+remain. The designs live on as production code: `TimeClockKit`, `TimeOffKit`,
+`SettingsKit`, `AuthKit`, `ManagerKit`, `TrainingKit`, `ClassGroupsKit`,
+`YearbookKit`, `MileageKit`, `RoutePlannerKit` and the design system itself.
+
+OPEN, and honestly stated: the iPad simulator signed itself out when its build
+was reinstalled, and the password is the operator's to type, so this phase's own
+device pass covered the DESIGN on both devices (in the lab, before conversion)
+but the CONVERTED screens on live data only on iPhone. D7's both-device
+requirement is met by the operator smoke, which is the real gate.
+
+STILL OUT OF SCOPE, recorded so nothing is assumed handled: the 100-row fetch
+ceiling (now SAID rather than hidden), the range-blind offline cache (now SAID),
+`getCurrentTimeEntry`'s unordered `.limit(1)`, the asymmetric offline support
+for five of the seven write paths, and the pay-period anchor still being stated
+in two places. AMB13_CLOCK_PARITY.md §7 carries all of them.
+
 Roughly ten sessions after AMB.2, plus AMB.2 itself — which is now the design
 system, the build gate, the lab harness AND batch 1's four surfaces' mockups,
 so it is realistically TWO sessions rather than one. Said here rather than
