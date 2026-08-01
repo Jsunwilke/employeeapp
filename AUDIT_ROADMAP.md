@@ -1461,8 +1461,8 @@ other rebases onto it.
   Full card: `~/Brain/decisions/2026-08-01 the time clock gets its own phase, the furniture
   ships with the tail.md`.
 
-  **SHIPPED + PUSHED 2026-08-01 (origin/main 52ee152..2fd4cf8). OPEN: the operator's
-  both-device smoke — start with sign-out/sign-in, the one path that could not be tested here.**
+  **CLOSED 2026-08-01 — OPERATOR SMOKE PASSED ("smoke passes"), shipped + pushed
+  (origin/main 52ee152..).**
   /code-review RUN and closed before the push (see the review round at the end of this entry). Settings (13 screens incl. the four auth screens), Manager Features
   (flag, unflag, employee detail, ManagerMileageView), Training (2 screens + its components),
   and the five shell surfaces. Build clean, zero new warnings; drift sweep clean and every
@@ -2229,3 +2229,21 @@ phase. Sequenced against AMB.3 because both touch `ScheduleView`'s per-day index
   plus code that reads right still proves neither.** Every phase of this arc has a defect class
   its automation cannot see; for the tail it was INTERACTIONS — drags, taps, disabled states.
   Exercise the CONTROLS on a converted screen, not just its pixels.
+
+  **CLOSED 2026-08-01, operator smoke PASSED.** Six mockups deleted at the close per the
+  AMB.7 rule — Settings, Manager Tools and Training (this phase's), plus Time Off (AMB.8),
+  Class Groups and Yearbook (AMB.10), **which had outlived their own closes and had simply
+  been left behind**. Their sample data went with them (995 lines → 377). A mockup is a
+  VALIDATION REFERENCE: it outlives the port it validated, not the phase — and data that only
+  ever fed a deleted screen is not scaffolding, it is a fossil that still compiles, so nothing
+  complains and the next person has to work out which of it is live.
+
+  **THE HARNESS SURVIVES, and that is the D15 ruling working as intended.** The gallery, the
+  sample data and the two FOUNDATION mockups (specimen sheet, palette) stay for AMB.13, which
+  needs somewhere to design the time clock. Verified after the deletions: build clean, sweep
+  clean, and the lab opens on the device showing exactly the two foundations.
+
+  **A CUT THAT WENT ONE BLOCK TOO FAR, caught by the build:** deleting the dead sample data
+  took `LabKitEdge` with it — the kit-colour band the SURVIVING specimen sheet draws. Restored.
+  The lesson is small and repeatable: when deleting by region rather than by symbol, the
+  compiler is the only thing that knows what the region was still holding up.

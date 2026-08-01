@@ -38,38 +38,29 @@ import SwiftUI
 enum DesignLabMockup: String, CaseIterable, Identifiable {
     case specimens
     case palette
-    /// AMB.7's two Reports mockups were DELETED at that phase's close, once the
-    /// operator confirmed both device smokes on the converted screens — a
-    /// validation reference outlives the port it validates, not the phase.
-    case timeOff
-    /// AMB.11's job box meter mockup was DELETED at its close (2026-07-29), the
-    /// same rule AMB.7's two Reports mockups went by: the operator confirmed the
-    /// converted screens on a device, so the validation reference had outlived the
-    /// port it validated. Its awkward states — Packed-then-Turned-In, a box on its
-    /// second trip — are covered executably by
-    /// `scripts/test_jobbox_progress_rules.sh` instead of by a screen.
-    /// AMB.9's three mockups (Mileage, Route Planner, Statistics) were DELETED
-    /// at its close (2026-07-30) — the operator confirmed the converted screens
-    /// on both devices and the /code-review passed, so the validation references
-    /// had outlived the ports. Their arithmetic lives on executably in
-    /// `scripts/test_mileage_rules.sh` and `scripts/test_stats_rules.sh`, and
-    /// the shared drawing in MileageKit/RoutePlannerKit/StatsKit, which the
-    /// converted screens use directly.
-    /// Batch 3's remaining two are AMB.10's, mocked with the batch so it was
-    /// judged in one sitting; they die at AMB.10's close.
-    case classGroups
-    case yearbook
-    /// Batch 4 — AMB.11's remaining surface and AMB.12's tail, mocked together so
-    /// the whole rest of the arc is judged in one sitting.
-    /// AMB.11's Job Box & Scan mockup was DELETED at its close (2026-08-01), by the
-    /// same rule as AMB.7/9/10's: the operator smoked the converted screens on a
-    /// device, so the validation reference had outlived the port it validated. Its
-    /// rules live on executably in `scripts/test_nfc_routing_rules.sh`,
-    /// `test_jobbox_flag_rules.sh`, `test_jobbox_progress_rules.sh` and
-    /// `test_jobbox_pickup_rules.sh`, and its drawing in production's `JobBoxKit`.
-    case settings
-    case manager
-    case training
+
+    // EVERY SURFACE MOCKUP IS NOW GONE, and that is the rule working rather than
+    // the lab emptying out. A mockup is a VALIDATION REFERENCE: it outlives the
+    // port it validated, not the phase. AMB.7, 9, 10, 11 and now 12 each deleted
+    // theirs at their close, once the operator had smoked the converted screens
+    // on a device.
+    //
+    // AMB.12 (2026-08-01) removed the last three — Settings, Manager Tools and
+    // Training — with its smoke passing on both devices. It also swept up three
+    // that had outlived their own closes and had simply been left behind: Time
+    // Off (AMB.8), Class Groups and Yearbook (AMB.10). Their designs live on
+    // where they belong: in production, as `SettingsKit`, `AuthKit`,
+    // `ManagerKit`, `TrainingKit`, `TimeOffKit`, `ClassGroupsKit` and
+    // `YearbookKit`, which the converted screens use directly.
+    //
+    // WHAT SURVIVES, and why it is only these two: the specimen sheet and the
+    // palette are FOUNDATIONS, not a phase's proposal. They show the primitives
+    // themselves, so they stay useful for as long as there is a phase left to
+    // design — which there is. THE HARNESS DOES NOT DIE HERE. D10 pinned its
+    // deletion to "the close of AMB.12" back when AMB.12 was the arc's last
+    // phase; the operator's 2026-08-01 ruling gave the time clock its own phase
+    // (D15), so AMB.13 needs the lab to design against and the harness dies with
+    // that phase instead.
 
     var id: String { rawValue }
 
@@ -77,12 +68,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "Specimen Sheet"
         case .palette: return "Feature Colours"
-        case .timeOff: return "Time Off"
-        case .classGroups: return "Class Groups"
-        case .yearbook: return "Yearbook"
-        case .settings: return "Settings"
-        case .manager: return "Manager Tools"
-        case .training: return "Training"
         }
     }
 
@@ -91,8 +76,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
     var batch: String {
         switch self {
         case .specimens, .palette: return "Foundations"
-        case .timeOff, .classGroups, .yearbook: return "Batch 3"
-        case .settings, .manager, .training: return "Batch 4"
         }
     }
 
@@ -102,12 +85,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "AMB.2"
         case .palette: return "AMB.2 · D11"
-        case .timeOff: return "AMB.8"
-        case .classGroups: return "AMB.10"
-        case .yearbook: return "AMB.10"
-        case .settings: return "AMB.12"
-        case .manager: return "AMB.12"
-        case .training: return "AMB.12"
         }
     }
 
@@ -117,18 +94,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
             return "Every Ambient primitive at every density, drawn against Equipment's real row content. This is where the density decision gets made."
         case .palette:
             return "The wash behind each screen is its feature's colour — but 27 features share 11 colours today. Current against proposed, as a wash and as a tile."
-        case .timeOff:
-            return "Five surfaces. The balance moves out of Settings to the top of the screen it is about, status gets ONE rendering instead of three, and the manager queue admits it is a queue."
-        case .classGroups:
-            return "Job cards say when — with the year — and how much is done. The detail finally shows the date and the note bodies, and the whole row takes the tap. The slate stays a plain whiteboard on purpose."
-        case .yearbook:
-            return "0% stops reading as an error, filters compose with search instead of wiping it, OPTIONAL marks the few items that really are, and a network failure stops claiming the checklist doesn't exist."
-        case .settings:
-            return "The rows people actually touch lead, the iPad sync block says who it is for, log out looks destructive while resync stops being the scary one, and every screen that can fail says so."
-        case .manager:
-            return "A denied user stops getting a live-looking form, one string stops being three states, unflagging asks first — and the flagged photographer gets a way to answer, drawn as a proposal."
-        case .training:
-            return "One word for one concept, a failed load that stops claiming you have no photos, a grid that follows the window instead of the model name, and a critique with no image that no longer crashes on Share."
         }
     }
 
@@ -136,12 +101,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return "square.grid.3x3.square"
         case .palette: return "paintpalette.fill"
-        case .timeOff: return "calendar.badge.clock"
-        case .classGroups: return "person.3.fill"
-        case .yearbook: return "list.clipboard.fill"
-        case .settings: return "gearshape.fill"
-        case .manager: return "flag.fill"
-        case .training: return "graduationcap.fill"
         }
     }
 
@@ -153,12 +112,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: return .purple
         case .palette: return .pink
-        case .timeOff: return TimeOffMockup.featureTint
-        case .classGroups: return ClassGroupsMockup.featureTint
-        case .yearbook: return YearbookMockup.featureTint
-        case .settings: return SettingsMockup.featureTint
-        case .manager: return ManagerMockup.featureTint
-        case .training: return TrainingMockup.featureTint
         }
     }
 
@@ -167,12 +120,6 @@ enum DesignLabMockup: String, CaseIterable, Identifiable {
         switch self {
         case .specimens: SpecimenSheetMockup()
         case .palette: PaletteMockup()
-        case .timeOff: TimeOffMockup()
-        case .classGroups: ClassGroupsMockup()
-        case .yearbook: YearbookMockup()
-        case .settings: SettingsMockup()
-        case .manager: ManagerMockup()
-        case .training: TrainingMockup()
         }
     }
 }
