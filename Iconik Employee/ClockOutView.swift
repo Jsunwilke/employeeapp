@@ -26,9 +26,6 @@ struct ClockOutView: View {
     /// in which case there is nothing to summarise — the write still refuses
     /// server-side.
     let clockInTime: Date?
-    /// Reported by the presenting screen, because this sheet dismisses itself on
-    /// success and a failure the user never sees is the shape being removed.
-    var onFailure: ((String) -> Void)?
 
     @Environment(\.presentationMode) private var presentationMode
 
@@ -98,9 +95,7 @@ struct ClockOutView: View {
                 presentationMode.wrappedValue.dismiss()
             } catch {
                 isSaving = false
-                let message = "Couldn't clock you out. \(error.userFacingMessage)"
-                failureMessage = message
-                onFailure?(message)
+                failureMessage = "Couldn't clock you out. \(error.userFacingMessage)"
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }

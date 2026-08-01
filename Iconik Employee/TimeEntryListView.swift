@@ -59,24 +59,46 @@ struct TimeEntryListView: View {
         entries.reduce(0) { $0 + $1.payrollSeconds }
     }
 
+    private var isLoading: Bool { phase == .loading }
+
+    /// True only before the FIRST successful load of this range. Once there are
+    /// rows, they stay on screen through a refresh and through a refresh that
+    /// fails — a total that blinks to nothing and back is its own small lie
+    /// about payroll.
+    private var hasNothingToShow: Bool {
+        if case .loaded = phase { return false }
+        return entries.isEmpty
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
             TimeClockRangePicker(selection: $range)
 
-            switch phase {
-            case .loading:
-                AmbientLoadingRow(message: "Loading your hours…")
-
-            case .failed(let message):
+            // A FAILURE IS SHOWN ABOVE WHAT WE ALREADY HAD, never instead of it.
+            // The first cut of this swapped the whole list for the failure card,
+            // which is a quieter version of the same lie the screen exists to
+            // remove: a refresh that fails should not make the hours you were
+            // already looking at disappear.
+            if case .failed(let message) = phase {
                 AmbientFailureCard(message: message) { load() }
+            }
 
-            case .loaded:
+            if hasNothingToShow {
+                // Nothing loaded and nothing to fall back on. Either it is still
+                // arriving, or the card above already explains why it is not.
+                if isLoading {
+                    AmbientLoadingRow(message: "Loading your hours…")
+                }
+            } else {
                 TimeClockTotalsCard(totalSeconds: totalSeconds,
                                     entryCount: entries.count,
                                     rangeLabel: range.rawValue,
-                                    isTruncated: entries.count >= fetchCeiling)
+                                    isTruncated: entries.count >= fetchCeiling,
+                                    lastSyncedAt: timeTrackingService.isUsingOfflineData
+                                        ? (timeTrackingService.lastSyncTime ?? Date())
+                                        : nil)
 
                 if entries.isEmpty {
                     AmbientEmptyState(
@@ -100,7 +122,7 @@ struct TimeEntryListView: View {
                 }
             }
         }
-        .task(id: range) { await loadAsync() }
+        .task(id: range) { await loadAsync(resettingRows: true) }
         .sheet(isPresented: $showingManualEntry, onDismiss: load) {
             ManualTimeEntryView(timeTrackingService: timeTrackingService)
         }
@@ -132,7 +154,12 @@ struct TimeEntryListView: View {
         Task { await loadAsync() }
     }
 
-    private func loadAsync() async {
+    /// `resettingRows` is true only when the RANGE changed. Keeping the old rows
+    /// there would show a pay period's entries under a total labelled "Today"
+    /// until the fetch landed. A plain refresh keeps them, which is the point of
+    /// `hasNothingToShow`.
+    private func loadAsync(resettingRows: Bool = false) async {
+        if resettingRows { entries = [] }
         phase = .loading
         let period = range.period()
         do {

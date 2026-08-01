@@ -246,6 +246,20 @@ struct TimeClockTotalsCard: View {
     /// is a data bug this phase does not fix, but a payroll figure that is
     /// silently short is not something to draw as if it were complete.
     var isTruncated = false
+    /// When these figures came from the offline cache rather than the server.
+    ///
+    /// THIS IS NOT A NICETY. `TimeTrackingService.getTimeEntries` falls back to
+    /// `persistentCache.loadTimeEntries(userId:organizationId:)` on any failure —
+    /// and that load takes NO date range, so it returns whatever period was
+    /// cached last. A dropped connection therefore draws some earlier period's
+    /// rows under the range you selected, with a total that belongs to neither.
+    /// Caught on a device during this phase, when a row appeared that the
+    /// database did not contain.
+    ///
+    /// Making the cache range-aware is a data change and is recorded as out of
+    /// scope; saying so is presentation, and the service already publishes both
+    /// `isUsingOfflineData` and `lastSyncTime` for it.
+    var lastSyncedAt: Date?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -262,6 +276,14 @@ struct TimeClockTotalsCard: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
+            }
+
+            if let lastSyncedAt {
+                Label("Saved copy from \(Formatters.shortTime.string(from: lastSyncedAt)) — these may not be this \(rangeLabel.lowercased())'s hours",
+                      systemImage: "icloud.slash.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TimeClockStyle.overrun)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if isTruncated {
@@ -655,7 +677,14 @@ struct TimeClockNotesField: View {
     var minHeight: CGFloat = 90
 
     private var limit: Int { TimeClockLimits.notesMaxCharacters }
-    private var count: Int { text.trimmingCharacters(in: .whitespacesAndNewlines).count }
+
+    /// COUNTED THE SAME WAY IT IS ENFORCED, which is the whole reason to draw a
+    /// counter at all. The first cut displayed the TRIMMED length (what the
+    /// server checks) while truncating the RAW string, so a field padded with
+    /// whitespace showed "498/500" and silently refused the next keystroke.
+    /// Counting raw is stricter than the server by at most the surrounding
+    /// whitespace, so a note this field accepts can never be rejected on save.
+    private var count: Int { text.count }
 
     var body: some View {
         AmbientFormSection(title: title,

@@ -273,6 +273,25 @@ Named so that nothing here is quietly assumed to have been handled.
   silently truncates AND the Total Hours figure is then wrong. That is a data
   bug with a payroll consequence and it needs its own phase — a design phase
   must not invent pagination. **Recorded, not fixed.**
+- **THE OFFLINE CACHE IGNORES THE DATE RANGE IT IS STANDING IN FOR.**
+  `getTimeEntries` falls back to
+  `persistentCache.loadTimeEntries(userId:organizationId:)` on any failure, and
+  on `!isConnected` (`TimeTrackingService.swift:564-572`, `:601-609`). The SAVE
+  takes `periodStart`/`periodEnd`; the LOAD takes neither. So a dropped
+  connection returns whatever period was cached last, and the list draws those
+  rows under the range you actually selected, with a total that belongs to
+  neither.
+
+  **Found on a device during this phase**, when the pay period showed 7 entries
+  including one the database did not contain — a zero-length row from an earlier
+  cache write. Two minutes and a relaunch later it was 6, and a direct SQL query
+  confirmed only one entry existed for that day.
+
+  Making the cache range-aware is a data change and is NOT done here. What IS
+  done: the totals card now says the figures are a saved copy and gives the sync
+  time, using `isUsingOfflineData` and `lastSyncTime`, which the service has
+  always published and no view has ever read. The same shape as the dashboard's
+  `offlineRow` from AMB.4.
 - **`getCurrentTimeEntry` uses `.limit(1)` with no ordering** (`:544-556`) — with
   two stray `clocked-in` rows, which one is "current" is undefined.
 - **Offline is asymmetric.** `clockIn`/`clockOut` queue to `TimeClockOutbox` and

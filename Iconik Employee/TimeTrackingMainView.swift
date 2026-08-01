@@ -48,8 +48,26 @@ struct TimeTrackingMainView: View {
     /// `.sheet(item:)` rather than a boolean plus an `if let`, so a sheet can
     /// never be presented without the entry it is about to edit.
     @State private var entryBeingAdjusted: TimeEntry?
-    @State private var entryBeingClosedOut: TimeEntry?
+    @State private var shiftBeingClosedOut: RunningShift?
     @State private var alertMessage: String?
+
+    /// A running shift that DEFINITELY has a start time.
+    ///
+    /// Handing `.sheet(item:)` the `TimeEntry` and then unwrapping
+    /// `clockInTime` inside the builder reintroduces the exact defect this
+    /// phase set out to remove: a sheet that presents and draws nothing. The
+    /// unwrap happens where the value is SET, so an entry without a start time
+    /// cannot open the sheet at all.
+    private struct RunningShift: Identifiable {
+        let id: String
+        let clockInTime: Date
+
+        init?(_ entry: TimeEntry?) {
+            guard let entry, let start = entry.clockInTime else { return nil }
+            self.id = entry.id
+            self.clockInTime = start
+        }
+    }
 
     private var status: TimeClockStatus {
         guard timeTrackingService.isClockIn,
@@ -108,22 +126,24 @@ struct TimeTrackingMainView: View {
             SessionSelectionView(timeTrackingService: timeTrackingService)
         }
         .sheet(isPresented: $showingClockOut) {
+            // No `onFailure` back to this screen: the sheet stays open and
+            // reports in place. Doing both put an alert on top of the sheet
+            // that was already showing the same sentence.
             ClockOutView(timeTrackingService: timeTrackingService,
-                         clockInTime: timeTrackingService.currentTimeEntry?.clockInTime,
-                         onFailure: { alertMessage = $0 })
+                         clockInTime: timeTrackingService.currentTimeEntry?.clockInTime)
         }
-        .sheet(item: $entryBeingClosedOut) { entry in
-            if let clockInTime = entry.clockInTime {
-                CustomClockOutView(timeTrackingService: timeTrackingService,
-                                   clockInTime: clockInTime)
-            }
+        .sheet(item: $shiftBeingClosedOut) { shift in
+            CustomClockOutView(timeTrackingService: timeTrackingService,
+                               clockInTime: shift.clockInTime)
         }
         .sheet(item: $entryBeingAdjusted) { entry in
             ActiveClockInEditView(timeEntry: entry, timeTrackingService: timeTrackingService)
         }
         .alert("Long shift detected", isPresented: $showingLongShiftAlert) {
             Button("Clock out now") { showingClockOut = true }
-            Button("Set the time I stopped") { entryBeingClosedOut = timeTrackingService.currentTimeEntry }
+            Button("Set the time I stopped") {
+                shiftBeingClosedOut = RunningShift(timeTrackingService.currentTimeEntry)
+            }
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("You've been clocked in for more than 24 hours. Would you like to set the time you actually stopped?")
