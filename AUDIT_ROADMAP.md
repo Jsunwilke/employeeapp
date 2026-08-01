@@ -1261,7 +1261,7 @@ other rebases onto it.
 
 **Batch 4**
 
-- [ ] **AMB.11 Job box / NFC** (18 views, 5,198 lines) — **PARTIAL: the progress meter
+- [x] **AMB.11 Job box / NFC** (18 views, 5,373 lines) — **SHIPPED + PUSHED + CLOSED 2026-07-31.** *(History below: the progress meter
   slice is DONE, SHIPPED and PUSHED 2026-07-29.** The rest of the surface is untouched, so
   the phase stays open.
 
@@ -1377,9 +1377,39 @@ other rebases onto it.
   session-section/pickup-orchestration duplication, jobBoxStatusRing deriving from
   JobBoxTripStage, JobBoxStatsRules extraction, JobBoxDTO retirement, refcounted
   listener store replacing the generation token, settings-slider publish debounce.
-  **Open to close the phase:** operator smoke both devices (checklist grew an AMB.11
-  section), then the JobBox mockup + gallery entry die (AMB.7 rule). NFC hardware paths
-  (reader/writer branches, the TAG-vs-NDEF entitlement flag) remain device-only checks.
+  **2026-07-31 — OPERATOR SMOKES PASSED BOTH DEVICES ("smokes pass"). SHIPPED +
+  PUSHED (origin/main 3b97d36..12c5a45); AMB.11 CLOSED.** The mockup, its gallery
+  entry and its 181-line sample-data block were deleted at the close per the AMB.7
+  rule; the design lives in `NFC/JobBoxKit` + `JobBox/JobBoxProgressMeter`/`Rules`/
+  `JobBoxFlagRules` + `NFC/NFCRoutingRules`, with 154 executable rule checks
+  standing in for the awkward states the mockup used to show.
+
+  **THREE OPERATOR RULINGS ARRIVED DURING THE CLOSE, and all three are the same
+  lesson — the operator asked for the ACTION, not the view of the problem:**
+  (1) *"anyone should be able to see that so that everyone knows not to use it"* —
+  flags went from manager-only to app-wide (scan sheet, Manual Entry, Search rows),
+  one shared current-trip read; (2) *"why cant i do it by hitting the alert and
+  having an option?"* — the Job Box Alert banner stopped being a filtered-Search
+  shortcut and became a "Left-behind boxes" sheet with **Mark Turned In** per box,
+  which immediately did real work (the operator's two months-old strays, unscannable
+  because the boxes had been reused, were cleared — one from his device, one live
+  from mine, both DB-verified); (3) *"im not a big fan of this tab bar and how it
+  wraps"* — the five pills went to ONE line, selected-shows-its-name, wrapping now
+  impossible by construction. **Generalizable: an alert that names a problem should
+  carry the fix.** Decision cards in `~/Brain/decisions/` (2026-07-31 ×2).
+
+  **A PROCESS FAILURE WORTH THE SAME WEIGHT:** the operator's smoke file still said
+  "run AFTER applying the flag SQL" hours after he had applied it, and its items were
+  plain bullets he could not tick. I swept the roadmap and the code comments when the
+  gate cleared and skipped the ONE file whose only audience is him. **When a gate
+  clears, sweep every file that mentions it — operator-facing first, not last.**
+
+  NFC hardware paths (reader/writer tag branches, the TAG-vs-NDEF entitlement
+  question) remain device-only checks, now covered by the operator's passing smoke on
+  real tags. Still parked for AMB.12: server-side permission gating on flag writes
+  (org RLS is the only boundary today, the whole surface's posture — TOF.1's class),
+  the web app rendering job-box flags + adopting the colour contract (and the stale
+  root `status-colors.json`), and the consolidation list above.
 - [ ] **AMB.12 Settings, Manager, Training** (~6,600 lines) — the tail, converted per D9.
   Closes the arc and deletes the lab harness + its menu entry.
 
