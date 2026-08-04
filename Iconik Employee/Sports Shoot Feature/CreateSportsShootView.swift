@@ -14,15 +14,12 @@ struct CreateSportsShootView: View {
     // Form fields
     @State private var selectedSession: Session?
     @State private var sessions: [Session] = []
-    @State private var selectedSchool: School?
-    @State private var schools: [School] = []
     @State private var sportName: String = ""
     @State private var seasonType: String = "Fall Sports"
     @State private var shootDate = Date()
     @State private var location: String = ""
     @State private var photographer: String = ""
     @State private var additionalNotes: String = ""
-    @State private var linkToSession: Bool = false
     
     // Season type options
     private let seasonTypes = ["Fall Sports", "Winter Sports", "Spring Sports", "League"]
@@ -40,69 +37,39 @@ struct CreateSportsShootView: View {
     var body: some View {
         NavigationView {
             Form {
-                // Session linking section (optional)
-                Section(header: Text("Link to Session (Optional)")) {
-                    Toggle("Link to upcoming session", isOn: $linkToSession)
-
-                    if linkToSession {
-                        Picker("Select Session", selection: $selectedSession) {
-                            Text("No Session").tag(nil as Session?)
-                            ForEach(sessions, id: \.id) { session in
-                                HStack {
-                                    VStack(alignment: .leading) {
-                                        Text(session.schoolName)
-                                            .font(.system(size: 14))
-                                        Text(session.date ?? "")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(.gray)
-                                    }
-                                }
-                                .tag(session as Session?)
+                Section(header: Text("Scheduled Sports Session")) {
+                    Picker("Select Session", selection: $selectedSession) {
+                        Text("Select a sports session").tag(nil as Session?)
+                        ForEach(sessions, id: \.id) { session in
+                            VStack(alignment: .leading) {
+                                Text(session.schoolName)
+                                    .font(.system(size: 14))
+                                Text(session.date)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.gray)
                             }
+                            .tag(session as Session?)
                         }
-                        .onChange(of: selectedSession) { newSession in
-                            // Auto-populate fields from selected session
-                            if let session = newSession {
-                                // Find and select the matching school
-                                if let school = schools.first(where: { $0.id == session.schoolId }) {
-                                    selectedSchool = school
-                                } else if !session.schoolName.isEmpty {
-                                    // Try to match by name if ID doesn't match
-                                    selectedSchool = schools.first(where: { $0.value == session.schoolName })
-                                }
+                    }
+                    .onChange(of: selectedSession) { newSession in
+                        guard let session = newSession else { return }
+                        applyDerivedSessionFields(session)
+                    }
 
-                                // Set date from session
-                                let formatter = DateFormatter()
-                                formatter.dateFormat = "yyyy-MM-dd"
-                                if let date = formatter.date(from: session.date) {
-                                    shootDate = date
-                                }
-
-                                // Set location from session
-                                if let loc = session.location, !loc.isEmpty {
-                                    location = loc
-                                }
-                            }
-                        }
-
-                        if selectedSession != nil {
-                            Text("Fields auto-populated from session")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
+                    if sessions.isEmpty && !isLoading {
+                        Text("No unused sports sessions are available in the next two weeks.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if selectedSession != nil {
+                        Text("School, date, and location come from the scheduled session.")
+                            .font(.caption)
+                            .foregroundColor(.blue)
                     }
                 }
 
                 // Basic information section
                 Section(header: Text("Basic Information")) {
-                    // School picker
-                    Picker("School", selection: $selectedSchool) {
-                        Text("Select School").tag(nil as School?)
-                        ForEach(schools, id: \.id) { school in
-                            Text(school.value).tag(school as School?)
-                        }
-                    }
-                    .disabled(linkToSession && selectedSession != nil)
+                    LabeledContent("School", value: selectedSession?.schoolName ?? "Select a session above")
                     
                     // Season type picker
                     Picker("Season/Type", selection: $seasonType) {
@@ -113,7 +80,9 @@ struct CreateSportsShootView: View {
                     
                     TextField("Sport Name (Optional)", text: $sportName)
                     DatePicker("Shoot Date", selection: $shootDate, displayedComponents: .date)
+                        .disabled(true)
                     TextField("Location", text: $location)
+                        .disabled(true)
                     TextField("Photographer", text: $photographer)
                 }
                 
@@ -138,11 +107,10 @@ struct CreateSportsShootView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .disabled(isLoading || selectedSchool == nil)
+                    .disabled(isLoading || selectedSession == nil)
 
-                    // Debug info
-                    if selectedSchool == nil {
-                        Text("Required: School")
+                    if selectedSession == nil {
+                        Text("Required: Scheduled sports session")
                             .font(.caption)
                             .foregroundColor(.red)
                     }
@@ -170,7 +138,6 @@ struct CreateSportsShootView: View {
                 )
             }
             .onAppear {
-                loadSchools()
                 loadSessions()
             }
         }
@@ -184,71 +151,156 @@ struct CreateSportsShootView: View {
             return
         }
 
-        guard let school = selectedSchool else {
+        guard let session = selectedSession else {
             alertTitle = "Error"
-            alertMessage = "School is required."
+            alertMessage = "Select a scheduled sports session before creating the job."
             showAlert = true
             return
         }
+
+        guard session.organizationID == storedUserOrganizationID else {
+            selectedSession = nil
+            alertTitle = "Sessions Changed"
+            alertMessage = "Reload the Sports Job form and select a session for the current organization."
+            showAlert = true
+            return
+        }
+
+        guard let sessionDate = session.startDate else {
+            alertTitle = "Error"
+            alertMessage = "The selected session does not have a valid date."
+            showAlert = true
+            return
+        }
+
+        let sessionLocation = derivedLocation(for: session)
+        applyDerivedSessionFields(session)
 
         // Create a new SportsShoot with UUID
         let newShoot = SportsShoot(
             id: UUID(),
             organizationId: storedUserOrganizationID,
-            schoolName: school.value,
-            schoolId: school.id,
+            schoolName: session.schoolName,
+            schoolId: session.schoolId,
             sportName: sportName,
             seasonType: seasonType,
-            shootDate: shootDate,
-            location: location,
+            shootDate: sessionDate,
+            location: sessionLocation,
             photographer: photographer,
             additionalNotes: additionalNotes,
-            sessionId: linkToSession ? selectedSession?.id : nil,
+            sessionId: session.id,
             isArchived: false
         )
 
         // Create sports shoot via service (requires network)
+        isLoading = true
         Task {
             do {
                 try await SportsShootService.shared.createSportsShoot(newShoot)
                 await MainActor.run {
+                    isLoading = false
                     alertTitle = "Success"
                     alertMessage = "Sports shoot created successfully."
                     showAlert = true
                 }
             } catch {
                 await MainActor.run {
+                    isLoading = false
                     alertTitle = "Error"
-                    alertMessage = "Failed to create sports shoot: \(error.localizedDescription)"
+                    let rawError = String(describing: error).lowercased()
+                    alertMessage = rawError.contains("23505") || rawError.contains("duplicate key")
+                        ? "That scheduled session already has a Sports Job."
+                        : "Failed to create sports shoot. \(error.userFacingMessage)"
                     showAlert = true
                 }
-            }
-        }
-    }
-    
-    private func loadSchools() {
-        guard !storedUserOrganizationID.isEmpty else { return }
-
-        Task {
-            do {
-                schools = try await SchoolService.shared.getSchools(organizationID: storedUserOrganizationID)
-            } catch {
             }
         }
     }
 
     private func loadSessions() {
         guard !storedUserOrganizationID.isEmpty else { return }
+        let organizationID = storedUserOrganizationID
 
+        isLoading = true
         Task {
             do {
-                let fetchedSessions = try await SportsShootService.shared.fetchUpcomingSessions(forOrganization: storedUserOrganizationID)
+                async let fetchedSessions = SessionService.shared.fetchSessions(
+                    organizationID: organizationID,
+                    forceRefresh: true
+                )
+                async let existingShoots = SportsShootService.shared.fetchAllSportsShoots(
+                    forOrganization: organizationID
+                )
+
+                let (upcomingSessions, sportsShoots) = try await (fetchedSessions, existingShoots)
+                let usedSessionIDs = Set(sportsShoots.compactMap { shoot in
+                    normalizedSessionID(shoot.sessionId)
+                }.filter { !$0.isEmpty })
+                let now = Date()
+                let twoWeeksFromNow = Calendar.current.date(
+                    byAdding: .weekOfYear,
+                    value: 2,
+                    to: now
+                ) ?? now
+                let availableSessions = upcomingSessions.filter { session in
+                    guard let sessionDate = session.startDate else { return false }
+                    return session.organizationID == organizationID
+                        && sessionDate >= now
+                        && sessionDate <= twoWeeksFromNow
+                        && isSportsSession(session)
+                        && !usedSessionIDs.contains(normalizedSessionID(session.id))
+                }
+
                 await MainActor.run {
-                    self.sessions = fetchedSessions
+                    guard storedUserOrganizationID == organizationID else {
+                        sessions = []
+                        selectedSession = nil
+                        isLoading = false
+                        return
+                    }
+                    sessions = availableSessions
+                    if let selectedSession,
+                       !availableSessions.contains(where: { $0.id == selectedSession.id }) {
+                        self.selectedSession = nil
+                    }
+                    isLoading = false
                 }
             } catch {
-                print("Failed to load sessions: \(error)")
+                await MainActor.run {
+                    sessions = []
+                    selectedSession = nil
+                    isLoading = false
+                    alertTitle = "Couldn't Load Sessions"
+                    alertMessage = error.userFacingMessage
+                    showAlert = true
+                }
             }
+        }
+    }
+
+    private func applyDerivedSessionFields(_ session: Session) {
+        if let sessionDate = session.startDate {
+            shootDate = sessionDate
+        }
+        location = derivedLocation(for: session)
+    }
+
+    private func derivedLocation(for session: Session) -> String {
+        guard let sessionLocation = session.location?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sessionLocation.isEmpty else {
+            return session.schoolName
+        }
+        return sessionLocation
+    }
+
+    private func normalizedSessionID(_ sessionID: String?) -> String {
+        sessionID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+
+    private func isSportsSession(_ session: Session) -> Bool {
+        let sportsTypes: Set<String> = ["sports", "sports_photography"]
+        return session.sessionType.contains { sessionType in
+            sportsTypes.contains(normalizedSessionID(sessionType))
         }
     }
 }
