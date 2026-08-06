@@ -25,6 +25,41 @@ class TaskService: ObservableObject {
 
     private init() {}
 
+    // MARK: - Zero-Row Write Guard
+
+    /// A PostgREST UPDATE/DELETE whose filter matches nothing returns success
+    /// with an empty body — including rows an RLS policy refuses to touch
+    /// (COH.1 gated task edit/delete server-side, 2026-08-06). Every write here
+    /// proves a row matched (same `WrittenRowID`/`requireRowsWritten` shape as
+    /// `YearbookShootListService`), so a refused write throws instead of
+    /// silently mutating local state.
+    enum WriteError: LocalizedError, CustomDebugStringConvertible {
+        case noRowsMatched(table: String, id: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .noRowsMatched:
+                return "Nothing was saved — you don't have permission to change this task, or it was deleted. Pull to refresh and try again."
+            }
+        }
+
+        var debugDescription: String {
+            switch self {
+            case .noRowsMatched(let table, let id):
+                return "WriteError.noRowsMatched: nothing in \(table) matches id \(id)"
+            }
+        }
+    }
+
+    private struct WrittenRowID: Decodable { let id: String }
+
+    private func requireRowsWritten(_ rows: [WrittenRowID], id: String) throws {
+        guard rows.isEmpty else { return }
+        let error = WriteError.noRowsMatched(table: tasksTable, id: id)
+        print("⚠️ \(error.debugDescription)")
+        throw error
+    }
+
     // MARK: - Create Task
 
     /// Create a new task in Supabase
@@ -220,11 +255,14 @@ class TaskService: ObservableObject {
         var updatedTask = task
         updatedTask.updatedAt = Date()
 
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from(tasksTable)
             .update(updatedTask)
             .eq("id", value: task.id)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, id: task.id)
 
         // Update local state
         if let index = tasks.firstIndex(where: { $0.id == task.id }) {
@@ -264,13 +302,14 @@ class TaskService: ObservableObject {
 
     /// Delete a task
     func deleteTask(id: String) async throws {
-        // TODO: Check permissions before deleting
-
-        try await supabase
+        let written: [WrittenRowID] = try await supabase
             .from(tasksTable)
             .delete()
             .eq("id", value: id)
+            .select("id")
             .execute()
+            .value
+        try requireRowsWritten(written, id: id)
 
         // Remove from local state
         tasks.removeAll { $0.id == id }
@@ -383,11 +422,14 @@ class TaskService: ObservableObject {
             task.sortOrder = update.newOrder
             task.updatedAt = Date()
 
-            try await supabase
+            let written: [WrittenRowID] = try await supabase
                 .from(tasksTable)
                 .update(task)
                 .eq("id", value: update.taskId)
+                .select("id")
                 .execute()
+                .value
+            try requireRowsWritten(written, id: update.taskId)
 
             // Update local state
             if let index = tasks.firstIndex(where: { $0.id == update.taskId }) {

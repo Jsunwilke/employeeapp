@@ -21,7 +21,7 @@ class YearbookShootListService: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .noRowsMatched:
-                return "Nothing was saved — this list may have been deleted elsewhere. Pull to refresh and try again."
+                return "Nothing was saved — you don't have permission to change this list, or it was deleted elsewhere. Pull to refresh and try again."
             }
         }
 
