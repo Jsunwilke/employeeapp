@@ -4374,7 +4374,16 @@ struct FPSportsRosterView_iPad: View {
                                     return
                                 }
 
-                                viewModel.isLoading = true
+                                // FIRST LOAD ONLY — the same fix as CapturaSportsView's, because
+                                // this screen has the same shape: an `.appDidBecomeActive` handler
+                                // that reloads, and an iPhone list whose `if viewModel.isLoading`
+                                // branch replaces the ForEach of NavigationLinks. Flipping this
+                                // unconditionally destroyed the link owning the pushed roster, so
+                                // returning from a call dropped the photographer back to the job
+                                // list. Blank only when there is nothing on screen yet.
+                                if viewModel.sportsShoots.isEmpty {
+                                    viewModel.isLoading = true
+                                }
 
                                 Task {
                                     // Step 1: Load from local PowerSync SQLite first — instant, works offline.

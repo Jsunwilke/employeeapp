@@ -3694,7 +3694,22 @@ struct CapturaSportsView: View {
                                     return
                                 }
 
-                                viewModel.isLoading = true
+                                // FIRST LOAD ONLY. A refresh keeps the rows on screen.
+                                //
+                                // This used to flip unconditionally, and on iPhone that POPPED the
+                                // photographer out of the roster they were standing in. The chain:
+                                // returning to the foreground posts `.appDidBecomeActive`, this view
+                                // answers it by calling loadSportsShoots (the .onReceive above),
+                                // `isLoading` went true, and `iPhoneView`'s List swapped its content
+                                // branch from the `ForEach` of NavigationLinks to a ProgressView.
+                                // Removing the NavigationLink that OWNS a pushed destination pops
+                                // that destination — so answering a call, or even pulling down
+                                // Control Center, dropped them back to the job list mid-shoot and
+                                // they had to find the job and re-enter it. The reload itself is
+                                // wanted; blanking the list to do it is not.
+                                if viewModel.sportsShoots.isEmpty {
+                                    viewModel.isLoading = true
+                                }
 
                                 Task {
                                     // Step 1: Load from local PowerSync SQLite first — instant, works offline.
